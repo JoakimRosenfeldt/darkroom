@@ -62,8 +62,13 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
       }
 
       const scanned = attachProfiles(await scanDirectory(dirHandle));
-      await saveDirectoryHandle(dirHandle);
-      await saveLibrarySnapshot(dirHandle.name, scanned);
+
+      try {
+        await saveDirectoryHandle(dirHandle);
+        await saveLibrarySnapshot(dirHandle.name, scanned);
+      } catch {
+        // Directory handles cannot always be persisted (e.g. mocked environments).
+      }
 
       set({
         folderName: dirHandle.name,
