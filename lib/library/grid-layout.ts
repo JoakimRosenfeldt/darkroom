@@ -59,6 +59,49 @@ export interface PackedRow {
   height: number;
 }
 
+export interface PackedSquareRow {
+  entries: LibraryEntry[];
+  cellSize: number;
+}
+
+export function measureContentWidth(element: HTMLElement): number {
+  const style = window.getComputedStyle(element);
+  const padding =
+    Number.parseFloat(style.paddingLeft) +
+    Number.parseFloat(style.paddingRight);
+  return element.clientWidth - padding;
+}
+
+export function packSquareRows(
+  entries: LibraryEntry[],
+  containerWidth: number,
+  targetCellSize: number,
+  gap: number,
+): { rows: PackedSquareRow[]; columnCount: number } {
+  if (containerWidth <= 0 || entries.length === 0) {
+    return { rows: [], columnCount: 1 };
+  }
+
+  const columnCount = Math.max(
+    1,
+    Math.floor((containerWidth + gap) / (targetCellSize + gap)),
+  );
+
+  const rows: PackedSquareRow[] = [];
+
+  for (let index = 0; index < entries.length; index += columnCount) {
+    const rowEntries = entries.slice(index, index + columnCount);
+    const gaps = Math.max(0, rowEntries.length - 1) * gap;
+    const cellSize = (containerWidth - gaps) / rowEntries.length;
+    rows.push({
+      entries: rowEntries,
+      cellSize: Math.round(cellSize),
+    });
+  }
+
+  return { rows, columnCount };
+}
+
 function justifyRow(
   entries: LibraryEntry[],
   aspectRatios: Map<string, number>,

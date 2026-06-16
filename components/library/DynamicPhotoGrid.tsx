@@ -3,7 +3,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { packDynamicRows } from "@/lib/library/grid-layout";
+import { measureContentWidth, packDynamicRows } from "@/lib/library/grid-layout";
 import { PhotoTile } from "./PhotoTile";
 import { useEntryAspectRatios } from "./useEntryAspectRatios";
 
@@ -14,14 +14,6 @@ interface DynamicPhotoGridProps {
 
 const ROW_GAP = 4;
 const TILE_GAP = 2;
-
-function measureContentWidth(element: HTMLElement): number {
-  const style = window.getComputedStyle(element);
-  const padding =
-    Number.parseFloat(style.paddingLeft) +
-    Number.parseFloat(style.paddingRight);
-  return element.clientWidth - padding;
-}
 
 export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
