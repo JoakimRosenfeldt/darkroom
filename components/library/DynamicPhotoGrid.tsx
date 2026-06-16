@@ -90,10 +90,12 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
             return (
               <div
                 key={virtualRow.key}
-                className="absolute left-0 top-0 flex w-full items-stretch gap-0.5"
+                className="absolute left-0 top-0 flex items-stretch"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
+                  width: `${containerWidth}px`,
                   height: `${row.height}px`,
+                  gap: `${TILE_GAP}px`,
                 }}
               >
                 {row.tiles.map((tile) => (
