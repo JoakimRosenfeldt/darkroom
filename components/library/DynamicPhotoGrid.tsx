@@ -32,8 +32,6 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
     [entries, aspectRatios, containerWidth, rowHeight],
   );
 
-  const virtualRowHeight = rowHeight + ROW_GAP;
-
   useLayoutEffect(() => {
     const element = parentRef.current;
     if (element) {
@@ -58,7 +56,7 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => virtualRowHeight,
+    estimateSize: (index) => (rows[index]?.height ?? rowHeight) + ROW_GAP,
     overscan: 4,
   });
 
@@ -84,10 +82,10 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
             return (
               <div
                 key={virtualRow.key}
-                className="absolute left-0 top-0 flex items-stretch gap-0.5 p-0.5"
+                className="absolute left-0 top-0 flex w-full items-stretch gap-0.5 p-0.5"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
-                  height: `${virtualRow.size}px`,
+                  height: `${row.height}px`,
                 }}
               >
                 {row.tiles.map((tile) => (

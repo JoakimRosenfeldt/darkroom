@@ -114,7 +114,7 @@ export function LibraryToolbar({
 
       <label className="flex items-center gap-1.5 text-xs text-lr-text-muted">
         <span className="text-[11px] text-lr-text-dim">
-          {viewMode === "grid" ? "Size" : "Height"}
+          {viewMode === "grid" ? "Size" : "Row height"}
         </span>
         <input
           type="range"

@@ -59,11 +59,37 @@ export interface PackedRow {
   height: number;
 }
 
+function justifyRow(
+  entries: LibraryEntry[],
+  aspectRatios: Map<string, number>,
+  containerWidth: number,
+  gap: number,
+): PackedRow {
+  const aspects = entries.map((entry) => aspectRatios.get(entry.id) ?? 1);
+  const aspectSum = aspects.reduce((sum, aspect) => sum + aspect, 0);
+  const gaps = Math.max(0, entries.length - 1) * gap;
+  const height = (containerWidth - gaps) / aspectSum;
+
+  const tiles = entries.map((entry, index) => {
+    const width = aspects[index] * height;
+    return {
+      entry,
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+  });
+
+  return {
+    tiles,
+    height: Math.round(height),
+  };
+}
+
 export function packDynamicRows(
   entries: LibraryEntry[],
   aspectRatios: Map<string, number>,
   containerWidth: number,
-  tileHeight: number,
+  targetRowHeight: number,
   gap: number,
 ): PackedRow[] {
   if (containerWidth <= 0 || entries.length === 0) {
@@ -71,29 +97,31 @@ export function packDynamicRows(
   }
 
   const rows: PackedRow[] = [];
-  let currentTiles: PackedTile[] = [];
-  let currentWidth = 0;
+  let currentEntries: LibraryEntry[] = [];
+  let currentAspectSum = 0;
 
   for (const entry of entries) {
     const aspect = aspectRatios.get(entry.id) ?? 1;
-    const width = Math.max(48, Math.round(tileHeight * aspect));
+    const nextCount = currentEntries.length + 1;
+    const nextAspectSum = currentAspectSum + aspect;
+    const nextGaps = Math.max(0, nextCount - 1) * gap;
+    const widthAtTarget = nextAspectSum * targetRowHeight + nextGaps;
 
-    const gapBefore = currentTiles.length > 0 ? gap : 0;
-    const nextWidth = currentWidth + gapBefore + width;
-
-    if (nextWidth > containerWidth && currentTiles.length > 0) {
-      rows.push({ tiles: currentTiles, height: tileHeight });
-      currentTiles = [{ entry, width, height: tileHeight }];
-      currentWidth = width;
+    if (widthAtTarget > containerWidth && currentEntries.length > 0) {
+      rows.push(
+        justifyRow(currentEntries, aspectRatios, containerWidth, gap),
+      );
+      currentEntries = [entry];
+      currentAspectSum = aspect;
       continue;
     }
 
-    currentTiles.push({ entry, width, height: tileHeight });
-    currentWidth = nextWidth;
+    currentEntries.push(entry);
+    currentAspectSum = nextAspectSum;
   }
 
-  if (currentTiles.length > 0) {
-    rows.push({ tiles: currentTiles, height: tileHeight });
+  if (currentEntries.length > 0) {
+    rows.push(justifyRow(currentEntries, aspectRatios, containerWidth, gap));
   }
 
   return rows;
