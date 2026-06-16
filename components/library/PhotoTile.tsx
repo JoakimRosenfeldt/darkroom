@@ -91,7 +91,7 @@ export function PhotoTile({
           alt={entry.name}
           fill
           unoptimized
-          className="object-cover"
+          className={compact ? "object-cover" : "object-contain"}
           sizes={`${size}px`}
         />
       ) : (
