@@ -87,15 +87,18 @@ export function packSquareRows(
     Math.floor((containerWidth + gap) / (targetCellSize + gap)),
   );
 
+  const fullRowGaps = Math.max(0, columnCount - 1) * gap;
+  const cellSize = Math.round(
+    (containerWidth - fullRowGaps) / columnCount,
+  );
+
   const rows: PackedSquareRow[] = [];
 
   for (let index = 0; index < entries.length; index += columnCount) {
     const rowEntries = entries.slice(index, index + columnCount);
-    const gaps = Math.max(0, rowEntries.length - 1) * gap;
-    const cellSize = (containerWidth - gaps) / rowEntries.length;
     rows.push({
       entries: rowEntries,
-      cellSize: Math.round(cellSize),
+      cellSize,
     });
   }
 
