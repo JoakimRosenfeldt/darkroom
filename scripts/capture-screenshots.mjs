@@ -114,7 +114,11 @@ async function main() {
   await capture(page, "02-library-grid");
 
   await page.getByRole("button", { name: "Dynamic" }).click();
-  await page.waitForTimeout(4000);
+  await page.waitForSelector("text=Preparing layout...", {
+    state: "hidden",
+    timeout: 120_000,
+  }).catch(() => {});
+  await page.waitForTimeout(2000);
   await capture(page, "04-library-dynamic-grid");
 
   await page.getByRole("button", { name: "Grid" }).click();

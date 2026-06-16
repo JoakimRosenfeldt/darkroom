@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { packDynamicRows } from "@/lib/library/grid-layout";
 import { PhotoTile } from "./PhotoTile";
@@ -34,6 +34,13 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
 
   const virtualRowHeight = rowHeight + ROW_GAP;
 
+  useLayoutEffect(() => {
+    const element = parentRef.current;
+    if (element) {
+      setContainerWidth(element.clientWidth);
+    }
+  }, []);
+
   useEffect(() => {
     const element = parentRef.current;
     if (!element) {
@@ -44,7 +51,6 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
       setContainerWidth(entry.contentRect.width);
     });
     observer.observe(element);
-    setContainerWidth(element.clientWidth);
 
     return () => observer.disconnect();
   }, []);
@@ -56,48 +62,48 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
     overscan: 4,
   });
 
-  if (loading && rows.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center text-xs text-lr-text-dim">
-        Preparing layout...
-      </div>
-    );
-  }
+  const layoutReady = containerWidth > 0 && !loading && rows.length > 0;
 
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
-      <div
-        className="relative w-full"
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
-      >
-        {virtualizer.getVirtualItems().map((virtualRow) => {
-          const row = rows[virtualRow.index];
-          if (!row) {
-            return null;
-          }
+      {!layoutReady ? (
+        <div className="flex h-full min-h-[200px] items-center justify-center text-xs text-lr-text-dim">
+          Preparing layout...
+        </div>
+      ) : (
+        <div
+          className="relative w-full"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            if (!row) {
+              return null;
+            }
 
-          return (
-            <div
-              key={virtualRow.key}
-              className="absolute left-0 top-0 flex items-stretch gap-0.5 p-0.5"
-              style={{
-                transform: `translateY(${virtualRow.start}px)`,
-                height: `${virtualRow.size}px`,
-              }}
-            >
-              {row.tiles.map((tile) => (
-                <PhotoTile
-                  key={tile.entry.id}
-                  entry={tile.entry}
-                  width={tile.width}
-                  height={tile.height}
-                  fit="cover"
-                />
-              ))}
-            </div>
-          );
-        })}
-      </div>
+            return (
+              <div
+                key={virtualRow.key}
+                className="absolute left-0 top-0 flex items-stretch gap-0.5 p-0.5"
+                style={{
+                  transform: `translateY(${virtualRow.start}px)`,
+                  height: `${virtualRow.size}px`,
+                }}
+              >
+                {row.tiles.map((tile) => (
+                  <PhotoTile
+                    key={tile.entry.id}
+                    entry={tile.entry}
+                    width={tile.width}
+                    height={tile.height}
+                    fit="cover"
+                  />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

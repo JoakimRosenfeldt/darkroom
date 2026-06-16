@@ -23,8 +23,12 @@ export function useEntryAspectRatios(entries: LibraryEntry[]) {
     async function loadAspectRatios() {
       const results = await Promise.all(
         entries.map(async (entry) => {
-          const ratio = await getEntryAspectRatio(entry);
-          return [entry.id, ratio] as const;
+          try {
+            const ratio = await getEntryAspectRatio(entry);
+            return [entry.id, ratio] as const;
+          } catch {
+            return [entry.id, 1] as const;
+          }
         }),
       );
 
