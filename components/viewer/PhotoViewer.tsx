@@ -1,21 +1,26 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DecodedImage } from "@/lib/raw/decode";
 import { decodeEntry } from "@/lib/raw/decode";
+import { TopBar } from "@/components/shell/TopBar";
+import { Filmstrip } from "./Filmstrip";
 import { MetadataPanel } from "./MetadataPanel";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
+  entries: LibraryEntry[];
 }
 
-export function PhotoViewer({ entry }: PhotoViewerProps) {
+export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
+  const router = useRouter();
   const [decoded, setDecoded] = useState<DecodedImage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showMetadata, setShowMetadata] = useState(true);
 
   useEffect(() => {
     let active = true;
@@ -23,6 +28,7 @@ export function PhotoViewer({ entry }: PhotoViewerProps) {
     async function loadImage() {
       setLoading(true);
       setError(null);
+      setDecoded(null);
 
       try {
         const result = await decodeEntry(entry, { thumbnail: false });
@@ -61,42 +67,54 @@ export function PhotoViewer({ entry }: PhotoViewerProps) {
     };
   }, [decoded]);
 
-  return (
-    <div className="flex min-h-[calc(100vh-120px)] flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <Link
-            href="/"
-            className="text-sm text-zinc-400 transition hover:text-zinc-200"
-          >
-            Back to library
-          </Link>
-          <h1 className="mt-2 text-2xl font-semibold text-zinc-100">
-            {entry.name}
-          </h1>
-          <p className="text-sm text-zinc-500">{entry.relativePath}</p>
-        </div>
-        <span className="rounded-full border border-zinc-700 px-3 py-1 text-xs uppercase tracking-wide text-zinc-300">
-          {entry.profileId ?? "unknown"}
-        </span>
-      </div>
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const index = entries.findIndex((item) => item.id === entry.id);
+      if (event.key === "ArrowLeft" && index > 0) {
+        router.push(`/photo?id=${encodeURIComponent(entries[index - 1].id)}`);
+      }
+      if (event.key === "ArrowRight" && index >= 0 && index < entries.length - 1) {
+        router.push(`/photo?id=${encodeURIComponent(entries[index + 1].id)}`);
+      }
+      if (event.key === "Escape") {
+        router.push("/");
+      }
+    }
 
-      <div className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="relative min-h-[420px] overflow-hidden rounded-2xl border border-zinc-800 bg-black">
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [entries, entry.id, router]);
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden">
+      <TopBar activeModule="library" showBack title={entry.name} />
+
+      <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-w-0 flex-1 flex-col bg-[#0d0d0d]">
+          <div className="absolute right-3 top-3 z-10">
+            <button
+              type="button"
+              onClick={() => setShowMetadata((value) => !value)}
+              className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
+            >
+              {showMetadata ? "Hide Info" : "Show Info"}
+            </button>
+          </div>
+
           {loading ? (
-            <div className="flex h-full min-h-[420px] items-center justify-center text-sm uppercase tracking-[0.2em] text-zinc-500">
-              Decoding image...
+            <div className="flex flex-1 items-center justify-center text-xs uppercase tracking-wider text-lr-text-dim">
+              Decoding...
             </div>
           ) : null}
 
           {error ? (
-            <div className="flex h-full min-h-[420px] items-center justify-center px-6 text-center text-sm text-red-300">
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-red-400">
               {error}
             </div>
           ) : null}
 
           {decoded ? (
-            <div className="relative h-full min-h-[420px]">
+            <div className="relative flex-1">
               <Image
                 src={decoded.objectUrl}
                 alt={entry.name}
@@ -109,8 +127,20 @@ export function PhotoViewer({ entry }: PhotoViewerProps) {
           ) : null}
         </div>
 
-        {decoded ? <MetadataPanel metadata={decoded.metadata} /> : null}
+        {showMetadata && decoded ? (
+          <MetadataPanel
+            metadata={decoded.metadata}
+            fileName={entry.name}
+            profileId={entry.profileId}
+          />
+        ) : null}
       </div>
+
+      <Filmstrip
+        entries={entries}
+        activeId={entry.id}
+        onSelect={(id) => router.push(`/photo?id=${encodeURIComponent(id)}`)}
+      />
     </div>
   );
 }

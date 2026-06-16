@@ -1,23 +1,35 @@
 @import "tailwindcss";
 
 :root {
-  --background: #09090b;
-  --foreground: #f4f4f5;
-  --panel: #111113;
-  --border: #27272a;
+  --lr-bg: #1a1a1a;
+  --lr-panel: #232323;
+  --lr-panel-raised: #2d2d2d;
+  --lr-border: #3a3a3a;
+  --lr-border-subtle: #2f2f2f;
+  --lr-text: #d4d4d4;
+  --lr-text-muted: #8a8a8a;
+  --lr-text-dim: #666666;
+  --lr-accent: #4a9fd4;
+  --lr-accent-hover: #5eb0e5;
+  --lr-selection: #3d6d8f;
+  --lr-toolbar: #1f1f1f;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-lr-bg: var(--lr-bg);
+  --color-lr-panel: var(--lr-panel);
+  --color-lr-panel-raised: var(--lr-panel-raised);
+  --color-lr-border: var(--lr-border);
+  --color-lr-border-subtle: var(--lr-border-subtle);
+  --color-lr-text: var(--lr-text);
+  --color-lr-text-muted: var(--lr-text-muted);
+  --color-lr-text-dim: var(--lr-text-dim);
+  --color-lr-accent: var(--lr-accent);
+  --color-lr-accent-hover: var(--lr-accent-hover);
+  --color-lr-selection: var(--lr-selection);
+  --color-lr-toolbar: var(--lr-toolbar);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
 
 * {
@@ -27,4 +39,31 @@ body {
 html,
 body {
   min-height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--lr-bg);
+  color: var(--lr-text);
+  font-family: var(--font-geist-sans), "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+}
+
+/* Lightroom-style thin scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--lr-panel);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
 }

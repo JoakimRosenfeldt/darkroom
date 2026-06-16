@@ -103,7 +103,7 @@ async function main() {
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await capture(page, "01-home-empty");
 
-  await page.getByRole("button", { name: "Open folder" }).click();
+  await page.getByRole("button", { name: "Import" }).click();
   await page.waitForFunction(
     () => document.body.textContent?.includes("6 photos"),
     null,

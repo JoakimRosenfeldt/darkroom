@@ -1,48 +1,119 @@
 "use client";
 
 import { formatMetadataValue } from "@/lib/raw/utils";
+import { IconInfo } from "@/components/shell/icons";
 
 interface MetadataPanelProps {
   metadata: Record<string, unknown>;
+  fileName: string;
+  profileId: string | null;
 }
 
-const PRIORITY_FIELDS = [
-  "camera_make",
-  "camera_model",
-  "iso_speed",
-  "shutter",
-  "aperture",
-  "focal_len",
-  "timestamp",
-  "width",
-  "height",
-  "artist",
-  "desc",
-  "software",
+const CAPTURE_FIELDS: Array<{ key: string; label: string }> = [
+  { key: "camera_make", label: "Make" },
+  { key: "camera_model", label: "Model" },
+  { key: "lens", label: "Lens" },
+  { key: "focal_len", label: "Focal Length" },
+  { key: "aperture", label: "Aperture" },
+  { key: "shutter", label: "Shutter" },
+  { key: "iso_speed", label: "ISO" },
+  { key: "timestamp", label: "Date Time" },
 ];
 
-export function MetadataPanel({ metadata }: MetadataPanelProps) {
-  const priorityEntries = PRIORITY_FIELDS.flatMap((field) => {
-    if (!(field in metadata)) {
+function formatShutter(value: unknown): string {
+  if (typeof value !== "number") {
+    return formatMetadataValue(value);
+  }
+  if (value >= 1) {
+    return `${value}s`;
+  }
+  return `1/${Math.round(1 / value)}`;
+}
+
+function formatAperture(value: unknown): string {
+  if (typeof value !== "number") {
+    return formatMetadataValue(value);
+  }
+  return `f/${value.toFixed(1)}`;
+}
+
+function formatFocal(value: unknown): string {
+  if (typeof value !== "number") {
+    return formatMetadataValue(value);
+  }
+  return `${value} mm`;
+}
+
+function formatField(key: string, value: unknown): string {
+  if (key === "shutter") {
+    return formatShutter(value);
+  }
+  if (key === "aperture") {
+    return formatAperture(value);
+  }
+  if (key === "focal_len") {
+    return formatFocal(value);
+  }
+  if (key === "lens" && typeof value === "object" && value !== null) {
+    const lens = value as { Lens?: string };
+    return lens.Lens ?? formatMetadataValue(value);
+  }
+  return formatMetadataValue(value);
+}
+
+export function MetadataPanel({
+  metadata,
+  fileName,
+  profileId,
+}: MetadataPanelProps) {
+  const captureRows = CAPTURE_FIELDS.flatMap(({ key, label }) => {
+    if (!(key in metadata)) {
       return [];
     }
-    return [[field, metadata[field]] as const];
+    return [{ label, value: formatField(key, metadata[key]) }];
   });
 
-  const remainingEntries = Object.entries(metadata).filter(
-    ([field]) => !PRIORITY_FIELDS.includes(field),
-  );
+  const dimensions =
+    "width" in metadata && "height" in metadata
+      ? `${metadata.width} × ${metadata.height}`
+      : null;
 
   return (
-    <aside className="flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
-      <div className="border-b border-zinc-800 px-4 py-3">
-        <h2 className="text-sm font-medium uppercase tracking-[0.2em] text-zinc-400">
+    <aside className="flex w-64 shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="flex items-center gap-2 border-b border-lr-border-subtle px-3 py-2">
+        <IconInfo className="h-3.5 w-3.5 text-lr-text-dim" />
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-muted">
           Metadata
         </h2>
       </div>
-      <div className="flex-1 space-y-4 overflow-auto p-4">
-        <MetadataSection title="Capture" entries={priorityEntries} />
-        <MetadataSection title="All fields" entries={remainingEntries} />
+
+      <div className="flex-1 overflow-auto">
+        <MetadataSection title="File">
+          <MetadataRow label="File Name" value={fileName} />
+          <MetadataRow label="Format" value={profileId?.toUpperCase() ?? "—"} />
+          {dimensions ? (
+            <MetadataRow label="Dimensions" value={dimensions} />
+          ) : null}
+        </MetadataSection>
+
+        {captureRows.length > 0 ? (
+          <MetadataSection title="Capture">
+            {captureRows.map((row) => (
+              <MetadataRow key={row.label} label={row.label} value={row.value} />
+            ))}
+          </MetadataSection>
+        ) : null}
+
+        <MetadataSection title="All Metadata" defaultOpen={false}>
+          {Object.entries(metadata).map(([key, value]) => (
+            <MetadataRow
+              key={key}
+              label={key.replaceAll("_", " ")}
+              value={formatMetadataValue(value)}
+              mono
+            />
+          ))}
+        </MetadataSection>
       </div>
     </aside>
   );
@@ -50,32 +121,43 @@ export function MetadataPanel({ metadata }: MetadataPanelProps) {
 
 function MetadataSection({
   title,
-  entries,
+  children,
+  defaultOpen = true,
 }: {
   title: string;
-  entries: Array<readonly [string, unknown]>;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
-  if (entries.length === 0) {
-    return null;
-  }
-
   return (
-    <section>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">
+    <details open={defaultOpen} className="border-b border-lr-border-subtle">
+      <summary className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim hover:text-lr-text-muted">
         {title}
-      </h3>
-      <dl className="space-y-2">
-        {entries.map(([field, value]) => (
-          <div key={field} className="rounded-lg bg-zinc-900/70 px-3 py-2">
-            <dt className="text-[11px] uppercase tracking-wide text-zinc-500">
-              {field.replaceAll("_", " ")}
-            </dt>
-            <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">
-              {formatMetadataValue(value)}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+      </summary>
+      <dl className="px-3 pb-2">{children}</dl>
+    </details>
+  );
+}
+
+function MetadataRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[88px_1fr] gap-2 py-1 text-xs">
+      <dt className="text-lr-text-dim">{label}</dt>
+      <dd
+        className={[
+          "break-words text-lr-text",
+          mono ? "font-mono text-[10px] leading-relaxed" : "",
+        ].join(" ")}
+      >
+        {value}
+      </dd>
+    </div>
   );
 }

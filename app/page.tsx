@@ -1,44 +1,109 @@
 "use client";
 
-import { FolderPicker } from "@/components/import/FolderPicker";
+import { useEffect, useMemo, useState } from "react";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
+import {
+  LibraryToolbar,
+  type FilterOption,
+  type SortOption,
+} from "@/components/shell/LibraryToolbar";
+import { SidePanel } from "@/components/shell/SidePanel";
+import { TopBar } from "@/components/shell/TopBar";
 import { useLibraryStore } from "@/stores/library-store";
+
+function filterEntries(
+  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
+  filter: FilterOption,
+) {
+  if (filter === "raw") {
+    return entries.filter((entry) => entry.profileId !== "standard");
+  }
+  if (filter === "standard") {
+    return entries.filter((entry) => entry.profileId === "standard");
+  }
+  return entries;
+}
+
+function sortEntries(
+  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
+  sort: SortOption,
+) {
+  const sorted = [...entries];
+  if (sort === "date") {
+    sorted.sort((a, b) => b.lastModified - a.lastModified);
+    return sorted;
+  }
+  sorted.sort((a, b) => a.name.localeCompare(b.name));
+  return sorted;
+}
 
 export default function HomePage() {
   const entries = useLibraryStore((state) => state.entries);
   const folderName = useLibraryStore((state) => state.folderName);
+  const restoreLastFolder = useLibraryStore((state) => state.restoreLastFolder);
+  const setSupportedBrowser = useLibraryStore((state) => state.setSupportedBrowser);
+
+  const [sort, setSort] = useState<SortOption>("name");
+  const [filter, setFilter] = useState<FilterOption>("all");
+  const [thumbSize, setThumbSize] = useState(180);
+
+  useEffect(() => {
+    setSupportedBrowser("showDirectoryPicker" in window);
+    void restoreLastFolder();
+  }, [restoreLastFolder, setSupportedBrowser]);
+
+  const rawCount = entries.filter((entry) => entry.profileId !== "standard").length;
+  const standardCount = entries.filter(
+    (entry) => entry.profileId === "standard",
+  ).length;
+
+  const visibleEntries = useMemo(
+    () => sortEntries(filterEntries(entries, filter), sort),
+    [entries, filter, sort],
+  );
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-6 py-8">
-      <header className="flex flex-col gap-4 border-b border-zinc-800 pb-6">
-        <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500">
-            Client-side library
-          </p>
-          <h1 className="mt-2 text-4xl font-semibold tracking-tight text-zinc-50">
-            Darkroom
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-            Browse local folders in place, decode RAW files on your machine, and
-            keep your library private.
-          </p>
-        </div>
-        <FolderPicker />
-      </header>
+    <div className="flex h-screen flex-col overflow-hidden">
+      <TopBar activeModule="library" />
 
-      <section className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium uppercase tracking-[0.2em] text-zinc-500">
-            Library
-          </h2>
-          {folderName ? (
-            <p className="text-sm text-zinc-400">
-              {entries.length} photo{entries.length === 1 ? "" : "s"}
-            </p>
-          ) : null}
+      <div className="flex min-h-0 flex-1">
+        <SidePanel
+          folderName={folderName}
+          photoCount={entries.length}
+          rawCount={rawCount}
+          standardCount={standardCount}
+          filter={filter}
+          onFilterChange={setFilter}
+        />
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          <LibraryToolbar
+            photoCount={visibleEntries.length}
+            sort={sort}
+            filter={filter}
+            thumbSize={thumbSize}
+            onSortChange={setSort}
+            onFilterChange={setFilter}
+            onThumbSizeChange={setThumbSize}
+          />
+
+          <main className="min-h-0 flex-1 bg-lr-bg">
+            {entries.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <p className="text-sm text-lr-text-muted">
+                  Import a folder to begin
+                </p>
+                <p className="max-w-sm text-xs text-lr-text-dim">
+                  Click Import in the toolbar to link a local photo folder.
+                  Files stay on your machine.
+                </p>
+              </div>
+            ) : (
+              <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
+            )}
+          </main>
         </div>
-        <PhotoGrid entries={entries} />
-      </section>
+      </div>
     </div>
   );
 }

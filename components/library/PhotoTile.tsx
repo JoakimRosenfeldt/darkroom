@@ -13,9 +13,17 @@ import { decodeEntry } from "@/lib/raw/decode";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
+  size: number;
+  selected?: boolean;
+  compact?: boolean;
 }
 
-export function PhotoTile({ entry }: PhotoTileProps) {
+export function PhotoTile({
+  entry,
+  size,
+  selected = false,
+  compact = false,
+}: PhotoTileProps) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
@@ -35,7 +43,7 @@ export function PhotoTile({ entry }: PhotoTileProps) {
         if (!blob) {
           const decoded = await decodeEntry(entry, {
             thumbnail: true,
-            maxEdge: 320,
+            maxEdge: Math.max(size, 120),
           });
           blob = decoded.blob;
           URL.revokeObjectURL(decoded.objectUrl);
@@ -64,34 +72,56 @@ export function PhotoTile({ entry }: PhotoTileProps) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [entry]);
+  }, [entry, size]);
+
+  const content = (
+    <div
+      className={[
+        "group relative shrink-0 overflow-hidden bg-[#141414]",
+        selected
+          ? "ring-2 ring-lr-accent ring-offset-1 ring-offset-lr-bg"
+          : "hover:ring-1 hover:ring-lr-border",
+        compact ? "" : "transition-shadow",
+      ].join(" ")}
+      style={{ width: size, height: size }}
+    >
+      {thumbnailUrl ? (
+        <Image
+          src={thumbnailUrl}
+          alt={entry.name}
+          fill
+          unoptimized
+          className="object-cover"
+          sizes={`${size}px`}
+        />
+      ) : (
+        <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-wider text-lr-text-dim">
+          {status === "error" ? "Error" : "···"}
+        </div>
+      )}
+
+      {!compact ? (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 pb-1 pt-6 opacity-0 transition-opacity group-hover:opacity-100">
+          <p className="truncate text-[10px] text-white/90">{entry.name}</p>
+          {entry.profileId && entry.profileId !== "standard" ? (
+            <p className="text-[9px] uppercase tracking-wide text-lr-accent">
+              {entry.profileId}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {selected ? (
+        <div className="absolute left-0 top-0 h-0 w-0 border-r-[10px] border-t-[10px] border-r-transparent border-t-lr-accent" />
+      ) : null}
+    </div>
+  );
+
+  if (compact) {
+    return content;
+  }
 
   return (
-    <Link
-      href={`/photo?id=${encodeURIComponent(entry.id)}`}
-      className="group flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 transition hover:border-zinc-600 hover:bg-zinc-900"
-    >
-      <div className="relative aspect-[4/3] overflow-hidden bg-zinc-900">
-        {thumbnailUrl ? (
-          <Image
-            src={thumbnailUrl}
-            alt={entry.name}
-            fill
-            unoptimized
-            className="object-cover transition duration-300 group-hover:scale-[1.02]"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center text-xs uppercase tracking-[0.2em] text-zinc-600">
-            {status === "error" ? "Decode error" : "Loading"}
-          </div>
-        )}
-      </div>
-      <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <p className="truncate text-sm text-zinc-200">{entry.name}</p>
-        <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
-          {entry.profileId ?? "unknown"}
-        </span>
-      </div>
-    </Link>
+    <Link href={`/photo?id=${encodeURIComponent(entry.id)}`}>{content}</Link>
   );
 }

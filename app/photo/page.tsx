@@ -3,6 +3,7 @@
 import { Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { PhotoViewer } from "@/components/viewer/PhotoViewer";
+import { TopBar } from "@/components/shell/TopBar";
 import { getEntryById, useLibraryStore } from "@/stores/library-store";
 
 function PhotoPageContent() {
@@ -19,34 +20,40 @@ function PhotoPageContent() {
 
   if (!photoId) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-16 text-center text-zinc-400">
-        No photo selected. Return to the library and choose an image.
+      <div className="flex h-screen flex-col">
+        <TopBar activeModule="library" showBack />
+        <div className="flex flex-1 items-center justify-center text-sm text-lr-text-muted">
+          No photo selected.
+        </div>
       </div>
     );
   }
 
   if (!entry) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-16 text-center text-zinc-400">
-        This photo is not available in the current library. Open the source
-        folder again from the library page.
+      <div className="flex h-screen flex-col">
+        <TopBar activeModule="library" showBack />
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+          <p className="text-sm text-lr-text-muted">
+            Photo not found in the current catalog.
+          </p>
+          <p className="text-xs text-lr-text-dim">
+            Re-import the source folder from the Library module.
+          </p>
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className="mx-auto max-w-7xl px-6 py-8">
-      <PhotoViewer entry={entry} />
-    </div>
-  );
+  return <PhotoViewer entry={entry} entries={entries} />;
 }
 
 export default function PhotoPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-3xl px-6 py-16 text-center text-zinc-500">
-          Loading photo...
+        <div className="flex h-screen items-center justify-center text-sm text-lr-text-dim">
+          Loading...
         </div>
       }
     >
