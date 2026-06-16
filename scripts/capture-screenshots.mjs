@@ -13,6 +13,7 @@ const DEMO_FILES = [
   "city-night.jpg",
   "desert-glow.jpg",
   "lake-reflection.jpg",
+  "portrait-street.jpg",
 ];
 
 async function waitForServer(url, attempts = 30) {
@@ -105,15 +106,20 @@ async function main() {
 
   await page.getByRole("button", { name: "Import" }).click();
   await page.waitForFunction(
-    () => document.body.textContent?.includes("6 photos"),
+    () => document.body.textContent?.includes("7 photos"),
     null,
     { timeout: 60_000 },
   );
   await page.waitForTimeout(3000);
   await capture(page, "02-library-grid");
 
+  await page.getByRole("button", { name: "Dynamic" }).click();
+  await page.waitForTimeout(4000);
+  await capture(page, "04-library-dynamic-grid");
+
+  await page.getByRole("button", { name: "Grid" }).click();
   await page.locator('a[href^="/photo?id="]').first().click();
-  await page.waitForSelector("text=Decoding image...", { state: "hidden", timeout: 120_000 }).catch(() => {});
+  await page.waitForSelector("text=Decoding...", { state: "hidden", timeout: 120_000 }).catch(() => {});
   await page.waitForTimeout(2000);
   await capture(page, "03-photo-detail");
 

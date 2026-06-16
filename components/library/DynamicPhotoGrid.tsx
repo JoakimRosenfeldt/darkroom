@@ -3,33 +3,36 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { packDynamicRows } from "@/lib/library/grid-layout";
 import { PhotoTile } from "./PhotoTile";
+import { useEntryAspectRatios } from "./useEntryAspectRatios";
 
-interface PhotoGridProps {
+interface DynamicPhotoGridProps {
   entries: LibraryEntry[];
-  thumbSize: number;
+  rowHeight: number;
 }
 
-const GRID_GAP = 2;
+const ROW_GAP = 4;
+const TILE_GAP = 2;
 
-export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
+export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const { aspectRatios, loading } = useEntryAspectRatios(entries);
 
-  const columnCount = Math.max(
-    1,
-    Math.floor((containerWidth + GRID_GAP) / (thumbSize + GRID_GAP)),
+  const rows = useMemo(
+    () =>
+      packDynamicRows(
+        entries,
+        aspectRatios,
+        containerWidth,
+        rowHeight,
+        TILE_GAP,
+      ),
+    [entries, aspectRatios, containerWidth, rowHeight],
   );
-  const rowCount = Math.ceil(entries.length / columnCount);
-  const rowHeight = thumbSize + GRID_GAP;
 
-  const rows = useMemo(() => {
-    const grouped: LibraryEntry[][] = [];
-    for (let i = 0; i < entries.length; i += columnCount) {
-      grouped.push(entries.slice(i, i + columnCount));
-    }
-    return grouped;
-  }, [entries, columnCount]);
+  const virtualRowHeight = rowHeight + ROW_GAP;
 
   useEffect(() => {
     const element = parentRef.current;
@@ -47,11 +50,19 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   }, []);
 
   const virtualizer = useVirtualizer({
-    count: rowCount,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => rowHeight,
-    overscan: 6,
+    estimateSize: () => virtualRowHeight,
+    overscan: 4,
   });
+
+  if (loading && rows.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-lr-text-dim">
+        Preparing layout...
+      </div>
+    );
+  }
 
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
@@ -60,23 +71,27 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
-          const rowEntries = rows[virtualRow.index] ?? [];
+          const row = rows[virtualRow.index];
+          if (!row) {
+            return null;
+          }
+
           return (
             <div
               key={virtualRow.key}
-              className="absolute left-0 top-0 flex gap-0.5 p-0.5"
+              className="absolute left-0 top-0 flex items-stretch gap-0.5 p-0.5"
               style={{
                 transform: `translateY(${virtualRow.start}px)`,
                 height: `${virtualRow.size}px`,
               }}
             >
-              {rowEntries.map((entry) => (
+              {row.tiles.map((tile) => (
                 <PhotoTile
-                  key={entry.id}
-                  entry={entry}
-                  width={thumbSize}
-                  height={thumbSize}
-                  fit="contain"
+                  key={tile.entry.id}
+                  entry={tile.entry}
+                  width={tile.width}
+                  height={tile.height}
+                  fit="cover"
                 />
               ))}
             </div>

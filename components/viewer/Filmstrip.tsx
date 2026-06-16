@@ -89,7 +89,8 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
           >
             <PhotoTile
               entry={entry}
-              size={THUMB_SIZE}
+              width={THUMB_SIZE}
+              height={THUMB_SIZE}
               selected={entry.id === activeId}
               compact
             />

@@ -1,19 +1,22 @@
 "use client";
 
 import { useLibraryStore } from "@/stores/library-store";
-import { IconFolder, IconGrid } from "./icons";
+import { IconDynamicGrid, IconFolder, IconGrid } from "./icons";
 
 export type SortOption = "name" | "date";
 export type FilterOption = "all" | "raw" | "standard";
+export type GridViewMode = "grid" | "dynamic";
 
 interface LibraryToolbarProps {
   photoCount: number;
   sort: SortOption;
   filter: FilterOption;
   thumbSize: number;
+  viewMode: GridViewMode;
   onSortChange: (sort: SortOption) => void;
   onFilterChange: (filter: FilterOption) => void;
   onThumbSizeChange: (size: number) => void;
+  onViewModeChange: (mode: GridViewMode) => void;
 }
 
 export function LibraryToolbar({
@@ -21,9 +24,11 @@ export function LibraryToolbar({
   sort,
   filter,
   thumbSize,
+  viewMode,
   onSortChange,
   onFilterChange,
   onThumbSizeChange,
+  onViewModeChange,
 }: LibraryToolbarProps) {
   const {
     folderName,
@@ -76,8 +81,41 @@ export function LibraryToolbar({
 
       <div className="flex-1" />
 
+      <div className="flex items-center rounded border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+        <button
+          type="button"
+          onClick={() => onViewModeChange("grid")}
+          className={[
+            "flex h-6 items-center gap-1 rounded px-2 text-[11px] transition",
+            viewMode === "grid"
+              ? "bg-lr-selection text-lr-text"
+              : "text-lr-text-muted hover:text-lr-text",
+          ].join(" ")}
+          title="Square grid"
+        >
+          <IconGrid className="h-3 w-3" />
+          Grid
+        </button>
+        <button
+          type="button"
+          onClick={() => onViewModeChange("dynamic")}
+          className={[
+            "flex h-6 items-center gap-1 rounded px-2 text-[11px] transition",
+            viewMode === "dynamic"
+              ? "bg-lr-selection text-lr-text"
+              : "text-lr-text-muted hover:text-lr-text",
+          ].join(" ")}
+          title="Dynamic grid (fixed height, variable width)"
+        >
+          <IconDynamicGrid className="h-3 w-3" />
+          Dynamic
+        </button>
+      </div>
+
       <label className="flex items-center gap-1.5 text-xs text-lr-text-muted">
-        <IconGrid className="h-3.5 w-3.5" />
+        <span className="text-[11px] text-lr-text-dim">
+          {viewMode === "grid" ? "Size" : "Height"}
+        </span>
         <input
           type="range"
           min={120}

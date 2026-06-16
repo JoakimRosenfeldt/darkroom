@@ -13,19 +13,24 @@ import { decodeEntry } from "@/lib/raw/decode";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
-  size: number;
+  width: number;
+  height: number;
   selected?: boolean;
   compact?: boolean;
+  fit?: "contain" | "cover";
 }
 
 export function PhotoTile({
   entry,
-  size,
+  width,
+  height,
   selected = false,
   compact = false,
+  fit = "contain",
 }: PhotoTileProps) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const decodeEdge = Math.max(width, height, 120);
 
   useEffect(() => {
     let active = true;
@@ -43,7 +48,7 @@ export function PhotoTile({
         if (!blob) {
           const decoded = await decodeEntry(entry, {
             thumbnail: true,
-            maxEdge: Math.max(size, 120),
+            maxEdge: decodeEdge,
           });
           blob = decoded.blob;
           URL.revokeObjectURL(decoded.objectUrl);
@@ -72,7 +77,9 @@ export function PhotoTile({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [entry, size]);
+  }, [entry, decodeEdge]);
+
+  const imageFit = compact ? "object-cover" : `object-${fit}`;
 
   const content = (
     <div
@@ -83,7 +90,7 @@ export function PhotoTile({
           : "hover:ring-1 hover:ring-lr-border",
         compact ? "" : "transition-shadow",
       ].join(" ")}
-      style={{ width: size, height: size }}
+      style={{ width, height }}
     >
       {thumbnailUrl ? (
         <Image
@@ -91,8 +98,8 @@ export function PhotoTile({
           alt={entry.name}
           fill
           unoptimized
-          className={compact ? "object-cover" : "object-contain"}
-          sizes={`${size}px`}
+          className={imageFit}
+          sizes={`${width}px`}
         />
       ) : (
         <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-wider text-lr-text-dim">

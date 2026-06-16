@@ -14,6 +14,14 @@ export function IconGrid({ className }: { className?: string }) {
   );
 }
 
+export function IconDynamicGrid({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h4A1.5 1.5 0 0 1 8 3.5v9A1.5 1.5 0 0 1 6.5 14h-4A1.5 1.5 0 0 1 1 12.5v-9zM9 3.5A1.5 1.5 0 0 1 10.5 2h3A1.5 1.5 0 0 1 15 3.5v9a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 12.5v-9z" />
+    </svg>
+  );
+}
+
 export function IconChevronLeft({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>

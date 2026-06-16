@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import {
   LibraryToolbar,
   type FilterOption,
+  type GridViewMode,
   type SortOption,
 } from "@/components/shell/LibraryToolbar";
 import { SidePanel } from "@/components/shell/SidePanel";
@@ -46,6 +48,7 @@ export default function HomePage() {
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
   const [thumbSize, setThumbSize] = useState(180);
+  const [viewMode, setViewMode] = useState<GridViewMode>("grid");
 
   useEffect(() => {
     setSupportedBrowser("showDirectoryPicker" in window);
@@ -82,9 +85,11 @@ export default function HomePage() {
             sort={sort}
             filter={filter}
             thumbSize={thumbSize}
+            viewMode={viewMode}
             onSortChange={setSort}
             onFilterChange={setFilter}
             onThumbSizeChange={setThumbSize}
+            onViewModeChange={setViewMode}
           />
 
           <main className="min-h-0 flex-1 bg-lr-bg">
@@ -98,6 +103,11 @@ export default function HomePage() {
                   Files stay on your machine.
                 </p>
               </div>
+            ) : viewMode === "dynamic" ? (
+              <DynamicPhotoGrid
+                entries={visibleEntries}
+                rowHeight={thumbSize}
+              />
             ) : (
               <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
             )}
