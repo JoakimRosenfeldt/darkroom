@@ -15,6 +15,14 @@ interface DynamicPhotoGridProps {
 const ROW_GAP = 4;
 const TILE_GAP = 2;
 
+function measureContentWidth(element: HTMLElement): number {
+  const style = window.getComputedStyle(element);
+  const padding =
+    Number.parseFloat(style.paddingLeft) +
+    Number.parseFloat(style.paddingRight);
+  return element.clientWidth - padding;
+}
+
 export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -35,7 +43,7 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
   useLayoutEffect(() => {
     const element = parentRef.current;
     if (element) {
-      setContainerWidth(element.clientWidth);
+      setContainerWidth(measureContentWidth(element));
     }
   }, []);
 
@@ -45,8 +53,8 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
       return;
     }
 
-    const observer = new ResizeObserver(([entry]) => {
-      setContainerWidth(entry.contentRect.width);
+    const observer = new ResizeObserver(() => {
+      setContainerWidth(measureContentWidth(element));
     });
     observer.observe(element);
 
@@ -82,7 +90,7 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
             return (
               <div
                 key={virtualRow.key}
-                className="absolute left-0 top-0 flex w-full items-stretch gap-0.5 p-0.5"
+                className="absolute left-0 top-0 flex w-full items-stretch gap-0.5"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   height: `${row.height}px`,

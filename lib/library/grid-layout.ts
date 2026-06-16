@@ -70,18 +70,30 @@ function justifyRow(
   const gaps = Math.max(0, entries.length - 1) * gap;
   const height = (containerWidth - gaps) / aspectSum;
 
-  const tiles = entries.map((entry, index) => {
-    const width = aspects[index] * height;
-    return {
-      entry,
-      width: Math.round(width),
-      height: Math.round(height),
-    };
-  });
+  const tiles: PackedTile[] = entries.map((entry, index) => ({
+    entry,
+    width: aspects[index] * height,
+    height,
+  }));
+
+  const roundedTiles = tiles.map((tile) => ({
+    ...tile,
+    width: Math.round(tile.width),
+    height: Math.round(tile.height),
+  }));
+
+  const usedWidth = roundedTiles.reduce(
+    (sum, tile, index) => sum + tile.width + (index > 0 ? gap : 0),
+    0,
+  );
+  const remainder = Math.round(containerWidth - usedWidth);
+  if (roundedTiles.length > 0 && remainder !== 0) {
+    roundedTiles[roundedTiles.length - 1].width += remainder;
+  }
 
   return {
-    tiles,
-    height: Math.round(height),
+    tiles: roundedTiles,
+    height: roundedTiles[0]?.height ?? Math.round(height),
   };
 }
 
