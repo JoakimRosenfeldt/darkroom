@@ -1,60 +1,16 @@
-import {
-  createEntryId,
-  isSupportedFileName,
-  type FileRef,
-  type LibraryEntry,
-  type StoredLibrary,
-} from "./types";
-import { iterateDirectory } from "./iterate";
-import { get, set } from "idb-keyval";
+import type { LibraryEntry, StoredLibrary } from "./types";
+import { scanDirectoryTree, type ScanProgress } from "./scan";
+import { get, set, del } from "idb-keyval";
 
 const LIBRARY_KEY = "darkroom-library";
+const DIRECTORY_PICKER_ID = "darkroom-library";
 
-async function collectFiles(
-  dirHandle: FileSystemDirectoryHandle,
-  prefix = "",
-): Promise<FileRef[]> {
-  const files: FileRef[] = [];
+export type { ScanProgress };
 
-  for await (const entry of iterateDirectory(dirHandle)) {
-    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+export { scanDirectoryTree as scanDirectory };
 
-    if (entry.kind === "directory") {
-      const nested = await collectFiles(
-        entry as FileSystemDirectoryHandle,
-        relativePath,
-      );
-      files.push(...nested);
-      continue;
-    }
-
-    if (entry.kind !== "file" || !isSupportedFileName(entry.name)) {
-      continue;
-    }
-
-    const fileHandle = entry as FileSystemFileHandle;
-    const file = await fileHandle.getFile();
-    files.push({
-      id: createEntryId(relativePath),
-      name: entry.name,
-      relativePath,
-      size: file.size,
-      lastModified: file.lastModified,
-      handle: fileHandle,
-    });
-  }
-
-  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-}
-
-export async function scanDirectory(
-  dirHandle: FileSystemDirectoryHandle,
-): Promise<LibraryEntry[]> {
-  const files = await collectFiles(dirHandle);
-  return files.map((file) => ({
-    ...file,
-    profileId: null,
-  }));
+export function getDirectoryPickerId(): string {
+  return DIRECTORY_PICKER_ID;
 }
 
 export async function getFileFromEntry(
@@ -89,45 +45,33 @@ export async function getLibrarySnapshot(): Promise<StoredLibrary | null> {
   return snapshot ?? null;
 }
 
-export async function resolveEntryHandle(
-  dirHandle: FileSystemDirectoryHandle,
-  relativePath: string,
-): Promise<FileSystemFileHandle | null> {
-  const parts = relativePath.split("/");
-  let currentDir = dirHandle;
-
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    try {
-      currentDir = await currentDir.getDirectoryHandle(parts[i]);
-    } catch {
-      return null;
-    }
-  }
-
-  try {
-    return await currentDir.getFileHandle(parts[parts.length - 1]);
-  } catch {
-    return null;
-  }
+export async function clearLibrarySnapshot(): Promise<void> {
+  await del(LIBRARY_KEY);
 }
 
-export async function restoreEntriesFromSnapshot(
-  dirHandle: FileSystemDirectoryHandle,
-  snapshot: StoredLibrary,
+export async function refreshEntryMetadata(
+  entries: LibraryEntry[],
 ): Promise<LibraryEntry[]> {
-  const entries: LibraryEntry[] = [];
+  const refreshed: LibraryEntry[] = [];
 
-  for (const stored of snapshot.entries) {
-    const handle = await resolveEntryHandle(dirHandle, stored.relativePath);
-    if (!handle) {
-      continue;
+  for (const entry of entries) {
+    try {
+      const file = await entry.handle.getFile();
+      refreshed.push({
+        ...entry,
+        size: file.size,
+        lastModified: file.lastModified,
+      });
+    } catch {
+      refreshed.push(entry);
     }
 
-    entries.push({
-      ...stored,
-      handle,
-    });
+    if (refreshed.length % 32 === 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+    }
   }
 
-  return entries;
+  return refreshed;
 }

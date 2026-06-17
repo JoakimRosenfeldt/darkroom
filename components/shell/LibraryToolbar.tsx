@@ -33,33 +33,49 @@ export function LibraryToolbar({
   const {
     folderName,
     importState,
+    importStatus,
     importError,
+    needsFolderAccess,
     isSupportedBrowser,
     pickFolder,
     restoreLastFolder,
   } = useLibraryStore();
 
+  const busy = importState === "importing" || importState === "restoring";
+
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-panel px-2">
+      {needsFolderAccess ? (
+        <button
+          type="button"
+          onClick={() => void restoreLastFolder({ interactive: true })}
+          disabled={!isSupportedBrowser || busy}
+          className="flex h-7 items-center gap-1.5 rounded bg-lr-accent/20 px-2.5 text-xs text-lr-accent transition hover:bg-lr-accent/30 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <IconFolder className="h-3.5 w-3.5" />
+          {importState === "restoring" ? "Re-linking..." : "Re-link folder"}
+        </button>
+      ) : null}
+
       <button
         type="button"
         onClick={() => void pickFolder()}
-        disabled={
-          !isSupportedBrowser ||
-          importState === "importing" ||
-          importState === "restoring"
-        }
+        disabled={!isSupportedBrowser || busy}
         className="flex h-7 items-center gap-1.5 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-50"
       >
         <IconFolder className="h-3.5 w-3.5 text-lr-accent" />
-        {importState === "importing" ? "Importing..." : "Import"}
+        {importState === "importing"
+          ? "Importing..."
+          : needsFolderAccess
+            ? "Import different folder"
+            : "Import"}
       </button>
 
-      {folderName ? (
+      {folderName && !needsFolderAccess ? (
         <button
           type="button"
-          onClick={() => void restoreLastFolder()}
-          disabled={importState === "importing" || importState === "restoring"}
+          onClick={() => void restoreLastFolder({ interactive: true })}
+          disabled={busy}
           className="h-7 rounded px-2 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
           title="Re-grant folder access"
         >
@@ -73,7 +89,7 @@ export function LibraryToolbar({
         {folderName ?? "No folder selected"}
       </span>
 
-      {folderName ? (
+      {folderName && !needsFolderAccess ? (
         <span className="text-xs text-lr-text-dim">
           · {photoCount} photo{photoCount === 1 ? "" : "s"}
         </span>
@@ -148,6 +164,12 @@ export function LibraryToolbar({
         <option value="name">Sort: File Name</option>
         <option value="date">Sort: Capture Date</option>
       </select>
+
+      {importStatus ? (
+        <span className="max-w-[220px] truncate text-xs text-lr-text-muted" title={importStatus}>
+          {importStatus}
+        </span>
+      ) : null}
 
       {importError ? (
         <span className="max-w-[200px] truncate text-xs text-red-400" title={importError}>

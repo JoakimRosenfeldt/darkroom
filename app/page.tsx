@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import {
@@ -42,18 +42,17 @@ function sortEntries(
 export default function HomePage() {
   const entries = useLibraryStore((state) => state.entries);
   const folderName = useLibraryStore((state) => state.folderName);
+  const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
+  const importState = useLibraryStore((state) => state.importState);
+  const importStatus = useLibraryStore((state) => state.importStatus);
+  const importError = useLibraryStore((state) => state.importError);
   const restoreLastFolder = useLibraryStore((state) => state.restoreLastFolder);
-  const setSupportedBrowser = useLibraryStore((state) => state.setSupportedBrowser);
+  const pickFolder = useLibraryStore((state) => state.pickFolder);
 
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
-
-  useEffect(() => {
-    setSupportedBrowser("showDirectoryPicker" in window);
-    void restoreLastFolder();
-  }, [restoreLastFolder, setSupportedBrowser]);
 
   const rawCount = entries.filter((entry) => entry.profileId !== "standard").length;
   const standardCount = entries.filter(
@@ -93,7 +92,88 @@ export default function HomePage() {
           />
 
           <main className="min-h-0 flex-1 bg-lr-bg">
-            {entries.length === 0 ? (
+            {needsFolderAccess ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+                <div className="space-y-2">
+                  <p className="text-sm text-lr-text-muted">
+                    Re-link your folder to continue
+                  </p>
+                  <p className="max-w-sm text-xs text-lr-text-dim">
+                    {folderName
+                      ? `Select "${folderName}" again to restore access.`
+                      : "Select your photo folder again to restore access."}{" "}
+                    If nothing happens, check for a hidden folder dialog behind this window.
+                    Cloud-synced folders (iCloud, OneDrive) may not work reliably.
+                  </p>
+                </div>
+                <div className="flex flex-col items-center gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => void restoreLastFolder({ interactive: true })}
+                    disabled={importState === "restoring"}
+                    className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90 disabled:opacity-50"
+                  >
+                    {importState === "restoring" ? "Re-linking…" : "Re-link folder"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void pickFolder()}
+                    disabled={importState === "importing"}
+                    className="rounded border border-lr-border-subtle px-4 py-2 text-sm text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
+                  >
+                    {importState === "importing"
+                      ? "Importing…"
+                      : "Import different folder"}
+                  </button>
+                </div>
+                {importStatus ? (
+                  <p className="max-w-sm text-xs text-lr-text-dim">{importStatus}</p>
+                ) : null}
+                {importError ? (
+                  <p className="max-w-sm text-xs text-red-400">{importError}</p>
+                ) : null}
+              </div>
+            ) : entries.length > 0 ? (
+              <>
+                {importStatus ? (
+                  <div className="border-b border-lr-border-subtle bg-lr-panel px-3 py-1.5 text-xs text-lr-text-muted">
+                    {importStatus}
+                  </div>
+                ) : null}
+                {viewMode === "dynamic" ? (
+                  <DynamicPhotoGrid
+                    entries={visibleEntries}
+                    rowHeight={thumbSize}
+                  />
+                ) : (
+                  <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
+                )}
+              </>
+            ) : importState === "importing" || importState === "restoring" ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <p className="text-sm text-lr-text-muted">Reading folder…</p>
+                {importStatus ? (
+                  <p className="max-w-sm text-xs text-lr-text-dim">{importStatus}</p>
+                ) : null}
+                {folderName ? (
+                  <p className="text-xs text-lr-text-dim">{folderName}</p>
+                ) : null}
+                {importError ? (
+                  <p className="max-w-sm text-xs text-red-400">{importError}</p>
+                ) : null}
+              </div>
+            ) : importError ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <p className="text-sm text-red-400">{importError}</p>
+                <button
+                  type="button"
+                  onClick={() => void pickFolder()}
+                  className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <p className="text-sm text-lr-text-muted">
                   Import a folder to begin
@@ -103,13 +183,6 @@ export default function HomePage() {
                   Files stay on your machine.
                 </p>
               </div>
-            ) : viewMode === "dynamic" ? (
-              <DynamicPhotoGrid
-                entries={visibleEntries}
-                rowHeight={thumbSize}
-              />
-            ) : (
-              <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
             )}
           </main>
         </div>

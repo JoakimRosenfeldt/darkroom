@@ -6,7 +6,8 @@
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "node scripts/patch-libraw.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.3",
