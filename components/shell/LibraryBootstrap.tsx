@@ -1,18 +1,24 @@
 "use client";
 
 import { useEffect } from "react";
+import { fsDebug } from "@/lib/fs/debug";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function LibraryBootstrap() {
-  const restoreLastFolder = useLibraryStore((state) => state.restoreLastFolder);
+  const bootstrapLibrary = useLibraryStore((state) => state.bootstrapLibrary);
   const setSupportedBrowser = useLibraryStore(
     (state) => state.setSupportedBrowser,
   );
 
   useEffect(() => {
-    setSupportedBrowser("showDirectoryPicker" in window);
-    void restoreLastFolder();
-  }, [restoreLastFolder, setSupportedBrowser]);
+    const supported = "showDirectoryPicker" in window;
+    fsDebug("LibraryBootstrap: mount", {
+      supported,
+      origin: window.location.origin,
+    });
+    setSupportedBrowser(supported);
+    void bootstrapLibrary();
+  }, [bootstrapLibrary, setSupportedBrowser]);
 
   return null;
 }

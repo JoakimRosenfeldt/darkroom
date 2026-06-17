@@ -1,30 +1,13 @@
 import { clearLibrarySnapshot } from "./directory";
 import { clearDirectoryHandle } from "./handles-store";
+import { clearSessionCatalog } from "./session-catalog";
 
-export async function isDirectoryHandleReadable(
-  dirHandle: FileSystemDirectoryHandle,
-): Promise<boolean> {
-  try {
-    const permission = await dirHandle.queryPermission({ mode: "read" });
-    if (permission !== "granted") {
-      return false;
-    }
-
-    const iterator = dirHandle.values();
-    try {
-      await iterator.next();
-    } finally {
-      if (typeof iterator.return === "function") {
-        await iterator.return();
-      }
-    }
-
-    return true;
-  } catch {
-    return false;
-  }
+/** Remove legacy persisted handles only (keeps catalog snapshot). */
+export async function clearPersistedLibraryHandles(): Promise<void> {
+  await clearDirectoryHandle();
 }
 
 export async function clearPersistedLibrary(): Promise<void> {
+  clearSessionCatalog();
   await Promise.all([clearDirectoryHandle(), clearLibrarySnapshot()]);
 }

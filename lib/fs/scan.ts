@@ -1,4 +1,5 @@
 import { createEntryId, isSupportedFileName, type LibraryEntry } from "./types";
+import { fsDebug, fsDebugError } from "./debug";
 import { withTimeout } from "./timeout";
 
 export interface ScanProgress {
@@ -70,63 +71,87 @@ export async function scanDirectoryTree(
   root: FileSystemDirectoryHandle,
   onProgress?: (progress: ScanProgress) => void,
 ): Promise<LibraryEntry[]> {
+  fsDebug("scanDirectoryTree: start", { folderName: root.name });
+
   const entries: LibraryEntry[] = [];
   const queue: ScanQueueItem[] = [{ dir: root, prefix: "" }];
   let visitedDirs = 0;
 
-  while (queue.length > 0) {
-    const { dir, prefix } = queue.shift()!;
-    visitedDirs += 1;
+  try {
+    while (queue.length > 0) {
+      const { dir, prefix } = queue.shift()!;
+      visitedDirs += 1;
 
-    if (visitedDirs > MAX_VISITED_DIRECTORIES) {
-      throw new Error(
-        "Folder is too large or contains too many subfolders to scan.",
-      );
-    }
-
-    if (visitedDirs % 8 === 0) {
-      await yieldToMain();
-    }
-
-    for await (const [name, handle] of iterateDirectoryEntries(dir)) {
-      const relativePath = prefix ? `${prefix}/${name}` : name;
-
-      if (handle.kind === "directory") {
-        queue.push({
-          dir: handle as FileSystemDirectoryHandle,
-          prefix: relativePath,
+      if (visitedDirs === 1) {
+        fsDebug("scanDirectoryTree: reading root directory", {
+          folderName: root.name,
         });
-        continue;
       }
 
-      if (handle.kind !== "file" || !isSupportedFileName(name)) {
-        continue;
+      if (visitedDirs > MAX_VISITED_DIRECTORIES) {
+        throw new Error(
+          "Folder is too large or contains too many subfolders to scan.",
+        );
       }
 
-      const libraryEntry: LibraryEntry = {
-        id: createEntryId(relativePath),
-        name,
-        relativePath,
-        size: 0,
-        lastModified: 0,
-        handle: handle as FileSystemFileHandle,
-        profileId: null,
-      };
+      if (visitedDirs % 8 === 0) {
+        await yieldToMain();
+      }
 
-      entries.push(libraryEntry);
-      onProgress?.({
-        count: entries.length,
-        latestPath: relativePath,
-        latestEntry: libraryEntry,
-      });
+      for await (const [name, handle] of iterateDirectoryEntries(dir)) {
+        const relativePath = prefix ? `${prefix}/${name}` : name;
+
+        if (handle.kind === "directory") {
+          queue.push({
+            dir: handle as FileSystemDirectoryHandle,
+            prefix: relativePath,
+          });
+          continue;
+        }
+
+        if (handle.kind !== "file" || !isSupportedFileName(name)) {
+          continue;
+        }
+
+        const libraryEntry: LibraryEntry = {
+          id: createEntryId(relativePath),
+          name,
+          relativePath,
+          size: 0,
+          lastModified: 0,
+          handle: handle as FileSystemFileHandle,
+          profileId: null,
+        };
+
+        entries.push(libraryEntry);
+        onProgress?.({
+          count: entries.length,
+          latestPath: relativePath,
+          latestEntry: libraryEntry,
+        });
+      }
     }
-  }
 
-  entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
-  onProgress?.({
-    count: entries.length,
-    latestPath: "",
-    done: true,
-  });
-  return entries;
+    entries.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    onProgress?.({
+      count: entries.length,
+      latestPath: "",
+      done: true,
+    });
+
+    fsDebug("scanDirectoryTree: complete", {
+      folderName: root.name,
+      visitedDirs,
+      photoCount: entries.length,
+    });
+
+    return entries;
+  } catch (error) {
+    fsDebugError("scanDirectoryTree: failed", error, {
+      folderName: root.name,
+      visitedDirs,
+      photoCount: entries.length,
+    });
+    throw error;
+  }
 }

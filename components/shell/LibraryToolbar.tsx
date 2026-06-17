@@ -1,6 +1,7 @@
 "use client";
 
 import { useLibraryStore } from "@/stores/library-store";
+import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
 import { IconDynamicGrid, IconFolder, IconGrid } from "./icons";
 
 export type SortOption = "name" | "date";
@@ -37,30 +38,25 @@ export function LibraryToolbar({
     importError,
     needsFolderAccess,
     isSupportedBrowser,
-    pickFolder,
-    restoreLastFolder,
+    clearLibrary,
   } = useLibraryStore();
-
-  const busy = importState === "importing" || importState === "restoring";
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-panel px-2">
       {needsFolderAccess ? (
-        <button
-          type="button"
-          onClick={() => void restoreLastFolder({ interactive: true })}
-          disabled={!isSupportedBrowser || busy}
+        <FolderPickerButton
+          mode="restore"
+          disabled={!isSupportedBrowser}
           className="flex h-7 items-center gap-1.5 rounded bg-lr-accent/20 px-2.5 text-xs text-lr-accent transition hover:bg-lr-accent/30 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <IconFolder className="h-3.5 w-3.5" />
           {importState === "restoring" ? "Re-linking..." : "Re-link folder"}
-        </button>
+        </FolderPickerButton>
       ) : null}
 
-      <button
-        type="button"
-        onClick={() => void pickFolder()}
-        disabled={!isSupportedBrowser || busy}
+      <FolderPickerButton
+        mode="import"
+        disabled={!isSupportedBrowser}
         className="flex h-7 items-center gap-1.5 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-50"
       >
         <IconFolder className="h-3.5 w-3.5 text-lr-accent" />
@@ -69,19 +65,25 @@ export function LibraryToolbar({
           : needsFolderAccess
             ? "Import different folder"
             : "Import"}
-      </button>
+      </FolderPickerButton>
 
       {folderName && !needsFolderAccess ? (
-        <button
-          type="button"
-          onClick={() => void restoreLastFolder({ interactive: true })}
-          disabled={busy}
-          className="h-7 rounded px-2 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
-          title="Re-grant folder access"
+        <FolderPickerButton
+          mode="restore"
+          className="h-7 rounded px-2 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
         >
           {importState === "restoring" ? "Restoring..." : "Re-link"}
-        </button>
+        </FolderPickerButton>
       ) : null}
+
+      <button
+        type="button"
+        onClick={() => void clearLibrary()}
+        className="h-7 rounded px-2 text-xs text-lr-text-dim transition hover:bg-lr-panel-raised hover:text-red-400"
+        title="Clear saved library and reset folder access"
+      >
+        Reset
+      </button>
 
       <div className="mx-1 h-4 w-px bg-lr-border-subtle" />
 

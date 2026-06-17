@@ -11,6 +11,7 @@ import {
 } from "@/components/shell/LibraryToolbar";
 import { SidePanel } from "@/components/shell/SidePanel";
 import { TopBar } from "@/components/shell/TopBar";
+import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
 import { useLibraryStore } from "@/stores/library-store";
 
 function filterEntries(
@@ -46,8 +47,9 @@ export default function HomePage() {
   const importState = useLibraryStore((state) => state.importState);
   const importStatus = useLibraryStore((state) => state.importStatus);
   const importError = useLibraryStore((state) => state.importError);
-  const restoreLastFolder = useLibraryStore((state) => state.restoreLastFolder);
-  const pickFolder = useLibraryStore((state) => state.pickFolder);
+  const cancelFolderOperation = useLibraryStore(
+    (state) => state.cancelFolderOperation,
+  );
 
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
@@ -102,29 +104,26 @@ export default function HomePage() {
                     {folderName
                       ? `Select "${folderName}" again to restore access.`
                       : "Select your photo folder again to restore access."}{" "}
-                    If nothing happens, check for a hidden folder dialog behind this window.
-                    Cloud-synced folders (iCloud, OneDrive) may not work reliably.
+                    After a page reload you must pick the folder again. Always use the
+                    same address (e.g. localhost:3000, not 127.0.0.1). If no dialog
+                    appears, check behind this window or try a local folder (not iCloud).
                   </p>
                 </div>
                 <div className="flex flex-col items-center gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={() => void restoreLastFolder({ interactive: true })}
-                    disabled={importState === "restoring"}
-                    className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90 disabled:opacity-50"
+                  <FolderPickerButton
+                    mode="restore"
+                    className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
                   >
                     {importState === "restoring" ? "Re-linking…" : "Re-link folder"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void pickFolder()}
-                    disabled={importState === "importing"}
-                    className="rounded border border-lr-border-subtle px-4 py-2 text-sm text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
+                  </FolderPickerButton>
+                  <FolderPickerButton
+                    mode="import"
+                    className="rounded border border-lr-border-subtle px-4 py-2 text-sm text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
                   >
                     {importState === "importing"
                       ? "Importing…"
                       : "Import different folder"}
-                  </button>
+                  </FolderPickerButton>
                 </div>
                 {importStatus ? (
                   <p className="max-w-sm text-xs text-lr-text-dim">{importStatus}</p>
@@ -161,17 +160,23 @@ export default function HomePage() {
                 {importError ? (
                   <p className="max-w-sm text-xs text-red-400">{importError}</p>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={() => cancelFolderOperation()}
+                  className="rounded border border-lr-border-subtle px-4 py-2 text-sm text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
+                >
+                  Cancel
+                </button>
               </div>
             ) : importError ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <p className="text-sm text-red-400">{importError}</p>
-                <button
-                  type="button"
-                  onClick={() => void pickFolder()}
+                <FolderPickerButton
+                  mode="import"
                   className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
                 >
                   Try again
-                </button>
+                </FolderPickerButton>
               </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -182,6 +187,12 @@ export default function HomePage() {
                   Click Import in the toolbar to link a local photo folder.
                   Files stay on your machine.
                 </p>
+                <FolderPickerButton
+                  mode="import"
+                  className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
+                >
+                  Import folder
+                </FolderPickerButton>
               </div>
             )}
           </main>

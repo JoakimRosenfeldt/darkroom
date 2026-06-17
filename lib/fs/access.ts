@@ -1,77 +1,112 @@
-import { withTimeout } from "./timeout";
+import { fsDebug, fsDebugError, fsDebugWarn } from "./debug";
 
-const FOLDER_PROBE_TIMEOUT_MS = 20_000;
-const PERMISSION_REQUEST_TIMEOUT_MS = 30_000;
-
-async function probeDirectoryReadable(
-  dirHandle: FileSystemDirectoryHandle,
-): Promise<void> {
-  await withTimeout(
-    (async () => {
-      const iterator = dirHandle.values();
-      try {
-        await iterator.next();
-      } finally {
-        if (typeof iterator.return === "function") {
-          await iterator.return();
-        }
-      }
-    })(),
-    FOLDER_PROBE_TIMEOUT_MS,
-    "The folder is not responding. Cloud-synced folders (iCloud, OneDrive, Google Drive) often block access — try a fully local folder.",
-  );
+export function isPhotoFolderPickerActive(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.DarkroomPickerBridge?.isActive() ?? false;
 }
 
-export async function ensureFolderReadAccess(
-  dirHandle: FileSystemDirectoryHandle,
-): Promise<void> {
-  const permission = await dirHandle.queryPermission({ mode: "read" });
-
-  if (permission === "granted") {
-    await probeDirectoryReadable(dirHandle);
-    return;
-  }
-
-  if (permission === "denied") {
+function getBridge(): DarkroomPickerBridge {
+  if (typeof window === "undefined" || !window.DarkroomPickerBridge) {
     throw new Error(
-      "Folder access was denied. Reset site permissions for this page in Chrome settings and try again.",
+      "Folder picker is not ready. Reload the page and try again.",
     );
   }
-
-  let requested: PermissionState;
-  try {
-    requested = await withTimeout(
-      dirHandle.requestPermission({ mode: "read" }),
-      PERMISSION_REQUEST_TIMEOUT_MS,
-      "Folder permission request timed out. Click Re-link again and approve access in the dialog.",
-    );
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "SecurityError") {
-      throw new Error(
-        "Could not request folder access. Click Re-link again to grant permission.",
-      );
-    }
-    throw error;
-  }
-
-  if (requested !== "granted") {
-    throw new Error(`Folder access was not granted (${requested}).`);
-  }
-
-  await probeDirectoryReadable(dirHandle);
+  return window.DarkroomPickerBridge;
 }
 
-export async function pickPhotoFolder(): Promise<FileSystemDirectoryHandle> {
+/**
+ * Open the system folder picker. Must be called synchronously from a native
+ * click handler — do not await anything before this call.
+ */
+export function openPhotoFolderPicker(
+  mode: "import" | "restore" = "import",
+): Promise<FileSystemDirectoryHandle> {
   if (!("showDirectoryPicker" in window)) {
-    throw new Error("Folder import requires a Chromium-based browser.");
+    fsDebugError("openPhotoFolderPicker: unsupported browser");
+    return Promise.reject(
+      new Error("Folder import requires a Chromium-based browser."),
+    );
   }
 
-  const dirHandle = await window.showDirectoryPicker({
-    mode: "read",
+  const bridge = getBridge();
+
+  if (!bridge.isNativePicker()) {
+    fsDebugWarn("openPhotoFolderPicker: showDirectoryPicker is not native", {
+      hint: "Disable browser extensions that may patch the File System Access API.",
+    });
+  }
+
+  if (bridge.isActive()) {
+    fsDebugWarn("openPhotoFolderPicker: picker already active");
+  }
+
+  fsDebug("openPhotoFolderPicker: delegating to picker bridge", {
+    mode,
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    embedded: window.self !== window.top,
   });
 
-  // The picker already grants read access. Do not call requestPermission here —
-  // user activation may have expired and that call can hang indefinitely.
-  await probeDirectoryReadable(dirHandle);
-  return dirHandle;
+  return bridge.open(mode);
+}
+
+export function watchPickerDiagnostics(
+  picker: Promise<FileSystemDirectoryHandle>,
+): void {
+  const onVisibility = () => {
+    fsDebug("picker: visibilitychange", {
+      hidden: document.hidden,
+      visibility: document.visibilityState,
+    });
+  };
+
+  const onFocus = () => {
+    fsDebug("picker: window focus");
+  };
+
+  const onBlur = () => {
+    fsDebug("picker: window blur");
+  };
+
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("focus", onFocus);
+  window.addEventListener("blur", onBlur);
+
+  window.setTimeout(() => {
+    if (!isPhotoFolderPickerActive()) {
+      return;
+    }
+    fsDebugWarn("picker: still waiting after 5s", {
+      visibility: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      hint: "Click Open in the folder dialog. Test http://localhost:3000/folder-picker-test.html in the same browser tab.",
+    });
+  }, 5_000);
+
+  void picker.finally(() => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("focus", onFocus);
+    window.removeEventListener("blur", onBlur);
+  });
+}
+
+export function formatPickerError(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === "AbortError") {
+      return "Folder selection was cancelled.";
+    }
+    if (
+      error.name === "NotAllowedError" &&
+      error.message.includes("File picker already active")
+    ) {
+      return "A folder dialog is already open. Select a folder and click Open, or close that dialog first.";
+    }
+    return `${error.name}: ${error.message}`;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "An unexpected error occurred.";
 }
