@@ -1,9 +1,5 @@
 import type { LibraryEntry } from "@/lib/fs/types";
-import {
-  getCachedThumbnail,
-  setCachedThumbnail,
-} from "@/lib/cache/thumbnail-cache";
-import { decodeEntry } from "@/lib/raw/decode";
+import { resolveEntryAspectRatio } from "@/lib/library/entry-dimensions";
 
 const aspectRatioCache = new Map<string, number>();
 
@@ -11,39 +7,30 @@ function cacheKey(entry: LibraryEntry): string {
   return `${entry.relativePath}:${entry.lastModified}`;
 }
 
-async function getThumbnailBlob(entry: LibraryEntry): Promise<Blob> {
-  const thumbKey = {
-    relativePath: entry.relativePath,
-    lastModified: entry.lastModified,
-    thumbnail: true,
-  };
-
-  let blob = await getCachedThumbnail(thumbKey);
-  if (!blob) {
-    const decoded = await decodeEntry(entry, {
-      thumbnail: true,
-      maxEdge: 480,
-    });
-    blob = decoded.blob;
-    URL.revokeObjectURL(decoded.objectUrl);
-    await setCachedThumbnail(thumbKey, blob);
-  }
-
-  return blob;
+export function getCachedEntryAspectRatio(entry: LibraryEntry): number | undefined {
+  return aspectRatioCache.get(cacheKey(entry));
 }
 
-export async function getEntryAspectRatio(entry: LibraryEntry): Promise<number> {
+export function rememberEntryAspectRatio(
+  entry: LibraryEntry,
+  ratio: number,
+): void {
+  aspectRatioCache.set(cacheKey(entry), ratio);
+}
+
+export async function getEntryAspectRatio(
+  entry: LibraryEntry,
+  options: { priority?: number; signal?: AbortSignal } = {},
+): Promise<number> {
   const key = cacheKey(entry);
   const cached = aspectRatioCache.get(key);
   if (cached) {
     return cached;
   }
 
-  const blob = await getThumbnailBlob(entry);
-  const bitmap = await createImageBitmap(blob);
-  const ratio = bitmap.width / bitmap.height;
-  bitmap.close();
-
+  const ratio = await resolveEntryAspectRatio(entry, {
+    signal: options.signal,
+  });
   aspectRatioCache.set(key, ratio);
   return ratio;
 }

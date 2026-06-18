@@ -4,6 +4,7 @@ import {
   folderExists,
   getFolderName,
   readFileBuffer,
+  readFileHead,
   scanFolderTree,
   statFile,
 } from "./fs-service";
@@ -86,6 +87,17 @@ function registerIpcHandlers(): void {
       buffer.byteOffset + buffer.byteLength,
     );
   });
+
+  ipcMain.handle(
+    "darkroom:read-file-head",
+    async (_event, absolutePath: string, maxBytes: number) => {
+      const buffer = await readFileHead(absolutePath, maxBytes);
+      return buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength,
+      );
+    },
+  );
 
   ipcMain.handle("darkroom:stat-file", async (_event, absolutePath: string) => {
     return statFile(absolutePath);

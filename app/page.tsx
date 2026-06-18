@@ -56,10 +56,20 @@ export default function HomePage() {
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
 
-  const rawCount = entries.filter((entry) => entry.profileId !== "standard").length;
-  const standardCount = entries.filter(
-    (entry) => entry.profileId === "standard",
-  ).length;
+  const { rawCount, standardCount } = useMemo(() => {
+    let raw = 0;
+    let standard = 0;
+
+    for (const entry of entries) {
+      if (entry.profileId === "standard") {
+        standard += 1;
+      } else {
+        raw += 1;
+      }
+    }
+
+    return { rawCount: raw, standardCount: standard };
+  }, [entries]);
 
   const visibleEntries = useMemo(
     () => sortEntries(filterEntries(entries, filter), sort),

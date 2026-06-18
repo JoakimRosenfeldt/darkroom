@@ -22,6 +22,10 @@ const darkroom = {
     return ipcRenderer.invoke("darkroom:read-file", absolutePath);
   },
 
+  readFileHead(absolutePath: string, maxBytes: number): Promise<ArrayBuffer> {
+    return ipcRenderer.invoke("darkroom:read-file-head", absolutePath, maxBytes);
+  },
+
   statFile(absolutePath: string): Promise<{ size: number; lastModified: number }> {
     return ipcRenderer.invoke("darkroom:stat-file", absolutePath);
   },

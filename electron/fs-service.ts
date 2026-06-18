@@ -77,6 +77,22 @@ export async function readFileBuffer(absolutePath: string): Promise<Buffer> {
   return fs.readFile(absolutePath);
 }
 
+export async function readFileHead(
+  absolutePath: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const handle = await fs.open(absolutePath, "r");
+  try {
+    const stat = await handle.stat();
+    const length = Math.min(Math.max(1, maxBytes), stat.size);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, 0);
+    return buffer;
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function statFile(absolutePath: string): Promise<{
   size: number;
   lastModified: number;

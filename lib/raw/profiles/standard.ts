@@ -5,13 +5,33 @@ const STANDARD_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 async function blobToDecodedImage(
   blob: Blob,
   metadata: Record<string, unknown>,
+  includePixels: boolean,
 ): Promise<DecodedImage> {
   const bitmap = await createImageBitmap(blob);
+
+  if (!includePixels) {
+    const width = bitmap.width;
+    const height = bitmap.height;
+    bitmap.close();
+
+    return {
+      width,
+      height,
+      rgb: new Uint8Array(0),
+      bits: 8,
+      colors: 4,
+      metadata,
+      blob,
+      objectUrl: URL.createObjectURL(blob),
+    };
+  }
+
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
   const context = canvas.getContext("2d");
   if (!context) {
+    bitmap.close();
     throw new Error("Could not create canvas context");
   }
   context.drawImage(bitmap, 0, 0);
@@ -84,10 +104,14 @@ export const standardImageProfile: ImageProfile = {
       blob = await resizeBlob(blob, options.maxEdge);
     }
 
-    return blobToDecodedImage(blob, {
-      format: mimeType,
-      source: "standard",
-    });
+    return blobToDecodedImage(
+      blob,
+      {
+        format: mimeType,
+        source: "standard",
+      },
+      Boolean(options?.thumbnail),
+    );
   },
 };
 

@@ -1,51 +1,166 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getEntryAspectRatio } from "@/lib/library/grid-layout";
+import { runWithAspectLoadLimit } from "@/lib/cache/aspect-ratio-loader";
+import { getPersistedAspectRatio } from "@/lib/cache/aspect-ratio-cache";
+import {
+  getCachedEntryAspectRatio,
+  getEntryAspectRatio,
+  rememberEntryAspectRatio,
+} from "@/lib/library/grid-layout";
 
-export function useEntryAspectRatios(entries: LibraryEntry[]) {
-  const [aspectRatios, setAspectRatios] = useState<Map<string, number>>(
-    () => new Map(),
+function seedAspectRatios(entries: LibraryEntry[]): Map<string, number> {
+  const seeded = new Map<string, number>();
+  for (const entry of entries) {
+    const cached = getCachedEntryAspectRatio(entry);
+    if (cached) {
+      seeded.set(entry.id, cached);
+    }
+  }
+  return seeded;
+}
+
+function priorityForIndex(index: number): number {
+  return Math.max(1, 100 - index);
+}
+
+export function useEntryAspectRatios(
+  entries: LibraryEntry[],
+  priorityEntryIds: string[],
+) {
+  const entriesById = useMemo(
+    () => new Map(entries.map((entry) => [entry.id, entry])),
+    [entries],
   );
-  const [loading, setLoading] = useState(entries.length > 0);
+  const [aspectRatios, setAspectRatios] = useState<Map<string, number>>(() =>
+    seedAspectRatios(entries),
+  );
+  const inFlightRef = useRef(new Set<string>());
+  const loadedRef = useRef(new Set<string>());
+  const pendingUpdatesRef = useRef(new Map<string, number>());
+  const flushFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (entries.length === 0) {
-      setAspectRatios(new Map());
-      setLoading(false);
-      return;
+    const seeded = seedAspectRatios(entries);
+    loadedRef.current = new Set(seeded.keys());
+    setAspectRatios((current) => {
+      const next = new Map(seeded);
+      for (const [id, ratio] of current) {
+        if (entriesById.has(id) && !next.has(id)) {
+          next.set(id, ratio);
+          loadedRef.current.add(id);
+        }
+      }
+      return next;
+    });
+    inFlightRef.current.clear();
+    pendingUpdatesRef.current.clear();
+  }, [entries, entriesById]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function scheduleUpdate(id: string, ratio: number) {
+      pendingUpdatesRef.current.set(id, ratio);
+      if (flushFrameRef.current === null) {
+        flushFrameRef.current = window.requestAnimationFrame(() => {
+          flushFrameRef.current = null;
+          if (pendingUpdatesRef.current.size === 0) {
+            return;
+          }
+
+          const batch = pendingUpdatesRef.current;
+          pendingUpdatesRef.current = new Map();
+
+          setAspectRatios((current) => {
+            const next = new Map(current);
+            for (const [entryId, ratio] of batch) {
+              next.set(entryId, ratio);
+            }
+            return next;
+          });
+        });
+      }
     }
 
-    let cancelled = false;
-    setLoading(true);
-
-    async function loadAspectRatios() {
-      const results = await Promise.all(
-        entries.map(async (entry) => {
-          try {
-            const ratio = await getEntryAspectRatio(entry);
-            return [entry.id, ratio] as const;
-          } catch {
-            return [entry.id, 1] as const;
-          }
-        }),
-      );
-
-      if (cancelled) {
+    async function hydratePersistedRatio(entryId: string) {
+      const entry = entriesById.get(entryId);
+      if (!entry || loadedRef.current.has(entryId)) {
         return;
       }
 
-      setAspectRatios(new Map(results));
-      setLoading(false);
+      const cached = getCachedEntryAspectRatio(entry);
+      if (cached) {
+        loadedRef.current.add(entryId);
+        rememberEntryAspectRatio(entry, cached);
+        scheduleUpdate(entryId, cached);
+        return;
+      }
+
+      const persisted = await getPersistedAspectRatio(entry);
+      if (cancelled || !persisted || loadedRef.current.has(entryId)) {
+        return;
+      }
+
+      loadedRef.current.add(entryId);
+      rememberEntryAspectRatio(entry, persisted);
+      scheduleUpdate(entryId, persisted);
     }
 
-    void loadAspectRatios();
+    async function loadAspectRatio(entryId: string, priority: number) {
+      if (
+        cancelled ||
+        loadedRef.current.has(entryId) ||
+        inFlightRef.current.has(entryId) ||
+        !entriesById.has(entryId)
+      ) {
+        return;
+      }
+
+      const entry = entriesById.get(entryId)!;
+      inFlightRef.current.add(entryId);
+
+      try {
+        const ratio = await runWithAspectLoadLimit(
+          () => getEntryAspectRatio(entry),
+          priority,
+        );
+        if (!cancelled) {
+          loadedRef.current.add(entryId);
+          rememberEntryAspectRatio(entry, ratio);
+          scheduleUpdate(entryId, ratio);
+        }
+      } catch {
+        if (!cancelled) {
+          loadedRef.current.add(entryId);
+          scheduleUpdate(entryId, 1);
+        }
+      } finally {
+        inFlightRef.current.delete(entryId);
+      }
+    }
+
+    const uniquePriorityIds = [...new Set(priorityEntryIds)].filter(
+      (entryId) => entriesById.has(entryId) && !loadedRef.current.has(entryId),
+    );
+
+    for (const entryId of uniquePriorityIds) {
+      void hydratePersistedRatio(entryId);
+    }
+
+    for (const [index, entryId] of uniquePriorityIds.entries()) {
+      void loadAspectRatio(entryId, priorityForIndex(index));
+    }
 
     return () => {
       cancelled = true;
+      if (flushFrameRef.current !== null) {
+        window.cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
     };
-  }, [entries]);
+  }, [entriesById, priorityEntryIds]);
 
-  return { aspectRatios, loading };
+  return { aspectRatios };
 }

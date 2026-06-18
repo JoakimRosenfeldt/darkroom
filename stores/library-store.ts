@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { formatPickerError } from "@/lib/fs/access";
 import {
   getLibrarySnapshot,
-  refreshEntryMetadata,
   saveLibrarySnapshot,
   scanDirectory,
   type ScanProgress,
@@ -37,6 +36,8 @@ interface LibraryStore {
   importError: string | null;
   needsFolderAccess: boolean;
   isDesktopApp: boolean;
+  selectedEntryId: string | null;
+  setSelectedEntryId: (id: string | null) => void;
   importFromFolderPath: (
     rootPath: string,
     folderName: string,
@@ -116,21 +117,28 @@ async function completeDirectoryImport(
 ): Promise<void> {
   try {
     set({ importStatus: `Scanning "${folderName}"…` });
+    let lastProgressStatusAt = 0;
 
     const scanned = attachProfiles(
       await loadFolderCatalog(rootPath, generation, (progress) => {
         if (!isActiveFolderOperation(generation)) {
           return;
         }
-        if (progress.count === 1 || progress.done || progress.count % 25 === 0) {
+        const shouldUpdateStatus =
+          progress.count === 1 ||
+          progress.done ||
+          progress.count - lastProgressStatusAt >= 25;
+
+        if (shouldUpdateStatus) {
+          lastProgressStatusAt = progress.count;
           fsDebug("completeDirectoryImport: scan progress", {
             generation,
             count: progress.count,
             latestPath: progress.latestPath,
             done: progress.done ?? false,
           });
+          set({ importStatus: `Found ${progress.count} photos…` });
         }
-        set({ importStatus: `Found ${progress.count} photos…` });
       }),
     );
 
@@ -157,6 +165,7 @@ async function completeDirectoryImport(
       folderName,
       rootPath,
       entries: scanned,
+      selectedEntryId: scanned[0]?.id ?? null,
       needsFolderAccess: false,
       importState: "idle",
       importStatus: null,
@@ -164,18 +173,6 @@ async function completeDirectoryImport(
     });
 
     persistSnapshotInBackground(folderName, rootPath, scanned);
-
-    void refreshEntryMetadata(scanned).then((refreshed) => {
-      if (!isActiveFolderOperation(generation)) {
-        return;
-      }
-      const withProfiles = attachProfiles(refreshed);
-      if (get().rootPath === rootPath) {
-        setSessionCatalog(folderName, withProfiles, rootPath);
-        set({ entries: withProfiles });
-        persistSnapshotInBackground(folderName, rootPath, withProfiles);
-      }
-    });
   } catch (error) {
     if (!isActiveFolderOperation(generation)) {
       return;
@@ -200,8 +197,11 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   importError: null,
   needsFolderAccess: false,
   isDesktopApp: false,
+  selectedEntryId: null,
 
   setDesktopApp: (desktop) => set({ isDesktopApp: desktop }),
+
+  setSelectedEntryId: (id) => set({ selectedEntryId: id }),
 
   bootstrapLibrary: async () => {
     fsDebug("bootstrapLibrary: start");
@@ -216,10 +216,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           rootPath,
           entryCount: entries.length,
         });
+        const restoredEntries = attachProfiles(entries);
         set({
           folderName,
           rootPath,
-          entries: attachProfiles(entries),
+          entries: restoredEntries,
+          selectedEntryId:
+            get().selectedEntryId &&
+            restoredEntries.some((entry) => entry.id === get().selectedEntryId)
+              ? get().selectedEntryId
+              : (restoredEntries[0]?.id ?? null),
           needsFolderAccess: false,
           importState: "idle",
           importError: null,
@@ -361,6 +367,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       folderName: null,
       rootPath: null,
       entries: [],
+      selectedEntryId: null,
       importState: "idle",
       importStatus: null,
       importError: null,

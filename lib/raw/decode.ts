@@ -23,7 +23,10 @@ export async function decodeEntry(
   };
 
   if (options?.thumbnail) {
-    return withThumbnailSlot(decode);
+    return withThumbnailSlot(decode, {
+      priority: options.priority,
+      signal: options.signal,
+    });
   }
 
   return decode();

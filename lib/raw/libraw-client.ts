@@ -164,6 +164,27 @@ async function decodeEmbeddedThumbnail(
   });
 }
 
+export async function readRawDimensions(
+  input: Uint8Array,
+): Promise<{ width: number; height: number } | null> {
+  return runLibRaw(async (raw) => {
+    await raw.open(
+      input.slice() as BufferSource,
+      buildSettings({ thumbnail: true }, true),
+    );
+
+    const metadata = await raw.metadata(false);
+    if (!metadata?.width || !metadata?.height) {
+      return null;
+    }
+
+    return {
+      width: metadata.width,
+      height: metadata.height,
+    };
+  });
+}
+
 export async function decodeWithLibRaw(
   input: Uint8Array,
   options: DecodeOptions = {},

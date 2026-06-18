@@ -64,6 +64,21 @@ export async function getFileFromEntry(
   return new File([buffer], entry.name);
 }
 
+export async function getFileHeadFromEntry(
+  entry: Pick<LibraryEntry, "relativePath">,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const rootPath = getSessionRootPath();
+  if (!rootPath) {
+    throw new Error("No folder is open.");
+  }
+
+  const api = getDarkroomAPI();
+  const absolutePath = joinRootPath(rootPath, entry.relativePath);
+  const buffer = await api.readFileHead(absolutePath, maxBytes);
+  return new Uint8Array(buffer);
+}
+
 export async function saveLibrarySnapshot(
   folderName: string,
   rootPath: string,

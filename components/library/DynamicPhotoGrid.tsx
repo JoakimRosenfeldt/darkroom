@@ -1,9 +1,11 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { measureContentWidth, packDynamicRows } from "@/lib/library/grid-layout";
+import { collectVisibleEntryIds } from "@/lib/library/visible-entry-ids";
+import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
 import { useEntryAspectRatios } from "./useEntryAspectRatios";
 
@@ -17,8 +19,14 @@ const TILE_GAP = 2;
 
 export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const didScrollToSelectedRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
-  const { aspectRatios, loading } = useEntryAspectRatios(entries);
+  const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const [visibleEntryIds, setVisibleEntryIds] = useState<string[]>([]);
+  const getScrollRoot = useCallback(() => parentRef.current, []);
+
+  const { aspectRatios } = useEntryAspectRatios(entries, visibleEntryIds);
 
   const rows = useMemo(
     () =>
@@ -60,7 +68,90 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
     overscan: 4,
   });
 
-  const layoutReady = containerWidth > 0 && !loading && rows.length > 0;
+  const layoutReady = containerWidth > 0 && rows.length > 0;
+  const selectedRowIndex = useMemo(() => {
+    if (!selectedEntryId) {
+      return -1;
+    }
+
+    return rows.findIndex((row) =>
+      row.tiles.some((tile) => tile.entry.id === selectedEntryId),
+    );
+  }, [rows, selectedEntryId]);
+
+  useEffect(() => {
+    if (
+      !layoutReady ||
+      didScrollToSelectedRef.current ||
+      selectedRowIndex < 0
+    ) {
+      return;
+    }
+
+    didScrollToSelectedRef.current = true;
+    virtualizer.scrollToIndex(selectedRowIndex, { align: "center" });
+  }, [layoutReady, selectedRowIndex, virtualizer]);
+
+  const visibleRows = useMemo(
+    () =>
+      rows.map((row) => ({
+        height: row.height,
+        entryIds: row.tiles.map((tile) => tile.entry.id),
+      })),
+    [rows],
+  );
+
+  useEffect(() => {
+    const element = parentRef.current;
+    if (!element || visibleRows.length === 0) {
+      return;
+    }
+
+    const scrollElement = element;
+
+    function updateVisibleEntryIds() {
+      const next = collectVisibleEntryIds(
+        scrollElement,
+        virtualizer.getVirtualItems(),
+        visibleRows,
+        selectedEntryId,
+      );
+
+      setVisibleEntryIds((current) => {
+        if (
+          current.length === next.length &&
+          current.every((id, index) => id === next[index])
+        ) {
+          return current;
+        }
+        return next;
+      });
+    }
+
+    updateVisibleEntryIds();
+    element.addEventListener("scroll", updateVisibleEntryIds, { passive: true });
+    window.addEventListener("resize", updateVisibleEntryIds);
+
+    return () => {
+      element.removeEventListener("scroll", updateVisibleEntryIds);
+      window.removeEventListener("resize", updateVisibleEntryIds);
+    };
+  }, [visibleRows, selectedEntryId, virtualizer]);
+
+  useLayoutEffect(() => {
+    const element = parentRef.current;
+    if (!element || visibleRows.length === 0) {
+      return;
+    }
+
+    const next = collectVisibleEntryIds(
+      element,
+      virtualizer.getVirtualItems(),
+      visibleRows,
+      selectedEntryId,
+    );
+    setVisibleEntryIds(next);
+  }, [layoutReady, visibleRows, selectedEntryId, virtualizer]);
 
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
@@ -97,6 +188,9 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
                     width={tile.width}
                     height={tile.height}
                     fit="cover"
+                    selected={tile.entry.id === selectedEntryId}
+                    onSelect={setSelectedEntryId}
+                    getScrollRoot={getScrollRoot}
                   />
                 ))}
               </div>

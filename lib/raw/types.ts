@@ -3,6 +3,8 @@ import type { FileRef } from "@/lib/fs/types";
 export interface DecodeOptions {
   thumbnail?: boolean;
   maxEdge?: number;
+  priority?: number;
+  signal?: AbortSignal;
 }
 
 export interface DecodedImage {

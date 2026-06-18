@@ -1,9 +1,10 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { measureContentWidth, packSquareRows } from "@/lib/library/grid-layout";
+import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
 
 interface PhotoGridProps {
@@ -16,7 +17,11 @@ const TILE_GAP = 2;
 
 export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const didScrollToSelectedRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
+  const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const getScrollRoot = useCallback(() => parentRef.current, []);
 
   const { rows } = useMemo(
     () => packSquareRows(entries, containerWidth, thumbSize, TILE_GAP),
@@ -52,6 +57,28 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   });
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
+  const selectedRowIndex = useMemo(() => {
+    if (!selectedEntryId) {
+      return -1;
+    }
+
+    return rows.findIndex((row) =>
+      row.entries.some((entry) => entry.id === selectedEntryId),
+    );
+  }, [rows, selectedEntryId]);
+
+  useEffect(() => {
+    if (
+      !layoutReady ||
+      didScrollToSelectedRef.current ||
+      selectedRowIndex < 0
+    ) {
+      return;
+    }
+
+    didScrollToSelectedRef.current = true;
+    virtualizer.scrollToIndex(selectedRowIndex, { align: "center" });
+  }, [layoutReady, selectedRowIndex, virtualizer]);
 
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
@@ -88,6 +115,9 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
                     width={row.cellSize}
                     height={row.cellSize}
                     fit="contain"
+                    selected={entry.id === selectedEntryId}
+                    onSelect={setSelectedEntryId}
+                    getScrollRoot={getScrollRoot}
                   />
                 ))}
               </div>

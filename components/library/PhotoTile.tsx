@@ -1,15 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { memo, useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import {
   createThumbnailObjectUrl,
-  getCachedThumbnail,
-  setCachedThumbnail,
+  loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
-import { decodeEntry } from "@/lib/raw/decode";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -18,43 +16,88 @@ interface PhotoTileProps {
   selected?: boolean;
   compact?: boolean;
   fit?: "contain" | "cover";
+  onSelect?: (entryId: string) => void;
+  getScrollRoot?: () => HTMLElement | null;
 }
 
-export function PhotoTile({
+const MIN_THUMBNAIL_EDGE = 360;
+
+export const PhotoTile = memo(function PhotoTile({
   entry,
   width,
   height,
   selected = false,
   compact = false,
   fit = "contain",
+  onSelect,
+  getScrollRoot,
 }: PhotoTileProps) {
+  const router = useRouter();
+  const tileRef = useRef<HTMLDivElement>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const decodeEdge = Math.max(width, height, 120);
+  const [isNearViewport, setIsNearViewport] = useState(false);
+  const [intersectionRatio, setIntersectionRatio] = useState(0);
+  const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+
+  useEffect(() => {
+    const element = tileRef.current;
+    if (!element) {
+      return;
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      setIsNearViewport(true);
+      setIntersectionRatio(1);
+      return;
+    }
+
+    const root = getScrollRoot?.() ?? null;
+    const observer = new IntersectionObserver(
+      ([observed]) => {
+        if (!observed) {
+          return;
+        }
+        setIsNearViewport(observed.isIntersecting);
+        setIntersectionRatio(observed.intersectionRatio);
+      },
+      {
+        root,
+        rootMargin: compact ? "160px 320px" : "320px",
+        threshold: [0, 0.25, 0.5, 0.75, 1],
+      },
+    );
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [compact, getScrollRoot]);
 
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
+    const controller = new AbortController();
+    setThumbnailUrl(null);
+    setStatus("loading");
+
+    if (!isNearViewport) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+
+    const loadPriority = selected
+      ? 30
+      : intersectionRatio >= 0.5
+        ? 20 + Math.round(intersectionRatio * 5)
+        : 12;
 
     async function loadThumbnail() {
       try {
-        const cacheKey = {
-          relativePath: entry.relativePath,
-          lastModified: entry.lastModified,
-          thumbnail: true,
-        };
-
-        let blob = await getCachedThumbnail(cacheKey);
-        if (!blob) {
-          const decoded = await decodeEntry(entry, {
-            thumbnail: true,
-            maxEdge: decodeEdge,
-          });
-          blob = decoded.blob;
-          URL.revokeObjectURL(decoded.objectUrl);
-          await setCachedThumbnail(cacheKey, blob);
-        }
-
+        const blob = await loadThumbnailBlob(entry, decodeEdge, {
+          priority: loadPriority,
+          signal: controller.signal,
+        });
         if (!active) {
           return;
         }
@@ -62,7 +105,10 @@ export function PhotoTile({
         objectUrl = createThumbnailObjectUrl(blob);
         setThumbnailUrl(objectUrl);
         setStatus("ready");
-      } catch {
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
         if (active) {
           setStatus("error");
         }
@@ -73,16 +119,18 @@ export function PhotoTile({
 
     return () => {
       active = false;
+      controller.abort();
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [entry, decodeEdge]);
+  }, [entry, decodeEdge, isNearViewport, intersectionRatio, selected]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
 
   const content = (
     <div
+      ref={tileRef}
       className={[
         "group relative shrink-0 overflow-hidden bg-[#141414]",
         selected
@@ -128,7 +176,30 @@ export function PhotoTile({
     return content;
   }
 
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
+        onClick={() => onSelect(entry.id)}
+        onDoubleClick={() =>
+          router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
+        }
+      >
+        {content}
+      </button>
+    );
+  }
+
   return (
-    <Link href={`/photo?id=${encodeURIComponent(entry.id)}`}>{content}</Link>
+    <button
+      type="button"
+      className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
+      onClick={() =>
+        router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
+      }
+    >
+      {content}
+    </button>
   );
-}
+});

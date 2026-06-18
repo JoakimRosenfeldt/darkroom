@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useLibraryStore } from "@/stores/library-store";
 
 type Module = "library" | "develop";
 
@@ -8,23 +9,40 @@ interface TopBarProps {
   activeModule?: Module;
   showBack?: boolean;
   title?: string;
+  developPhotoId?: string;
 }
-
-const MODULES: Array<{ id: Module; label: string; href: string; enabled: boolean }> =
-  [
-    { id: "library", label: "Library", href: "/", enabled: true },
-    { id: "develop", label: "Develop", href: "#", enabled: false },
-  ];
 
 export function TopBar({
   activeModule = "library",
   showBack = false,
   title,
+  developPhotoId,
 }: TopBarProps) {
+  const entries = useLibraryStore((state) => state.entries);
+  const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
+  const hasPhotos = entries.length > 0 && !needsFolderAccess;
+
+  const developTargetId =
+    developPhotoId ?? selectedEntryId ?? entries[0]?.id;
+  const developHref = developTargetId
+    ? `/photo?id=${encodeURIComponent(developTargetId)}`
+    : "/photo";
+
+  const modules: Array<{
+    id: Module;
+    label: string;
+    href: string;
+    enabled: boolean;
+  }> = [
+    { id: "library", label: "Library", href: "/", enabled: true },
+    { id: "develop", label: "Develop", href: developHref, enabled: hasPhotos },
+  ];
+
   return (
     <header className="flex h-10 shrink-0 items-stretch border-b border-lr-border-subtle bg-lr-toolbar">
       <div className="flex items-stretch border-r border-lr-border-subtle">
-        {MODULES.map((module) => {
+        {modules.map((module) => {
           const isActive = module.id === activeModule;
           const className = [
             "flex items-center px-4 text-xs font-medium tracking-wide transition-colors",
@@ -37,7 +55,15 @@ export function TopBar({
 
           if (!module.enabled) {
             return (
-              <span key={module.id} className={className} title="Coming soon">
+              <span
+                key={module.id}
+                className={className}
+                title={
+                  module.id === "develop"
+                    ? "Import a folder to open Develop"
+                    : "Unavailable"
+                }
+              >
                 {module.label}
               </span>
             );

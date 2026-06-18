@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { PhotoTile } from "@/components/library/PhotoTile";
 import { IconChevronLeft, IconChevronRight } from "@/components/shell/icons";
@@ -12,20 +13,33 @@ interface FilmstripProps {
 }
 
 const THUMB_SIZE = 72;
+const THUMB_GAP = 2;
 
 export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const activeIndex = entries.findIndex((entry) => entry.id === activeId);
+  const getScrollRoot = useCallback(() => scrollRef.current, []);
+  const activeIndex = useMemo(
+    () => entries.findIndex((entry) => entry.id === activeId),
+    [entries, activeId],
+  );
+  const virtualizer = useVirtualizer({
+    horizontal: true,
+    count: entries.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => THUMB_SIZE + THUMB_GAP,
+    overscan: 16,
+  });
 
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container || activeIndex < 0) {
+    if (activeIndex < 0) {
       return;
     }
 
-    const thumb = container.children[activeIndex] as HTMLElement | undefined;
-    thumb?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-  }, [activeIndex]);
+    virtualizer.scrollToIndex(activeIndex, {
+      align: "center",
+      behavior: "smooth",
+    });
+  }, [activeIndex, virtualizer]);
 
   function scrollBy(direction: -1 | 1) {
     scrollRef.current?.scrollBy({
@@ -78,24 +92,42 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
 
       <div
         ref={scrollRef}
-        className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 py-2"
+        className="min-w-0 flex-1 overflow-x-auto px-1 py-2"
       >
-        {entries.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => onSelect(entry.id)}
-            className="shrink-0"
-          >
-            <PhotoTile
-              entry={entry}
-              width={THUMB_SIZE}
-              height={THUMB_SIZE}
-              selected={entry.id === activeId}
-              compact
-            />
-          </button>
-        ))}
+        <div
+          className="relative h-full"
+          style={{ width: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const entry = entries[virtualItem.index];
+            if (!entry) {
+              return null;
+            }
+
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => onSelect(entry.id)}
+                className="absolute top-0 shrink-0"
+                style={{
+                  width: `${THUMB_SIZE}px`,
+                  height: `${THUMB_SIZE}px`,
+                  transform: `translateX(${virtualItem.start}px)`,
+                }}
+              >
+                <PhotoTile
+                  entry={entry}
+                  width={THUMB_SIZE}
+                  height={THUMB_SIZE}
+                  selected={entry.id === activeId}
+                  compact
+                  getScrollRoot={getScrollRoot}
+                />
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <button

@@ -2,11 +2,15 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { DecodedImage } from "@/lib/raw/decode";
-import { decodeEntry } from "@/lib/raw/decode";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import {
+  loadDevelopImage,
+  preloadDevelopImages,
+} from "@/lib/cache/develop-image-cache";
 import { TopBar } from "@/components/shell/TopBar";
+import { useLibraryStore } from "@/stores/library-store";
 import { Filmstrip } from "./Filmstrip";
 import { MetadataPanel } from "./MetadataPanel";
 
@@ -17,10 +21,19 @@ interface PhotoViewerProps {
 
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
-  const [decoded, setDecoded] = useState<DecodedImage | null>(null);
+  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const [decoded, setDecoded] = useState<DevelopImage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showMetadata, setShowMetadata] = useState(true);
+  const activeIndex = useMemo(
+    () => entries.findIndex((item) => item.id === entry.id),
+    [entries, entry.id],
+  );
+
+  useEffect(() => {
+    setSelectedEntryId(entry.id);
+  }, [entry.id, setSelectedEntryId]);
 
   useEffect(() => {
     let active = true;
@@ -31,12 +44,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setDecoded(null);
 
       try {
-        const result = await decodeEntry(entry, { thumbnail: false });
+        const result = await loadDevelopImage(entry);
         if (!active) {
-          URL.revokeObjectURL(result.objectUrl);
           return;
         }
         setDecoded(result);
+        preloadDevelopImages(entries, activeIndex);
       } catch (loadError) {
         if (active) {
           setError(
@@ -57,24 +70,19 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     return () => {
       active = false;
     };
-  }, [entry]);
-
-  useEffect(() => {
-    return () => {
-      if (decoded?.objectUrl) {
-        URL.revokeObjectURL(decoded.objectUrl);
-      }
-    };
-  }, [decoded]);
+  }, [entry, entries, activeIndex]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      const index = entries.findIndex((item) => item.id === entry.id);
-      if (event.key === "ArrowLeft" && index > 0) {
-        router.push(`/photo?id=${encodeURIComponent(entries[index - 1].id)}`);
+      if (event.key === "ArrowLeft" && activeIndex > 0) {
+        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
       }
-      if (event.key === "ArrowRight" && index >= 0 && index < entries.length - 1) {
-        router.push(`/photo?id=${encodeURIComponent(entries[index + 1].id)}`);
+      if (
+        event.key === "ArrowRight" &&
+        activeIndex >= 0 &&
+        activeIndex < entries.length - 1
+      ) {
+        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex + 1].id)}`);
       }
       if (event.key === "Escape") {
         router.push("/");
@@ -83,11 +91,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, entry.id, router]);
+  }, [entries, activeIndex, router]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <TopBar activeModule="library" showBack title={entry.name} />
+      <TopBar
+        activeModule="develop"
+        showBack
+        title={entry.name}
+        developPhotoId={entry.id}
+      />
 
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col bg-[#0d0d0d]">
