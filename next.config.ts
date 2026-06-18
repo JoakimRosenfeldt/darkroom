@@ -5,19 +5,6 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  async headers() {
-    return [
-      {
-        source: "/:path*",
-        headers: [
-          {
-            key: "Permissions-Policy",
-            value: "file-system-access=(self)",
-          },
-        ],
-      },
-    ];
-  },
   webpack: (config) => {
     config.experiments = {
       ...config.experiments,

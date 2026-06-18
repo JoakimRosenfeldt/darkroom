@@ -4,7 +4,6 @@ export interface FileRef {
   relativePath: string;
   size: number;
   lastModified: number;
-  handle: FileSystemFileHandle;
 }
 
 export interface LibraryEntry extends FileRef {
@@ -13,7 +12,8 @@ export interface LibraryEntry extends FileRef {
 
 export interface StoredLibrary {
   folderName: string;
-  entries: Array<Omit<LibraryEntry, "handle">>;
+  rootPath: string;
+  entries: Array<Omit<LibraryEntry, "profileId"> & { profileId: string | null }>;
   importedAt: number;
 }
 

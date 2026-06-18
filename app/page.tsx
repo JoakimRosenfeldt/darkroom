@@ -104,9 +104,7 @@ export default function HomePage() {
                     {folderName
                       ? `Select "${folderName}" again to restore access.`
                       : "Select your photo folder again to restore access."}{" "}
-                    After a page reload you must pick the folder again. Always use the
-                    same address (e.g. localhost:3000, not 127.0.0.1). If no dialog
-                    appears, check behind this window or try a local folder (not iCloud).
+                    The folder may have been moved or deleted.
                   </p>
                 </div>
                 <div className="flex flex-col items-center gap-2 sm:flex-row">

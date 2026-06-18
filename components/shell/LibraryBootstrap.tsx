@@ -2,23 +2,28 @@
 
 import { useEffect } from "react";
 import { fsDebug } from "@/lib/fs/debug";
+import { isElectronApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function LibraryBootstrap() {
   const bootstrapLibrary = useLibraryStore((state) => state.bootstrapLibrary);
-  const setSupportedBrowser = useLibraryStore(
-    (state) => state.setSupportedBrowser,
-  );
+  const setDesktopApp = useLibraryStore((state) => state.setDesktopApp);
 
   useEffect(() => {
-    const supported = "showDirectoryPicker" in window;
-    fsDebug("LibraryBootstrap: mount", {
-      supported,
-      origin: window.location.origin,
-    });
-    setSupportedBrowser(supported);
+    const desktop = isElectronApp();
+    fsDebug("LibraryBootstrap: mount", { desktop });
+    setDesktopApp(desktop);
+
+    if (!desktop) {
+      useLibraryStore.setState({
+        importError:
+          "Darkroom must be run as a desktop app. Use npm run electron:dev.",
+      });
+      return;
+    }
+
     void bootstrapLibrary();
-  }, [bootstrapLibrary, setSupportedBrowser]);
+  }, [bootstrapLibrary, setDesktopApp]);
 
   return null;
 }

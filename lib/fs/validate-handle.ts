@@ -1,13 +1,15 @@
 import { clearLibrarySnapshot } from "./directory";
-import { clearDirectoryHandle } from "./handles-store";
+import { getDarkroomAPI } from "./platform";
 import { clearSessionCatalog } from "./session-catalog";
 
-/** Remove legacy persisted handles only (keeps catalog snapshot). */
 export async function clearPersistedLibraryHandles(): Promise<void> {
-  await clearDirectoryHandle();
+  // Legacy no-op — Electron stores the folder path in app settings.
 }
 
 export async function clearPersistedLibrary(): Promise<void> {
   clearSessionCatalog();
-  await Promise.all([clearDirectoryHandle(), clearLibrarySnapshot()]);
+  await Promise.all([
+    getDarkroomAPI().setLastFolder(null),
+    clearLibrarySnapshot(),
+  ]);
 }

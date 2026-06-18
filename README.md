@@ -1,19 +1,15 @@
 # Darkroom
 
-A client-side photo library inspired by Lightroom. Darkroom reads photos directly from local folders on your machine — nothing is uploaded or copied to a server.
+A desktop photo library inspired by Lightroom. Darkroom reads photos directly from local folders on your machine — nothing is uploaded or copied to a server.
 
-## Browser requirements
-
-Darkroom requires a **Chromium-based browser** (Chrome or Edge) because it uses the [File System Access API](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access) for local folder access.
-
-Safari and Firefox are not supported in v1.
+Built as an **Electron** app with a Next.js UI, native folder access, and automatic restoration of your last library on launch.
 
 ## Features
 
-- **Local folder import** — pick a directory and browse supported images in place
-- **No uploads** — files are read on demand via `FileSystemFileHandle`
-- **Folder persistence** — the last opened folder handle is stored in IndexedDB; re-grant access on return visits
-- **RAW support (NEF)** — Nikon NEF files decode in the browser via [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm)
+- **Native folder import** — pick a directory and browse supported images in place
+- **No uploads** — files are read on demand from disk
+- **Persistent library** — your last folder is remembered across app restarts
+- **RAW support (NEF)** — Nikon NEF files decode via [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm)
 - **Standard images** — JPEG, PNG, and WebP via native browser decoding
 - **Virtualized grid** — handles large libraries without rendering every tile at once
 - **Thumbnail cache** — decoded previews cached in IndexedDB by path and modification time
@@ -23,25 +19,33 @@ Safari and Firefox are not supported in v1.
 
 ```bash
 npm install
-npm run dev
+npm run electron:dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in Chrome or Edge, click **Open folder**, and select a directory containing photos.
+This starts the Next.js dev server and opens the Electron window. Click **Import** in the toolbar and select a photo folder.
 
 ### Production build
 
 ```bash
 npm run build
+npm run electron:start
 ```
 
-The app is configured for static export (`output: "export"`) and can be deployed to Vercel, Cloudflare Pages, or any static host.
+### Packaged app
+
+```bash
+npm run dist
+```
+
+Installers are written to `release/`.
 
 ## Architecture
 
 ```
-app/                    Next.js routes (client-only)
+app/                    Next.js routes (client-only, static export)
 components/             UI: folder picker, grid, viewer
-lib/fs/                 File System Access API + IndexedDB persistence
+electron/               Main process, preload, native file I/O
+lib/fs/                 Folder scanning, file reads, persistence
 lib/raw/                Extensible decoder profile system
 lib/cache/              Thumbnail cache
 stores/                 Zustand library state
@@ -49,9 +53,9 @@ stores/                 Zustand library state
 
 ### Data flow
 
-1. User picks a folder via `showDirectoryPicker()`
-2. App scans recursively for supported extensions
-3. Directory handle + library index snapshot saved to IndexedDB
+1. User picks a folder via the native OS dialog (Electron `dialog.showOpenDialog`)
+2. Main process scans recursively for supported extensions
+3. Library index snapshot saved to IndexedDB; folder path saved in app settings
 4. Thumbnails decode in the background (libraw-wasm worker for RAW, canvas for standard)
 5. Full decode runs only on the photo detail page
 
@@ -93,6 +97,7 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 ## Tech stack
 
+- [Electron](https://www.electronjs.org/) — desktop shell and native file access
 - [Next.js 16](https://nextjs.org/) (App Router, static export)
 - [React 19](https://react.dev/)
 - [Tailwind CSS 4](https://tailwindcss.com/)
@@ -103,7 +108,6 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 ## Limitations (v1)
 
-- Chromium-only (no Safari/Firefox folder picker)
 - Read-only — no export or non-destructive editing yet
 - Single folder library
 - RAW decode is CPU-intensive; large NEF files may take a few seconds per thumbnail

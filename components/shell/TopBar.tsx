@@ -71,7 +71,7 @@ export function TopBar({
       </div>
 
       <div className="flex items-center border-l border-lr-border-subtle px-3 text-[11px] text-lr-text-dim">
-        Local · Client-side
+        Desktop · Local files
       </div>
     </header>
   );

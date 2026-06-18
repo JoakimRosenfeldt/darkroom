@@ -2,12 +2,17 @@
   "name": "darkroom",
   "version": "0.1.0",
   "private": true,
+  "main": "electron-dist/main.js",
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --webpack",
-    "start": "next start",
+    "build:next": "next build --webpack",
+    "build:electron": "node electron/build.mjs",
+    "build": "npm run build:next && npm run build:electron",
+    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && npm run build:electron && cross-env ELECTRON_DEV=1 electron .\"",
+    "electron:start": "npm run build:electron && electron .",
+    "dist": "npm run build && electron-builder",
     "lint": "eslint",
-    "postinstall": "node scripts/patch-libraw.mjs"
+    "postinstall": "node scripts/patch-libraw.mjs && node scripts/ensure-electron.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.3",
@@ -23,10 +28,45 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^35.7.5",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.9",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "playwright": "^1.61.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.darkroom.app",
+    "productName": "Darkroom",
+    "files": [
+      "electron-dist/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.photography",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
   }
 }

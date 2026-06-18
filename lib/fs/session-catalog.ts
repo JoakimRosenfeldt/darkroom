@@ -1,37 +1,41 @@
 import type { LibraryEntry } from "./types";
 
-let activeDirectoryHandle: FileSystemDirectoryHandle | null = null;
+let activeRootPath: string | null = null;
 let activeFolderName: string | null = null;
 let activeEntries: LibraryEntry[] = [];
 
 export function setSessionCatalog(
   folderName: string,
   entries: LibraryEntry[],
-  dirHandle: FileSystemDirectoryHandle | null = null,
+  rootPath: string | null = null,
 ): void {
   activeFolderName = folderName;
   activeEntries = entries;
-  activeDirectoryHandle = dirHandle;
+  activeRootPath = rootPath;
 }
 
 export function getSessionCatalog(): {
-  dirHandle: FileSystemDirectoryHandle | null;
+  rootPath: string | null;
   folderName: string | null;
   entries: LibraryEntry[];
 } {
   return {
-    dirHandle: activeDirectoryHandle,
+    rootPath: activeRootPath,
     folderName: activeFolderName,
     entries: activeEntries,
   };
 }
 
+export function getSessionRootPath(): string | null {
+  return activeRootPath;
+}
+
 export function hasSessionCatalog(): boolean {
-  return activeFolderName !== null && activeEntries.length > 0;
+  return activeRootPath !== null && activeEntries.length > 0;
 }
 
 export function clearSessionCatalog(): void {
-  activeDirectoryHandle = null;
+  activeRootPath = null;
   activeFolderName = null;
   activeEntries = [];
 }

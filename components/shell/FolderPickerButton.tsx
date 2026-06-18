@@ -3,7 +3,7 @@
 import { useCallback, useRef, type ReactNode } from "react";
 import {
   formatPickerError,
-  watchPickerDiagnostics,
+  openPhotoFolderPicker,
 } from "@/lib/fs/access";
 import { fsDebug, fsDebugError } from "@/lib/fs/debug";
 import { useLibraryStore } from "@/stores/library-store";
@@ -38,53 +38,27 @@ function handlePickerFailure(
 function startFolderPick(mode: "import" | "restore"): void {
   const { folderName, entries, importState } = useLibraryStore.getState();
 
-  fsDebug("startFolderPick: native click", {
+  fsDebug("startFolderPick: click", {
     mode,
     folderName,
     entryCount: entries.length,
     importState,
-    origin: window.location.origin,
-    visibility: document.visibilityState,
-    embedded: window.self !== window.top,
   });
 
-  const bridge = window.DarkroomPickerBridge;
-  if (!bridge) {
-    handlePickerFailure(
-      new Error("Folder picker is not ready. Reload the page and try again."),
-      mode,
-    );
-    return;
-  }
-
-  if (!bridge.isNativePicker()) {
-    fsDebugError("startFolderPick: showDirectoryPicker is not native", {
-      hint: "Disable browser extensions that may patch the File System Access API.",
-    });
-  }
-
-  let pickerPromise: Promise<FileSystemDirectoryHandle>;
-  try {
-    pickerPromise = bridge.open(mode);
-  } catch (error) {
-    handlePickerFailure(error, mode);
-    return;
-  }
-
-  watchPickerDiagnostics(pickerPromise);
-
-  void pickerPromise.then(
-    (dirHandle) => {
+  void openPhotoFolderPicker()
+    .then((result) => {
       fsDebug("startFolderPick: picker resolved, starting scan", {
         mode,
-        folderName: dirHandle.name,
+        folderName: result.name,
+        rootPath: result.path,
       });
-      useLibraryStore.getState().importFromDirectoryHandle(dirHandle, mode);
-    },
-    (error) => {
+      useLibraryStore
+        .getState()
+        .importFromFolderPath(result.path, result.name, mode);
+    })
+    .catch((error) => {
       handlePickerFailure(error, mode);
-    },
-  );
+    });
 }
 
 export function FolderPickerButton({

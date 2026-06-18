@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { formatPickerError, isPhotoFolderPickerActive } from "@/lib/fs/access";
+import { formatPickerError } from "@/lib/fs/access";
 import {
   getLibrarySnapshot,
   refreshEntryMetadata,
@@ -8,6 +8,7 @@ import {
   type ScanProgress,
 } from "@/lib/fs/directory";
 import { fsDebug, fsDebugError, fsDebugWarn } from "@/lib/fs/debug";
+import { getDarkroomAPI } from "@/lib/fs/platform";
 import {
   hasSessionCatalog,
   setSessionCatalog,
@@ -29,21 +30,23 @@ interface RestoreLastFolderOptions {
 
 interface LibraryStore {
   folderName: string | null;
+  rootPath: string | null;
   entries: LibraryEntry[];
   importState: ImportState;
   importStatus: string | null;
   importError: string | null;
   needsFolderAccess: boolean;
-  isSupportedBrowser: boolean;
-  importFromDirectoryHandle: (
-    dirHandle: FileSystemDirectoryHandle,
+  isDesktopApp: boolean;
+  importFromFolderPath: (
+    rootPath: string,
+    folderName: string,
     mode?: "import" | "restore",
   ) => void;
   restoreLastFolder: (options?: RestoreLastFolderOptions) => void;
   cancelFolderOperation: () => void;
   clearLibrary: () => Promise<void>;
   bootstrapLibrary: () => Promise<void>;
-  setSupportedBrowser: (supported: boolean) => void;
+  setDesktopApp: (desktop: boolean) => void;
 }
 
 const SCAN_TIMEOUT_MS = 90_000;
@@ -78,25 +81,26 @@ function attachProfiles(entries: LibraryEntry[]): LibraryEntry[] {
 
 function persistSnapshotInBackground(
   folderName: string,
+  rootPath: string,
   entries: LibraryEntry[],
 ): void {
-  void saveLibrarySnapshot(folderName, entries).catch(() => {
+  void saveLibrarySnapshot(folderName, rootPath, entries).catch(() => {
     // Snapshot persistence is best-effort.
   });
 }
 
 async function loadFolderCatalog(
-  dirHandle: FileSystemDirectoryHandle,
+  rootPath: string,
   generation: number,
   onProgress: (progress: ScanProgress) => void,
 ): Promise<LibraryEntry[]> {
   fsDebug("loadFolderCatalog: start", {
     generation,
-    folderName: dirHandle.name,
+    rootPath,
   });
 
   return withTimeout(
-    scanDirectory(dirHandle, onProgress),
+    scanDirectory(rootPath, onProgress),
     SCAN_TIMEOUT_MS,
     "Timed out while reading the folder. Try a local folder that is not synced with iCloud, OneDrive, or Google Drive.",
   );
@@ -104,16 +108,17 @@ async function loadFolderCatalog(
 
 async function completeDirectoryImport(
   generation: number,
-  dirHandle: FileSystemDirectoryHandle,
+  rootPath: string,
+  folderName: string,
   hadSavedFolder: boolean,
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
 ): Promise<void> {
   try {
-    set({ importStatus: `Scanning "${dirHandle.name}"…` });
+    set({ importStatus: `Scanning "${folderName}"…` });
 
     const scanned = attachProfiles(
-      await loadFolderCatalog(dirHandle, generation, (progress) => {
+      await loadFolderCatalog(rootPath, generation, (progress) => {
         if (!isActiveFolderOperation(generation)) {
           return;
         }
@@ -139,16 +144,18 @@ async function completeDirectoryImport(
       );
     }
 
-    setSessionCatalog(dirHandle.name, scanned, dirHandle);
+    setSessionCatalog(folderName, scanned, rootPath);
 
     fsDebug("completeDirectoryImport: success", {
       generation,
-      folderName: dirHandle.name,
+      folderName,
+      rootPath,
       entryCount: scanned.length,
     });
 
     set({
-      folderName: dirHandle.name,
+      folderName,
+      rootPath,
       entries: scanned,
       needsFolderAccess: false,
       importState: "idle",
@@ -156,17 +163,17 @@ async function completeDirectoryImport(
       importError: null,
     });
 
-    persistSnapshotInBackground(dirHandle.name, scanned);
+    persistSnapshotInBackground(folderName, rootPath, scanned);
 
     void refreshEntryMetadata(scanned).then((refreshed) => {
       if (!isActiveFolderOperation(generation)) {
         return;
       }
       const withProfiles = attachProfiles(refreshed);
-      if (get().folderName === dirHandle.name) {
-        setSessionCatalog(dirHandle.name, withProfiles, dirHandle);
+      if (get().rootPath === rootPath) {
+        setSessionCatalog(folderName, withProfiles, rootPath);
         set({ entries: withProfiles });
-        persistSnapshotInBackground(dirHandle.name, withProfiles);
+        persistSnapshotInBackground(folderName, rootPath, withProfiles);
       }
     });
   } catch (error) {
@@ -186,33 +193,32 @@ async function completeDirectoryImport(
 
 export const useLibraryStore = create<LibraryStore>((set, get) => ({
   folderName: null,
+  rootPath: null,
   entries: [],
   importState: "idle",
   importStatus: null,
   importError: null,
   needsFolderAccess: false,
-  isSupportedBrowser: false,
+  isDesktopApp: false,
 
-  setSupportedBrowser: (supported) => set({ isSupportedBrowser: supported }),
+  setDesktopApp: (desktop) => set({ isDesktopApp: desktop }),
 
   bootstrapLibrary: async () => {
-    fsDebug("bootstrapLibrary: start", {
-      origin: typeof window !== "undefined" ? window.location.origin : "ssr",
-    });
+    fsDebug("bootstrapLibrary: start");
 
-    // Legacy directory handles in IndexedDB can leave Chrome's picker stuck.
     await clearPersistedLibraryHandles();
 
     if (hasSessionCatalog()) {
-      const { dirHandle, folderName, entries } = getSessionCatalog();
-      if (folderName) {
+      const { rootPath, folderName, entries } = getSessionCatalog();
+      if (rootPath && folderName) {
         fsDebug("bootstrapLibrary: restored from session memory", {
           folderName,
+          rootPath,
           entryCount: entries.length,
-          hasDirHandle: Boolean(dirHandle),
         });
         set({
           folderName,
+          rootPath,
           entries: attachProfiles(entries),
           needsFolderAccess: false,
           importState: "idle",
@@ -223,19 +229,71 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       }
     }
 
-    const snapshot = await getLibrarySnapshot();
-    if (!snapshot) {
-      fsDebug("bootstrapLibrary: no saved snapshot");
+    const api = getDarkroomAPI();
+    const lastFolderPath = await api.getLastFolder();
+
+    if (lastFolderPath && (await api.folderExists(lastFolderPath))) {
+      const folderName = lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath;
+      fsDebug("bootstrapLibrary: restoring last folder", {
+        folderName,
+        rootPath: lastFolderPath,
+      });
+      get().importFromFolderPath(lastFolderPath, folderName, "restore");
       return;
     }
 
-    fsDebug("bootstrapLibrary: snapshot found, needs re-link", {
+    const snapshot = await getLibrarySnapshot();
+    if (!snapshot) {
+      fsDebug("bootstrapLibrary: no saved snapshot");
+      if (lastFolderPath) {
+        set({
+          folderName: lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath,
+          rootPath: lastFolderPath,
+          entries: [],
+          needsFolderAccess: true,
+        });
+      }
+      return;
+    }
+
+    if (!snapshot.rootPath) {
+      fsDebug("bootstrapLibrary: legacy snapshot without root path", {
+        folderName: snapshot.folderName,
+      });
+      set({
+        folderName: snapshot.folderName,
+        rootPath: null,
+        entries: [],
+        needsFolderAccess: true,
+        importState: "idle",
+        importError: null,
+        importStatus: null,
+      });
+      return;
+    }
+
+    const snapshotExists = await api.folderExists(snapshot.rootPath);
+    if (snapshotExists) {
+      fsDebug("bootstrapLibrary: restoring snapshot folder", {
+        folderName: snapshot.folderName,
+        rootPath: snapshot.rootPath,
+      });
+      get().importFromFolderPath(
+        snapshot.rootPath,
+        snapshot.folderName,
+        "restore",
+      );
+      return;
+    }
+
+    fsDebug("bootstrapLibrary: snapshot folder missing", {
       folderName: snapshot.folderName,
-      savedEntryCount: snapshot.entries.length,
+      rootPath: snapshot.rootPath,
     });
 
     set({
       folderName: snapshot.folderName,
+      rootPath: snapshot.rootPath,
       entries: [],
       needsFolderAccess: true,
       importState: "idle",
@@ -244,25 +302,27 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     });
   },
 
-  importFromDirectoryHandle: (dirHandle, mode = "import") => {
+  importFromFolderPath: (rootPath, folderName, mode = "import") => {
     const generation = beginFolderOperation();
     const hadSavedFolder = Boolean(get().folderName);
 
-    fsDebug("importFromDirectoryHandle: start", {
+    fsDebug("importFromFolderPath: start", {
       generation,
       mode,
-      folderName: dirHandle.name,
+      folderName,
+      rootPath,
     });
 
     set({
       importState: mode === "restore" ? "restoring" : "importing",
       importError: null,
-      importStatus: `Scanning "${dirHandle.name}"…`,
+      importStatus: `Scanning "${folderName}"…`,
     });
 
     void completeDirectoryImport(
       generation,
-      dirHandle,
+      rootPath,
+      folderName,
       hadSavedFolder,
       set,
       get,
@@ -277,19 +337,17 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   cancelFolderOperation: () => {
     const hadSavedFolder = Boolean(get().folderName);
-    const pickerActive = isPhotoFolderPickerActive();
 
     fsDebug("cancelFolderOperation", {
       hadSavedFolder,
-      pickerActive,
       currentGeneration: folderOperationGeneration,
     });
 
+    beginFolderOperation();
+
     set({
       importState: "idle",
-      importStatus: pickerActive
-        ? "Folder dialog is still open — select a folder and click Open, or close the dialog."
-        : null,
+      importStatus: null,
       importError: null,
       needsFolderAccess: hadSavedFolder || get().entries.length === 0,
     });
@@ -301,6 +359,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     await clearPersistedLibrary();
     set({
       folderName: null,
+      rootPath: null,
       entries: [],
       importState: "idle",
       importStatus: null,
