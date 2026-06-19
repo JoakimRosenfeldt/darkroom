@@ -3,6 +3,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { measureContentWidth, packDynamicRows } from "@/lib/library/grid-layout";
 import { collectVisibleEntryIds } from "@/lib/library/visible-entry-ids";
 import { useLibraryStore } from "@/stores/library-store";
@@ -22,6 +23,7 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
   const didScrollToSelectedRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const [visibleEntryIds, setVisibleEntryIds] = useState<string[]>([]);
   const getScrollRoot = useCallback(() => parentRef.current, []);
@@ -189,6 +191,7 @@ export function DynamicPhotoGrid({ entries, rowHeight }: DynamicPhotoGridProps) 
                     height={tile.height}
                     fit="cover"
                     selected={tile.entry.id === selectedEntryId}
+                    metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
                     onSelect={setSelectedEntryId}
                     getScrollRoot={getScrollRoot}
                   />

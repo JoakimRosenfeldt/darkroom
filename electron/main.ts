@@ -8,6 +8,7 @@ import {
   scanFolderTree,
   statFile,
 } from "./fs-service";
+import { createCatalogStore } from "./catalog-store";
 import { createSettingsStore } from "./settings";
 import { getAppRoot, getOutDir, startStaticServer } from "./static-server";
 
@@ -18,6 +19,7 @@ let mainWindow: BrowserWindow | null = null;
 let staticServerPort: number | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
+const catalogStore = createCatalogStore(app.getPath("userData"));
 
 function getPreloadPath(): string {
   return path.join(__dirname, "preload.js");
@@ -113,6 +115,18 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("darkroom:folder-exists", async (_event, folderPath: string) => {
     return folderExists(folderPath);
+  });
+
+  ipcMain.handle("darkroom:catalog-read", async (_event, rootPath: string) => {
+    return catalogStore.read(rootPath);
+  });
+
+  ipcMain.handle("darkroom:catalog-write", async (_event, catalog) => {
+    await catalogStore.write(catalog);
+  });
+
+  ipcMain.handle("darkroom:catalog-delete", async (_event, rootPath: string) => {
+    await catalogStore.remove(rootPath);
   });
 }
 

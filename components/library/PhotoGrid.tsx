@@ -3,6 +3,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { measureContentWidth, packSquareRows } from "@/lib/library/grid-layout";
 import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
@@ -20,6 +21,7 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   const didScrollToSelectedRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const getScrollRoot = useCallback(() => parentRef.current, []);
 
@@ -116,6 +118,7 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
                     height={row.cellSize}
                     fit="contain"
                     selected={entry.id === selectedEntryId}
+                    metadata={getEntryMetadata(entryMetadata, entry.id)}
                     onSelect={setSelectedEntryId}
                     getScrollRoot={getScrollRoot}
                   />

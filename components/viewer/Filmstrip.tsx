@@ -3,7 +3,9 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { PhotoTile } from "@/components/library/PhotoTile";
+import { useLibraryStore } from "@/stores/library-store";
 import { IconChevronLeft, IconChevronRight } from "@/components/shell/icons";
 
 interface FilmstripProps {
@@ -17,6 +19,7 @@ const THUMB_GAP = 2;
 
 export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const getScrollRoot = useCallback(() => scrollRef.current, []);
   const activeIndex = useMemo(
     () => entries.findIndex((entry) => entry.id === activeId),
@@ -121,6 +124,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
                   width={THUMB_SIZE}
                   height={THUMB_SIZE}
                   selected={entry.id === activeId}
+                  metadata={getEntryMetadata(entryMetadata, entry.id)}
                   compact
                   getScrollRoot={getScrollRoot}
                 />

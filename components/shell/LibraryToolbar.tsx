@@ -2,20 +2,33 @@
 
 import { useLibraryStore } from "@/stores/library-store";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
+import { StarRatingControl } from "@/components/library/StarRatingControl";
+import type {
+  CurationFilter,
+  FilterOption,
+  GridViewMode,
+  SortOption,
+} from "@/lib/library/filter-types";
+import {
+  curationFilterFromRating,
+  getRatingFromCurationFilter,
+  isRatingCurationFilter,
+} from "@/lib/library/rating-filter";
+import type { StarRating } from "@/lib/catalog/types";
 import { IconDynamicGrid, IconFolder, IconGrid } from "./icons";
 
-export type SortOption = "name" | "date";
-export type FilterOption = "all" | "raw" | "standard";
-export type GridViewMode = "grid" | "dynamic";
+export type { CurationFilter, FilterOption, GridViewMode, SortOption };
 
 interface LibraryToolbarProps {
   photoCount: number;
   sort: SortOption;
   filter: FilterOption;
+  curationFilter: CurationFilter;
   thumbSize: number;
   viewMode: GridViewMode;
   onSortChange: (sort: SortOption) => void;
   onFilterChange: (filter: FilterOption) => void;
+  onCurationFilterChange: (filter: CurationFilter) => void;
   onThumbSizeChange: (size: number) => void;
   onViewModeChange: (mode: GridViewMode) => void;
 }
@@ -24,10 +37,12 @@ export function LibraryToolbar({
   photoCount,
   sort,
   filter,
+  curationFilter,
   thumbSize,
   viewMode,
   onSortChange,
   onFilterChange,
+  onCurationFilterChange,
   onThumbSizeChange,
   onViewModeChange,
 }: LibraryToolbarProps) {
@@ -40,6 +55,12 @@ export function LibraryToolbar({
     isDesktopApp,
     clearLibrary,
   } = useLibraryStore();
+
+  const activeRatingFilter = getRatingFromCurationFilter(curationFilter);
+
+  function handleRatingFilterChange(rating: StarRating) {
+    onCurationFilterChange(curationFilterFromRating(rating, curationFilter));
+  }
 
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-panel px-2">
@@ -146,6 +167,32 @@ export function LibraryToolbar({
         />
       </label>
 
+      <StarRatingControl
+        value={activeRatingFilter}
+        onChange={handleRatingFilterChange}
+        starClassName="text-xs"
+      />
+
+      <select
+        value={
+          isRatingCurationFilter(curationFilter) ? "all" : curationFilter
+        }
+        onChange={(event) =>
+          onCurationFilterChange(event.target.value as CurationFilter)
+        }
+        className="h-7 rounded border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
+      >
+        <option value="all">All Curation</option>
+        <option value="picked">Picked</option>
+        <option value="rejected">Rejected</option>
+        <option value="unpicked">Unflagged</option>
+        <option value="label-red">Red Label</option>
+        <option value="label-yellow">Yellow Label</option>
+        <option value="label-green">Green Label</option>
+        <option value="label-blue">Blue Label</option>
+        <option value="label-purple">Purple Label</option>
+      </select>
+
       <select
         value={filter}
         onChange={(event) =>
@@ -165,6 +212,8 @@ export function LibraryToolbar({
       >
         <option value="name">Sort: File Name</option>
         <option value="date">Sort: Capture Date</option>
+        <option value="rating">Sort: Rating</option>
+        <option value="pick">Sort: Pick Status</option>
       </select>
 
       {importStatus ? (

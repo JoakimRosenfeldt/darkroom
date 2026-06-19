@@ -1,6 +1,23 @@
 import { create } from "zustand";
 import { formatPickerError } from "@/lib/fs/access";
 import {
+  getEntryMetadata,
+  createEntryMetadata,
+} from "@/lib/catalog/defaults";
+import {
+  buildPhotoCatalog,
+  deleteCatalog,
+  loadCatalog,
+  scheduleCatalogPersist,
+} from "@/lib/catalog/persistence";
+import type {
+  ColorLabel,
+  EntryMetadata,
+  PickStatus,
+  StarRating,
+} from "@/lib/catalog/types";
+import { pruneMetadataForEntries } from "@/lib/library/curation";
+import {
   getLibrarySnapshot,
   saveLibrarySnapshot,
   scanDirectory,
@@ -37,7 +54,16 @@ interface LibraryStore {
   needsFolderAccess: boolean;
   isDesktopApp: boolean;
   selectedEntryId: string | null;
+  entryMetadata: Record<string, EntryMetadata>;
   setSelectedEntryId: (id: string | null) => void;
+  setEntryMetadata: (entryId: string, patch: Partial<EntryMetadata>) => void;
+  setPick: (entryId: string, pick: PickStatus) => void;
+  setRating: (entryId: string, rating: StarRating) => void;
+  setColorLabel: (entryId: string, label: ColorLabel) => void;
+  loadCatalogForFolder: (
+    rootPath: string,
+    entryIds: string[],
+  ) => Promise<void>;
   importFromFolderPath: (
     rootPath: string,
     folderName: string,
@@ -78,6 +104,23 @@ function attachProfiles(entries: LibraryEntry[]): LibraryEntry[] {
     ...entry,
     profileId: resolveProfile(entry)?.id ?? null,
   }));
+}
+
+function persistMetadataInBackground(
+  rootPath: string,
+  entryMetadata: Record<string, EntryMetadata>,
+): void {
+  scheduleCatalogPersist(buildPhotoCatalog(rootPath, entryMetadata));
+}
+
+async function loadAndMergeCatalog(
+  rootPath: string,
+  entries: LibraryEntry[],
+): Promise<Record<string, EntryMetadata>> {
+  const entryIds = new Set(entries.map((entry) => entry.id));
+  const catalog = await loadCatalog(rootPath);
+  const stored = catalog?.entries ?? {};
+  return pruneMetadataForEntries(stored, entryIds);
 }
 
 function persistSnapshotInBackground(
@@ -152,6 +195,8 @@ async function completeDirectoryImport(
       );
     }
 
+    const entryMetadata = await loadAndMergeCatalog(rootPath, scanned);
+
     setSessionCatalog(folderName, scanned, rootPath);
 
     fsDebug("completeDirectoryImport: success", {
@@ -161,11 +206,18 @@ async function completeDirectoryImport(
       entryCount: scanned.length,
     });
 
+    const previousSelection = get().selectedEntryId;
+    const selectedEntryId =
+      previousSelection && scanned.some((entry) => entry.id === previousSelection)
+        ? previousSelection
+        : (scanned[0]?.id ?? null);
+
     set({
       folderName,
       rootPath,
       entries: scanned,
-      selectedEntryId: scanned[0]?.id ?? null,
+      entryMetadata,
+      selectedEntryId,
       needsFolderAccess: false,
       importState: "idle",
       importStatus: null,
@@ -198,10 +250,47 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   needsFolderAccess: false,
   isDesktopApp: false,
   selectedEntryId: null,
+  entryMetadata: {},
 
   setDesktopApp: (desktop) => set({ isDesktopApp: desktop }),
 
   setSelectedEntryId: (id) => set({ selectedEntryId: id }),
+
+  loadCatalogForFolder: async (rootPath, entryIds) => {
+    const entryIdSet = new Set(entryIds);
+    const catalog = await loadCatalog(rootPath);
+    const stored = catalog?.entries ?? {};
+    const entryMetadata = pruneMetadataForEntries(stored, entryIdSet);
+    set({ entryMetadata });
+  },
+
+  setEntryMetadata: (entryId, patch) => {
+    const { rootPath, entryMetadata } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const next = createEntryMetadata({ ...current, ...patch });
+
+    const updated = { ...entryMetadata, [entryId]: next };
+    set({ entryMetadata: updated });
+
+    if (rootPath) {
+      persistMetadataInBackground(rootPath, updated);
+    }
+  },
+
+  setPick: (entryId, pick) => {
+    get().setEntryMetadata(entryId, { pick });
+  },
+
+  setRating: (entryId, rating) => {
+    get().setEntryMetadata(entryId, { rating });
+  },
+
+  setColorLabel: (entryId, label) => {
+    const { entryMetadata } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const nextLabel = current.colorLabel === label ? null : label;
+    get().setEntryMetadata(entryId, { colorLabel: nextLabel });
+  },
 
   bootstrapLibrary: async () => {
     fsDebug("bootstrapLibrary: start");
@@ -217,10 +306,15 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           entryCount: entries.length,
         });
         const restoredEntries = attachProfiles(entries);
+        const entryMetadata = await loadAndMergeCatalog(
+          rootPath,
+          restoredEntries,
+        );
         set({
           folderName,
           rootPath,
           entries: restoredEntries,
+          entryMetadata,
           selectedEntryId:
             get().selectedEntryId &&
             restoredEntries.some((entry) => entry.id === get().selectedEntryId)
@@ -361,12 +455,17 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   clearLibrary: async () => {
     fsDebug("clearLibrary: start");
+    const { rootPath } = get();
     beginFolderOperation();
     await clearPersistedLibrary();
+    if (rootPath) {
+      await deleteCatalog(rootPath);
+    }
     set({
       folderName: null,
       rootPath: null,
       entries: [],
+      entryMetadata: {},
       selectedEntryId: null,
       importState: "idle",
       importStatus: null,

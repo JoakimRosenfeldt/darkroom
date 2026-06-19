@@ -1,10 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import {
   LibraryToolbar,
+  type CurationFilter,
   type FilterOption,
   type GridViewMode,
   type SortOption,
@@ -12,36 +14,21 @@ import {
 import { SidePanel } from "@/components/shell/SidePanel";
 import { TopBar } from "@/components/shell/TopBar";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
+import {
+  countCuration,
+  filterByCuration,
+  filterByFormat,
+  sortLibraryEntries,
+} from "@/lib/library/curation";
+import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { useLibraryStore } from "@/stores/library-store";
 
-function filterEntries(
-  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
-  filter: FilterOption,
-) {
-  if (filter === "raw") {
-    return entries.filter((entry) => entry.profileId !== "standard");
-  }
-  if (filter === "standard") {
-    return entries.filter((entry) => entry.profileId === "standard");
-  }
-  return entries;
-}
-
-function sortEntries(
-  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
-  sort: SortOption,
-) {
-  const sorted = [...entries];
-  if (sort === "date") {
-    sorted.sort((a, b) => b.lastModified - a.lastModified);
-    return sorted;
-  }
-  sorted.sort((a, b) => a.name.localeCompare(b.name));
-  return sorted;
-}
-
 export default function HomePage() {
+  const router = useRouter();
   const entries = useLibraryStore((state) => state.entries);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
+  const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const folderName = useLibraryStore((state) => state.folderName);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const importState = useLibraryStore((state) => state.importState);
@@ -53,6 +40,7 @@ export default function HomePage() {
 
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
+  const [curationFilter, setCurationFilter] = useState<CurationFilter>("all");
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
 
@@ -71,10 +59,30 @@ export default function HomePage() {
     return { rawCount: raw, standardCount: standard };
   }, [entries]);
 
-  const visibleEntries = useMemo(
-    () => sortEntries(filterEntries(entries, filter), sort),
-    [entries, filter, sort],
+  const curationCounts = useMemo(
+    () => countCuration(entries, entryMetadata),
+    [entries, entryMetadata],
   );
+
+  const visibleEntries = useMemo(
+    () =>
+      sortLibraryEntries(
+        filterByFormat(
+          filterByCuration(entries, entryMetadata, curationFilter),
+          filter,
+        ),
+        entryMetadata,
+        sort,
+      ),
+    [entries, entryMetadata, curationFilter, filter, sort],
+  );
+
+  useLibraryGridShortcuts({
+    visibleEntries,
+    selectedEntryId,
+    onSelect: setSelectedEntryId,
+    onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
+  });
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -86,8 +94,11 @@ export default function HomePage() {
           photoCount={entries.length}
           rawCount={rawCount}
           standardCount={standardCount}
+          curationCounts={curationCounts}
           filter={filter}
+          curationFilter={curationFilter}
           onFilterChange={setFilter}
+          onCurationFilterChange={setCurationFilter}
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -95,10 +106,12 @@ export default function HomePage() {
             photoCount={visibleEntries.length}
             sort={sort}
             filter={filter}
+            curationFilter={curationFilter}
             thumbSize={thumbSize}
             viewMode={viewMode}
             onSortChange={setSort}
             onFilterChange={setFilter}
+            onCurationFilterChange={setCurationFilter}
             onThumbSizeChange={setThumbSize}
             onViewModeChange={setViewMode}
           />

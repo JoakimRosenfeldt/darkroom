@@ -4,10 +4,12 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   createThumbnailObjectUrl,
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
+import { EntryMetadataBadges } from "./EntryMetadataBar";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -16,6 +18,7 @@ interface PhotoTileProps {
   selected?: boolean;
   compact?: boolean;
   fit?: "contain" | "cover";
+  metadata?: EntryMetadata;
   onSelect?: (entryId: string) => void;
   getScrollRoot?: () => HTMLElement | null;
 }
@@ -29,6 +32,7 @@ export const PhotoTile = memo(function PhotoTile({
   selected = false,
   compact = false,
   fit = "contain",
+  metadata,
   onSelect,
   getScrollRoot,
 }: PhotoTileProps) {
@@ -127,6 +131,7 @@ export const PhotoTile = memo(function PhotoTile({
   }, [entry, decodeEdge, isNearViewport, intersectionRatio, selected]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
+  const isRejected = metadata?.pick === "reject";
 
   const content = (
     <div
@@ -146,7 +151,10 @@ export const PhotoTile = memo(function PhotoTile({
           alt={entry.name}
           fill
           unoptimized
-          className={imageFit}
+          className={[
+            imageFit,
+            isRejected ? "grayscale opacity-45" : "",
+          ].join(" ")}
           sizes={`${width}px`}
         />
       ) : (
@@ -165,6 +173,8 @@ export const PhotoTile = memo(function PhotoTile({
           ) : null}
         </div>
       ) : null}
+
+      {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}
 
       {selected ? (
         <div className="absolute left-0 top-0 h-0 w-0 border-r-[10px] border-t-[10px] border-r-transparent border-t-lr-accent" />
