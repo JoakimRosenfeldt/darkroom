@@ -89,6 +89,7 @@ interface LibraryGridShortcutsOptions {
   onSelect: (id: string) => void;
   onOpen?: (id: string) => void;
   disabled?: boolean;
+  metadataShortcutsDisabled?: boolean;
 }
 
 export function useLibraryGridShortcuts({
@@ -99,6 +100,7 @@ export function useLibraryGridShortcuts({
   onSelect,
   onOpen,
   disabled = false,
+  metadataShortcutsDisabled = false,
 }: LibraryGridShortcutsOptions): void {
   const shortcutTargets = useMemo(
     () =>
@@ -110,7 +112,10 @@ export function useLibraryGridShortcuts({
     [selectedEntryIds, selectedEntryId],
   );
 
-  useEntryMetadataShortcuts(shortcutTargets, disabled);
+  useEntryMetadataShortcuts(
+    shortcutTargets,
+    disabled || metadataShortcutsDisabled,
+  );
 
   useEffect(() => {
     if (disabled) {
@@ -127,6 +132,9 @@ export function useLibraryGridShortcuts({
       }
 
       if (event.key === "Enter" && selectedEntryId && onOpen) {
+        if (event.defaultPrevented) {
+          return;
+        }
         event.preventDefault();
         onOpen(selectedEntryId);
         return;

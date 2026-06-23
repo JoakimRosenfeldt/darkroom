@@ -81,11 +81,13 @@ export function buildPhotoCatalog(
   rootPath: string,
   entries: Record<string, EntryMetadata>,
   albums: Album[] = [],
+  archivedEntryIds: string[] = [],
 ): PhotoCatalog {
   return {
     version: 1,
     rootPath,
     entries,
     albums,
+    archivedEntryIds,
   };
 }

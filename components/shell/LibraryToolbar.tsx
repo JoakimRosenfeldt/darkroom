@@ -49,8 +49,6 @@ export function LibraryToolbar({
   const {
     folderName,
     importState,
-    importStatus,
-    importError,
     needsFolderAccess,
     isDesktopApp,
     clearLibrary,
@@ -215,18 +213,6 @@ export function LibraryToolbar({
         <option value="rating">Sort: Rating</option>
         <option value="pick">Sort: Pick Status</option>
       </select>
-
-      {importStatus ? (
-        <span className="max-w-[220px] truncate text-xs text-lr-text-muted" title={importStatus}>
-          {importStatus}
-        </span>
-      ) : null}
-
-      {importError ? (
-        <span className="max-w-[200px] truncate text-xs text-red-400" title={importError}>
-          {importError}
-        </span>
-      ) : null}
 
       {!isDesktopApp ? (
         <span className="text-xs text-amber-400">Desktop app required</span>

@@ -22,6 +22,7 @@ export interface PhotoCatalog {
   rootPath: string;
   entries: Record<string, EntryMetadata>;
   albums?: Album[];
+  archivedEntryIds?: string[];
 }
 
 export const COLOR_LABELS = [

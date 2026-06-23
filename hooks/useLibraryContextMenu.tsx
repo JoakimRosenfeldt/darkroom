@@ -11,6 +11,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { DeleteFromDiskConfirm } from "@/components/library/DeleteFromDiskConfirm";
 import { COLOR_LABEL_HEX } from "@/lib/catalog/defaults";
 import { COLOR_LABELS } from "@/lib/catalog/types";
 import { useLibraryStore } from "@/stores/library-store";
@@ -35,6 +36,9 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
   const router = useRouter();
   const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [diskDeleteTargets, setDiskDeleteTargets] = useState<string[] | null>(
+    null,
+  );
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -43,14 +47,36 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
   const albums = useLibraryStore((state) => state.albums);
   const createAlbum = useLibraryStore((state) => state.createAlbum);
   const addEntriesToAlbum = useLibraryStore((state) => state.addEntriesToAlbum);
+  const removeEntriesFromAlbum = useLibraryStore(
+    (state) => state.removeEntriesFromAlbum,
+  );
+  const archiveEntries = useLibraryStore((state) => state.archiveEntries);
+  const restoreEntries = useLibraryStore((state) => state.restoreEntries);
+  const deleteEntriesFromDisk = useLibraryStore(
+    (state) => state.deleteEntriesFromDisk,
+  );
+  const catalogView = useLibraryStore((state) => state.catalogView);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
+
+  const isArchiveView = catalogView.type === "archive";
 
   const actionTargets = useMemo(
     () => (menu ? getActionTargets(menu.entryId, selectedEntryIds) : []),
     [menu, selectedEntryIds],
   );
+
+  const albumsContainingSelection = useMemo(() => {
+    if (actionTargets.length === 0) {
+      return [];
+    }
+
+    const targetSet = new Set(actionTargets);
+    return albums.filter((album) =>
+      album.entryIds.some((id) => targetSet.has(id)),
+    );
+  }, [actionTargets, albums]);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -139,6 +165,36 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
             }}
             role="menu"
           >
+            {isArchiveView ? (
+              <>
+                <ContextMenuItem
+                  onClick={() => {
+                    restoreEntries(actionTargets);
+                    closeMenu();
+                  }}
+                >
+                  Restore to imported
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={() => {
+                    setDiskDeleteTargets(actionTargets);
+                    closeMenu();
+                  }}
+                >
+                  <span className="text-red-400">Remove from disk</span>
+                </ContextMenuItem>
+
+                {actionTargets.length > 1 ? (
+                  <>
+                    <ContextMenuSeparator />
+                    <div className="px-3 py-1.5 text-[10px] text-lr-text-dim">
+                      {actionTargets.length} photos selected
+                    </div>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <>
             <ContextMenuItem
               onClick={() => {
                 router.push(
@@ -241,6 +297,47 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
               New album…
             </ContextMenuItem>
 
+            {albumsContainingSelection.length > 0 ? (
+              <>
+                <ContextMenuSeparator />
+                <div className="flex items-center px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+                  <span>Remove from album</span>
+                </div>
+                {albumsContainingSelection.map((album) => (
+                  <ContextMenuItem
+                    key={album.id}
+                    onClick={() => {
+                      removeEntriesFromAlbum(album.id, actionTargets);
+                      closeMenu();
+                    }}
+                  >
+                    {album.name}
+                  </ContextMenuItem>
+                ))}
+              </>
+            ) : null}
+
+            <ContextMenuSeparator />
+
+            <ContextMenuItem
+              onClick={() => {
+                archiveEntries(actionTargets);
+                closeMenu();
+              }}
+            >
+              Remove from imported
+            </ContextMenuItem>
+
+            <ContextMenuItem
+              onClick={() => {
+                setDiskDeleteTargets(actionTargets);
+                closeMenu();
+              }}
+            >
+              <span className="text-red-400">Remove from disk</span>
+              <ShortcutHint>Del</ShortcutHint>
+            </ContextMenuItem>
+
             {actionTargets.length > 1 ? (
               <>
                 <ContextMenuSeparator />
@@ -249,12 +346,39 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
                 </div>
               </>
             ) : null}
+              </>
+            )}
           </div>,
           document.body,
         )
       : null;
 
-  return { openContextMenu, contextMenu };
+  const diskDeleteConfirm =
+    diskDeleteTargets && typeof document !== "undefined"
+      ? createPortal(
+          <DeleteFromDiskConfirm
+            entryIds={diskDeleteTargets}
+            onClose={() => setDiskDeleteTargets(null)}
+            onConfirm={() => {
+              void deleteEntriesFromDisk(diskDeleteTargets).then(() =>
+                setDiskDeleteTargets(null),
+              );
+            }}
+          />,
+          document.body,
+        )
+      : null;
+
+  return {
+    openContextMenu,
+    contextMenu: (
+      <>
+        {contextMenu}
+        {diskDeleteConfirm}
+      </>
+    ),
+    actionOverlayOpen: diskDeleteTargets !== null,
+  };
 }
 
 function ContextMenuItem({

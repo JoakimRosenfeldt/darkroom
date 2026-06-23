@@ -7,6 +7,7 @@ import {
   readFileHead,
   scanFolderTree,
   statFile,
+  trashFiles,
 } from "./fs-service";
 import { createCatalogStore } from "./catalog-store";
 import { createSettingsStore } from "./settings";
@@ -128,6 +129,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-delete", async (_event, rootPath: string) => {
     await catalogStore.remove(rootPath);
   });
+
+  ipcMain.handle(
+    "darkroom:delete-files",
+    async (_event, absolutePaths: string[]) => {
+      await trashFiles(absolutePaths);
+    },
+  );
 }
 
 app.whenReady().then(async () => {

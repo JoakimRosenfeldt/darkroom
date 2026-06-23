@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
@@ -23,6 +23,10 @@ import {
   filterByAlbum,
   filterByFolderPath,
 } from "@/lib/library/folders";
+import {
+  filterArchivedEntries,
+  filterOnlyArchivedEntries,
+} from "@/lib/library/archive";
 import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { useAlbumPickerShortcut } from "@/hooks/useAlbumPickerShortcut";
 import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
@@ -31,6 +35,7 @@ import { useLibraryStore } from "@/stores/library-store";
 export default function HomePage() {
   const router = useRouter();
   const entries = useLibraryStore((state) => state.entries);
+  const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
@@ -45,6 +50,13 @@ export default function HomePage() {
   const cancelFolderOperation = useLibraryStore(
     (state) => state.cancelFolderOperation,
   );
+  const setCatalogView = useLibraryStore((state) => state.setCatalogView);
+
+  useEffect(() => {
+    if (catalogView.type === "archive" && archivedEntryIds.length === 0) {
+      setCatalogView({ type: "all" });
+    }
+  }, [archivedEntryIds.length, catalogView.type, setCatalogView]);
 
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
@@ -53,8 +65,16 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
   const [gridRows, setGridRows] = useState<string[][]>([]);
 
+  const libraryEntries = useMemo(
+    () => filterArchivedEntries(entries, archivedEntryIds),
+    [entries, archivedEntryIds],
+  );
+
   const visibleEntries = useMemo(() => {
-    let scoped = entries;
+    let scoped =
+      catalogView.type === "archive"
+        ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+        : libraryEntries;
 
     if (catalogView.type === "folder") {
       scoped = filterByFolderPath(scoped, catalogView.path);
@@ -73,6 +93,8 @@ export default function HomePage() {
     );
   }, [
     entries,
+    archivedEntryIds,
+    libraryEntries,
     entryMetadata,
     albums,
     catalogView,
@@ -86,11 +108,13 @@ export default function HomePage() {
     [visibleEntries],
   );
 
-  const { openContextMenu, contextMenu } = useLibraryContextMenu(visibleOrder);
+  const { openContextMenu, contextMenu, actionOverlayOpen } =
+    useLibraryContextMenu(visibleOrder);
 
-  const { albumPicker, albumPickerOpen } = useAlbumPickerShortcut({
+  const { albumPicker, removePopup, overlayOpen } = useAlbumPickerShortcut({
     selectedEntryId,
     selectedEntryIds,
+    disabled: actionOverlayOpen,
   });
 
   useLibraryGridShortcuts({
@@ -100,13 +124,15 @@ export default function HomePage() {
     selectedEntryIds,
     onSelect: setSelectedEntryId,
     onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
-    disabled: albumPickerOpen,
+    disabled: overlayOpen || actionOverlayOpen,
+    metadataShortcutsDisabled: catalogView.type === "archive",
   });
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       {contextMenu}
       {albumPicker}
+      {removePopup}
       <TopBar activeModule="library" />
 
       <div className="flex min-h-0 flex-1">

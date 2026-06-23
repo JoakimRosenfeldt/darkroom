@@ -73,6 +73,18 @@ export function IconTrash({ className }: { className?: string }) {
   );
 }
 
+export function IconArchive({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M14.5 3h-13A1.5 1.5 0 0 0 0 4.5v2A1.5 1.5 0 0 0 1.5 8h13A1.5 1.5 0 0 0 16 6.5v-2A1.5 1.5 0 0 0 14.5 3zM1.5 4a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5V4z" />
+      <path
+        fillRule="evenodd"
+        d="M2 8.5A1.5 1.5 0 0 1 3.5 7h9A1.5 1.5 0 0 1 14 8.5v5A1.5 1.5 0 0 1 12.5 15h-9A1.5 1.5 0 0 1 2 13.5v-5zm1.5-.5a.5.5 0 0 0-.5.5v5a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-5a.5.5 0 0 0-.5-.5h-9z"
+      />
+    </svg>
+  );
+}
+
 export function IconInfo({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>

@@ -66,6 +66,10 @@ const darkroom = {
   deleteCatalog(rootPath: string): Promise<void> {
     return ipcRenderer.invoke("darkroom:catalog-delete", rootPath);
   },
+
+  deleteFiles(absolutePaths: string[]): Promise<void> {
+    return ipcRenderer.invoke("darkroom:delete-files", absolutePaths);
+  },
 };
 
 contextBridge.exposeInMainWorld("darkroom", darkroom);

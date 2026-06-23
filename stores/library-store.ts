@@ -18,6 +18,7 @@ import type {
   StarRating,
 } from "@/lib/catalog/types";
 import { pruneMetadataForEntries } from "@/lib/library/curation";
+import { filterArchivedEntries, filterOnlyArchivedEntries, pruneArchivedEntryIds } from "@/lib/library/archive";
 import { pruneAlbumsForEntries } from "@/lib/library/folders";
 import {
   getLibrarySnapshot,
@@ -26,7 +27,7 @@ import {
   type ScanProgress,
 } from "@/lib/fs/directory";
 import { fsDebug, fsDebugError, fsDebugWarn } from "@/lib/fs/debug";
-import { getDarkroomAPI } from "@/lib/fs/platform";
+import { deleteFilesFromDisk, getDarkroomAPI, joinRootPath } from "@/lib/fs/platform";
 import {
   hasSessionCatalog,
   setSessionCatalog,
@@ -84,13 +85,15 @@ function restoreSelection(
 export type CatalogView =
   | { type: "all" }
   | { type: "folder"; path: string | null }
-  | { type: "album"; albumId: string };
+  | { type: "album"; albumId: string }
+  | { type: "archive" };
 
 interface LibraryStore {
   folderName: string | null;
   rootPath: string | null;
   entries: LibraryEntry[];
   albums: Album[];
+  archivedEntryIds: string[];
   catalogView: CatalogView;
   importState: ImportState;
   importStatus: string | null;
@@ -121,6 +124,10 @@ interface LibraryStore {
   deleteAlbum: (albumId: string) => void;
   addEntriesToAlbum: (albumId: string, entryIds: string[]) => void;
   removeEntriesFromAlbum: (albumId: string, entryIds: string[]) => void;
+  removeEntriesFromAllAlbums: (entryIds: string[]) => void;
+  archiveEntries: (entryIds: string[]) => void;
+  restoreEntries: (entryIds: string[]) => void;
+  deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
   loadCatalogForFolder: (
     rootPath: string,
     entryIds: string[],
@@ -171,8 +178,11 @@ function persistCatalogInBackground(
   rootPath: string,
   entryMetadata: Record<string, EntryMetadata>,
   albums: Album[],
+  archivedEntryIds: string[],
 ): void {
-  scheduleCatalogPersist(buildPhotoCatalog(rootPath, entryMetadata, albums));
+  scheduleCatalogPersist(
+    buildPhotoCatalog(rootPath, entryMetadata, albums, archivedEntryIds),
+  );
 }
 
 async function loadAndMergeCatalog(
@@ -181,13 +191,18 @@ async function loadAndMergeCatalog(
 ): Promise<{
   entryMetadata: Record<string, EntryMetadata>;
   albums: Album[];
+  archivedEntryIds: string[];
 }> {
   const entryIds = new Set(entries.map((entry) => entry.id));
   const catalog = await loadCatalog(rootPath);
   const stored = catalog?.entries ?? {};
   const entryMetadata = pruneMetadataForEntries(stored, entryIds);
   const albums = pruneAlbumsForEntries(catalog?.albums ?? [], entryIds);
-  return { entryMetadata, albums };
+  const archivedEntryIds = pruneArchivedEntryIds(
+    catalog?.archivedEntryIds ?? [],
+    entryIds,
+  );
+  return { entryMetadata, albums, archivedEntryIds };
 }
 
 function persistSnapshotInBackground(
@@ -262,7 +277,8 @@ async function completeDirectoryImport(
       );
     }
 
-    const { entryMetadata, albums } = await loadAndMergeCatalog(rootPath, scanned);
+    const { entryMetadata, albums, archivedEntryIds } =
+      await loadAndMergeCatalog(rootPath, scanned);
 
     setSessionCatalog(folderName, scanned, rootPath);
 
@@ -273,8 +289,9 @@ async function completeDirectoryImport(
       entryCount: scanned.length,
     });
 
+    const activeEntries = filterArchivedEntries(scanned, archivedEntryIds);
     const selection = restoreSelection(
-      scanned,
+      activeEntries,
       get().selectedEntryIds,
       get().selectionAnchorId,
     );
@@ -285,6 +302,7 @@ async function completeDirectoryImport(
       entries: scanned,
       entryMetadata,
       albums,
+      archivedEntryIds,
       catalogView: { type: "all" },
       ...selection,
       needsFolderAccess: false,
@@ -314,6 +332,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   rootPath: null,
   entries: [],
   albums: [],
+  archivedEntryIds: [],
   catalogView: { type: "all" },
   importState: "idle",
   importStatus: null,
@@ -378,7 +397,11 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const stored = catalog?.entries ?? {};
     const entryMetadata = pruneMetadataForEntries(stored, entryIdSet);
     const albums = pruneAlbumsForEntries(catalog?.albums ?? [], entryIdSet);
-    set({ entryMetadata, albums });
+    const archivedEntryIds = pruneArchivedEntryIds(
+      catalog?.archivedEntryIds ?? [],
+      entryIdSet,
+    );
+    set({ entryMetadata, albums, archivedEntryIds });
   },
 
   setEntryMetadata: (entryId, patch) => {
@@ -390,7 +413,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       return;
     }
 
-    const { rootPath, entryMetadata, albums } = get();
+    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
     const updated = { ...entryMetadata };
     const updatedAt = Date.now();
 
@@ -406,7 +429,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     set({ entryMetadata: updated });
 
     if (rootPath) {
-      persistCatalogInBackground(rootPath, updated, albums);
+      persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
     }
   },
 
@@ -429,9 +452,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const albums = [...get().albums, album];
     set({ albums, catalogView: { type: "album", albumId: album.id } });
 
-    const { rootPath, entryMetadata } = get();
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
     if (rootPath) {
-      persistCatalogInBackground(rootPath, entryMetadata, albums);
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
     }
 
     return album.id;
@@ -450,9 +478,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     );
     set({ albums });
 
-    const { rootPath, entryMetadata } = get();
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
     if (rootPath) {
-      persistCatalogInBackground(rootPath, entryMetadata, albums);
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
     }
   },
 
@@ -465,9 +498,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
         : currentView;
     set({ albums, catalogView });
 
-    const { rootPath, entryMetadata } = get();
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
     if (rootPath) {
-      persistCatalogInBackground(rootPath, entryMetadata, albums);
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
     }
   },
 
@@ -491,9 +529,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     });
     set({ albums });
 
-    const { rootPath, entryMetadata } = get();
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
     if (rootPath) {
-      persistCatalogInBackground(rootPath, entryMetadata, albums);
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
     }
   },
 
@@ -516,10 +559,178 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     });
     set({ albums });
 
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
+    if (rootPath) {
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
+    }
+  },
+
+  removeEntriesFromAllAlbums: (entryIds) => {
+    if (entryIds.length === 0) {
+      return;
+    }
+
+    const removeSet = new Set(entryIds);
+    const albums = get().albums.map((album) => ({
+      ...album,
+      entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
+      updatedAt: Date.now(),
+    }));
+    set({ albums });
+
+    const { rootPath, entryMetadata, archivedEntryIds } = get();
+    if (rootPath) {
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
+    }
+  },
+
+  archiveEntries: (entryIds) => {
+    if (entryIds.length === 0) {
+      return;
+    }
+
+    const removeSet = new Set(entryIds);
+    const archivedEntryIds = [
+      ...new Set([...get().archivedEntryIds, ...entryIds]),
+    ];
+    const albums = get().albums.map((album) => ({
+      ...album,
+      entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
+      updatedAt: Date.now(),
+    }));
+    const activeEntries = filterArchivedEntries(get().entries, archivedEntryIds);
+    const selection = restoreSelection(
+      activeEntries,
+      get().selectedEntryIds,
+      get().selectionAnchorId,
+    );
+
+    set({
+      archivedEntryIds,
+      albums,
+      ...selection,
+    });
+
     const { rootPath, entryMetadata } = get();
     if (rootPath) {
-      persistCatalogInBackground(rootPath, entryMetadata, albums);
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
     }
+  },
+
+  restoreEntries: (entryIds) => {
+    if (entryIds.length === 0) {
+      return;
+    }
+
+    const removeSet = new Set(entryIds);
+    const archivedEntryIds = get().archivedEntryIds.filter(
+      (id) => !removeSet.has(id),
+    );
+    const { entries, catalogView } = get();
+    const activeEntries =
+      catalogView.type === "archive"
+        ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+        : filterArchivedEntries(entries, archivedEntryIds);
+    const selection = restoreSelection(
+      activeEntries,
+      get().selectedEntryIds.filter((id) => !removeSet.has(id)),
+      get().selectionAnchorId,
+    );
+
+    set({
+      archivedEntryIds,
+      ...selection,
+    });
+
+    const { rootPath, entryMetadata, albums } = get();
+    if (rootPath) {
+      persistCatalogInBackground(
+        rootPath,
+        entryMetadata,
+        albums,
+        archivedEntryIds,
+      );
+    }
+  },
+
+  deleteEntriesFromDisk: async (entryIds) => {
+    if (entryIds.length === 0) {
+      return;
+    }
+
+    const { rootPath, folderName, entries, catalogView } = get();
+    if (!rootPath) {
+      return;
+    }
+
+    const removeSet = new Set(entryIds);
+    const toDelete = entries.filter((entry) => removeSet.has(entry.id));
+    const absolutePaths = toDelete.map((entry) =>
+      joinRootPath(rootPath, entry.relativePath),
+    );
+
+    try {
+      await deleteFilesFromDisk(absolutePaths);
+    } catch (error) {
+      set({ importError: formatPickerError(error) });
+      return;
+    }
+
+    const remainingEntries = entries.filter((entry) => !removeSet.has(entry.id));
+    const remainingIds = new Set(remainingEntries.map((entry) => entry.id));
+    const entryMetadata = pruneMetadataForEntries(
+      get().entryMetadata,
+      remainingIds,
+    );
+    const albums = pruneAlbumsForEntries(get().albums, remainingIds);
+    const archivedEntryIds = get().archivedEntryIds.filter((id) =>
+      remainingIds.has(id),
+    );
+    const activeEntries =
+      catalogView.type === "archive"
+        ? filterOnlyArchivedEntries(remainingEntries, archivedEntryIds)
+        : filterArchivedEntries(remainingEntries, archivedEntryIds);
+    const selection = restoreSelection(
+      activeEntries,
+      get().selectedEntryIds.filter((id) => remainingIds.has(id)),
+      get().selectionAnchorId,
+    );
+
+    set({
+      entries: remainingEntries,
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+      importError: null,
+      ...selection,
+    });
+
+    if (folderName) {
+      setSessionCatalog(folderName, remainingEntries, rootPath);
+      persistSnapshotInBackground(folderName, rootPath, remainingEntries);
+    }
+
+    persistCatalogInBackground(
+      rootPath,
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+    );
   },
 
   setPick: (entryId, pick) => {
@@ -551,9 +762,11 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           entryCount: entries.length,
         });
         const restoredEntries = attachProfiles(entries);
-        const { entryMetadata, albums } = await loadAndMergeCatalog(
-          rootPath,
+        const { entryMetadata, albums, archivedEntryIds } =
+          await loadAndMergeCatalog(rootPath, restoredEntries);
+        const activeEntries = filterArchivedEntries(
           restoredEntries,
+          archivedEntryIds,
         );
         set({
           folderName,
@@ -561,8 +774,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           entries: restoredEntries,
           entryMetadata,
           albums,
+          archivedEntryIds,
           ...restoreSelection(
-            restoredEntries,
+            activeEntries,
             get().selectedEntryIds,
             get().selectionAnchorId,
           ),
@@ -713,6 +927,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       entries: [],
       entryMetadata: {},
       albums: [],
+      archivedEntryIds: [],
       catalogView: { type: "all" },
       selectedEntryId: null,
       selectedEntryIds: [],

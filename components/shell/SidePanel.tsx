@@ -2,8 +2,10 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
+import { DeleteAlbumConfirm } from "@/components/library/DeleteAlbumConfirm";
 import {
   IconAlbum,
+  IconArchive,
   IconChevronRight,
   IconFolder,
   IconPlus,
@@ -13,10 +15,16 @@ import {
   buildFolderTree,
   type FolderNode,
 } from "@/lib/library/folders";
+import {
+  filterArchivedEntries,
+  filterOnlyArchivedEntries,
+} from "@/lib/library/archive";
+import type { Album } from "@/lib/catalog/types";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function SidePanel() {
   const entries = useLibraryStore((state) => state.entries);
+  const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const isDesktopApp = useLibraryStore((state) => state.isDesktopApp);
@@ -31,9 +39,25 @@ export function SidePanel() {
   const [newAlbumName, setNewAlbumName] = useState("");
   const [renamingAlbumId, setRenamingAlbumId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [albumPendingDelete, setAlbumPendingDelete] = useState<Album | null>(
+    null,
+  );
 
-  const folderTree = useMemo(() => buildFolderTree(entries), [entries]);
-  const hasLibrary = entries.length > 0 && !needsFolderAccess;
+  const libraryEntries = useMemo(
+    () => filterArchivedEntries(entries, archivedEntryIds),
+    [entries, archivedEntryIds],
+  );
+
+  const archivedEntries = useMemo(
+    () => filterOnlyArchivedEntries(entries, archivedEntryIds),
+    [entries, archivedEntryIds],
+  );
+
+  const folderTree = useMemo(
+    () => buildFolderTree(libraryEntries),
+    [libraryEntries],
+  );
+  const hasImportedFolder = entries.length > 0 && !needsFolderAccess;
 
   function handleCreateAlbum() {
     const id = createAlbum(newAlbumName);
@@ -51,7 +75,16 @@ export function SidePanel() {
     setRenameValue("");
   }
 
+  function handleDeleteAlbum(album: Album) {
+    if (album.entryIds.length > 0) {
+      setAlbumPendingDelete(album);
+      return;
+    }
+    deleteAlbum(album.id);
+  }
+
   return (
+    <>
     <aside className="flex w-52 shrink-0 flex-col border-r border-lr-border-subtle bg-lr-panel">
       <div className="border-b border-lr-border-subtle px-3 py-2">
         <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-dim">
@@ -95,11 +128,11 @@ export function SidePanel() {
             </div>
           )}
 
-          {hasLibrary ? (
+          {hasImportedFolder ? (
             <ul className="space-y-0.5">
               <CatalogItem
                 label="All Photos"
-                count={entries.length}
+                count={libraryEntries.length}
                 icon={<IconFolder className="h-3 w-3 text-lr-accent" />}
                 isActive={catalogView.type === "all"}
                 onClick={() => setCatalogView({ type: "all" })}
@@ -128,6 +161,15 @@ export function SidePanel() {
                   }
                 />
               ))}
+              {archivedEntries.length > 0 ? (
+                <CatalogItem
+                  label="Archive"
+                  count={archivedEntries.length}
+                  icon={<IconArchive className="h-3 w-3 text-lr-text-dim" />}
+                  isActive={catalogView.type === "archive"}
+                  onClick={() => setCatalogView({ type: "archive" })}
+                />
+              ) : null}
             </ul>
           ) : (
             <p className="px-2 py-1.5 text-xs text-lr-text-dim">
@@ -147,7 +189,7 @@ export function SidePanel() {
                 setCreatingAlbum(true);
                 setNewAlbumName("");
               }}
-              disabled={!hasLibrary}
+              disabled={!hasImportedFolder}
               className="flex h-5 w-5 items-center justify-center rounded text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
               title="New album"
             >
@@ -229,7 +271,7 @@ export function SidePanel() {
                       />
                       <button
                         type="button"
-                        onClick={() => deleteAlbum(album.id)}
+                        onClick={() => handleDeleteAlbum(album)}
                         className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-lr-text-dim opacity-0 transition hover:bg-lr-panel-raised hover:text-red-400 group-hover:opacity-100"
                         title="Delete album"
                       >
@@ -248,6 +290,18 @@ export function SidePanel() {
         </section>
       </div>
     </aside>
+
+    {albumPendingDelete ? (
+      <DeleteAlbumConfirm
+        album={albumPendingDelete}
+        onConfirm={() => {
+          deleteAlbum(albumPendingDelete.id);
+          setAlbumPendingDelete(null);
+        }}
+        onClose={() => setAlbumPendingDelete(null)}
+      />
+    ) : null}
+    </>
   );
 }
 

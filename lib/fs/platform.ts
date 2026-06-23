@@ -13,3 +13,15 @@ export function joinRootPath(rootPath: string, relativePath: string): string {
   const separator = rootPath.includes("\\") ? "\\" : "/";
   return `${rootPath}${separator}${relativePath.split("/").join(separator)}`;
 }
+
+export async function deleteFilesFromDisk(
+  absolutePaths: string[],
+): Promise<void> {
+  const api = getDarkroomAPI();
+  if (typeof api.deleteFiles !== "function") {
+    throw new Error(
+      "Remove from disk is unavailable. Quit and restart the desktop app.",
+    );
+  }
+  await api.deleteFiles(absolutePaths);
+}

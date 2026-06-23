@@ -84,12 +84,14 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
         return;
       }
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
+        event.stopPropagation();
         setHighlightIndex((index) =>
           rows.length === 0 ? 0 : Math.min(index + 1, rows.length - 1),
         );
@@ -98,12 +100,14 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
+        event.stopPropagation();
         setHighlightIndex((index) => Math.max(index - 1, 0));
         return;
       }
 
       if (event.key === "Enter") {
         event.preventDefault();
+        event.stopPropagation();
         const row = rows[highlightIndex];
         if (row) {
           confirmRow(row);
@@ -185,11 +189,23 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
                     ].join(" ")}
                   >
                     <span className="flex min-w-0 items-center gap-2">
-                      <IconAlbum className="h-3.5 w-3.5 shrink-0 text-lr-text-dim" />
+                      <IconAlbum
+                        className={[
+                          "h-3.5 w-3.5 shrink-0",
+                          isActive ? "text-lr-text-muted" : "text-lr-text-dim",
+                        ].join(" ")}
+                      />
                       <span className="truncate">{label}</span>
                     </span>
                     {count !== null ? (
-                      <span className="shrink-0 text-lr-text-dim">{count}</span>
+                      <span
+                        className={[
+                          "shrink-0",
+                          isActive ? "text-lr-text-muted" : "text-lr-text-dim",
+                        ].join(" ")}
+                      >
+                        {count}
+                      </span>
                     ) : null}
                   </button>
                 </li>

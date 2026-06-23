@@ -31,6 +31,7 @@ export interface DarkroomAPI {
   readCatalog(rootPath: string): Promise<PhotoCatalog | null>;
   writeCatalog(catalog: PhotoCatalog): Promise<void>;
   deleteCatalog(rootPath: string): Promise<void>;
+  deleteFiles(absolutePaths: string[]): Promise<void>;
 }
 
 declare global {

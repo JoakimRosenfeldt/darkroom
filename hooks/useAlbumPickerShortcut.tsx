@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AlbumPickerPopup } from "@/components/library/AlbumPickerPopup";
+import { RemovePhotosPopup } from "@/components/library/RemovePhotosPopup";
+import { useLibraryStore } from "@/stores/library-store";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -17,6 +19,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+function isRemoveKey(key: string): boolean {
+  return key === "Backspace" || key === "Delete";
+}
+
 interface UseAlbumPickerShortcutOptions {
   selectedEntryId: string | null;
   selectedEntryIds: string[];
@@ -28,7 +34,10 @@ export function useAlbumPickerShortcut({
   selectedEntryIds,
   disabled = false,
 }: UseAlbumPickerShortcutOptions) {
-  const [open, setOpen] = useState(false);
+  const [albumPickerOpen, setAlbumPickerOpen] = useState(false);
+  const [removePopupOpen, setRemovePopupOpen] = useState(false);
+  const catalogView = useLibraryStore((state) => state.catalogView);
+  const isArchiveView = catalogView.type === "archive";
 
   const entryIds = useMemo(
     () =>
@@ -40,8 +49,10 @@ export function useAlbumPickerShortcut({
     [selectedEntryIds, selectedEntryId],
   );
 
+  const overlayOpen = albumPickerOpen || removePopupOpen;
+
   useEffect(() => {
-    if (disabled || open || entryIds.length === 0) {
+    if (disabled || overlayOpen || entryIds.length === 0) {
       return;
     }
 
@@ -52,26 +63,46 @@ export function useAlbumPickerShortcut({
 
       if (
         event.key === "b" &&
+        !isArchiveView &&
         !event.metaKey &&
         !event.ctrlKey &&
         !event.altKey &&
         !event.shiftKey
       ) {
         event.preventDefault();
-        setOpen(true);
+        setAlbumPickerOpen(true);
+        return;
+      }
+
+      if (
+        isRemoveKey(event.key) &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        setRemovePopupOpen(true);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [disabled, entryIds.length, open]);
+  }, [disabled, entryIds.length, isArchiveView, overlayOpen]);
 
-  const albumPicker = open ? (
-    <AlbumPickerPopup
+  const albumPicker =
+    albumPickerOpen && !isArchiveView ? (
+      <AlbumPickerPopup
+        entryIds={entryIds}
+        onClose={() => setAlbumPickerOpen(false)}
+      />
+    ) : null;
+
+  const removePopup = removePopupOpen ? (
+    <RemovePhotosPopup
       entryIds={entryIds}
-      onClose={() => setOpen(false)}
+      onClose={() => setRemovePopupOpen(false)}
     />
   ) : null;
 
-  return { albumPicker, albumPickerOpen: open };
+  return { albumPicker, removePopup, overlayOpen };
 }
