@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import {
   LibraryToolbar,
+  type CurationFilter,
   type FilterOption,
   type GridViewMode,
   type SortOption,
@@ -12,37 +14,34 @@ import {
 import { SidePanel } from "@/components/shell/SidePanel";
 import { TopBar } from "@/components/shell/TopBar";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
+import {
+  filterByCuration,
+  filterByFormat,
+  sortLibraryEntries,
+} from "@/lib/library/curation";
+import {
+  filterByAlbum,
+  filterByFolderPath,
+} from "@/lib/library/folders";
+import {
+  filterArchivedEntries,
+  filterOnlyArchivedEntries,
+} from "@/lib/library/archive";
+import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
+import { useAlbumPickerShortcut } from "@/hooks/useAlbumPickerShortcut";
+import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
 import { useLibraryStore } from "@/stores/library-store";
 
-function filterEntries(
-  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
-  filter: FilterOption,
-) {
-  if (filter === "raw") {
-    return entries.filter((entry) => entry.profileId !== "standard");
-  }
-  if (filter === "standard") {
-    return entries.filter((entry) => entry.profileId === "standard");
-  }
-  return entries;
-}
-
-function sortEntries(
-  entries: ReturnType<typeof useLibraryStore.getState>["entries"],
-  sort: SortOption,
-) {
-  const sorted = [...entries];
-  if (sort === "date") {
-    sorted.sort((a, b) => b.lastModified - a.lastModified);
-    return sorted;
-  }
-  sorted.sort((a, b) => a.name.localeCompare(b.name));
-  return sorted;
-}
-
 export default function HomePage() {
+  const router = useRouter();
   const entries = useLibraryStore((state) => state.entries);
+  const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
+  const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
+  const albums = useLibraryStore((state) => state.albums);
+  const catalogView = useLibraryStore((state) => state.catalogView);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const importState = useLibraryStore((state) => state.importState);
   const importStatus = useLibraryStore((state) => state.importStatus);
@@ -50,55 +49,105 @@ export default function HomePage() {
   const cancelFolderOperation = useLibraryStore(
     (state) => state.cancelFolderOperation,
   );
+  const setCatalogView = useLibraryStore((state) => state.setCatalogView);
+
+  useEffect(() => {
+    if (catalogView.type === "archive" && archivedEntryIds.length === 0) {
+      setCatalogView({ type: "all" });
+    }
+  }, [archivedEntryIds.length, catalogView.type, setCatalogView]);
 
   const [sort, setSort] = useState<SortOption>("name");
   const [filter, setFilter] = useState<FilterOption>("all");
+  const [curationFilter, setCurationFilter] = useState<CurationFilter>("all");
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
+  const [gridRows, setGridRows] = useState<string[][]>([]);
 
-  const { rawCount, standardCount } = useMemo(() => {
-    let raw = 0;
-    let standard = 0;
+  const libraryEntries = useMemo(
+    () => filterArchivedEntries(entries, archivedEntryIds),
+    [entries, archivedEntryIds],
+  );
 
-    for (const entry of entries) {
-      if (entry.profileId === "standard") {
-        standard += 1;
-      } else {
-        raw += 1;
-      }
+  const visibleEntries = useMemo(() => {
+    let scoped =
+      catalogView.type === "archive"
+        ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+        : libraryEntries;
+
+    if (catalogView.type === "folder") {
+      scoped = filterByFolderPath(scoped, catalogView.path);
+    } else if (catalogView.type === "album") {
+      const album = albums.find((item) => item.id === catalogView.albumId);
+      scoped = filterByAlbum(scoped, album);
     }
 
-    return { rawCount: raw, standardCount: standard };
-  }, [entries]);
+    return sortLibraryEntries(
+      filterByFormat(
+        filterByCuration(scoped, entryMetadata, curationFilter),
+        filter,
+      ),
+      entryMetadata,
+      sort,
+    );
+  }, [
+    entries,
+    archivedEntryIds,
+    libraryEntries,
+    entryMetadata,
+    albums,
+    catalogView,
+    curationFilter,
+    filter,
+    sort,
+  ]);
 
-  const visibleEntries = useMemo(
-    () => sortEntries(filterEntries(entries, filter), sort),
-    [entries, filter, sort],
+  const visibleOrder = useMemo(
+    () => visibleEntries.map((entry) => entry.id),
+    [visibleEntries],
   );
+
+  const { openContextMenu, contextMenu, actionOverlayOpen } =
+    useLibraryContextMenu(visibleOrder);
+
+  const { albumPicker, removePopup, overlayOpen } = useAlbumPickerShortcut({
+    selectedEntryId,
+    selectedEntryIds,
+    disabled: actionOverlayOpen,
+  });
+
+  useLibraryGridShortcuts({
+    gridRows,
+    visibleEntries,
+    visibleOrder,
+    selectedEntryId,
+    selectedEntryIds,
+    onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
+    disabled: overlayOpen || actionOverlayOpen,
+    metadataShortcutsDisabled: catalogView.type === "archive",
+  });
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
+      {contextMenu}
+      {albumPicker}
+      {removePopup}
       <TopBar activeModule="library" />
 
       <div className="flex min-h-0 flex-1">
-        <SidePanel
-          folderName={folderName}
-          photoCount={entries.length}
-          rawCount={rawCount}
-          standardCount={standardCount}
-          filter={filter}
-          onFilterChange={setFilter}
-        />
+        <SidePanel />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <LibraryToolbar
             photoCount={visibleEntries.length}
             sort={sort}
             filter={filter}
+            curationFilter={curationFilter}
             thumbSize={thumbSize}
             viewMode={viewMode}
             onSortChange={setSort}
             onFilterChange={setFilter}
+            onCurationFilterChange={setCurationFilter}
             onThumbSizeChange={setThumbSize}
             onViewModeChange={setViewMode}
           />
@@ -147,13 +196,25 @@ export default function HomePage() {
                     {importStatus}
                   </div>
                 ) : null}
+                {importError ? (
+                  <div className="border-b border-lr-border-subtle bg-lr-panel px-3 py-1.5 text-xs text-red-400">
+                    {importError}
+                  </div>
+                ) : null}
                 {viewMode === "dynamic" ? (
                   <DynamicPhotoGrid
                     entries={visibleEntries}
                     rowHeight={thumbSize}
+                    onGridRowsChange={setGridRows}
+                    onPhotoContextMenu={openContextMenu}
                   />
                 ) : (
-                  <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
+                  <PhotoGrid
+                    entries={visibleEntries}
+                    thumbSize={thumbSize}
+                    onGridRowsChange={setGridRows}
+                    onPhotoContextMenu={openContextMenu}
+                  />
                 )}
               </>
             ) : importState === "importing" || importState === "restoring" ? (

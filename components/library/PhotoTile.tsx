@@ -4,10 +4,13 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { memo, useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import type { EntryMetadata } from "@/lib/catalog/types";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import {
   createThumbnailObjectUrl,
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
+import { EntryMetadataBadges } from "./EntryMetadataBar";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -16,7 +19,9 @@ interface PhotoTileProps {
   selected?: boolean;
   compact?: boolean;
   fit?: "contain" | "cover";
-  onSelect?: (entryId: string) => void;
+  metadata?: EntryMetadata;
+  onSelect?: (entryId: string, modifiers: SelectEntryModifiers) => void;
+  onContextMenu?: (entryId: string, event: React.MouseEvent) => void;
   getScrollRoot?: () => HTMLElement | null;
 }
 
@@ -29,7 +34,9 @@ export const PhotoTile = memo(function PhotoTile({
   selected = false,
   compact = false,
   fit = "contain",
+  metadata,
   onSelect,
+  onContextMenu,
   getScrollRoot,
 }: PhotoTileProps) {
   const router = useRouter();
@@ -38,7 +45,26 @@ export const PhotoTile = memo(function PhotoTile({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [intersectionRatio, setIntersectionRatio] = useState(0);
+  const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+    setThumbnailUrl(null);
+    setStatus("loading");
+  }, [entry.id, decodeEdge]);
 
   useEffect(() => {
     const element = tileRef.current;
@@ -73,18 +99,12 @@ export const PhotoTile = memo(function PhotoTile({
   }, [compact, getScrollRoot]);
 
   useEffect(() => {
-    let active = true;
-    let objectUrl: string | null = null;
-    const controller = new AbortController();
-    setThumbnailUrl(null);
-    setStatus("loading");
-
     if (!isNearViewport) {
-      return () => {
-        active = false;
-        controller.abort();
-      };
+      return;
     }
+
+    let active = true;
+    const controller = new AbortController();
 
     const loadPriority = selected
       ? 30
@@ -102,8 +122,11 @@ export const PhotoTile = memo(function PhotoTile({
           return;
         }
 
-        objectUrl = createThumbnailObjectUrl(blob);
-        setThumbnailUrl(objectUrl);
+        if (objectUrlRef.current) {
+          URL.revokeObjectURL(objectUrlRef.current);
+        }
+        objectUrlRef.current = createThumbnailObjectUrl(blob);
+        setThumbnailUrl(objectUrlRef.current);
         setStatus("ready");
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
@@ -120,23 +143,21 @@ export const PhotoTile = memo(function PhotoTile({
     return () => {
       active = false;
       controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [entry, decodeEdge, isNearViewport, intersectionRatio, selected]);
+  }, [entry, decodeEdge, isNearViewport, selected, intersectionRatio]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
+  const isRejected = metadata?.pick === "reject";
 
   const content = (
     <div
       ref={tileRef}
       className={[
-        "group relative shrink-0 overflow-hidden bg-[#141414]",
+        "group relative shrink-0 overflow-hidden border-2 bg-[#141414]",
         selected
-          ? "ring-2 ring-lr-accent ring-offset-1 ring-offset-lr-bg"
-          : "hover:ring-1 hover:ring-lr-border",
-        compact ? "" : "transition-shadow",
+          ? "border-lr-accent"
+          : "border-transparent hover:border-lr-border",
+        compact ? "" : "transition-shadow duration-100 ease-out",
       ].join(" ")}
       style={{ width, height }}
     >
@@ -166,6 +187,12 @@ export const PhotoTile = memo(function PhotoTile({
         </div>
       ) : null}
 
+      {isRejected ? (
+        <div className="pointer-events-none absolute inset-0 bg-black/50" />
+      ) : null}
+
+      {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}
+
       {selected ? (
         <div className="absolute left-0 top-0 h-0 w-0 border-r-[10px] border-t-[10px] border-r-transparent border-t-lr-accent" />
       ) : null}
@@ -181,10 +208,16 @@ export const PhotoTile = memo(function PhotoTile({
       <button
         type="button"
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
-        onClick={() => onSelect(entry.id)}
+        onClick={(event) =>
+          onSelect(entry.id, {
+            shift: event.shiftKey,
+            toggle: event.metaKey || event.ctrlKey,
+          })
+        }
         onDoubleClick={() =>
           router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
         }
+        onContextMenu={(event) => onContextMenu?.(entry.id, event)}
       >
         {content}
       </button>

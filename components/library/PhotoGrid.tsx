@@ -1,53 +1,50 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useScrollToSelectedRow } from "@/hooks/useScrollToSelectedRow";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { measureContentWidth, packSquareRows } from "@/lib/library/grid-layout";
+import { getEntryMetadata } from "@/lib/catalog/defaults";
+import { packSquareRows } from "@/lib/library/grid-layout";
+import { useGridContainerWidth } from "@/hooks/useGridContainerWidth";
 import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
 
 interface PhotoGridProps {
   entries: LibraryEntry[];
   thumbSize: number;
+  onGridRowsChange?: (rows: string[][]) => void;
+  onPhotoContextMenu?: (entryId: string, event: React.MouseEvent) => void;
 }
 
 const ROW_GAP = 4;
 const TILE_GAP = 2;
 
-export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
+export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContextMenu }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const didScrollToSelectedRef = useRef(false);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const containerWidth = useGridContainerWidth(parentRef, entries);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
-  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
+  const selectEntry = useLibraryStore((state) => state.selectEntry);
   const getScrollRoot = useCallback(() => parentRef.current, []);
+
+  const visibleOrder = useMemo(
+    () => entries.map((entry) => entry.id),
+    [entries],
+  );
+
+  const handleSelect = useCallback(
+    (entryId: string, modifiers: { shift?: boolean; toggle?: boolean }) => {
+      selectEntry(entryId, modifiers, visibleOrder);
+    },
+    [selectEntry, visibleOrder],
+  );
 
   const { rows } = useMemo(
     () => packSquareRows(entries, containerWidth, thumbSize, TILE_GAP),
     [entries, containerWidth, thumbSize],
   );
-
-  useLayoutEffect(() => {
-    const element = parentRef.current;
-    if (element) {
-      setContainerWidth(measureContentWidth(element));
-    }
-  }, []);
-
-  useEffect(() => {
-    const element = parentRef.current;
-    if (!element) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      setContainerWidth(measureContentWidth(element));
-    });
-    observer.observe(element);
-
-    return () => observer.disconnect();
-  }, []);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -57,6 +54,17 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   });
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
+
+  useEffect(() => {
+    if (!onGridRowsChange) {
+      return;
+    }
+    if (!layoutReady) {
+      return;
+    }
+    onGridRowsChange(rows.map((row) => row.entries.map((entry) => entry.id)));
+  }, [rows, layoutReady, onGridRowsChange]);
+
   const selectedRowIndex = useMemo(() => {
     if (!selectedEntryId) {
       return -1;
@@ -67,18 +75,19 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
     );
   }, [rows, selectedEntryId]);
 
-  useEffect(() => {
-    if (
-      !layoutReady ||
-      didScrollToSelectedRef.current ||
-      selectedRowIndex < 0
-    ) {
-      return;
-    }
+  useScrollToSelectedRow({
+    layoutReady,
+    selectedRowIndex,
+    virtualizer,
+  });
 
-    didScrollToSelectedRef.current = true;
-    virtualizer.scrollToIndex(selectedRowIndex, { align: "center" });
-  }, [layoutReady, selectedRowIndex, virtualizer]);
+  if (entries.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-center text-xs text-lr-text-dim">
+        No photos match the current filters
+      </div>
+    );
+  }
 
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
@@ -115,8 +124,10 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
                     width={row.cellSize}
                     height={row.cellSize}
                     fit="contain"
-                    selected={entry.id === selectedEntryId}
-                    onSelect={setSelectedEntryId}
+                    selected={selectedEntryIds.includes(entry.id)}
+                    metadata={getEntryMetadata(entryMetadata, entry.id)}
+                    onSelect={handleSelect}
+                    onContextMenu={onPhotoContextMenu}
                     getScrollRoot={getScrollRoot}
                   />
                 ))}

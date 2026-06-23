@@ -10,9 +10,14 @@ import {
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
 import { TopBar } from "@/components/shell/TopBar";
+import {
+  EntryMetadataBar,
+  useEntryMetadataForId,
+} from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
 import { Filmstrip } from "./Filmstrip";
 import { MetadataPanel } from "./MetadataPanel";
+import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -22,6 +27,10 @@ interface PhotoViewerProps {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const setPick = useLibraryStore((state) => state.setPick);
+  const setRating = useLibraryStore((state) => state.setRating);
+  const setColorLabel = useLibraryStore((state) => state.setColorLabel);
+  const metadata = useEntryMetadataForId(entry.id);
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,6 +81,8 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     };
   }, [entry, entries, activeIndex]);
 
+  useEntryMetadataShortcuts([entry.id]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "ArrowLeft" && activeIndex > 0) {
@@ -100,6 +111,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         showBack
         title={entry.name}
         developPhotoId={entry.id}
+      />
+
+      <EntryMetadataBar
+        entryId={entry.id}
+        metadata={metadata}
+        onPick={() => setPick(entry.id, "pick")}
+        onReject={() => setPick(entry.id, "reject")}
+        onClearPick={() => setPick(entry.id, "none")}
+        onRating={(rating) => setRating(entry.id, rating)}
+        onColorLabel={(label) => setColorLabel(entry.id, label)}
       />
 
       <div className="flex min-h-0 flex-1">

@@ -7,6 +7,19 @@ interface ScannedFile {
   lastModified: number;
 }
 
+interface CatalogEntryMetadata {
+  pick: "none" | "pick" | "reject";
+  rating: 0 | 1 | 2 | 3 | 4 | 5;
+  colorLabel: "red" | "yellow" | "green" | "blue" | "purple" | null;
+  updatedAt: number;
+}
+
+interface PhotoCatalog {
+  version: 1;
+  rootPath: string;
+  entries: Record<string, CatalogEntryMetadata>;
+}
+
 const darkroom = {
   isElectron: true as const,
 
@@ -40,6 +53,22 @@ const darkroom = {
 
   folderExists(folderPath: string): Promise<boolean> {
     return ipcRenderer.invoke("darkroom:folder-exists", folderPath);
+  },
+
+  readCatalog(rootPath: string): Promise<PhotoCatalog | null> {
+    return ipcRenderer.invoke("darkroom:catalog-read", rootPath);
+  },
+
+  writeCatalog(catalog: PhotoCatalog): Promise<void> {
+    return ipcRenderer.invoke("darkroom:catalog-write", catalog);
+  },
+
+  deleteCatalog(rootPath: string): Promise<void> {
+    return ipcRenderer.invoke("darkroom:catalog-delete", rootPath);
+  },
+
+  deleteFiles(absolutePaths: string[]): Promise<void> {
+    return ipcRenderer.invoke("darkroom:delete-files", absolutePaths);
   },
 };
 
