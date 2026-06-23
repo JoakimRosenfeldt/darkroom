@@ -43,6 +43,7 @@ export default function HomePage() {
   const [curationFilter, setCurationFilter] = useState<CurationFilter>("all");
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
+  const [gridRows, setGridRows] = useState<string[][]>([]);
 
   const { rawCount, standardCount } = useMemo(() => {
     let raw = 0;
@@ -78,6 +79,7 @@ export default function HomePage() {
   );
 
   useLibraryGridShortcuts({
+    gridRows,
     visibleEntries,
     selectedEntryId,
     onSelect: setSelectedEntryId,
@@ -164,9 +166,14 @@ export default function HomePage() {
                   <DynamicPhotoGrid
                     entries={visibleEntries}
                     rowHeight={thumbSize}
+                    onGridRowsChange={setGridRows}
                   />
                 ) : (
-                  <PhotoGrid entries={visibleEntries} thumbSize={thumbSize} />
+                  <PhotoGrid
+                    entries={visibleEntries}
+                    thumbSize={thumbSize}
+                    onGridRowsChange={setGridRows}
+                  />
                 )}
               </>
             ) : importState === "importing" || importState === "restoring" ? (

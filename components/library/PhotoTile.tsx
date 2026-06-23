@@ -151,10 +151,7 @@ export const PhotoTile = memo(function PhotoTile({
           alt={entry.name}
           fill
           unoptimized
-          className={[
-            imageFit,
-            isRejected ? "grayscale opacity-45" : "",
-          ].join(" ")}
+          className={imageFit}
           sizes={`${width}px`}
         />
       ) : (
@@ -172,6 +169,10 @@ export const PhotoTile = memo(function PhotoTile({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {isRejected ? (
+        <div className="pointer-events-none absolute inset-0 bg-black/50" />
       ) : null}
 
       {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}

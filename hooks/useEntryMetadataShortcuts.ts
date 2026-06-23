@@ -6,6 +6,7 @@ import {
   isStarRating,
 } from "@/lib/catalog/defaults";
 import type { ColorLabel } from "@/lib/catalog/types";
+import { navigateGridRows } from "@/lib/library/grid-navigation";
 import { useLibraryStore } from "@/stores/library-store";
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -71,6 +72,7 @@ export function useEntryMetadataShortcuts(activeEntryId: string | null): void {
 }
 
 interface LibraryGridShortcutsOptions {
+  gridRows: string[][];
   visibleEntries: Array<{ id: string }>;
   selectedEntryId: string | null;
   onSelect: (id: string) => void;
@@ -78,6 +80,7 @@ interface LibraryGridShortcutsOptions {
 }
 
 export function useLibraryGridShortcuts({
+  gridRows,
   visibleEntries,
   selectedEntryId,
   onSelect,
@@ -95,16 +98,40 @@ export function useLibraryGridShortcuts({
         return;
       }
 
-      const currentIndex = selectedEntryId
-        ? visibleEntries.findIndex((entry) => entry.id === selectedEntryId)
-        : -1;
-
       if (event.key === "Enter" && selectedEntryId && onOpen) {
         event.preventDefault();
         onOpen(selectedEntryId);
         return;
       }
 
+      let nextId: string | null = null;
+
+      if (event.key === "ArrowRight") {
+        nextId = navigateGridRows(gridRows, selectedEntryId, "right");
+      } else if (event.key === "ArrowLeft") {
+        nextId = navigateGridRows(gridRows, selectedEntryId, "left");
+      } else if (event.key === "ArrowDown") {
+        nextId = navigateGridRows(gridRows, selectedEntryId, "down");
+      } else if (event.key === "ArrowUp") {
+        nextId = navigateGridRows(gridRows, selectedEntryId, "up");
+      } else {
+        return;
+      }
+
+      if (nextId && nextId !== selectedEntryId) {
+        event.preventDefault();
+        onSelect(nextId);
+        return;
+      }
+
+      // Fall back to flat navigation when grid layout is not ready.
+      if (gridRows.length > 0) {
+        return;
+      }
+
+      const currentIndex = selectedEntryId
+        ? visibleEntries.findIndex((entry) => entry.id === selectedEntryId)
+        : -1;
       let nextIndex = currentIndex;
 
       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
@@ -117,8 +144,6 @@ export function useLibraryGridShortcuts({
           currentIndex < 0
             ? visibleEntries.length - 1
             : Math.max(currentIndex - 1, 0);
-      } else {
-        return;
       }
 
       if (nextIndex !== currentIndex && visibleEntries[nextIndex]) {
@@ -129,5 +154,5 @@ export function useLibraryGridShortcuts({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [visibleEntries, selectedEntryId, onSelect, onOpen]);
+  }, [gridRows, visibleEntries, selectedEntryId, onSelect, onOpen]);
 }

@@ -11,14 +11,14 @@ import { PhotoTile } from "./PhotoTile";
 interface PhotoGridProps {
   entries: LibraryEntry[];
   thumbSize: number;
+  onGridRowsChange?: (rows: string[][]) => void;
 }
 
 const ROW_GAP = 4;
 const TILE_GAP = 2;
 
-export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
+export function PhotoGrid({ entries, thumbSize, onGridRowsChange }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const didScrollToSelectedRef = useRef(false);
   const [containerWidth, setContainerWidth] = useState(0);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
@@ -59,6 +59,18 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   });
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
+
+  useEffect(() => {
+    if (!onGridRowsChange) {
+      return;
+    }
+    if (!layoutReady) {
+      onGridRowsChange([]);
+      return;
+    }
+    onGridRowsChange(rows.map((row) => row.entries.map((entry) => entry.id)));
+  }, [rows, layoutReady, onGridRowsChange]);
+
   const selectedRowIndex = useMemo(() => {
     if (!selectedEntryId) {
       return -1;
@@ -70,16 +82,11 @@ export function PhotoGrid({ entries, thumbSize }: PhotoGridProps) {
   }, [rows, selectedEntryId]);
 
   useEffect(() => {
-    if (
-      !layoutReady ||
-      didScrollToSelectedRef.current ||
-      selectedRowIndex < 0
-    ) {
+    if (!layoutReady || selectedRowIndex < 0) {
       return;
     }
 
-    didScrollToSelectedRef.current = true;
-    virtualizer.scrollToIndex(selectedRowIndex, { align: "center" });
+    virtualizer.scrollToIndex(selectedRowIndex, { align: "auto" });
   }, [layoutReady, selectedRowIndex, virtualizer]);
 
   return (
