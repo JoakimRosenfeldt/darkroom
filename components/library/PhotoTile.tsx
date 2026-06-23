@@ -122,6 +122,9 @@ export const PhotoTile = memo(function PhotoTile({
           return;
         }
 
+        if (objectUrlRef.current) {
+          URL.revokeObjectURL(objectUrlRef.current);
+        }
         objectUrlRef.current = createThumbnailObjectUrl(blob);
         setThumbnailUrl(objectUrlRef.current);
         setStatus("ready");

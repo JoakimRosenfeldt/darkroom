@@ -196,6 +196,11 @@ export default function HomePage() {
                     {importStatus}
                   </div>
                 ) : null}
+                {importError ? (
+                  <div className="border-b border-lr-border-subtle bg-lr-panel px-3 py-1.5 text-xs text-red-400">
+                    {importError}
+                  </div>
+                ) : null}
                 {viewMode === "dynamic" ? (
                   <DynamicPhotoGrid
                     entries={visibleEntries}

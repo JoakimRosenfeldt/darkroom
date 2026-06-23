@@ -301,10 +301,12 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
             onClose();
           }}
           onConfirm={() => {
-            void deleteEntriesFromDisk(entryIds).then(() => {
-              setConfirmDiskDelete(false);
-              onClose();
-            });
+            void deleteEntriesFromDisk(entryIds)
+              .then(() => {
+                setConfirmDiskDelete(false);
+                onClose();
+              })
+              .catch(() => {});
           }}
         />
       ) : null}

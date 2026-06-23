@@ -12,7 +12,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { DeleteFromDiskConfirm } from "@/components/library/DeleteFromDiskConfirm";
-import { COLOR_LABEL_HEX } from "@/lib/catalog/defaults";
+import {
+  COLOR_LABEL_HEX,
+  COLOR_LABEL_SHORTCUT_HINTS,
+} from "@/lib/catalog/defaults";
 import { COLOR_LABELS } from "@/lib/catalog/types";
 import { useLibraryStore } from "@/stores/library-store";
 
@@ -250,7 +253,7 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
             <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
               Color label
             </div>
-            {COLOR_LABELS.map((label, index) => (
+            {COLOR_LABELS.map((label) => (
               <ContextMenuItem
                 key={label}
                 onClick={() => applyToTargets({ colorLabel: label })}
@@ -260,7 +263,7 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
                   style={{ backgroundColor: COLOR_LABEL_HEX[label] }}
                 />
                 <span className="capitalize">{label}</span>
-                <ShortcutHint>{index + 6}</ShortcutHint>
+                <ShortcutHint>{COLOR_LABEL_SHORTCUT_HINTS[label]}</ShortcutHint>
               </ContextMenuItem>
             ))}
             <ContextMenuItem onClick={() => applyToTargets({ colorLabel: null })}>
@@ -360,9 +363,9 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
             entryIds={diskDeleteTargets}
             onClose={() => setDiskDeleteTargets(null)}
             onConfirm={() => {
-              void deleteEntriesFromDisk(diskDeleteTargets).then(() =>
-                setDiskDeleteTargets(null),
-              );
+              void deleteEntriesFromDisk(diskDeleteTargets)
+                .then(() => setDiskDeleteTargets(null))
+                .catch(() => {});
             }}
           />,
           document.body,

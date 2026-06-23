@@ -698,8 +698,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     try {
       await deleteFilesFromDisk(absolutePaths);
     } catch (error) {
-      set({ importError: formatPickerError(error) });
-      return;
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
     }
 
     const remainingEntries = entries.filter((entry) => !removeSet.has(entry.id));
