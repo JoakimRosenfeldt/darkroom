@@ -45,11 +45,7 @@ export const PhotoTile = memo(function PhotoTile({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [intersectionRatio, setIntersectionRatio] = useState(0);
-  const selectedRef = useRef(selected);
-  const intersectionRatioRef = useRef(intersectionRatio);
   const objectUrlRef = useRef<string | null>(null);
-  selectedRef.current = selected;
-  intersectionRatioRef.current = intersectionRatio;
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
 
   useEffect(() => {
@@ -110,10 +106,10 @@ export const PhotoTile = memo(function PhotoTile({
     let active = true;
     const controller = new AbortController();
 
-    const loadPriority = selectedRef.current
+    const loadPriority = selected
       ? 30
-      : intersectionRatioRef.current >= 0.5
-        ? 20 + Math.round(intersectionRatioRef.current * 5)
+      : intersectionRatio >= 0.5
+        ? 20 + Math.round(intersectionRatio * 5)
         : 12;
 
     async function loadThumbnail() {
@@ -145,7 +141,7 @@ export const PhotoTile = memo(function PhotoTile({
       active = false;
       controller.abort();
     };
-  }, [entry, decodeEdge, isNearViewport]);
+  }, [entry, decodeEdge, isNearViewport, selected, intersectionRatio]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";

@@ -357,6 +357,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   clearSelection: () =>
     set({
       selectedEntryIds: [],
+      selectedEntryId: null,
       selectionAnchorId: null,
     }),
 
