@@ -154,10 +154,10 @@ export const PhotoTile = memo(function PhotoTile({
     <div
       ref={tileRef}
       className={[
-        "group relative shrink-0 overflow-hidden bg-[#141414]",
+        "group relative shrink-0 overflow-hidden border-2 bg-[#141414]",
         selected
-          ? "ring-2 ring-lr-accent ring-offset-1 ring-offset-lr-bg"
-          : "hover:ring-1 hover:ring-lr-border",
+          ? "border-lr-accent"
+          : "border-transparent hover:border-lr-border",
         compact ? "" : "transition-shadow duration-100 ease-out",
       ].join(" ")}
       style={{ width, height }}
