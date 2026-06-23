@@ -84,9 +84,9 @@ export function useEntryMetadataShortcuts(
 interface LibraryGridShortcutsOptions {
   gridRows: string[][];
   visibleEntries: Array<{ id: string }>;
+  visibleOrder: string[];
   selectedEntryId: string | null;
   selectedEntryIds: string[];
-  onSelect: (id: string) => void;
   onOpen?: (id: string) => void;
   disabled?: boolean;
   metadataShortcutsDisabled?: boolean;
@@ -95,13 +95,15 @@ interface LibraryGridShortcutsOptions {
 export function useLibraryGridShortcuts({
   gridRows,
   visibleEntries,
+  visibleOrder,
   selectedEntryId,
   selectedEntryIds,
-  onSelect,
   onOpen,
   disabled = false,
   metadataShortcutsDisabled = false,
 }: LibraryGridShortcutsOptions): void {
+  const selectEntry = useLibraryStore((state) => state.selectEntry);
+  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const shortcutTargets = useMemo(
     () =>
       selectedEntryIds.length > 0
@@ -156,7 +158,11 @@ export function useLibraryGridShortcuts({
 
       if (nextId && nextId !== selectedEntryId) {
         event.preventDefault();
-        onSelect(nextId);
+        if (event.shiftKey) {
+          selectEntry(nextId, { shift: true }, visibleOrder);
+        } else {
+          setSelectedEntryId(nextId);
+        }
         return;
       }
 
@@ -184,11 +190,25 @@ export function useLibraryGridShortcuts({
 
       if (nextIndex !== currentIndex && visibleEntries[nextIndex]) {
         event.preventDefault();
-        onSelect(visibleEntries[nextIndex].id);
+        const nextId = visibleEntries[nextIndex].id;
+        if (event.shiftKey) {
+          selectEntry(nextId, { shift: true }, visibleOrder);
+        } else {
+          setSelectedEntryId(nextId);
+        }
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [gridRows, visibleEntries, selectedEntryId, onSelect, onOpen, disabled]);
+  }, [
+    gridRows,
+    visibleEntries,
+    visibleOrder,
+    selectedEntryId,
+    selectEntry,
+    setSelectedEntryId,
+    onOpen,
+    disabled,
+  ]);
 }

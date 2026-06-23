@@ -39,7 +39,6 @@ export default function HomePage() {
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
-  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const folderName = useLibraryStore((state) => state.folderName);
   const albums = useLibraryStore((state) => state.albums);
   const catalogView = useLibraryStore((state) => state.catalogView);
@@ -120,9 +119,9 @@ export default function HomePage() {
   useLibraryGridShortcuts({
     gridRows,
     visibleEntries,
+    visibleOrder,
     selectedEntryId,
     selectedEntryIds,
-    onSelect: setSelectedEntryId,
     onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
     disabled: overlayOpen || actionOverlayOpen,
     metadataShortcutsDisabled: catalogView.type === "archive",

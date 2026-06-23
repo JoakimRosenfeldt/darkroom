@@ -370,17 +370,20 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       return;
     }
 
-    if (modifiers.shift && selectionAnchorId) {
-      const anchorIdx = visibleOrder.indexOf(selectionAnchorId);
-      const clickIdx = visibleOrder.indexOf(id);
-      if (anchorIdx >= 0 && clickIdx >= 0) {
-        const start = Math.min(anchorIdx, clickIdx);
-        const end = Math.max(anchorIdx, clickIdx);
-        set({
-          selectedEntryIds: visibleOrder.slice(start, end + 1),
-          selectedEntryId: id,
-        });
-        return;
+    if (modifiers.shift) {
+      const anchor = selectionAnchorId ?? get().selectedEntryId;
+      if (anchor) {
+        const anchorIdx = visibleOrder.indexOf(anchor);
+        const targetIdx = visibleOrder.indexOf(id);
+        if (anchorIdx >= 0 && targetIdx >= 0) {
+          const start = Math.min(anchorIdx, targetIdx);
+          const end = Math.max(anchorIdx, targetIdx);
+          set({
+            selectedEntryIds: visibleOrder.slice(start, end + 1),
+            selectedEntryId: id,
+          });
+          return;
+        }
       }
     }
 
