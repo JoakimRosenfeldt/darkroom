@@ -40,13 +40,27 @@ export function navigateGridRows(
       if (colIndex > 0) {
         return currentRow[colIndex - 1] ?? null;
       }
-      return currentId;
+      if (rowIndex === 0) {
+        return currentId;
+      }
+      const targetRow = rows[rowIndex - 1];
+      if (!targetRow || targetRow.length === 0) {
+        return currentId;
+      }
+      return targetRow[targetRow.length - 1] ?? null;
     }
     case "right": {
       if (colIndex < currentRow.length - 1) {
         return currentRow[colIndex + 1] ?? null;
       }
-      return currentId;
+      if (rowIndex >= rows.length - 1) {
+        return currentId;
+      }
+      const targetRow = rows[rowIndex + 1];
+      if (!targetRow || targetRow.length === 0) {
+        return currentId;
+      }
+      return targetRow[0] ?? null;
     }
     case "up": {
       if (rowIndex === 0) {
