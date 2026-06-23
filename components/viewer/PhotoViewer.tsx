@@ -81,7 +81,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     };
   }, [entry, entries, activeIndex]);
 
-  useEntryMetadataShortcuts(entry.id);
+  useEntryMetadataShortcuts([entry.id]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

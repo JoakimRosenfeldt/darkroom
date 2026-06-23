@@ -21,6 +21,7 @@ import {
   sortLibraryEntries,
 } from "@/lib/library/curation";
 import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
+import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
 import { useLibraryStore } from "@/stores/library-store";
 
 export default function HomePage() {
@@ -28,6 +29,7 @@ export default function HomePage() {
   const entries = useLibraryStore((state) => state.entries);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const folderName = useLibraryStore((state) => state.folderName);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
@@ -78,16 +80,25 @@ export default function HomePage() {
     [entries, entryMetadata, curationFilter, filter, sort],
   );
 
+  const visibleOrder = useMemo(
+    () => visibleEntries.map((entry) => entry.id),
+    [visibleEntries],
+  );
+
+  const { openContextMenu, contextMenu } = useLibraryContextMenu(visibleOrder);
+
   useLibraryGridShortcuts({
     gridRows,
     visibleEntries,
     selectedEntryId,
+    selectedEntryIds,
     onSelect: setSelectedEntryId,
     onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
   });
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
+      {contextMenu}
       <TopBar activeModule="library" />
 
       <div className="flex min-h-0 flex-1">
@@ -167,12 +178,14 @@ export default function HomePage() {
                     entries={visibleEntries}
                     rowHeight={thumbSize}
                     onGridRowsChange={setGridRows}
+                    onPhotoContextMenu={openContextMenu}
                   />
                 ) : (
                   <PhotoGrid
                     entries={visibleEntries}
                     thumbSize={thumbSize}
                     onGridRowsChange={setGridRows}
+                    onPhotoContextMenu={openContextMenu}
                   />
                 )}
               </>

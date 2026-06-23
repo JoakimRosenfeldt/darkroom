@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   COLOR_LABEL_SHORTCUTS,
   isStarRating,
@@ -23,17 +23,18 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function useEntryMetadataShortcuts(activeEntryId: string | null): void {
-  const setPick = useLibraryStore((state) => state.setPick);
-  const setRating = useLibraryStore((state) => state.setRating);
+export function useEntryMetadataShortcuts(activeEntryIds: string[]): void {
+  const applyMetadataToEntries = useLibraryStore(
+    (state) => state.applyMetadataToEntries,
+  );
   const setColorLabel = useLibraryStore((state) => state.setColorLabel);
 
   useEffect(() => {
-    if (!activeEntryId) {
+    if (activeEntryIds.length === 0) {
       return;
     }
 
-    const entryId = activeEntryId;
+    const targets = activeEntryIds;
 
     function onKeyDown(event: KeyboardEvent) {
       if (isEditableTarget(event.target)) {
@@ -44,20 +45,26 @@ export function useEntryMetadataShortcuts(activeEntryId: string | null): void {
       let handled = false;
 
       if (key === "p" || key === "P") {
-        setPick(entryId, "pick");
+        applyMetadataToEntries(targets, { pick: "pick" });
         handled = true;
       } else if (key === "x" || key === "X") {
-        setPick(entryId, "reject");
+        applyMetadataToEntries(targets, { pick: "reject" });
         handled = true;
       } else if (key === "u" || key === "U") {
-        setPick(entryId, "none");
+        applyMetadataToEntries(targets, { pick: "none" });
         handled = true;
       } else if (isStarRating(Number(key))) {
-        setRating(entryId, Number(key) as 0 | 1 | 2 | 3 | 4 | 5);
+        applyMetadataToEntries(targets, {
+          rating: Number(key) as 0 | 1 | 2 | 3 | 4 | 5,
+        });
         handled = true;
       } else if (key in COLOR_LABEL_SHORTCUTS) {
         const label = COLOR_LABEL_SHORTCUTS[key] as Exclude<ColorLabel, null>;
-        setColorLabel(entryId, label);
+        if (targets.length > 1) {
+          applyMetadataToEntries(targets, { colorLabel: label });
+        } else {
+          setColorLabel(targets[0]!, label);
+        }
         handled = true;
       }
 
@@ -68,13 +75,14 @@ export function useEntryMetadataShortcuts(activeEntryId: string | null): void {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeEntryId, setColorLabel, setPick, setRating]);
+  }, [activeEntryIds, applyMetadataToEntries, setColorLabel]);
 }
 
 interface LibraryGridShortcutsOptions {
   gridRows: string[][];
   visibleEntries: Array<{ id: string }>;
   selectedEntryId: string | null;
+  selectedEntryIds: string[];
   onSelect: (id: string) => void;
   onOpen?: (id: string) => void;
 }
@@ -83,10 +91,21 @@ export function useLibraryGridShortcuts({
   gridRows,
   visibleEntries,
   selectedEntryId,
+  selectedEntryIds,
   onSelect,
   onOpen,
 }: LibraryGridShortcutsOptions): void {
-  useEntryMetadataShortcuts(selectedEntryId);
+  const shortcutTargets = useMemo(
+    () =>
+      selectedEntryIds.length > 0
+        ? selectedEntryIds
+        : selectedEntryId
+          ? [selectedEntryId]
+          : [],
+    [selectedEntryIds, selectedEntryId],
+  );
+
+  useEntryMetadataShortcuts(shortcutTargets);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

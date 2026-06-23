@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { memo, useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import {
   createThumbnailObjectUrl,
   loadThumbnailBlob,
@@ -19,7 +20,8 @@ interface PhotoTileProps {
   compact?: boolean;
   fit?: "contain" | "cover";
   metadata?: EntryMetadata;
-  onSelect?: (entryId: string) => void;
+  onSelect?: (entryId: string, modifiers: SelectEntryModifiers) => void;
+  onContextMenu?: (entryId: string, event: React.MouseEvent) => void;
   getScrollRoot?: () => HTMLElement | null;
 }
 
@@ -34,6 +36,7 @@ export const PhotoTile = memo(function PhotoTile({
   fit = "contain",
   metadata,
   onSelect,
+  onContextMenu,
   getScrollRoot,
 }: PhotoTileProps) {
   const router = useRouter();
@@ -192,10 +195,16 @@ export const PhotoTile = memo(function PhotoTile({
       <button
         type="button"
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
-        onClick={() => onSelect(entry.id)}
+        onClick={(event) =>
+          onSelect(entry.id, {
+            shift: event.shiftKey,
+            toggle: event.metaKey || event.ctrlKey,
+          })
+        }
         onDoubleClick={() =>
           router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
         }
+        onContextMenu={(event) => onContextMenu?.(entry.id, event)}
       >
         {content}
       </button>

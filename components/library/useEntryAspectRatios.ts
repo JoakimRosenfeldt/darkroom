@@ -33,6 +33,11 @@ export function useEntryAspectRatios(
     () => new Map(entries.map((entry) => [entry.id, entry])),
     [entries],
   );
+  const entrySetKey = useMemo(() => {
+    const ids = entries.map((entry) => entry.id);
+    ids.sort();
+    return ids.join("\0");
+  }, [entries]);
   const [aspectRatios, setAspectRatios] = useState<Map<string, number>>(() =>
     seedAspectRatios(entries),
   );
@@ -42,7 +47,8 @@ export function useEntryAspectRatios(
   const flushFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const seeded = seedAspectRatios(entries);
+    const catalogEntries = [...entriesById.values()];
+    const seeded = seedAspectRatios(catalogEntries);
     loadedRef.current = new Set(seeded.keys());
     setAspectRatios((current) => {
       const next = new Map(seeded);
@@ -56,7 +62,7 @@ export function useEntryAspectRatios(
     });
     inFlightRef.current.clear();
     pendingUpdatesRef.current.clear();
-  }, [entries, entriesById]);
+  }, [entrySetKey, entriesById]);
 
   useEffect(() => {
     let cancelled = false;

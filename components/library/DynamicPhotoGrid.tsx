@@ -4,8 +4,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
-import { measureContentWidth, packDynamicRows } from "@/lib/library/grid-layout";
+import { packDynamicRows } from "@/lib/library/grid-layout";
 import { collectVisibleEntryIds } from "@/lib/library/visible-entry-ids";
+import { useGridContainerWidth } from "@/hooks/useGridContainerWidth";
 import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
 import { useEntryAspectRatios } from "./useEntryAspectRatios";
@@ -14,6 +15,7 @@ interface DynamicPhotoGridProps {
   entries: LibraryEntry[];
   rowHeight: number;
   onGridRowsChange?: (rows: string[][]) => void;
+  onPhotoContextMenu?: (entryId: string, event: React.MouseEvent) => void;
 }
 
 const ROW_GAP = 4;
@@ -23,14 +25,28 @@ export function DynamicPhotoGrid({
   entries,
   rowHeight,
   onGridRowsChange,
+  onPhotoContextMenu,
 }: DynamicPhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const containerWidth = useGridContainerWidth(parentRef, entries);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
-  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const selectEntry = useLibraryStore((state) => state.selectEntry);
   const [visibleEntryIds, setVisibleEntryIds] = useState<string[]>([]);
   const getScrollRoot = useCallback(() => parentRef.current, []);
+
+  const visibleOrder = useMemo(
+    () => entries.map((entry) => entry.id),
+    [entries],
+  );
+
+  const handleSelect = useCallback(
+    (entryId: string, modifiers: { shift?: boolean; toggle?: boolean }) => {
+      selectEntry(entryId, modifiers, visibleOrder);
+    },
+    [selectEntry, visibleOrder],
+  );
 
   const { aspectRatios } = useEntryAspectRatios(entries, visibleEntryIds);
 
@@ -46,33 +62,14 @@ export function DynamicPhotoGrid({
     [entries, aspectRatios, containerWidth, rowHeight],
   );
 
-  useLayoutEffect(() => {
-    const element = parentRef.current;
-    if (element) {
-      setContainerWidth(measureContentWidth(element));
-    }
-  }, []);
-
-  useEffect(() => {
-    const element = parentRef.current;
-    if (!element) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      setContainerWidth(measureContentWidth(element));
-    });
-    observer.observe(element);
-
-    return () => observer.disconnect();
-  }, []);
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => (rows[index]?.height ?? rowHeight) + ROW_GAP,
     overscan: 4,
   });
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
 
@@ -81,7 +78,6 @@ export function DynamicPhotoGrid({
       return;
     }
     if (!layoutReady) {
-      onGridRowsChange([]);
       return;
     }
     onGridRowsChange(
@@ -104,8 +100,8 @@ export function DynamicPhotoGrid({
       return;
     }
 
-    virtualizer.scrollToIndex(selectedRowIndex, { align: "auto" });
-  }, [layoutReady, selectedRowIndex, virtualizer]);
+    virtualizerRef.current.scrollToIndex(selectedRowIndex, { align: "auto" });
+  }, [layoutReady, selectedRowIndex]);
 
   const visibleRows = useMemo(
     () =>
@@ -168,6 +164,14 @@ export function DynamicPhotoGrid({
     setVisibleEntryIds(next);
   }, [layoutReady, visibleRows, selectedEntryId, virtualizer]);
 
+  if (entries.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-center text-xs text-lr-text-dim">
+        No photos match the current filters
+      </div>
+    );
+  }
+
   return (
     <div ref={parentRef} className="h-full overflow-auto p-1">
       {!layoutReady ? (
@@ -203,9 +207,10 @@ export function DynamicPhotoGrid({
                     width={tile.width}
                     height={tile.height}
                     fit="cover"
-                    selected={tile.entry.id === selectedEntryId}
+                    selected={selectedEntryIds.includes(tile.entry.id)}
                     metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
-                    onSelect={setSelectedEntryId}
+                    onSelect={handleSelect}
+                    onContextMenu={onPhotoContextMenu}
                     getScrollRoot={getScrollRoot}
                   />
                 ))}

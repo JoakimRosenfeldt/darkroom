@@ -44,6 +44,41 @@ interface RestoreLastFolderOptions {
   interactive?: boolean;
 }
 
+export interface SelectEntryModifiers {
+  shift?: boolean;
+  toggle?: boolean;
+}
+
+function restoreSelection(
+  entries: LibraryEntry[],
+  previousIds: string[],
+  previousAnchor: string | null,
+): {
+  selectedEntryIds: string[];
+  selectedEntryId: string | null;
+  selectionAnchorId: string | null;
+} {
+  const validIds = previousIds.filter((id) =>
+    entries.some((entry) => entry.id === id),
+  );
+  const selectedEntryIds =
+    validIds.length > 0
+      ? validIds
+      : entries[0]
+        ? [entries[0].id]
+        : [];
+  const anchorValid =
+    previousAnchor &&
+    entries.some((entry) => entry.id === previousAnchor);
+  return {
+    selectedEntryIds,
+    selectedEntryId: selectedEntryIds.at(-1) ?? null,
+    selectionAnchorId: anchorValid
+      ? previousAnchor
+      : (selectedEntryIds[0] ?? null),
+  };
+}
+
 interface LibraryStore {
   folderName: string | null;
   rootPath: string | null;
@@ -54,9 +89,20 @@ interface LibraryStore {
   needsFolderAccess: boolean;
   isDesktopApp: boolean;
   selectedEntryId: string | null;
+  selectedEntryIds: string[];
+  selectionAnchorId: string | null;
   entryMetadata: Record<string, EntryMetadata>;
   setSelectedEntryId: (id: string | null) => void;
+  selectEntry: (
+    id: string,
+    modifiers: SelectEntryModifiers,
+    visibleOrder: string[],
+  ) => void;
   setEntryMetadata: (entryId: string, patch: Partial<EntryMetadata>) => void;
+  applyMetadataToEntries: (
+    entryIds: string[],
+    patch: Partial<EntryMetadata>,
+  ) => void;
   setPick: (entryId: string, pick: PickStatus) => void;
   setRating: (entryId: string, rating: StarRating) => void;
   setColorLabel: (entryId: string, label: ColorLabel) => void;
@@ -206,18 +252,18 @@ async function completeDirectoryImport(
       entryCount: scanned.length,
     });
 
-    const previousSelection = get().selectedEntryId;
-    const selectedEntryId =
-      previousSelection && scanned.some((entry) => entry.id === previousSelection)
-        ? previousSelection
-        : (scanned[0]?.id ?? null);
+    const selection = restoreSelection(
+      scanned,
+      get().selectedEntryIds,
+      get().selectionAnchorId,
+    );
 
     set({
       folderName,
       rootPath,
       entries: scanned,
       entryMetadata,
-      selectedEntryId,
+      ...selection,
       needsFolderAccess: false,
       importState: "idle",
       importStatus: null,
@@ -250,11 +296,56 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   needsFolderAccess: false,
   isDesktopApp: false,
   selectedEntryId: null,
+  selectedEntryIds: [],
+  selectionAnchorId: null,
   entryMetadata: {},
 
   setDesktopApp: (desktop) => set({ isDesktopApp: desktop }),
 
-  setSelectedEntryId: (id) => set({ selectedEntryId: id }),
+  setSelectedEntryId: (id) =>
+    set({
+      selectedEntryId: id,
+      selectedEntryIds: id ? [id] : [],
+      selectionAnchorId: id,
+    }),
+
+  selectEntry: (id, modifiers, visibleOrder) => {
+    const { selectedEntryIds, selectionAnchorId } = get();
+
+    if (modifiers.toggle) {
+      const next = selectedEntryIds.includes(id)
+        ? selectedEntryIds.filter((entryId) => entryId !== id)
+        : [...selectedEntryIds, id];
+      set({
+        selectedEntryIds: next,
+        selectedEntryId: next.includes(id)
+          ? id
+          : (next.at(-1) ?? null),
+        selectionAnchorId: selectionAnchorId ?? id,
+      });
+      return;
+    }
+
+    if (modifiers.shift && selectionAnchorId) {
+      const anchorIdx = visibleOrder.indexOf(selectionAnchorId);
+      const clickIdx = visibleOrder.indexOf(id);
+      if (anchorIdx >= 0 && clickIdx >= 0) {
+        const start = Math.min(anchorIdx, clickIdx);
+        const end = Math.max(anchorIdx, clickIdx);
+        set({
+          selectedEntryIds: visibleOrder.slice(start, end + 1),
+          selectedEntryId: id,
+        });
+        return;
+      }
+    }
+
+    set({
+      selectedEntryIds: [id],
+      selectedEntryId: id,
+      selectionAnchorId: id,
+    });
+  },
 
   loadCatalogForFolder: async (rootPath, entryIds) => {
     const entryIdSet = new Set(entryIds);
@@ -265,11 +356,27 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   },
 
   setEntryMetadata: (entryId, patch) => {
-    const { rootPath, entryMetadata } = get();
-    const current = getEntryMetadata(entryMetadata, entryId);
-    const next = createEntryMetadata({ ...current, ...patch });
+    get().applyMetadataToEntries([entryId], patch);
+  },
 
-    const updated = { ...entryMetadata, [entryId]: next };
+  applyMetadataToEntries: (entryIds, patch) => {
+    if (entryIds.length === 0) {
+      return;
+    }
+
+    const { rootPath, entryMetadata } = get();
+    const updated = { ...entryMetadata };
+    const updatedAt = Date.now();
+
+    for (const entryId of entryIds) {
+      const current = getEntryMetadata(updated, entryId);
+      updated[entryId] = createEntryMetadata({
+        ...current,
+        ...patch,
+        updatedAt,
+      });
+    }
+
     set({ entryMetadata: updated });
 
     if (rootPath) {
@@ -315,11 +422,11 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           rootPath,
           entries: restoredEntries,
           entryMetadata,
-          selectedEntryId:
-            get().selectedEntryId &&
-            restoredEntries.some((entry) => entry.id === get().selectedEntryId)
-              ? get().selectedEntryId
-              : (restoredEntries[0]?.id ?? null),
+          ...restoreSelection(
+            restoredEntries,
+            get().selectedEntryIds,
+            get().selectionAnchorId,
+          ),
           needsFolderAccess: false,
           importState: "idle",
           importError: null,
@@ -467,6 +574,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       entries: [],
       entryMetadata: {},
       selectedEntryId: null,
+      selectedEntryIds: [],
+      selectionAnchorId: null,
       importState: "idle",
       importStatus: null,
       importError: null,
