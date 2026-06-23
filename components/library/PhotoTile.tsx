@@ -45,7 +45,30 @@ export const PhotoTile = memo(function PhotoTile({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isNearViewport, setIsNearViewport] = useState(false);
   const [intersectionRatio, setIntersectionRatio] = useState(0);
+  const selectedRef = useRef(selected);
+  const intersectionRatioRef = useRef(intersectionRatio);
+  const objectUrlRef = useRef<string | null>(null);
+  selectedRef.current = selected;
+  intersectionRatioRef.current = intersectionRatio;
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = null;
+    }
+    setThumbnailUrl(null);
+    setStatus("loading");
+  }, [entry.id, decodeEdge]);
 
   useEffect(() => {
     const element = tileRef.current;
@@ -80,23 +103,17 @@ export const PhotoTile = memo(function PhotoTile({
   }, [compact, getScrollRoot]);
 
   useEffect(() => {
-    let active = true;
-    let objectUrl: string | null = null;
-    const controller = new AbortController();
-    setThumbnailUrl(null);
-    setStatus("loading");
-
     if (!isNearViewport) {
-      return () => {
-        active = false;
-        controller.abort();
-      };
+      return;
     }
 
-    const loadPriority = selected
+    let active = true;
+    const controller = new AbortController();
+
+    const loadPriority = selectedRef.current
       ? 30
-      : intersectionRatio >= 0.5
-        ? 20 + Math.round(intersectionRatio * 5)
+      : intersectionRatioRef.current >= 0.5
+        ? 20 + Math.round(intersectionRatioRef.current * 5)
         : 12;
 
     async function loadThumbnail() {
@@ -109,8 +126,8 @@ export const PhotoTile = memo(function PhotoTile({
           return;
         }
 
-        objectUrl = createThumbnailObjectUrl(blob);
-        setThumbnailUrl(objectUrl);
+        objectUrlRef.current = createThumbnailObjectUrl(blob);
+        setThumbnailUrl(objectUrlRef.current);
         setStatus("ready");
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
@@ -127,11 +144,8 @@ export const PhotoTile = memo(function PhotoTile({
     return () => {
       active = false;
       controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [entry, decodeEdge, isNearViewport, intersectionRatio, selected]);
+  }, [entry, decodeEdge, isNearViewport]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
