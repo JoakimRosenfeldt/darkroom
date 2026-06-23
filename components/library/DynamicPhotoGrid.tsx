@@ -7,6 +7,7 @@ import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { packDynamicRows } from "@/lib/library/grid-layout";
 import { collectVisibleEntryIds } from "@/lib/library/visible-entry-ids";
 import { useGridContainerWidth } from "@/hooks/useGridContainerWidth";
+import { useScrollToSelectedRow } from "@/hooks/useScrollToSelectedRow";
 import { useLibraryStore } from "@/stores/library-store";
 import { PhotoTile } from "./PhotoTile";
 import { useEntryAspectRatios } from "./useEntryAspectRatios";
@@ -68,8 +69,6 @@ export function DynamicPhotoGrid({
     estimateSize: (index) => (rows[index]?.height ?? rowHeight) + ROW_GAP,
     overscan: 4,
   });
-  const virtualizerRef = useRef(virtualizer);
-  virtualizerRef.current = virtualizer;
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
 
@@ -95,13 +94,11 @@ export function DynamicPhotoGrid({
     );
   }, [rows, selectedEntryId]);
 
-  useEffect(() => {
-    if (!layoutReady || selectedRowIndex < 0) {
-      return;
-    }
-
-    virtualizerRef.current.scrollToIndex(selectedRowIndex, { align: "auto" });
-  }, [layoutReady, selectedRowIndex]);
+  useScrollToSelectedRow({
+    layoutReady,
+    selectedRowIndex,
+    virtualizer,
+  });
 
   const visibleRows = useMemo(
     () =>

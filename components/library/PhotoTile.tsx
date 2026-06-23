@@ -158,7 +158,7 @@ export const PhotoTile = memo(function PhotoTile({
         selected
           ? "ring-2 ring-lr-accent ring-offset-1 ring-offset-lr-bg"
           : "hover:ring-1 hover:ring-lr-border",
-        compact ? "" : "transition-shadow",
+        compact ? "" : "transition-shadow duration-100 ease-out",
       ].join(" ")}
       style={{ width, height }}
     >

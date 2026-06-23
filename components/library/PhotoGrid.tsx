@@ -2,6 +2,7 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useScrollToSelectedRow } from "@/hooks/useScrollToSelectedRow";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { packSquareRows } from "@/lib/library/grid-layout";
@@ -51,8 +52,6 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
     estimateSize: (index) => (rows[index]?.cellSize ?? thumbSize) + ROW_GAP,
     overscan: 6,
   });
-  const virtualizerRef = useRef(virtualizer);
-  virtualizerRef.current = virtualizer;
 
   const layoutReady = containerWidth > 0 && rows.length > 0;
 
@@ -76,13 +75,11 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
     );
   }, [rows, selectedEntryId]);
 
-  useEffect(() => {
-    if (!layoutReady || selectedRowIndex < 0) {
-      return;
-    }
-
-    virtualizerRef.current.scrollToIndex(selectedRowIndex, { align: "auto" });
-  }, [layoutReady, selectedRowIndex]);
+  useScrollToSelectedRow({
+    layoutReady,
+    selectedRowIndex,
+    virtualizer,
+  });
 
   if (entries.length === 0) {
     return (
