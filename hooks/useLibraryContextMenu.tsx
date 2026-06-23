@@ -40,6 +40,9 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
   );
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
+  const albums = useLibraryStore((state) => state.albums);
+  const createAlbum = useLibraryStore((state) => state.createAlbum);
+  const addEntriesToAlbum = useLibraryStore((state) => state.addEntriesToAlbum);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
@@ -206,6 +209,36 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
             ))}
             <ContextMenuItem onClick={() => applyToTargets({ colorLabel: null })}>
               Clear label
+            </ContextMenuItem>
+
+            <ContextMenuSeparator />
+
+            <div className="flex items-center px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+              <span>Add to album</span>
+              <ShortcutHint>B</ShortcutHint>
+            </div>
+            {albums.map((album) => (
+              <ContextMenuItem
+                key={album.id}
+                onClick={() => {
+                  addEntriesToAlbum(album.id, actionTargets);
+                  closeMenu();
+                }}
+              >
+                {album.name}
+              </ContextMenuItem>
+            ))}
+            <ContextMenuItem
+              onClick={() => {
+                const name = `Album ${albums.length + 1}`;
+                const albumId = createAlbum(name);
+                if (albumId) {
+                  addEntriesToAlbum(albumId, actionTargets);
+                }
+                closeMenu();
+              }}
+            >
+              New album…
             </ContextMenuItem>
 
             {actionTargets.length > 1 ? (

@@ -15,12 +15,16 @@ import { SidePanel } from "@/components/shell/SidePanel";
 import { TopBar } from "@/components/shell/TopBar";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
 import {
-  countCuration,
   filterByCuration,
   filterByFormat,
   sortLibraryEntries,
 } from "@/lib/library/curation";
+import {
+  filterByAlbum,
+  filterByFolderPath,
+} from "@/lib/library/folders";
 import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
+import { useAlbumPickerShortcut } from "@/hooks/useAlbumPickerShortcut";
 import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
 import { useLibraryStore } from "@/stores/library-store";
 
@@ -32,6 +36,8 @@ export default function HomePage() {
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const folderName = useLibraryStore((state) => state.folderName);
+  const albums = useLibraryStore((state) => state.albums);
+  const catalogView = useLibraryStore((state) => state.catalogView);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const importState = useLibraryStore((state) => state.importState);
   const importStatus = useLibraryStore((state) => state.importStatus);
@@ -47,38 +53,33 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
   const [gridRows, setGridRows] = useState<string[][]>([]);
 
-  const { rawCount, standardCount } = useMemo(() => {
-    let raw = 0;
-    let standard = 0;
+  const visibleEntries = useMemo(() => {
+    let scoped = entries;
 
-    for (const entry of entries) {
-      if (entry.profileId === "standard") {
-        standard += 1;
-      } else {
-        raw += 1;
-      }
+    if (catalogView.type === "folder") {
+      scoped = filterByFolderPath(scoped, catalogView.path);
+    } else if (catalogView.type === "album") {
+      const album = albums.find((item) => item.id === catalogView.albumId);
+      scoped = filterByAlbum(scoped, album);
     }
 
-    return { rawCount: raw, standardCount: standard };
-  }, [entries]);
-
-  const curationCounts = useMemo(
-    () => countCuration(entries, entryMetadata),
-    [entries, entryMetadata],
-  );
-
-  const visibleEntries = useMemo(
-    () =>
-      sortLibraryEntries(
-        filterByFormat(
-          filterByCuration(entries, entryMetadata, curationFilter),
-          filter,
-        ),
-        entryMetadata,
-        sort,
+    return sortLibraryEntries(
+      filterByFormat(
+        filterByCuration(scoped, entryMetadata, curationFilter),
+        filter,
       ),
-    [entries, entryMetadata, curationFilter, filter, sort],
-  );
+      entryMetadata,
+      sort,
+    );
+  }, [
+    entries,
+    entryMetadata,
+    albums,
+    catalogView,
+    curationFilter,
+    filter,
+    sort,
+  ]);
 
   const visibleOrder = useMemo(
     () => visibleEntries.map((entry) => entry.id),
@@ -87,6 +88,11 @@ export default function HomePage() {
 
   const { openContextMenu, contextMenu } = useLibraryContextMenu(visibleOrder);
 
+  const { albumPicker, albumPickerOpen } = useAlbumPickerShortcut({
+    selectedEntryId,
+    selectedEntryIds,
+  });
+
   useLibraryGridShortcuts({
     gridRows,
     visibleEntries,
@@ -94,25 +100,17 @@ export default function HomePage() {
     selectedEntryIds,
     onSelect: setSelectedEntryId,
     onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
+    disabled: albumPickerOpen,
   });
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       {contextMenu}
+      {albumPicker}
       <TopBar activeModule="library" />
 
       <div className="flex min-h-0 flex-1">
-        <SidePanel
-          folderName={folderName}
-          photoCount={entries.length}
-          rawCount={rawCount}
-          standardCount={standardCount}
-          curationCounts={curationCounts}
-          filter={filter}
-          curationFilter={curationFilter}
-          onFilterChange={setFilter}
-          onCurationFilterChange={setCurationFilter}
-        />
+        <SidePanel />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <LibraryToolbar

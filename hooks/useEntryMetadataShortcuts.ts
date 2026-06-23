@@ -23,14 +23,17 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function useEntryMetadataShortcuts(activeEntryIds: string[]): void {
+export function useEntryMetadataShortcuts(
+  activeEntryIds: string[],
+  disabled = false,
+): void {
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
   const setColorLabel = useLibraryStore((state) => state.setColorLabel);
 
   useEffect(() => {
-    if (activeEntryIds.length === 0) {
+    if (disabled || activeEntryIds.length === 0) {
       return;
     }
 
@@ -75,7 +78,7 @@ export function useEntryMetadataShortcuts(activeEntryIds: string[]): void {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeEntryIds, applyMetadataToEntries, setColorLabel]);
+  }, [activeEntryIds, applyMetadataToEntries, disabled, setColorLabel]);
 }
 
 interface LibraryGridShortcutsOptions {
@@ -85,6 +88,7 @@ interface LibraryGridShortcutsOptions {
   selectedEntryIds: string[];
   onSelect: (id: string) => void;
   onOpen?: (id: string) => void;
+  disabled?: boolean;
 }
 
 export function useLibraryGridShortcuts({
@@ -94,6 +98,7 @@ export function useLibraryGridShortcuts({
   selectedEntryIds,
   onSelect,
   onOpen,
+  disabled = false,
 }: LibraryGridShortcutsOptions): void {
   const shortcutTargets = useMemo(
     () =>
@@ -105,9 +110,13 @@ export function useLibraryGridShortcuts({
     [selectedEntryIds, selectedEntryId],
   );
 
-  useEntryMetadataShortcuts(shortcutTargets);
+  useEntryMetadataShortcuts(shortcutTargets, disabled);
 
   useEffect(() => {
+    if (disabled) {
+      return;
+    }
+
     function onKeyDown(event: KeyboardEvent) {
       if (isEditableTarget(event.target)) {
         return;
@@ -173,5 +182,5 @@ export function useLibraryGridShortcuts({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [gridRows, visibleEntries, selectedEntryId, onSelect, onOpen]);
+  }, [gridRows, visibleEntries, selectedEntryId, onSelect, onOpen, disabled]);
 }

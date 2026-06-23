@@ -9,10 +9,19 @@ export interface EntryMetadata {
   updatedAt: number;
 }
 
+export interface Album {
+  id: string;
+  name: string;
+  entryIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface PhotoCatalog {
   version: 1;
   rootPath: string;
   entries: Record<string, EntryMetadata>;
+  albums?: Album[];
 }
 
 export const COLOR_LABELS = [

@@ -1,5 +1,5 @@
 import { get, set, del } from "idb-keyval";
-import type { EntryMetadata, PhotoCatalog } from "./types";
+import type { Album, EntryMetadata, PhotoCatalog } from "./types";
 import { isElectronApp, getDarkroomAPI } from "@/lib/fs/platform";
 
 const CATALOG_PREFIX = "darkroom-catalog:";
@@ -80,10 +80,12 @@ export async function deleteCatalog(rootPath: string): Promise<void> {
 export function buildPhotoCatalog(
   rootPath: string,
   entries: Record<string, EntryMetadata>,
+  albums: Album[] = [],
 ): PhotoCatalog {
   return {
     version: 1,
     rootPath,
     entries,
+    albums,
   };
 }
