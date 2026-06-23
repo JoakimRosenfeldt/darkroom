@@ -104,6 +104,7 @@ export function useLibraryGridShortcuts({
 }: LibraryGridShortcutsOptions): void {
   const selectEntry = useLibraryStore((state) => state.selectEntry);
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const clearSelection = useLibraryStore((state) => state.clearSelection);
   const shortcutTargets = useMemo(
     () =>
       selectedEntryIds.length > 0
@@ -126,6 +127,17 @@ export function useLibraryGridShortcuts({
 
     function onKeyDown(event: KeyboardEvent) {
       if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (document.querySelector('[role="menu"]')) {
+          return;
+        }
+        if (selectedEntryIds.length > 0) {
+          event.preventDefault();
+          clearSelection();
+        }
         return;
       }
 
@@ -206,8 +218,10 @@ export function useLibraryGridShortcuts({
     visibleEntries,
     visibleOrder,
     selectedEntryId,
+    selectedEntryIds,
     selectEntry,
     setSelectedEntryId,
+    clearSelection,
     onOpen,
     disabled,
   ]);

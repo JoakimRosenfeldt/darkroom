@@ -105,6 +105,7 @@ interface LibraryStore {
   selectionAnchorId: string | null;
   entryMetadata: Record<string, EntryMetadata>;
   setSelectedEntryId: (id: string | null) => void;
+  clearSelection: () => void;
   selectEntry: (
     id: string,
     modifiers: SelectEntryModifiers,
@@ -351,6 +352,12 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       selectedEntryId: id,
       selectedEntryIds: id ? [id] : [],
       selectionAnchorId: id,
+    }),
+
+  clearSelection: () =>
+    set({
+      selectedEntryIds: [],
+      selectionAnchorId: null,
     }),
 
   selectEntry: (id, modifiers, visibleOrder) => {
