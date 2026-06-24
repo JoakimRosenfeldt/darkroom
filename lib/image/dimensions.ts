@@ -163,9 +163,3 @@ export function parseImageDimensions(
 
   return null;
 }
-
-export function dimensionsToAspectRatio(
-  dimensions: ImageDimensions,
-): number {
-  return dimensions.width / dimensions.height;
-}

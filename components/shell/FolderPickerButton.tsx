@@ -5,7 +5,6 @@ import {
   formatPickerError,
   openPhotoFolderPicker,
 } from "@/lib/fs/access";
-import { fsDebug, fsDebugError } from "@/lib/fs/debug";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface FolderPickerButtonProps {
@@ -20,11 +19,10 @@ function handlePickerFailure(
   mode: "import" | "restore",
 ): void {
   if (error instanceof DOMException && error.name === "AbortError") {
-    fsDebug("handlePickerFailure: user cancelled picker");
     return;
   }
 
-  fsDebugError("handlePickerFailure", error, { mode });
+  console.error("[darkroom:fs] handlePickerFailure", error, { mode });
   const { folderName, entries } = useLibraryStore.getState();
 
   useLibraryStore.setState({
@@ -36,22 +34,8 @@ function handlePickerFailure(
 }
 
 function startFolderPick(mode: "import" | "restore"): void {
-  const { folderName, entries, importState } = useLibraryStore.getState();
-
-  fsDebug("startFolderPick: click", {
-    mode,
-    folderName,
-    entryCount: entries.length,
-    importState,
-  });
-
   void openPhotoFolderPicker()
     .then((result) => {
-      fsDebug("startFolderPick: picker resolved, starting scan", {
-        mode,
-        folderName: result.name,
-        rootPath: result.path,
-      });
       useLibraryStore
         .getState()
         .importFromFolderPath(result.path, result.name, mode);

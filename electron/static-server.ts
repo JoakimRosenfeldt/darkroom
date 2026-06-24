@@ -1,7 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -85,8 +84,4 @@ export function getOutDir(appRoot: string): string {
 
 export function getAppRoot(): string {
   return path.resolve(__dirname, "..");
-}
-
-export function toFileUrl(filePath: string): string {
-  return pathToFileURL(filePath).href;
 }

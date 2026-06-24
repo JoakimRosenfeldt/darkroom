@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { IconAlbum } from "@/components/shell/icons";
 import type { Album } from "@/lib/catalog/types";
-import { rankByFuzzyScore } from "@/lib/library/fuzzy-match";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface AlbumPickerPopupProps {
@@ -28,7 +27,10 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
 
   const rows = useMemo(() => {
     const trimmed = query.trim();
-    const matched = rankByFuzzyScore(albums, query, (album) => album.name);
+    const lowerQuery = trimmed.toLowerCase();
+    const matched = lowerQuery
+      ? albums.filter((album) => album.name.toLowerCase().includes(lowerQuery))
+      : albums;
     const result: PickerRow[] = matched.map((album) => ({
       kind: "album",
       album,

@@ -24,14 +24,6 @@ export function getEntryMetadata(
   return map[entryId] ?? DEFAULT_ENTRY_METADATA;
 }
 
-export function hasCuration(metadata: EntryMetadata): boolean {
-  return (
-    metadata.pick !== "none" ||
-    metadata.rating > 0 ||
-    metadata.colorLabel !== null
-  );
-}
-
 export function isStarRating(value: number): value is StarRating {
   return Number.isInteger(value) && value >= 0 && value <= 5;
 }

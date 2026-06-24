@@ -12,40 +12,32 @@ import {
 } from "@/lib/catalog/persistence";
 import type {
   Album,
-  ColorLabel,
   EntryMetadata,
-  PickStatus,
-  StarRating,
 } from "@/lib/catalog/types";
 import { pruneMetadataForEntries } from "@/lib/library/curation";
 import { filterArchivedEntries, filterOnlyArchivedEntries, pruneArchivedEntryIds } from "@/lib/library/archive";
 import { pruneAlbumsForEntries } from "@/lib/library/folders";
 import {
-  getLibrarySnapshot,
-  saveLibrarySnapshot,
+  clearPersistedLibrary,
+  persistLastFolder,
   scanDirectory,
   type ScanProgress,
 } from "@/lib/fs/directory";
-import { fsDebug, fsDebugError, fsDebugWarn } from "@/lib/fs/debug";
 import { deleteFilesFromDisk, getDarkroomAPI, joinRootPath } from "@/lib/fs/platform";
 import {
   hasSessionCatalog,
   setSessionCatalog,
   getSessionCatalog,
 } from "@/lib/fs/session-catalog";
-import { clearPersistedLibrary, clearPersistedLibraryHandles } from "@/lib/fs/validate-handle";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { withTimeout } from "@/lib/fs/timeout";
-import { initializeProfiles } from "@/lib/raw/profiles";
-import { resolveProfile } from "@/lib/raw/registry";
+import { resolveProfile } from "@/lib/raw/decode";
 
-initializeProfiles();
+const fsDebug = (...args: unknown[]) => console.log("[darkroom:fs]", ...args);
+const fsDebugWarn = (...args: unknown[]) => console.warn("[darkroom:fs]", ...args);
+const fsDebugError = (step: string, error: unknown, detail?: unknown) =>
+  console.error("[darkroom:fs]", step, error, detail);
 
 export type ImportState = "idle" | "importing" | "restoring" | "error";
-
-interface RestoreLastFolderOptions {
-  interactive?: boolean;
-}
 
 export interface SelectEntryModifiers {
   shift?: boolean;
@@ -99,7 +91,6 @@ interface LibraryStore {
   importStatus: string | null;
   importError: string | null;
   needsFolderAccess: boolean;
-  isDesktopApp: boolean;
   selectedEntryId: string | null;
   selectedEntryIds: string[];
   selectionAnchorId: string | null;
@@ -116,9 +107,6 @@ interface LibraryStore {
     entryIds: string[],
     patch: Partial<EntryMetadata>,
   ) => void;
-  setPick: (entryId: string, pick: PickStatus) => void;
-  setRating: (entryId: string, rating: StarRating) => void;
-  setColorLabel: (entryId: string, label: ColorLabel) => void;
   setCatalogView: (view: CatalogView) => void;
   createAlbum: (name: string) => string;
   renameAlbum: (albumId: string, name: string) => void;
@@ -129,20 +117,14 @@ interface LibraryStore {
   archiveEntries: (entryIds: string[]) => void;
   restoreEntries: (entryIds: string[]) => void;
   deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
-  loadCatalogForFolder: (
-    rootPath: string,
-    entryIds: string[],
-  ) => Promise<void>;
   importFromFolderPath: (
     rootPath: string,
     folderName: string,
     mode?: "import" | "restore",
   ) => void;
-  restoreLastFolder: (options?: RestoreLastFolderOptions) => void;
   cancelFolderOperation: () => void;
   clearLibrary: () => Promise<void>;
   bootstrapLibrary: () => Promise<void>;
-  setDesktopApp: (desktop: boolean) => void;
 }
 
 const SCAN_TIMEOUT_MS = 90_000;
@@ -206,13 +188,9 @@ async function loadAndMergeCatalog(
   return { entryMetadata, albums, archivedEntryIds };
 }
 
-function persistSnapshotInBackground(
-  folderName: string,
-  rootPath: string,
-  entries: LibraryEntry[],
-): void {
-  void saveLibrarySnapshot(folderName, rootPath, entries).catch(() => {
-    // Snapshot persistence is best-effort.
+function persistLastFolderInBackground(rootPath: string): void {
+  void persistLastFolder(rootPath).catch(() => {
+    // Folder persistence is best-effort.
   });
 }
 
@@ -226,11 +204,20 @@ async function loadFolderCatalog(
     rootPath,
   });
 
-  return withTimeout(
+  return Promise.race([
     scanDirectory(rootPath, onProgress),
-    SCAN_TIMEOUT_MS,
-    "Timed out while reading the folder. Try a local folder that is not synced with iCloud, OneDrive, or Google Drive.",
-  );
+    new Promise<LibraryEntry[]>((_, reject) => {
+      window.setTimeout(
+        () =>
+          reject(
+            new Error(
+              "Timed out while reading the folder. Try a local folder that is not synced with iCloud, OneDrive, or Google Drive.",
+            ),
+          ),
+        SCAN_TIMEOUT_MS,
+      );
+    }),
+  ]);
 }
 
 async function completeDirectoryImport(
@@ -312,7 +299,7 @@ async function completeDirectoryImport(
       importError: null,
     });
 
-    persistSnapshotInBackground(folderName, rootPath, scanned);
+    persistLastFolderInBackground(rootPath);
   } catch (error) {
     if (!isActiveFolderOperation(generation)) {
       return;
@@ -339,13 +326,10 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   importStatus: null,
   importError: null,
   needsFolderAccess: false,
-  isDesktopApp: false,
   selectedEntryId: null,
   selectedEntryIds: [],
   selectionAnchorId: null,
   entryMetadata: {},
-
-  setDesktopApp: (desktop) => set({ isDesktopApp: desktop }),
 
   setSelectedEntryId: (id) =>
     set({
@@ -400,19 +384,6 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       selectedEntryId: id,
       selectionAnchorId: id,
     });
-  },
-
-  loadCatalogForFolder: async (rootPath, entryIds) => {
-    const entryIdSet = new Set(entryIds);
-    const catalog = await loadCatalog(rootPath);
-    const stored = catalog?.entries ?? {};
-    const entryMetadata = pruneMetadataForEntries(stored, entryIdSet);
-    const albums = pruneAlbumsForEntries(catalog?.albums ?? [], entryIdSet);
-    const archivedEntryIds = pruneArchivedEntryIds(
-      catalog?.archivedEntryIds ?? [],
-      entryIdSet,
-    );
-    set({ entryMetadata, albums, archivedEntryIds });
   },
 
   setEntryMetadata: (entryId, patch) => {
@@ -734,7 +705,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
     if (folderName) {
       setSessionCatalog(folderName, remainingEntries, rootPath);
-      persistSnapshotInBackground(folderName, rootPath, remainingEntries);
+      persistLastFolderInBackground(rootPath);
     }
 
     persistCatalogInBackground(
@@ -745,25 +716,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     );
   },
 
-  setPick: (entryId, pick) => {
-    get().setEntryMetadata(entryId, { pick });
-  },
-
-  setRating: (entryId, rating) => {
-    get().setEntryMetadata(entryId, { rating });
-  },
-
-  setColorLabel: (entryId, label) => {
-    const { entryMetadata } = get();
-    const current = getEntryMetadata(entryMetadata, entryId);
-    const nextLabel = current.colorLabel === label ? null : label;
-    get().setEntryMetadata(entryId, { colorLabel: nextLabel });
-  },
-
   bootstrapLibrary: async () => {
     fsDebug("bootstrapLibrary: start");
-
-    await clearPersistedLibraryHandles();
 
     if (hasSessionCatalog()) {
       const { rootPath, folderName, entries } = getSessionCatalog();
@@ -814,64 +768,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       return;
     }
 
-    const snapshot = await getLibrarySnapshot();
-    if (!snapshot) {
-      fsDebug("bootstrapLibrary: no saved snapshot");
-      if (lastFolderPath) {
-        set({
-          folderName: lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath,
-          rootPath: lastFolderPath,
-          entries: [],
-          needsFolderAccess: true,
-        });
-      }
-      return;
-    }
-
-    if (!snapshot.rootPath) {
-      fsDebug("bootstrapLibrary: legacy snapshot without root path", {
-        folderName: snapshot.folderName,
-      });
+    if (lastFolderPath) {
       set({
-        folderName: snapshot.folderName,
-        rootPath: null,
+        folderName: lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath,
+        rootPath: lastFolderPath,
         entries: [],
         needsFolderAccess: true,
-        importState: "idle",
-        importError: null,
-        importStatus: null,
       });
-      return;
     }
-
-    const snapshotExists = await api.folderExists(snapshot.rootPath);
-    if (snapshotExists) {
-      fsDebug("bootstrapLibrary: restoring snapshot folder", {
-        folderName: snapshot.folderName,
-        rootPath: snapshot.rootPath,
-      });
-      get().importFromFolderPath(
-        snapshot.rootPath,
-        snapshot.folderName,
-        "restore",
-      );
-      return;
-    }
-
-    fsDebug("bootstrapLibrary: snapshot folder missing", {
-      folderName: snapshot.folderName,
-      rootPath: snapshot.rootPath,
-    });
-
-    set({
-      folderName: snapshot.folderName,
-      rootPath: snapshot.rootPath,
-      entries: [],
-      needsFolderAccess: true,
-      importState: "idle",
-      importError: null,
-      importStatus: null,
-    });
   },
 
   importFromFolderPath: (rootPath, folderName, mode = "import") => {
@@ -899,12 +803,6 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       set,
       get,
     );
-  },
-
-  restoreLastFolder: ({ interactive = false } = {}) => {
-    if (!interactive) {
-      void get().bootstrapLibrary();
-    }
   },
 
   cancelFolderOperation: () => {

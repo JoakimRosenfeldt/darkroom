@@ -1,11 +1,17 @@
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getFileFromEntry } from "@/lib/fs/directory";
-import { withThumbnailSlot } from "@/lib/cache/thumbnail-loader";
-import { initializeProfiles } from "./profiles";
-import { resolveProfile } from "./registry";
+import { runWithThumbnailLimit } from "@/lib/cache/concurrency";
+import { nefProfile } from "./profiles/nef";
+import { standardImageProfile } from "./profiles/standard";
 import type { DecodeOptions, DecodedImage } from "./types";
 
-initializeProfiles();
+const PROFILES = [standardImageProfile, nefProfile];
+
+export function resolveProfile(
+  file: Pick<LibraryEntry, "name">,
+): (typeof PROFILES)[number] | null {
+  return PROFILES.find((profile) => profile.detect(file)) ?? null;
+}
 
 export async function decodeEntry(
   entry: LibraryEntry,
@@ -23,7 +29,7 @@ export async function decodeEntry(
   };
 
   if (options?.thumbnail) {
-    return withThumbnailSlot(decode, {
+    return runWithThumbnailLimit(decode, {
       priority: options.priority,
       signal: options.signal,
     });
@@ -32,5 +38,4 @@ export async function decodeEntry(
   return decode();
 }
 
-export { resolveProfile, getSupportedExtensions } from "./registry";
 export type { DecodeOptions, DecodedImage, ImageProfile } from "./types";

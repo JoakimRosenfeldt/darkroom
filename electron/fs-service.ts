@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { shell } from "electron";
-import { isSupportedFileName } from "../lib/fs/types";
-
-const SUPPORTED_EXTENSIONS = [".nef", ".jpg", ".jpeg", ".png", ".webp"] as const;
+import { isSupportedFileName, SUPPORTED_EXTENSIONS } from "../lib/fs/types";
 
 export interface ScannedFile {
   name: string;

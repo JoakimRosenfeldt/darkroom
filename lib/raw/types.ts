@@ -1,5 +1,3 @@
-import type { FileRef } from "@/lib/fs/types";
-
 export interface DecodeOptions {
   thumbnail?: boolean;
   maxEdge?: number;
@@ -21,7 +19,7 @@ export interface DecodedImage {
 export interface ImageProfile {
   id: string;
   extensions: string[];
-  detect(file: Pick<FileRef, "name">): boolean;
+  detect(file: Pick<{ name: string }, "name">): boolean;
   decode(
     input: Uint8Array,
     options?: DecodeOptions,

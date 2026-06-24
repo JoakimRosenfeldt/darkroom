@@ -1,23 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { isEditableTarget } from "@/hooks/is-editable-target";
 import { AlbumPickerPopup } from "@/components/library/AlbumPickerPopup";
 import { RemovePhotosPopup } from "@/components/library/RemovePhotosPopup";
 import { useLibraryStore } from "@/stores/library-store";
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tag = target.tagName;
-  return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.isContentEditable
-  );
-}
 
 function isRemoveKey(key: string): boolean {
   return key === "Backspace" || key === "Delete";

@@ -7,7 +7,6 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { SelectEntryModifiers } from "@/stores/library-store";
 import {
-  createThumbnailObjectUrl,
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
 import { EntryMetadataBadges } from "./EntryMetadataBar";
@@ -125,7 +124,7 @@ export const PhotoTile = memo(function PhotoTile({
         if (objectUrlRef.current) {
           URL.revokeObjectURL(objectUrlRef.current);
         }
-        objectUrlRef.current = createThumbnailObjectUrl(blob);
+        objectUrlRef.current = URL.createObjectURL(blob);
         setThumbnailUrl(objectUrlRef.current);
         setStatus("ready");
       } catch (error) {

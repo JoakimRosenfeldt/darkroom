@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
-import { fsDebug } from "@/lib/fs/debug";
 import { isElectronApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function LibraryBootstrap() {
   const bootstrapLibrary = useLibraryStore((state) => state.bootstrapLibrary);
-  const setDesktopApp = useLibraryStore((state) => state.setDesktopApp);
   const importStatus = useLibraryStore((state) => state.importStatus);
   const importError = useLibraryStore((state) => state.importError);
 
@@ -24,11 +22,7 @@ export function LibraryBootstrap() {
   }, [importError]);
 
   useEffect(() => {
-    const desktop = isElectronApp();
-    fsDebug("LibraryBootstrap: mount", { desktop });
-    setDesktopApp(desktop);
-
-    if (!desktop) {
+    if (!isElectronApp()) {
       useLibraryStore.setState({
         importError:
           "Darkroom must be run as a desktop app. Use npm run electron:dev.",
@@ -37,7 +31,7 @@ export function LibraryBootstrap() {
     }
 
     void bootstrapLibrary();
-  }, [bootstrapLibrary, setDesktopApp]);
+  }, [bootstrapLibrary]);
 
   return null;
 }
