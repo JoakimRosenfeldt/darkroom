@@ -1,10 +1,17 @@
 "use client";
 
-import { useCallback, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   formatPickerError,
   openPhotoFolderPicker,
 } from "@/lib/fs/access";
+import { isElectronApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface FolderPickerButtonProps {
@@ -51,11 +58,17 @@ export function FolderPickerButton({
   disabled = false,
   children,
 }: FolderPickerButtonProps) {
+  const [desktopApp, setDesktopApp] = useState(false);
+  const isDisabled = disabled || !desktopApp;
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+  const disabledRef = useRef(isDisabled);
+  disabledRef.current = isDisabled;
+
+  useEffect(() => {
+    setDesktopApp(isElectronApp());
+  }, []);
 
   const setButtonRef = useCallback((button: HTMLButtonElement | null) => {
     if (!button) {
@@ -74,8 +87,13 @@ export function FolderPickerButton({
     <button
       ref={setButtonRef}
       type="button"
-      className={className}
-      disabled={disabled}
+      className={[
+        className,
+        "disabled:cursor-not-allowed disabled:opacity-50",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      disabled={isDisabled}
     >
       {children}
     </button>
