@@ -2,9 +2,8 @@
 
 import {
   useCallback,
-  useEffect,
-  useRef,
-  useState,
+  useSyncExternalStore,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -52,41 +51,45 @@ function startFolderPick(mode: "import" | "restore"): void {
     });
 }
 
+function subscribeToDesktopApp(): () => void {
+  return () => {};
+}
+
+function getDesktopAppSnapshot(): boolean {
+  return isElectronApp();
+}
+
+function getServerDesktopAppSnapshot(): boolean {
+  return false;
+}
+
 export function FolderPickerButton({
   mode,
   className,
   disabled = false,
   children,
 }: FolderPickerButtonProps) {
-  const [desktopApp, setDesktopApp] = useState(false);
+  const desktopApp = useSyncExternalStore(
+    subscribeToDesktopApp,
+    getDesktopAppSnapshot,
+    getServerDesktopAppSnapshot,
+  );
   const isDisabled = disabled || !desktopApp;
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
 
-  const disabledRef = useRef(isDisabled);
-  disabledRef.current = isDisabled;
-
-  useEffect(() => {
-    setDesktopApp(isElectronApp());
-  }, []);
-
-  const setButtonRef = useCallback((button: HTMLButtonElement | null) => {
-    if (!button) {
-      return;
-    }
-
-    button.onclick = (event) => {
-      if (disabledRef.current || event.button !== 0) {
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (isDisabled || event.button !== 0) {
         return;
       }
-      startFolderPick(modeRef.current);
-    };
-  }, []);
+      startFolderPick(mode);
+    },
+    [isDisabled, mode],
+  );
 
   return (
     <button
-      ref={setButtonRef}
       type="button"
+      onClick={handleClick}
       className={[
         className,
         "disabled:cursor-not-allowed disabled:opacity-50",
