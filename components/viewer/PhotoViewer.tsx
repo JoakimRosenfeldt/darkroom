@@ -27,9 +27,9 @@ interface PhotoViewerProps {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
-  const setPick = useLibraryStore((state) => state.setPick);
-  const setRating = useLibraryStore((state) => state.setRating);
-  const setColorLabel = useLibraryStore((state) => state.setColorLabel);
+  const applyMetadataToEntries = useLibraryStore(
+    (state) => state.applyMetadataToEntries,
+  );
   const metadata = useEntryMetadataForId(entry.id);
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,11 +116,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       <EntryMetadataBar
         entryId={entry.id}
         metadata={metadata}
-        onPick={() => setPick(entry.id, "pick")}
-        onReject={() => setPick(entry.id, "reject")}
-        onClearPick={() => setPick(entry.id, "none")}
-        onRating={(rating) => setRating(entry.id, rating)}
-        onColorLabel={(label) => setColorLabel(entry.id, label)}
+        onPick={() => applyMetadataToEntries([entry.id], { pick: "pick" })}
+        onReject={() => applyMetadataToEntries([entry.id], { pick: "reject" })}
+        onClearPick={() => applyMetadataToEntries([entry.id], { pick: "none" })}
+        onRating={(rating) => applyMetadataToEntries([entry.id], { rating })}
+        onColorLabel={(label) => {
+          const current = metadata.colorLabel;
+          applyMetadataToEntries([entry.id], {
+            colorLabel: current === label ? null : label,
+          });
+        }}
       />
 
       <div className="flex min-h-0 flex-1">

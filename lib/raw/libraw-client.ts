@@ -1,6 +1,6 @@
 import type { LibRawSettings } from "libraw-wasm";
 import type { DecodeOptions, DecodedImage } from "./types";
-import { metadataToRecord, rgbDataToBlob } from "./utils";
+import { rgbDataToBlob } from "./utils";
 
 type LibRawInstance = InstanceType<
   Awaited<typeof import("libraw-wasm")>["default"]
@@ -110,7 +110,7 @@ async function decodeOpenedRaw(
       throw new Error("Could not read RAW metadata");
     }
 
-    const metadataRecord = metadataToRecord(
+    const metadataRecord = structuredClone(
       metadata as Record<string, unknown>,
     );
 
@@ -159,7 +159,7 @@ async function decodeEmbeddedThumbnail(
 
     return buildFromEmbeddedThumbnail(
       thumbnail,
-      metadataToRecord(metadata as Record<string, unknown>),
+      structuredClone(metadata as Record<string, unknown>),
     );
   });
 }

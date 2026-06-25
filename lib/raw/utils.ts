@@ -52,19 +52,6 @@ export function rgbDataToBlob(
   });
 }
 
-export function metadataToRecord(
-  metadata: Record<string, unknown>,
-): Record<string, unknown> {
-  return JSON.parse(
-    JSON.stringify(metadata, (_key, value) => {
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      return value;
-    }),
-  ) as Record<string, unknown>;
-}
-
 export function formatMetadataValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "—";

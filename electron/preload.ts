@@ -1,23 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { PhotoCatalog } from "../lib/catalog/types";
 
 interface ScannedFile {
   name: string;
   relativePath: string;
   size: number;
   lastModified: number;
-}
-
-interface CatalogEntryMetadata {
-  pick: "none" | "pick" | "reject";
-  rating: 0 | 1 | 2 | 3 | 4 | 5;
-  colorLabel: "red" | "yellow" | "green" | "blue" | "purple" | null;
-  updatedAt: number;
-}
-
-interface PhotoCatalog {
-  version: 1;
-  rootPath: string;
-  entries: Record<string, CatalogEntryMetadata>;
 }
 
 const darkroom = {

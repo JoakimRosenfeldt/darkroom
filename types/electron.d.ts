@@ -1,3 +1,5 @@
+import type { PhotoCatalog } from "../lib/catalog/types";
+
 export interface ScannedFile {
   name: string;
   relativePath: string;
@@ -5,18 +7,7 @@ export interface ScannedFile {
   lastModified: number;
 }
 
-export interface CatalogEntryMetadata {
-  pick: "none" | "pick" | "reject";
-  rating: 0 | 1 | 2 | 3 | 4 | 5;
-  colorLabel: "red" | "yellow" | "green" | "blue" | "purple" | null;
-  updatedAt: number;
-}
-
-export interface PhotoCatalog {
-  version: 1;
-  rootPath: string;
-  entries: Record<string, CatalogEntryMetadata>;
-}
+export type { PhotoCatalog };
 
 export interface DarkroomAPI {
   isElectron: true;

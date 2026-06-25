@@ -1,12 +1,5 @@
-import { get, set, del } from "idb-keyval";
+import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { Album, EntryMetadata, PhotoCatalog } from "./types";
-import { isElectronApp, getDarkroomAPI } from "@/lib/fs/platform";
-
-const CATALOG_PREFIX = "darkroom-catalog:";
-
-function catalogIdbKey(rootPath: string): string {
-  return `${CATALOG_PREFIX}${rootPath}`;
-}
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingCatalog: PhotoCatalog | null = null;
@@ -22,12 +15,7 @@ async function flushCatalog(): Promise<void> {
     return;
   }
 
-  if (isElectronApp()) {
-    await getDarkroomAPI().writeCatalog(catalog);
-    return;
-  }
-
-  await set(catalogIdbKey(catalog.rootPath), catalog);
+  await getDarkroomAPI().writeCatalog(catalog);
 }
 
 export function scheduleCatalogPersist(catalog: PhotoCatalog): void {
@@ -45,21 +33,7 @@ export function scheduleCatalogPersist(catalog: PhotoCatalog): void {
 }
 
 export async function loadCatalog(rootPath: string): Promise<PhotoCatalog | null> {
-  if (isElectronApp()) {
-    return getDarkroomAPI().readCatalog(rootPath);
-  }
-
-  const stored = await get<PhotoCatalog>(catalogIdbKey(rootPath));
-  return stored ?? null;
-}
-
-export async function saveCatalog(catalog: PhotoCatalog): Promise<void> {
-  if (isElectronApp()) {
-    await getDarkroomAPI().writeCatalog(catalog);
-    return;
-  }
-
-  await set(catalogIdbKey(catalog.rootPath), catalog);
+  return getDarkroomAPI().readCatalog(rootPath);
 }
 
 export async function deleteCatalog(rootPath: string): Promise<void> {
@@ -69,12 +43,7 @@ export async function deleteCatalog(rootPath: string): Promise<void> {
     pendingCatalog = null;
   }
 
-  if (isElectronApp()) {
-    await getDarkroomAPI().deleteCatalog(rootPath);
-    return;
-  }
-
-  await del(catalogIdbKey(rootPath));
+  await getDarkroomAPI().deleteCatalog(rootPath);
 }
 
 export function buildPhotoCatalog(

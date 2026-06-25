@@ -3,25 +3,13 @@
 import { useEffect, useMemo } from "react";
 import {
   COLOR_LABEL_SHORTCUTS,
+  getEntryMetadata,
   isStarRating,
 } from "@/lib/catalog/defaults";
 import type { ColorLabel } from "@/lib/catalog/types";
+import { isEditableTarget } from "@/hooks/is-editable-target";
 import { navigateGridRows } from "@/lib/library/grid-navigation";
 import { useLibraryStore } from "@/stores/library-store";
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tag = target.tagName;
-  return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.isContentEditable
-  );
-}
 
 export function useEntryMetadataShortcuts(
   activeEntryIds: string[],
@@ -30,7 +18,7 @@ export function useEntryMetadataShortcuts(
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
-  const setColorLabel = useLibraryStore((state) => state.setColorLabel);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
 
   useEffect(() => {
     if (disabled || activeEntryIds.length === 0) {
@@ -66,7 +54,11 @@ export function useEntryMetadataShortcuts(
         if (targets.length > 1) {
           applyMetadataToEntries(targets, { colorLabel: label });
         } else {
-          setColorLabel(targets[0]!, label);
+          const entryId = targets[0]!;
+          const current = getEntryMetadata(entryMetadata, entryId);
+          applyMetadataToEntries([entryId], {
+            colorLabel: current.colorLabel === label ? null : label,
+          });
         }
         handled = true;
       }
@@ -78,7 +70,7 @@ export function useEntryMetadataShortcuts(
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeEntryIds, applyMetadataToEntries, disabled, setColorLabel]);
+  }, [activeEntryIds, applyMetadataToEntries, disabled, entryMetadata]);
 }
 
 interface LibraryGridShortcutsOptions {

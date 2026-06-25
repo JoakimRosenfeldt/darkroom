@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { runWithAspectLoadLimit } from "@/lib/cache/aspect-ratio-loader";
+import { runWithAspectLimit } from "@/lib/cache/concurrency";
 import { getPersistedAspectRatio } from "@/lib/cache/aspect-ratio-cache";
 import {
   getCachedEntryAspectRatio,
@@ -99,7 +99,6 @@ export function useEntryAspectRatios(
       const cached = getCachedEntryAspectRatio(entry);
       if (cached) {
         loadedRef.current.add(entryId);
-        rememberEntryAspectRatio(entry, cached);
         scheduleUpdate(entryId, cached);
         return;
       }
@@ -128,13 +127,12 @@ export function useEntryAspectRatios(
       inFlightRef.current.add(entryId);
 
       try {
-        const ratio = await runWithAspectLoadLimit(
+        const ratio = await runWithAspectLimit(
           () => getEntryAspectRatio(entry),
-          priority,
+          { priority },
         );
         if (!cancelled) {
           loadedRef.current.add(entryId);
-          rememberEntryAspectRatio(entry, ratio);
           scheduleUpdate(entryId, ratio);
         }
       } catch {

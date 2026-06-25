@@ -1,19 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-export interface CatalogEntryMetadata {
-  pick: "none" | "pick" | "reject";
-  rating: 0 | 1 | 2 | 3 | 4 | 5;
-  colorLabel: "red" | "yellow" | "green" | "blue" | "purple" | null;
-  updatedAt: number;
-}
-
-export interface PhotoCatalog {
-  version: 1;
-  rootPath: string;
-  entries: Record<string, CatalogEntryMetadata>;
-}
+import type { PhotoCatalog } from "../lib/catalog/types";
 
 function catalogKeyForRootPath(rootPath: string): string {
   const normalized = path.resolve(rootPath);

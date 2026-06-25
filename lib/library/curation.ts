@@ -1,9 +1,58 @@
-import type { EntryMetadata } from "@/lib/catalog/types";
+import type { EntryMetadata, StarRating } from "@/lib/catalog/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { CurationFilter, FilterOption, SortOption } from "./filter-types";
 
-export type { CurationFilter } from "./filter-types";
+export type SortOption = "name" | "date" | "rating" | "pick";
+export type FilterOption = "all" | "raw" | "standard";
+export type GridViewMode = "grid" | "dynamic";
+
+export type CurationFilter =
+  | "all"
+  | "picked"
+  | "rejected"
+  | "unpicked"
+  | "rated"
+  | "rating-1"
+  | "rating-2"
+  | "rating-3"
+  | "rating-4"
+  | "rating-5"
+  | "label-red"
+  | "label-yellow"
+  | "label-green"
+  | "label-blue"
+  | "label-purple";
+
+export function getRatingFromCurationFilter(
+  filter: CurationFilter,
+): StarRating {
+  if (filter === "rating-1") return 1;
+  if (filter === "rating-2") return 2;
+  if (filter === "rating-3") return 3;
+  if (filter === "rating-4") return 4;
+  if (filter === "rating-5") return 5;
+  return 0;
+}
+
+export function isRatingCurationFilter(filter: CurationFilter): boolean {
+  return getRatingFromCurationFilter(filter) > 0;
+}
+
+export function curationFilterFromRating(
+  rating: StarRating,
+  currentFilter: CurationFilter,
+): CurationFilter {
+  if (rating === 0) {
+    return isRatingCurationFilter(currentFilter) ? "all" : currentFilter;
+  }
+
+  const next = `rating-${rating}` as CurationFilter;
+  if (currentFilter === next) {
+    return "all";
+  }
+
+  return next;
+}
 
 export function filterByFormat(
   entries: LibraryEntry[],
@@ -107,99 +156,6 @@ export function sortLibraryEntries(
 
   sorted.sort((a, b) => a.name.localeCompare(b.name));
   return sorted;
-}
-
-export interface CurationCounts {
-  picked: number;
-  rejected: number;
-  unpicked: number;
-  rated: number;
-  rating1: number;
-  rating2: number;
-  rating3: number;
-  rating4: number;
-  rating5: number;
-  labelRed: number;
-  labelYellow: number;
-  labelGreen: number;
-  labelBlue: number;
-  labelPurple: number;
-}
-
-export function countCuration(
-  entries: LibraryEntry[],
-  metadata: Record<string, EntryMetadata>,
-): CurationCounts {
-  const counts: CurationCounts = {
-    picked: 0,
-    rejected: 0,
-    unpicked: 0,
-    rated: 0,
-    rating1: 0,
-    rating2: 0,
-    rating3: 0,
-    rating4: 0,
-    rating5: 0,
-    labelRed: 0,
-    labelYellow: 0,
-    labelGreen: 0,
-    labelBlue: 0,
-    labelPurple: 0,
-  };
-
-  for (const entry of entries) {
-    const meta = getEntryMetadata(metadata, entry.id);
-
-    if (meta.pick === "pick") {
-      counts.picked += 1;
-    } else if (meta.pick === "reject") {
-      counts.rejected += 1;
-    } else {
-      counts.unpicked += 1;
-    }
-
-    if (meta.rating >= 1) {
-      counts.rated += 1;
-    }
-
-    switch (meta.rating) {
-      case 1:
-        counts.rating1 += 1;
-        break;
-      case 2:
-        counts.rating2 += 1;
-        break;
-      case 3:
-        counts.rating3 += 1;
-        break;
-      case 4:
-        counts.rating4 += 1;
-        break;
-      case 5:
-        counts.rating5 += 1;
-        break;
-    }
-
-    switch (meta.colorLabel) {
-      case "red":
-        counts.labelRed += 1;
-        break;
-      case "yellow":
-        counts.labelYellow += 1;
-        break;
-      case "green":
-        counts.labelGreen += 1;
-        break;
-      case "blue":
-        counts.labelBlue += 1;
-        break;
-      case "purple":
-        counts.labelPurple += 1;
-        break;
-    }
-  }
-
-  return counts;
 }
 
 export function pruneMetadataForEntries(

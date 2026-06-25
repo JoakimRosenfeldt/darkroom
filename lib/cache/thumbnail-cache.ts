@@ -1,4 +1,4 @@
-import { get, set } from "idb-keyval";
+import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { decodeEntry } from "@/lib/raw/decode";
 
@@ -49,7 +49,7 @@ export async function getCachedThumbnail(
     return memoryCached;
   }
 
-  const cached = await get<Blob>(cacheKey);
+  const cached = await idbGet<Blob>(cacheKey);
   if (cached) {
     rememberThumbnail(cacheKey, cached);
   }
@@ -63,11 +63,7 @@ export async function setCachedThumbnail(
 ): Promise<void> {
   const cacheKey = buildCacheKey(key);
   rememberThumbnail(cacheKey, blob);
-  await set(cacheKey, blob);
-}
-
-export function createThumbnailObjectUrl(blob: Blob): string {
-  return URL.createObjectURL(blob);
+  await idbSet(cacheKey, blob);
 }
 
 export async function loadThumbnailBlob(

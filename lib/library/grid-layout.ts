@@ -1,29 +1,17 @@
 import type { LibraryEntry } from "@/lib/fs/types";
+import {
+  getCachedEntryAspectRatio,
+  rememberEntryAspectRatio,
+} from "@/lib/cache/aspect-ratio-cache";
 import { resolveEntryAspectRatio } from "@/lib/library/entry-dimensions";
 
-const aspectRatioCache = new Map<string, number>();
-
-function cacheKey(entry: LibraryEntry): string {
-  return `${entry.relativePath}:${entry.lastModified}`;
-}
-
-export function getCachedEntryAspectRatio(entry: LibraryEntry): number | undefined {
-  return aspectRatioCache.get(cacheKey(entry));
-}
-
-export function rememberEntryAspectRatio(
-  entry: LibraryEntry,
-  ratio: number,
-): void {
-  aspectRatioCache.set(cacheKey(entry), ratio);
-}
+export { getCachedEntryAspectRatio, rememberEntryAspectRatio };
 
 export async function getEntryAspectRatio(
   entry: LibraryEntry,
   options: { priority?: number; signal?: AbortSignal } = {},
 ): Promise<number> {
-  const key = cacheKey(entry);
-  const cached = aspectRatioCache.get(key);
+  const cached = getCachedEntryAspectRatio(entry);
   if (cached) {
     return cached;
   }
@@ -31,7 +19,7 @@ export async function getEntryAspectRatio(
   const ratio = await resolveEntryAspectRatio(entry, {
     signal: options.signal,
   });
-  aspectRatioCache.set(key, ratio);
+  rememberEntryAspectRatio(entry, ratio);
   return ratio;
 }
 

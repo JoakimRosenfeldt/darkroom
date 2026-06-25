@@ -1,20 +1,10 @@
-export interface FileRef {
+export interface LibraryEntry {
   id: string;
   name: string;
   relativePath: string;
   size: number;
   lastModified: number;
-}
-
-export interface LibraryEntry extends FileRef {
   profileId: string | null;
-}
-
-export interface StoredLibrary {
-  folderName: string;
-  rootPath: string;
-  entries: Array<Omit<LibraryEntry, "profileId"> & { profileId: string | null }>;
-  importedAt: number;
 }
 
 export const SUPPORTED_EXTENSIONS = [
@@ -32,8 +22,4 @@ export function isSupportedFileName(name: string): boolean {
 
 export function createEntryId(relativePath: string): string {
   return encodeURIComponent(relativePath);
-}
-
-export function decodeEntryId(id: string): string {
-  return decodeURIComponent(id);
 }

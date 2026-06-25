@@ -8,12 +8,12 @@ import type {
   FilterOption,
   GridViewMode,
   SortOption,
-} from "@/lib/library/filter-types";
+} from "@/lib/library/curation";
 import {
   curationFilterFromRating,
   getRatingFromCurationFilter,
   isRatingCurationFilter,
-} from "@/lib/library/rating-filter";
+} from "@/lib/library/curation";
 import type { StarRating } from "@/lib/catalog/types";
 import { IconDynamicGrid, IconFolder, IconGrid } from "./icons";
 
@@ -50,7 +50,6 @@ export function LibraryToolbar({
     folderName,
     importState,
     needsFolderAccess,
-    isDesktopApp,
     clearLibrary,
   } = useLibraryStore();
 
@@ -65,8 +64,7 @@ export function LibraryToolbar({
       {needsFolderAccess ? (
         <FolderPickerButton
           mode="restore"
-          disabled={!isDesktopApp}
-          className="flex h-7 items-center gap-1.5 rounded bg-lr-accent/20 px-2.5 text-xs text-lr-accent transition hover:bg-lr-accent/30 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-7 items-center gap-1.5 rounded bg-lr-accent/20 px-2.5 text-xs text-lr-accent transition hover:bg-lr-accent/30"
         >
           <IconFolder className="h-3.5 w-3.5" />
           {importState === "restoring" ? "Re-linking..." : "Re-link folder"}
@@ -75,8 +73,7 @@ export function LibraryToolbar({
 
       <FolderPickerButton
         mode="import"
-        disabled={!isDesktopApp}
-        className="flex h-7 items-center gap-1.5 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-7 items-center gap-1.5 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838]"
       >
         <IconFolder className="h-3.5 w-3.5 text-lr-accent" />
         {importState === "importing"
@@ -213,10 +210,6 @@ export function LibraryToolbar({
         <option value="rating">Sort: Rating</option>
         <option value="pick">Sort: Pick Status</option>
       </select>
-
-      {!isDesktopApp ? (
-        <span className="text-xs text-amber-400">Desktop app required</span>
-      ) : null}
     </div>
   );
 }

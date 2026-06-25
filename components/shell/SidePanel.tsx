@@ -27,7 +27,6 @@ export function SidePanel() {
   const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
-  const isDesktopApp = useLibraryStore((state) => state.isDesktopApp);
   const albums = useLibraryStore((state) => state.albums);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const setCatalogView = useLibraryStore((state) => state.setCatalogView);
@@ -102,16 +101,14 @@ export function SidePanel() {
               {needsFolderAccess ? (
                 <FolderPickerButton
                   mode="restore"
-                  disabled={!isDesktopApp}
-                  className="flex h-5 w-5 items-center justify-center rounded text-lr-accent transition hover:bg-lr-panel-raised disabled:opacity-50"
+                  className="flex h-5 w-5 items-center justify-center rounded text-lr-accent transition hover:bg-lr-panel-raised"
                 >
                   <IconFolder className="h-3 w-3" />
                 </FolderPickerButton>
               ) : null}
               <FolderPickerButton
                 mode="import"
-                disabled={!isDesktopApp}
-                className="flex h-5 w-5 items-center justify-center rounded text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
+                className="flex h-5 w-5 items-center justify-center rounded text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
               >
                 <IconPlus className="h-3 w-3" />
               </FolderPickerButton>

@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useSyncExternalStore,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import {
   formatPickerError,
   openPhotoFolderPicker,
 } from "@/lib/fs/access";
-import { fsDebug, fsDebugError } from "@/lib/fs/debug";
+import { isElectronApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface FolderPickerButtonProps {
@@ -20,11 +25,10 @@ function handlePickerFailure(
   mode: "import" | "restore",
 ): void {
   if (error instanceof DOMException && error.name === "AbortError") {
-    fsDebug("handlePickerFailure: user cancelled picker");
     return;
   }
 
-  fsDebugError("handlePickerFailure", error, { mode });
+  console.error("[darkroom:fs] handlePickerFailure", error, { mode });
   const { folderName, entries } = useLibraryStore.getState();
 
   useLibraryStore.setState({
@@ -36,22 +40,8 @@ function handlePickerFailure(
 }
 
 function startFolderPick(mode: "import" | "restore"): void {
-  const { folderName, entries, importState } = useLibraryStore.getState();
-
-  fsDebug("startFolderPick: click", {
-    mode,
-    folderName,
-    entryCount: entries.length,
-    importState,
-  });
-
   void openPhotoFolderPicker()
     .then((result) => {
-      fsDebug("startFolderPick: picker resolved, starting scan", {
-        mode,
-        folderName: result.name,
-        rootPath: result.path,
-      });
       useLibraryStore
         .getState()
         .importFromFolderPath(result.path, result.name, mode);
@@ -61,37 +51,52 @@ function startFolderPick(mode: "import" | "restore"): void {
     });
 }
 
+function subscribeToDesktopApp(): () => void {
+  return () => {};
+}
+
+function getDesktopAppSnapshot(): boolean {
+  return isElectronApp();
+}
+
+function getServerDesktopAppSnapshot(): boolean {
+  return false;
+}
+
 export function FolderPickerButton({
   mode,
   className,
   disabled = false,
   children,
 }: FolderPickerButtonProps) {
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
+  const desktopApp = useSyncExternalStore(
+    subscribeToDesktopApp,
+    getDesktopAppSnapshot,
+    getServerDesktopAppSnapshot,
+  );
+  const isDisabled = disabled || !desktopApp;
 
-  const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
-
-  const setButtonRef = useCallback((button: HTMLButtonElement | null) => {
-    if (!button) {
-      return;
-    }
-
-    button.onclick = (event) => {
-      if (disabledRef.current || event.button !== 0) {
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (isDisabled || event.button !== 0) {
         return;
       }
-      startFolderPick(modeRef.current);
-    };
-  }, []);
+      startFolderPick(mode);
+    },
+    [isDisabled, mode],
+  );
 
   return (
     <button
-      ref={setButtonRef}
       type="button"
-      className={className}
-      disabled={disabled}
+      onClick={handleClick}
+      className={[
+        className,
+        "disabled:cursor-not-allowed disabled:opacity-50",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      disabled={isDisabled}
     >
       {children}
     </button>
