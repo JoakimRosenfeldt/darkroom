@@ -1,3 +1,5 @@
+import type { DevelopSettings } from "@/lib/develop/types";
+
 export type PickStatus = "none" | "pick" | "reject";
 export type StarRating = 0 | 1 | 2 | 3 | 4 | 5;
 export type ColorLabel = "red" | "yellow" | "green" | "blue" | "purple" | null;
@@ -6,6 +8,7 @@ export interface EntryMetadata {
   pick: PickStatus;
   rating: StarRating;
   colorLabel: ColorLabel;
+  develop?: DevelopSettings;
   updatedAt: number;
 }
 

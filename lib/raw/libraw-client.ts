@@ -43,7 +43,7 @@ function buildSettings(
 ): LibRawSettings {
   return {
     halfSize,
-    outputBps: 8,
+    outputBps: options.thumbnail ? 8 : 16,
     useCameraWb: true,
     userQual: options.thumbnail ? 0 : halfSize ? 1 : 2,
   };

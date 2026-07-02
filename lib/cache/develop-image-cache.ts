@@ -5,6 +5,9 @@ export interface DevelopImage {
   width: number;
   height: number;
   metadata: Record<string, unknown>;
+  rgb: Uint8Array | Uint16Array | Uint8ClampedArray;
+  bits: number;
+  colors: number;
   blob: Blob;
   objectUrl: string;
 }
@@ -58,6 +61,9 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
       width: decoded.width,
       height: decoded.height,
       metadata: decoded.metadata,
+      rgb: decoded.rgb,
+      bits: decoded.bits,
+      colors: decoded.colors,
       blob: decoded.blob,
       objectUrl: decoded.objectUrl,
     };

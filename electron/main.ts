@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   folderExists,
@@ -21,6 +22,24 @@ let staticServerPort: number | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
+
+function resolveLibraryFile(rootPath: string, relativePath: string): string {
+  const root = path.resolve(rootPath);
+  const absolute = path.resolve(root, relativePath);
+  const relative = path.relative(root, absolute);
+
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Sidecar path must stay inside the active library.");
+  }
+
+  return absolute;
+}
+
+function getSidecarPath(rootPath: string, relativePath: string): string {
+  const source = resolveLibraryFile(rootPath, relativePath);
+  const parsed = path.parse(source);
+  return path.join(parsed.dir, `${parsed.name}.xmp`);
+}
 
 function getPreloadPath(): string {
   return path.join(__dirname, "preload.js");
@@ -134,6 +153,78 @@ function registerIpcHandlers(): void {
     "darkroom:delete-files",
     async (_event, absolutePaths: string[]) => {
       await trashFiles(absolutePaths);
+    },
+  );
+
+  ipcMain.handle(
+    "darkroom:read-sidecar",
+    async (_event, rootPath: string, relativePath: string) => {
+      const sidecarPath = getSidecarPath(rootPath, relativePath);
+      try {
+        const [contents, stat] = await Promise.all([
+          fs.readFile(sidecarPath, "utf8"),
+          fs.stat(sidecarPath),
+        ]);
+        return { contents, lastModified: stat.mtimeMs };
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
+          return null;
+        }
+        throw error;
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "darkroom:write-sidecar",
+    async (
+      _event,
+      rootPath: string,
+      relativePath: string,
+      contents: string | null,
+    ) => {
+      const sidecarPath = getSidecarPath(rootPath, relativePath);
+      if (contents === null) {
+        try {
+          await fs.unlink(sidecarPath);
+        } catch (error) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ENOENT"
+          ) {
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
+
+      await fs.writeFile(sidecarPath, contents, "utf8");
+    },
+  );
+
+  ipcMain.handle(
+    "darkroom:save-export",
+    async (_event, suggestedName: string, data: ArrayBuffer) => {
+      const result = await dialog.showSaveDialog({
+        title: "Export edited photo",
+        defaultPath: suggestedName,
+        filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
+      });
+
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+
+      await fs.writeFile(result.filePath, Buffer.from(new Uint8Array(data)));
+      return result.filePath;
     },
   );
 }
