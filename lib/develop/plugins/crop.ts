@@ -43,7 +43,7 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
   xmp: {
     write: (settings) => {
       if (!settings.enabled) {
-        return {};
+        return {} as Record<string, string>;
       }
       return {
         "crs:HasCrop": "True",

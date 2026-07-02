@@ -46,6 +46,7 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
     if (!canvas) {
       return;
     }
+    const currentCanvas = canvas;
 
     let active = true;
     setReady(false);
@@ -54,7 +55,7 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
     async function loadRenderer() {
       try {
         rendererRef.current?.dispose();
-        const renderer = new DevelopRenderer(canvas);
+        const renderer = new DevelopRenderer(currentCanvas);
         rendererRef.current = renderer;
         await renderer.setImage(image);
         if (!active) {
@@ -89,18 +90,24 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
     if (!canvas || !renderer || !container || !ready) {
       return;
     }
+    const currentCanvas = canvas;
+    const currentContainer = container;
+    const currentRenderer = renderer;
 
     function render() {
-      if (!canvas || !container) {
+      if (!currentCanvas || !currentContainer) {
         return;
       }
-      renderer.resize(container.clientWidth, container.clientHeight);
-      renderer.render(settings, showOriginal);
+      currentRenderer.resize(
+        currentContainer.clientWidth,
+        currentContainer.clientHeight,
+      );
+      currentRenderer.render(settings, showOriginal);
     }
 
     render();
     const observer = new ResizeObserver(render);
-    observer.observe(container);
+    observer.observe(currentContainer);
     return () => observer.disconnect();
   }, [settings, showOriginal, ready]);
 
