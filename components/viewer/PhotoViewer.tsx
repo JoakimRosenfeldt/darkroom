@@ -19,10 +19,9 @@ import {
   DevelopCanvas,
   type DevelopCanvasHandle,
 } from "@/components/develop/DevelopCanvas";
-import { EditPanel } from "@/components/develop/EditPanel";
+import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { Filmstrip } from "./Filmstrip";
-import { MetadataPanel } from "./MetadataPanel";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 
 interface PhotoViewerProps {
@@ -41,7 +40,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showMetadata, setShowMetadata] = useState(true);
   const activeIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
@@ -185,13 +183,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               >
                 Export JPEG
               </button>
-              <button
-                type="button"
-                onClick={() => setShowMetadata((value) => !value)}
-                className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
-              >
-                {showMetadata ? "Hide Info" : "Show Info"}
-              </button>
             </div>
           </div>
 
@@ -214,15 +205,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
           ) : null}
         </div>
 
-        {decoded ? <EditPanel /> : null}
-
-        {showMetadata && decoded ? (
-          <MetadataPanel
-            metadata={decoded.metadata}
-            fileName={entry.name}
-            profileId={entry.profileId}
-          />
-        ) : null}
+        {decoded ? <DevelopSidePanels decoded={decoded} entry={entry} /> : null}
       </div>
 
       <Filmstrip

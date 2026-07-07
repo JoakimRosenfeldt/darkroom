@@ -85,6 +85,17 @@ export function IconArchive({ className }: { className?: string }) {
   );
 }
 
+export function IconSliders({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M11.5 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM9.05 3a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1h-.55a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h7.55zM2.5 7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM1.05 8a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1H5.95a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h-.45zM11.5 12a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM9.05 13a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1h-.55a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h7.55z"
+      />
+    </svg>
+  );
+}
+
 export function IconInfo({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
