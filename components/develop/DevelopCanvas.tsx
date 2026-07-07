@@ -11,6 +11,7 @@ import {
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { DevelopRenderer } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
+import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOverlay";
 
 interface DevelopCanvasProps {
   image: DevelopImage;
@@ -157,7 +158,10 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
           Preparing editor...
         </div>
       ) : null}
-      <CropOverlay />
+      <InteractiveCropOverlay
+        imageWidth={image.width}
+        imageHeight={image.height}
+      />
       {showOriginal ? (
         <div className="absolute left-3 top-3 rounded bg-lr-panel/90 px-2 py-1 text-[11px] uppercase tracking-wider text-lr-text-muted">
           Before
@@ -166,29 +170,3 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
     </div>
   );
 });
-
-function CropOverlay() {
-  const crop = useDevelopStore((state) => state.settings.crop);
-  if (!crop.enabled) {
-    return null;
-  }
-
-  return (
-    <div
-      className="pointer-events-none absolute border border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)]"
-      style={{
-        left: `${crop.x * 100}%`,
-        top: `${crop.y * 100}%`,
-        width: `${crop.width * 100}%`,
-        height: `${crop.height * 100}%`,
-        transform: `rotate(${crop.angle}deg)`,
-      }}
-    >
-      <div className="grid h-full w-full grid-cols-3 grid-rows-3">
-        {Array.from({ length: 9 }, (_, index) => (
-          <div key={index} className="border border-white/20" />
-        ))}
-      </div>
-    </div>
-  );
-}

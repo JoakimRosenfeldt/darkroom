@@ -25,7 +25,12 @@ export function DevelopSidePanels({ decoded, entry }: DevelopSidePanelsProps) {
 
   return (
     <>
-      {activePanel === "crop" ? <CropPanel /> : null}
+      {activePanel === "crop" ? (
+        <CropPanel
+          imageWidth={decoded.width}
+          imageHeight={decoded.height}
+        />
+      ) : null}
       {activePanel === "edit" ? <EditPanel /> : null}
       {activePanel === "info" ? (
         <MetadataPanel

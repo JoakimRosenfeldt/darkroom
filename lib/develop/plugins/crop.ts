@@ -10,6 +10,9 @@ export const DEFAULT_CROP_SETTINGS: CropSettings = {
   perspectiveX: 0,
   perspectiveY: 0,
   distortion: 0,
+  aspectPreset: "original",
+  customAspectWidth: 1,
+  customAspectHeight: 1,
 };
 
 function numberProp(props: Record<string, string>, key: string): number | null {
@@ -31,7 +34,10 @@ function isDefault(settings: CropSettings): boolean {
     settings.angle === 0 &&
     settings.perspectiveX === 0 &&
     settings.perspectiveY === 0 &&
-    settings.distortion === 0
+    settings.distortion === 0 &&
+    settings.aspectPreset === "original" &&
+    settings.customAspectWidth === 1 &&
+    settings.customAspectHeight === 1
   );
 }
 

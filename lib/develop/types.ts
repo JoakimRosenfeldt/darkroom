@@ -11,6 +11,8 @@ export interface BasicSettings {
   saturation: number;
 }
 
+import type { AspectRatioPresetId } from "@/lib/develop/crop-geometry";
+
 export interface CropSettings {
   enabled: boolean;
   x: number;
@@ -21,6 +23,9 @@ export interface CropSettings {
   perspectiveX: number;
   perspectiveY: number;
   distortion: number;
+  aspectPreset: AspectRatioPresetId;
+  customAspectWidth: number;
+  customAspectHeight: number;
 }
 
 export interface CurveSettings {
