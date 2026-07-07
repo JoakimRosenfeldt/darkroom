@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import { CropPanel } from "@/components/develop/CropPanel";
 import { EditPanel } from "@/components/develop/EditPanel";
 import {
   DevelopPanelRail,
@@ -24,6 +25,7 @@ export function DevelopSidePanels({ decoded, entry }: DevelopSidePanelsProps) {
 
   return (
     <>
+      {activePanel === "crop" ? <CropPanel /> : null}
       {activePanel === "edit" ? <EditPanel /> : null}
       {activePanel === "info" ? (
         <MetadataPanel
