@@ -10,6 +10,7 @@ import {
 } from "@/lib/develop/crop-geometry";
 import { useDevelopStore } from "@/stores/develop-store";
 import { SliderRow } from "@/components/develop/SliderRow";
+import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 
 interface CropPanelProps {
   imageWidth: number;
@@ -20,6 +21,16 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
   const crop = useDevelopStore((state) => state.settings.crop);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const resetPlugin = useDevelopStore((state) => state.resetPlugin);
+
+  function updateCrop(patch: Partial<typeof crop>) {
+    const next = { ...crop, ...patch };
+    updatePlugin("crop", {
+      ...patch,
+      width: Math.min(next.width, 1 - next.x),
+      height: Math.min(next.height, 1 - next.y),
+    });
+  }
+
   function selectAspectPreset(presetId: AspectRatioPresetId) {
     const ratio = resolveAspectRatio(
       presetId,
@@ -69,9 +80,9 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
           <input
             type="checkbox"
             checked={crop.enabled}
-            onChange={(event) =>
-              updatePlugin("crop", { enabled: event.target.checked })
-            }
+            onChange={(event) => event.target.checked
+              ? updatePlugin("crop", { enabled: true })
+              : updatePlugin("crop", DEFAULT_CROP_SETTINGS)}
           />
           Enable crop
         </label>
@@ -116,8 +127,16 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
           max={45}
           step={0.1}
           suffix="°"
+          disabled={!crop.enabled}
           onChange={(angle) => updatePlugin("crop", { angle })}
         />
+        <SliderRow label="Left" value={crop.x} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(x) => updateCrop({ x })} />
+        <SliderRow label="Top" value={crop.y} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(y) => updateCrop({ y })} />
+        <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} disabled={!crop.enabled} onChange={(width) => updateCrop({ width })} />
+        <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} disabled={!crop.enabled} onChange={(height) => updateCrop({ height })} />
+        <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveX) => updatePlugin("crop", { perspectiveX })} />
+        <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveY) => updatePlugin("crop", { perspectiveY })} />
+        <SliderRow label="Distortion" value={crop.distortion} min={-100} max={100} disabled={!crop.enabled} onChange={(distortion) => updatePlugin("crop", { distortion })} />
       </div>
     </aside>
   );

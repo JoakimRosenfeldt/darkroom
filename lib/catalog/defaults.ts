@@ -41,7 +41,7 @@ export const COLOR_LABEL_SHORTCUTS: Record<string, Exclude<ColorLabel, null>> = 
   "7": "yellow",
   "8": "green",
   "9": "blue",
-  "\\": "purple",
+  "]": "purple",
 };
 
 export const COLOR_LABEL_SHORTCUT_HINTS = Object.fromEntries(
