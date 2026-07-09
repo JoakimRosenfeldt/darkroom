@@ -85,6 +85,28 @@ export function IconArchive({ className }: { className?: string }) {
   );
 }
 
+export function IconCrop({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M1.5 1a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 1 0V2.707l7.146 7.147a.5.5 0 0 0 .708-.708L2.707 2H4.5a.5.5 0 0 0 0-1h-3zm11 0a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 1 0V2.707l-7.146 7.147a.5.5 0 0 0 .708.708L13.293 2H11.5a.5.5 0 0 0 0-1h3zm-11 11a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 0-1H2.707l7.147-7.146a.5.5 0 0 0-.708-.708L2 13.293V11.5a.5.5 0 0 0-1 0v3zm11-.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1 0-1h1.793l-7.147-7.146a.5.5 0 0 1 .708-.708L14 13.293V11.5a.5.5 0 0 1-.5-.5z"
+      />
+    </svg>
+  );
+}
+
+export function IconSliders({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M11.5 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM9.05 3a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1h-.55a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h7.55zM2.5 7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM1.05 8a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1H5.95a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h-.45zM11.5 12a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM9.05 13a2.5 2.5 0 1 1 4.9 0H14.5a.5.5 0 0 1 0 1h-.55a2.5 2.5 0 1 1-4.9 0H1.5a.5.5 0 0 1 0-1h7.55z"
+      />
+    </svg>
+  );
+}
+
 export function IconInfo({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="currentColor" aria-hidden>

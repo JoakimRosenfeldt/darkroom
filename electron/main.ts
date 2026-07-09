@@ -1,10 +1,4 @@
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  type IpcMainInvokeEvent,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,50 +20,58 @@ const DEV_SERVER_URL = process.env.DARKROOM_DEV_URL ?? "http://localhost:3000";
 
 let mainWindow: BrowserWindow | null = null;
 let staticServerPort: number | null = null;
-let trustedOrigin: string | null = null;
 let activeLibraryRoot: string | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
 const MAX_SIDECAR_BYTES = 4 * 1024 * 1024;
 
-function assertTrustedIpc(event: IpcMainInvokeEvent): void {
-  if (
-    event.sender !== mainWindow?.webContents ||
-    !trustedOrigin ||
-    !event.senderFrame ||
-    new URL(event.senderFrame.url).origin !== trustedOrigin
-  ) {
-    throw new Error("Darkroom IPC request came from an untrusted renderer.");
+async function activateLibraryRoot(rootPath: string): Promise<string> {
+  const stat = await fs.stat(rootPath);
+  if (!stat.isDirectory()) {
+    throw new Error("Library root must be a directory.");
   }
+  const root = await fs.realpath(rootPath);
+  activeLibraryRoot = root;
+  return root;
 }
 
-async function setActiveLibraryRoot(rootPath: string): Promise<void> {
-  const root = await fs.realpath(rootPath);
-  const stat = await fs.stat(root);
-  if (!stat.isDirectory()) {
-    throw new Error("Active library root must be a directory.");
+function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
+  if (event.sender !== mainWindow?.webContents) {
+    throw new Error("Desktop API is only available to the main Darkroom window.");
   }
-  activeLibraryRoot = root;
+  if (!event.senderFrame) {
+    throw new Error("Desktop API request has no renderer frame.");
+  }
+
+  const expectedOrigin = isDev
+    ? new URL(DEV_SERVER_URL).origin
+    : `http://127.0.0.1:${staticServerPort}`;
+  if (new URL(event.senderFrame.url).origin !== expectedOrigin) {
+    throw new Error("Desktop API request came from an untrusted origin.");
+  }
 }
 
 async function resolveLibraryFile(
+  event: IpcMainInvokeEvent,
   rootPath: string,
   relativePath: string,
 ): Promise<string> {
-  const root = await fs.realpath(rootPath);
-  if (root !== activeLibraryRoot) {
+  assertTrustedRenderer(event);
+  if (!activeLibraryRoot) {
+    throw new Error("No approved library folder is open.");
+  }
+
+  const requestedRoot = await fs.realpath(rootPath);
+  if (requestedRoot !== activeLibraryRoot) {
     throw new Error("Sidecar path must use the active library.");
   }
-  if (!relativePath || path.isAbsolute(relativePath)) {
-    throw new Error("Sidecar path must name a library file.");
-  }
 
-  const absolute = path.resolve(root, relativePath);
-  const relative = path.relative(root, absolute);
+  const absolute = path.resolve(activeLibraryRoot, relativePath);
+  const relative = path.relative(activeLibraryRoot, absolute);
 
   if (
-    !relative ||
+    !relativePath ||
     relative === ".." ||
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
@@ -77,49 +79,65 @@ async function resolveLibraryFile(
     throw new Error("Sidecar path must stay inside the active library.");
   }
 
-  const source = await fs.realpath(absolute);
-  const sourceRelative = path.relative(root, source);
+  const directory = await fs.realpath(path.dirname(absolute));
+  const directoryRelative = path.relative(activeLibraryRoot, directory);
   if (
-    sourceRelative === ".." ||
-    sourceRelative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(sourceRelative)
+    directoryRelative === ".." ||
+    directoryRelative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(directoryRelative)
   ) {
-    throw new Error("Sidecar source resolves outside the active library.");
+    throw new Error("Sidecar path cannot follow a symlink outside the library.");
   }
 
-  return source;
+  return path.join(directory, path.basename(absolute));
 }
 
 async function getSidecarPath(
+  event: IpcMainInvokeEvent,
   rootPath: string,
   relativePath: string,
 ): Promise<string> {
-  const source = await resolveLibraryFile(rootPath, relativePath);
+  const source = await resolveLibraryFile(event, rootPath, relativePath);
   const parsed = path.parse(source);
-  return path.join(parsed.dir, `${parsed.name}.xmp`);
+  return path.join(
+    parsed.dir,
+    parsed.ext.toLowerCase() === ".nef"
+      ? `${parsed.name}.xmp`
+      : `${parsed.base}.xmp`,
+  );
 }
 
-async function writeSidecarAtomically(
-  sidecarPath: string,
-  contents: string,
-): Promise<void> {
-  const temporaryPath = path.join(
-    path.dirname(sidecarPath),
-    `.${path.basename(sidecarPath)}.${randomUUID()}.tmp`,
-  );
-
+async function assertRegularSidecar(sidecarPath: string): Promise<boolean> {
   try {
-    const handle = await fs.open(temporaryPath, "wx", 0o600);
-    try {
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
+    const stat = await fs.lstat(sidecarPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Refusing to follow a symbolic-link XMP sidecar.");
     }
-    await fs.rename(temporaryPath, sidecarPath);
+    if (!stat.isFile()) {
+      throw new Error("XMP sidecar is not a regular file.");
+    }
+    return true;
   } catch (error) {
-    await fs.unlink(temporaryPath).catch(() => undefined);
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
     throw error;
+  }
+}
+
+async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
+  await assertRegularSidecar(filePath);
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, contents, "utf8");
+    await fs.rename(temporaryPath, filePath);
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
   }
 }
 
@@ -128,20 +146,15 @@ function getPreloadPath(): string {
 }
 
 async function loadWindow(window: BrowserWindow): Promise<void> {
-  let windowUrl: string;
   if (isDev) {
-    windowUrl = DEV_SERVER_URL;
-    trustedOrigin = new URL(windowUrl).origin;
-    await window.loadURL(windowUrl);
+    await window.loadURL(DEV_SERVER_URL);
     window.webContents.openDevTools({ mode: "detach" });
     return;
   }
 
   const outDir = getOutDir(getAppRoot());
   staticServerPort ??= await startStaticServer(outDir);
-  windowUrl = `http://127.0.0.1:${staticServerPort}`;
-  trustedOrigin = new URL(windowUrl).origin;
-  await window.loadURL(windowUrl);
+  await window.loadURL(`http://127.0.0.1:${staticServerPort}`);
 }
 
 async function createWindow(): Promise<void> {
@@ -165,7 +178,10 @@ async function createWindow(): Promise<void> {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!trustedOrigin || new URL(url).origin !== trustedOrigin) {
+    const expectedOrigin = isDev
+      ? new URL(DEV_SERVER_URL).origin
+      : `http://127.0.0.1:${staticServerPort}`;
+    if (new URL(url).origin !== expectedOrigin) {
       event.preventDefault();
     }
   });
@@ -175,7 +191,7 @@ async function createWindow(): Promise<void> {
 
 function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:pick-folder", async (event) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
       title: "Select photo folder",
@@ -185,7 +201,7 @@ function registerIpcHandlers(): void {
       return null;
     }
 
-    const folderPath = result.filePaths[0]!;
+    const folderPath = await activateLibraryRoot(result.filePaths[0]!);
     return {
       path: folderPath,
       name: getFolderName(folderPath),
@@ -193,14 +209,12 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("darkroom:scan-folder", async (event, rootPath: string) => {
-    assertTrustedIpc(event);
-    const files = await scanFolderTree(rootPath);
-    await setActiveLibraryRoot(rootPath);
-    return files;
+    assertTrustedRenderer(event);
+    return scanFolderTree(rootPath);
   });
 
   ipcMain.handle("darkroom:read-file", async (event, absolutePath: string) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     const buffer = await readFileBuffer(absolutePath);
     return buffer.buffer.slice(
       buffer.byteOffset,
@@ -211,7 +225,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "darkroom:read-file-head",
     async (event, absolutePath: string, maxBytes: number) => {
-      assertTrustedIpc(event);
+      assertTrustedRenderer(event);
       const buffer = await readFileHead(absolutePath, maxBytes);
       return buffer.buffer.slice(
         buffer.byteOffset,
@@ -221,44 +235,60 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle("darkroom:stat-file", async (event, absolutePath: string) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     return statFile(absolutePath);
   });
 
   ipcMain.handle("darkroom:get-last-folder", async (event) => {
-    assertTrustedIpc(event);
-    return settingsStore.getLastFolder();
+    assertTrustedRenderer(event);
+    const folderPath = await settingsStore.getLastFolder();
+    if (folderPath) {
+      try {
+        await activateLibraryRoot(folderPath);
+      } catch {
+        activeLibraryRoot = null;
+      }
+    }
+    return folderPath;
   });
 
   ipcMain.handle("darkroom:set-last-folder", async (event, folderPath: string | null) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
+    if (folderPath) {
+      const requestedRoot = await fs.realpath(folderPath);
+      if (requestedRoot !== activeLibraryRoot) {
+        throw new Error("Library folder was not selected through Darkroom.");
+      }
+    } else {
+      activeLibraryRoot = null;
+    }
     await settingsStore.setLastFolder(folderPath);
   });
 
   ipcMain.handle("darkroom:folder-exists", async (event, folderPath: string) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     return folderExists(folderPath);
   });
 
   ipcMain.handle("darkroom:catalog-read", async (event, rootPath: string) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     return catalogStore.read(rootPath);
   });
 
   ipcMain.handle("darkroom:catalog-write", async (event, catalog) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     await catalogStore.write(catalog);
   });
 
   ipcMain.handle("darkroom:catalog-delete", async (event, rootPath: string) => {
-    assertTrustedIpc(event);
+    assertTrustedRenderer(event);
     await catalogStore.remove(rootPath);
   });
 
   ipcMain.handle(
     "darkroom:delete-files",
     async (event, absolutePaths: string[]) => {
-      assertTrustedIpc(event);
+      assertTrustedRenderer(event);
       await trashFiles(absolutePaths);
     },
   );
@@ -266,11 +296,13 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "darkroom:read-sidecar",
     async (event, rootPath: string, relativePath: string) => {
-      assertTrustedIpc(event);
-      const sidecarPath = await getSidecarPath(rootPath, relativePath);
+      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
       try {
-        const stat = await fs.stat(sidecarPath);
-        if (!stat.isFile() || stat.size > MAX_SIDECAR_BYTES) {
+        if (!await assertRegularSidecar(sidecarPath)) {
+          return null;
+        }
+        const stat = await fs.lstat(sidecarPath);
+        if (stat.size > MAX_SIDECAR_BYTES) {
           throw new Error("XMP sidecar is not a supported file size.");
         }
         const contents = await fs.readFile(sidecarPath, "utf8");
@@ -295,18 +327,40 @@ function registerIpcHandlers(): void {
       event,
       rootPath: string,
       relativePath: string,
-      contents: string,
+      contents: string | null,
     ) => {
-      assertTrustedIpc(event);
-      const sidecarPath = await getSidecarPath(rootPath, relativePath);
-      await writeSidecarAtomically(sidecarPath, contents);
+      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
+      if (contents === null) {
+        try {
+          if (!await assertRegularSidecar(sidecarPath)) {
+            return;
+          }
+          await fs.unlink(sidecarPath);
+        } catch (error) {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ENOENT"
+          ) {
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
+
+      await writeFileAtomically(sidecarPath, contents);
     },
   );
 
   ipcMain.handle(
     "darkroom:save-export",
     async (event, suggestedName: string, data: ArrayBuffer) => {
-      assertTrustedIpc(event);
+      assertTrustedRenderer(event);
+      if (data.byteLength > 512 * 1024 * 1024) {
+        throw new Error("Export is too large.");
+      }
       const result = await dialog.showSaveDialog({
         title: "Export edited photo",
         defaultPath: path.basename(suggestedName),

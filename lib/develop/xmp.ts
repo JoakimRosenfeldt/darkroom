@@ -1,71 +1,15 @@
-import { COLOR_LABELS, type EntryMetadata } from "@/lib/catalog/types";
+import type { EntryMetadata } from "@/lib/catalog/types";
+import { COLOR_LABELS } from "@/lib/catalog/types";
 import {
-  readBasicXmp,
-  writeBasicXmp,
-} from "@/lib/develop/plugins/basic";
-import {
-  readCropXmp,
-  writeCropXmp,
-} from "@/lib/develop/plugins/crop";
-import {
-  readCurveXmp,
-  writeCurveXmp,
-} from "@/lib/develop/plugins/curve";
-import {
-  readEffectsXmp,
-  writeEffectsXmp,
-} from "@/lib/develop/plugins/effects";
-import {
-  readMixerXmp,
-  writeMixerXmp,
-} from "@/lib/develop/plugins/mixer";
-import {
+  DEVELOP_PLUGINS,
   createDevelopSettings,
   isDefaultDevelopSettings,
 } from "@/lib/develop/registry";
 import type { DevelopSettings } from "@/lib/develop/types";
 
-const CRS_NAMESPACE = "http://ns.adobe.com/camera-raw-settings/1.0/";
-const RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XMP_NAMESPACE = "http://ns.adobe.com/xap/1.0/";
-
-const DEVELOP_XMP_PROPERTIES = [
-  "crs:ProcessVersion",
-  "crs:Exposure2012",
-  "crs:Contrast2012",
-  "crs:Highlights2012",
-  "crs:Shadows2012",
-  "crs:Whites2012",
-  "crs:Blacks2012",
-  "crs:Temperature",
-  "crs:Tint",
-  "crs:Vibrance",
-  "crs:Saturation",
-  "crs:HasCrop",
-  "crs:CropLeft",
-  "crs:CropTop",
-  "crs:CropRight",
-  "crs:CropBottom",
-  "crs:CropAngle",
-  "crs:PerspectiveHorizontal",
-  "crs:PerspectiveVertical",
-  "crs:LensManualDistortionAmount",
-  "crs:ToneCurvePV2012",
-  "crs:PostCropVignetteAmount",
-  "crs:GrainAmount",
-  "crs:Sharpness",
-  "crs:LuminanceSmoothing",
-  "crs:ColorNoiseReduction",
-  ...["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"].flatMap(
-    (color) => [
-      `crs:HueAdjustment${color}`,
-      `crs:SaturationAdjustment${color}`,
-      `crs:LuminanceAdjustment${color}`,
-    ],
-  ),
-  "xmp:Rating",
-  "xmp:Label",
-] as const;
+const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const CRS_NS = "http://ns.adobe.com/camera-raw-settings/1.0/";
+const XMP_NS = "http://ns.adobe.com/xap/1.0/";
 
 export interface ParsedDevelopXmp {
   settings: DevelopSettings;
@@ -73,119 +17,73 @@ export interface ParsedDevelopXmp {
   colorLabel?: EntryMetadata["colorLabel"];
 }
 
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
 function collectDevelopProps(settings: DevelopSettings): Record<string, string> {
-  if (isDefaultDevelopSettings(settings)) {
-    return {};
-  }
-
-  return {
-    ...writeCropXmp(settings.crop),
-    ...writeBasicXmp(settings.basic),
-    ...writeCurveXmp(settings.curve),
-    ...writeMixerXmp(settings.mixer),
-    ...writeEffectsXmp(settings.effects),
-  };
-}
-
-function collectProps(
-  settings: DevelopSettings,
-  metadata?: Pick<EntryMetadata, "rating" | "colorLabel">,
-): Record<string, string> {
-  const props = collectDevelopProps(settings);
-  if (metadata?.rating) {
-    props["xmp:Rating"] = String(metadata.rating);
-  }
-  if (metadata?.colorLabel) {
-    props["xmp:Label"] = metadata.colorLabel;
+  const props: Record<string, string> = {};
+  for (const plugin of DEVELOP_PLUGINS) {
+    Object.assign(props, plugin.xmp.write(settings[plugin.id] as never));
   }
   return props;
 }
 
-function parseXml(xml: string): XMLDocument {
+function createXmpDocument(): XMLDocument {
+  return new DOMParser().parseFromString(
+    `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="${RDF_NS}"><rdf:Description xmlns:crs="${CRS_NS}" xmlns:xmp="${XMP_NS}"/></rdf:RDF></x:xmpmeta>`,
+    "application/xml",
+  );
+}
+
+function descriptionFor(doc: XMLDocument): Element {
+  const description = doc.getElementsByTagNameNS(RDF_NS, "Description")[0];
+  if (!description) {
+    throw new Error("Could not find an XMP description.");
+  }
+  return description;
+}
+
+function parseXmpDocument(xml: string): XMLDocument {
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   if (doc.querySelector("parsererror")) {
     throw new Error("Could not parse XMP sidecar.");
   }
+  descriptionFor(doc);
   return doc;
-}
-
-function getDescription(doc: XMLDocument): Element | null {
-  return doc.getElementsByTagNameNS(RDF_NAMESPACE, "Description").item(0);
-}
-
-function propertyNamespace(property: string): string {
-  return property.startsWith("xmp:") ? XMP_NAMESPACE : CRS_NAMESPACE;
-}
-
-function propertyLocalName(property: string): string {
-  return property.slice(property.indexOf(":") + 1);
-}
-
-function applyProps(description: Element, props: Record<string, string>): void {
-  for (const property of DEVELOP_XMP_PROPERTIES) {
-    description.removeAttributeNS(
-      propertyNamespace(property),
-      propertyLocalName(property),
-    );
-  }
-
-  for (const [property, value] of Object.entries(props)) {
-    description.setAttributeNS(propertyNamespace(property), property, value);
-  }
-}
-
-function createXmp(props: Record<string, string>): string {
-  const attributes = Object.entries(props)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `   ${key}="${escapeXml(value)}"`)
-    .join("\n");
-
-  return `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
- <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description
-   xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-   xmlns:xmp="http://ns.adobe.com/xap/1.0/"
-${attributes}
-  />
- </rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>`;
 }
 
 export function serializeDevelopXmp(
   settings: DevelopSettings,
-  metadata?: Pick<EntryMetadata, "rating" | "colorLabel">,
-  existingXml?: string,
+  metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
+  existingContents: string | null,
 ): string | null {
-  const props = collectProps(settings, metadata);
-  if (!existingXml) {
-    return Object.keys(props).length > 0 ? createXmp(props) : null;
+  if (
+    existingContents === null &&
+    isDefaultDevelopSettings(settings) &&
+    metadata.rating === 0 &&
+    metadata.colorLabel === null
+  ) {
+    return null;
   }
 
-  const doc = parseXml(existingXml);
-  const description = getDescription(doc);
-  if (!description) {
-    throw new Error("XMP sidecar does not contain an rdf:Description element.");
+  const doc = existingContents ? parseXmpDocument(existingContents) : createXmpDocument();
+  const description = descriptionFor(doc);
+  description.setAttribute("xmlns:crs", CRS_NS);
+  description.setAttribute("xmlns:xmp", XMP_NS);
+
+  for (const [key, value] of Object.entries(collectDevelopProps(settings))) {
+    description.setAttributeNS(CRS_NS, key, value);
   }
-  applyProps(description, props);
+  description.setAttributeNS(XMP_NS, "xmp:Rating", String(metadata.rating));
+  if (metadata.colorLabel) {
+    description.setAttributeNS(XMP_NS, "xmp:Label", metadata.colorLabel);
+  } else {
+    description.removeAttributeNS(XMP_NS, "Label");
+    description.removeAttribute("xmp:Label");
+  }
+
   return new XMLSerializer().serializeToString(doc);
 }
 
 function extractAttributes(xml: string): Record<string, string> {
-  const description = getDescription(parseXml(xml));
-  if (!description) {
-    return {};
-  }
-
+  const description = descriptionFor(parseXmpDocument(xml));
   return Array.from(description.attributes).reduce<Record<string, string>>(
     (props, attribute) => {
       if (attribute.name.startsWith("crs:") || attribute.name.startsWith("xmp:")) {
@@ -220,14 +118,14 @@ function parseColorLabel(
 
 export function parseDevelopXmp(xml: string): ParsedDevelopXmp {
   const props = extractAttributes(xml);
+  const patch: Partial<DevelopSettings> = {};
+
+  for (const plugin of DEVELOP_PLUGINS) {
+    patch[plugin.id] = plugin.xmp.read(props) as never;
+  }
+
   return {
-    settings: createDevelopSettings({
-      crop: readCropXmp(props),
-      basic: readBasicXmp(props),
-      curve: readCurveXmp(props),
-      mixer: readMixerXmp(props),
-      effects: readEffectsXmp(props),
-    }),
+    settings: createDevelopSettings(patch),
     rating: parseRating(props["xmp:Rating"]),
     colorLabel: parseColorLabel(props["xmp:Label"]),
   };

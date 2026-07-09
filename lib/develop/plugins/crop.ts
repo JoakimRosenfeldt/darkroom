@@ -1,4 +1,5 @@
-import type { CropSettings } from "@/lib/develop/types";
+import type { CropSettings, DevelopPlugin } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/xmp-value";
 
 export const DEFAULT_CROP_SETTINGS: CropSettings = {
   enabled: false,
@@ -10,34 +11,12 @@ export const DEFAULT_CROP_SETTINGS: CropSettings = {
   perspectiveX: 0,
   perspectiveY: 0,
   distortion: 0,
+  aspectPreset: "original",
+  customAspectWidth: 1,
+  customAspectHeight: 1,
 };
 
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(Math.max(value, minimum), maximum);
-}
-
-export function normalizeCrop(settings: CropSettings): CropSettings {
-  const x = clamp(settings.x, 0, 0.95);
-  const y = clamp(settings.y, 0, 0.95);
-  return {
-    ...settings,
-    x,
-    y,
-    width: clamp(settings.width, 0.05, 1 - x),
-    height: clamp(settings.height, 0.05, 1 - y),
-  };
-}
-
-export function isDefaultCrop(settings: CropSettings): boolean {
+function isDefault(settings: CropSettings): boolean {
   return (
     !settings.enabled &&
     settings.x === 0 &&
@@ -47,44 +26,48 @@ export function isDefaultCrop(settings: CropSettings): boolean {
     settings.angle === 0 &&
     settings.perspectiveX === 0 &&
     settings.perspectiveY === 0 &&
-    settings.distortion === 0
+    settings.distortion === 0 &&
+    settings.aspectPreset === "original" &&
+    settings.customAspectWidth === 1 &&
+    settings.customAspectHeight === 1
   );
 }
 
-export function writeCropXmp(settings: CropSettings): Record<string, string> {
-  const crop = normalizeCrop(settings);
-  if (!crop.enabled) {
-    return {};
-  }
-  return {
-    "crs:HasCrop": "True",
-    "crs:CropLeft": crop.x.toFixed(6),
-    "crs:CropTop": crop.y.toFixed(6),
-    "crs:CropRight": (crop.x + crop.width).toFixed(6),
-    "crs:CropBottom": (crop.y + crop.height).toFixed(6),
-    "crs:CropAngle": crop.angle.toFixed(2),
-    "crs:PerspectiveHorizontal": String(Math.round(crop.perspectiveX)),
-    "crs:PerspectiveVertical": String(Math.round(crop.perspectiveY)),
-    "crs:LensManualDistortionAmount": String(Math.round(crop.distortion)),
-  };
-}
-
-export function readCropXmp(
-  props: Record<string, string>,
-): Partial<CropSettings> {
-  const left = numberProp(props, "crs:CropLeft") ?? 0;
-  const top = numberProp(props, "crs:CropTop") ?? 0;
-  const right = numberProp(props, "crs:CropRight") ?? 1;
-  const bottom = numberProp(props, "crs:CropBottom") ?? 1;
-  return normalizeCrop({
-    enabled: props["crs:HasCrop"] === "True" || left > 0 || top > 0,
-    x: left,
-    y: top,
-    width: Math.max(0.05, right - left),
-    height: Math.max(0.05, bottom - top),
-    angle: numberProp(props, "crs:CropAngle") ?? 0,
-    perspectiveX: numberProp(props, "crs:PerspectiveHorizontal") ?? 0,
-    perspectiveY: numberProp(props, "crs:PerspectiveVertical") ?? 0,
-    distortion: numberProp(props, "crs:LensManualDistortionAmount") ?? 0,
-  });
-}
+export const cropPlugin: DevelopPlugin<"crop"> = {
+  id: "crop",
+  label: "Crop & Transform",
+  defaults: DEFAULT_CROP_SETTINGS,
+  isDefault,
+  xmp: {
+    write: (settings) => ({
+        "crs:HasCrop": settings.enabled ? "True" : "False",
+        "crs:CropLeft": settings.x.toFixed(6),
+        "crs:CropTop": settings.y.toFixed(6),
+        "crs:CropRight": (settings.x + settings.width).toFixed(6),
+        "crs:CropBottom": (settings.y + settings.height).toFixed(6),
+        "crs:CropAngle": settings.angle.toFixed(2),
+        "crs:PerspectiveHorizontal": String(Math.round(settings.perspectiveX)),
+        "crs:PerspectiveVertical": String(Math.round(settings.perspectiveY)),
+        "crs:LensManualDistortionAmount": String(
+          Math.round(settings.distortion),
+        ),
+      }),
+    read: (props) => {
+      const left = numberProp(props, "crs:CropLeft") ?? 0;
+      const top = numberProp(props, "crs:CropTop") ?? 0;
+      const right = numberProp(props, "crs:CropRight") ?? 1;
+      const bottom = numberProp(props, "crs:CropBottom") ?? 1;
+      return {
+        enabled: props["crs:HasCrop"] === "True" || left > 0 || top > 0,
+        x: left,
+        y: top,
+        width: Math.max(0.05, right - left),
+        height: Math.max(0.05, bottom - top),
+        angle: numberProp(props, "crs:CropAngle") ?? 0,
+        perspectiveX: numberProp(props, "crs:PerspectiveHorizontal") ?? 0,
+        perspectiveY: numberProp(props, "crs:PerspectiveVertical") ?? 0,
+        distortion: numberProp(props, "crs:LensManualDistortionAmount") ?? 0,
+      };
+    },
+  },
+};

@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { LibraryEntry } from "@/lib/fs/types";
-import {
-  createDevelopSettings,
-  developSettingsHash,
-} from "@/lib/develop/registry";
+import { createDevelopSettings, developSettingsHash } from "@/lib/develop/registry";
+import type { DevelopSettings } from "@/lib/develop/types";
 import { readDevelopSidecar, writeDevelopSidecar } from "@/lib/develop/sidecar";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -19,10 +17,15 @@ interface UseDevelopSettingsSyncOptions {
   applyMetadata: (patch: Partial<EntryMetadata>) => void;
 }
 
-interface PendingPersist {
-  entryId: string;
-  timer: number;
-  flush: () => void;
+function snapshot(
+  settings: DevelopSettings,
+  metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
+): string {
+  return JSON.stringify({
+    settings,
+    rating: metadata.rating,
+    colorLabel: metadata.colorLabel,
+  });
 }
 
 export function useDevelopSettingsSync({
@@ -35,11 +38,16 @@ export function useDevelopSettingsSync({
   const activeEntryId = useDevelopStore((state) => state.activeEntryId);
   const setActiveEntry = useDevelopStore((state) => state.setActiveEntry);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
-  const hydratedEntryId = useRef<string | null>(null);
-  const skipNextPersist = useRef(false);
+  const sidecarStatus = useDevelopStore((state) => state.sidecarStatus);
   const metadataRef = useRef(metadata);
-  const pendingPersistRef = useRef<PendingPersist | null>(null);
-  const [hydrationVersion, setHydrationVersion] = useState(0);
+  const persistedSnapshotRef = useRef<string | null>(null);
+  const sidecarContentsRef = useRef<{ entryId: string; contents: string | null }>({
+    entryId: "",
+    contents: null,
+  });
+  const pendingWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const hydratedEntryIdRef = useRef<string | null>(null);
+  const canWriteSidecarRef = useRef(true);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -47,75 +55,80 @@ export function useDevelopSettingsSync({
 
   useEffect(() => {
     let active = true;
-    skipNextPersist.current = true;
-    hydratedEntryId.current = null;
+    hydratedEntryIdRef.current = null;
     setActiveEntry(entry.id, metadataRef.current.develop);
-    const hydrationStartHash = developSettingsHash(
-      useDevelopStore.getState().settings,
-    );
+    setSidecarStatus("loading");
+    const initialSettings = useDevelopStore.getState().settings;
+    const initialSnapshot = snapshot(initialSettings, metadataRef.current);
+    sidecarContentsRef.current = { entryId: entry.id, contents: null };
+    canWriteSidecarRef.current = true;
 
-    async function hydrateFromSidecar() {
-      if (!rootPath) {
-        if (
-          developSettingsHash(useDevelopStore.getState().settings) !==
-          hydrationStartHash
-        ) {
-          skipNextPersist.current = false;
-        }
-        hydratedEntryId.current = entry.id;
-        setHydrationVersion((version) => version + 1);
-        return;
-      }
+    async function hydrate(): Promise<void> {
+      let sidecarContents: string | null = null;
+      let persisted = initialSnapshot;
 
-      setSidecarStatus("loading");
       try {
-        const sidecar = await readDevelopSidecar(rootPath, entry.relativePath);
-        if (!active) {
-          return;
+        if (rootPath) {
+          const sidecar = await readDevelopSidecar(rootPath, entry.relativePath);
+          if (!active) {
+            return;
+          }
+          sidecarContents = sidecar?.contents ?? null;
+
+          const hasLocalChanges =
+            developSettingsHash(useDevelopStore.getState().settings) !==
+            developSettingsHash(initialSettings);
+          if (
+            sidecar &&
+            !hasLocalChanges &&
+            sidecar.lastModified > metadataRef.current.updatedAt
+          ) {
+            const nextMetadata: Partial<EntryMetadata> = {
+              develop: sidecar.settings,
+              ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+              ...(sidecar.colorLabel === undefined
+                ? {}
+                : { colorLabel: sidecar.colorLabel }),
+            };
+            setActiveEntry(entry.id, sidecar.settings);
+            applyMetadata(nextMetadata);
+            persisted = snapshot(sidecar.settings, {
+              rating: sidecar.rating ?? metadataRef.current.rating,
+              colorLabel: sidecar.colorLabel ?? metadataRef.current.colorLabel,
+            });
+          } else {
+            const currentSnapshot = snapshot(
+              useDevelopStore.getState().settings,
+              metadataRef.current,
+            );
+            persisted = currentSnapshot === initialSnapshot
+              ? currentSnapshot
+              : initialSnapshot;
+          }
         }
 
-        const hasLocalEdits =
-          developSettingsHash(useDevelopStore.getState().settings) !==
-          hydrationStartHash;
-        if (
-          sidecar &&
-          !hasLocalEdits &&
-          sidecar.lastModified > metadataRef.current.updatedAt
-        ) {
-          const nextMetadata: Partial<EntryMetadata> = {
-            develop: sidecar.settings,
-          };
-          if (sidecar.rating !== undefined) {
-            nextMetadata.rating = sidecar.rating;
-          }
-          if (sidecar.colorLabel !== undefined) {
-            nextMetadata.colorLabel = sidecar.colorLabel;
-          }
-          skipNextPersist.current = true;
-          setActiveEntry(entry.id, sidecar.settings);
-          applyMetadata(nextMetadata);
-        } else if (hasLocalEdits) {
-          skipNextPersist.current = false;
+        if (active) {
+          sidecarContentsRef.current = { entryId: entry.id, contents: sidecarContents };
+          persistedSnapshotRef.current = persisted;
+          setSidecarStatus("saved");
         }
-
-        setSidecarStatus("saved");
       } catch (error) {
         if (active) {
+          canWriteSidecarRef.current = false;
           setSidecarStatus(
             "error",
             error instanceof Error ? error.message : "Could not read XMP sidecar.",
           );
+          persistedSnapshotRef.current = null;
         }
       } finally {
         if (active) {
-          hydratedEntryId.current = entry.id;
-          setHydrationVersion((version) => version + 1);
+          hydratedEntryIdRef.current = entry.id;
         }
       }
     }
 
-    void hydrateFromSidecar();
-
+    void hydrate();
     return () => {
       active = false;
     };
@@ -129,90 +142,79 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
-    return () => {
-      const pending = pendingPersistRef.current;
-      if (pending?.entryId !== entry.id) {
-        return;
-      }
-
-      window.clearTimeout(pending.timer);
-      pendingPersistRef.current = null;
-      pending.flush();
-    };
-  }, [entry.id]);
-
-  useEffect(() => {
-    if (activeEntryId !== entry.id || hydratedEntryId.current !== entry.id) {
+    if (
+      activeEntryId !== entry.id ||
+      hydratedEntryIdRef.current !== entry.id
+    ) {
       return;
     }
 
-    if (skipNextPersist.current) {
-      skipNextPersist.current = false;
+    const nextSnapshot = snapshot(settings, metadata);
+    if (nextSnapshot === persistedSnapshotRef.current) {
+      return;
+    }
+    if (rootPath && !canWriteSidecarRef.current) {
       return;
     }
 
-    const persist = () => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
       const develop = createDevelopSettings(settings);
       applyMetadata({ develop });
 
       if (!rootPath) {
+        persistedSnapshotRef.current = nextSnapshot;
         return;
       }
 
-      const setStatusForEntry = (
-        status: Parameters<typeof setSidecarStatus>[0],
-        error?: string | null,
-      ) => {
-        if (useDevelopStore.getState().activeEntryId === entry.id) {
-          setSidecarStatus(status, error);
+      setSidecarStatus("saving");
+      const write = async (): Promise<void> => {
+        if (cancelled) {
+          return;
+        }
+        const sidecar = sidecarContentsRef.current;
+        const contents = await writeDevelopSidecar(
+          rootPath,
+          entry.relativePath,
+          develop,
+          metadata,
+          sidecar.entryId === entry.id ? sidecar.contents : null,
+        );
+        sidecarContentsRef.current = { entryId: entry.id, contents };
+        if (
+          useDevelopStore.getState().activeEntryId === entry.id &&
+          snapshot(useDevelopStore.getState().settings, metadataRef.current) ===
+            nextSnapshot
+        ) {
+          persistedSnapshotRef.current = nextSnapshot;
+          setSidecarStatus("saved");
         }
       };
 
-      setStatusForEntry("saving");
-      void writeDevelopSidecar(
-        rootPath,
-        entry.relativePath,
-        develop,
-        { rating: metadata.rating, colorLabel: metadata.colorLabel },
-      )
-        .then(() => setStatusForEntry("saved"))
-        .catch((error) => {
-          setStatusForEntry(
+      const queued = pendingWriteRef.current.then(write, write);
+      pendingWriteRef.current = queued.catch(() => undefined);
+      void queued.catch((error) => {
+        if (!cancelled) {
+          setSidecarStatus(
             "error",
-            error instanceof Error
-              ? error.message
-              : "Could not write XMP sidecar.",
+            error instanceof Error ? error.message : "Could not write XMP sidecar.",
           );
-        });
-    };
-    const pending: PendingPersist = {
-      entryId: entry.id,
-      timer: 0,
-      flush: persist,
-    };
-    pending.timer = window.setTimeout(() => {
-      if (pendingPersistRef.current === pending) {
-        pendingPersistRef.current = null;
-      }
-      persist();
+        }
+      });
     }, PERSIST_DEBOUNCE_MS);
-    pendingPersistRef.current = pending;
 
     return () => {
-      window.clearTimeout(pending.timer);
-      if (pendingPersistRef.current === pending) {
-        pendingPersistRef.current = null;
-      }
+      cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
     activeEntryId,
     entry.id,
     entry.relativePath,
-    hydrationVersion,
+    metadata,
     rootPath,
+    sidecarStatus,
     settings,
-    metadata.rating,
-    metadata.colorLabel,
     applyMetadata,
     setSidecarStatus,
   ]);

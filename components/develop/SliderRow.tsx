@@ -7,6 +7,7 @@ interface SliderRowProps {
   max: number;
   step?: number;
   suffix?: string;
+  disabled?: boolean;
   onChange: (value: number) => void;
   onReset?: () => void;
 }
@@ -18,6 +19,7 @@ export function SliderRow({
   max,
   step = 1,
   suffix = "",
+  disabled = false,
   onChange,
   onReset,
 }: SliderRowProps) {
@@ -33,6 +35,7 @@ export function SliderRow({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
         className="accent-lr-accent"
       />
