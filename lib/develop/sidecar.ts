@@ -1,10 +1,10 @@
 import type { EntryMetadata } from "@/lib/catalog/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
-import { isDefaultDevelopSettings } from "@/lib/develop/registry";
 import type { DevelopSettings } from "@/lib/develop/types";
 import { parseDevelopXmp, serializeDevelopXmp } from "@/lib/develop/xmp";
 
 export interface DevelopSidecar {
+  contents: string;
   settings: DevelopSettings;
   lastModified: number;
   rating?: EntryMetadata["rating"];
@@ -21,6 +21,7 @@ export async function readDevelopSidecar(
   }
 
   return {
+    contents: sidecar.contents,
     ...parseDevelopXmp(sidecar.contents),
     lastModified: sidecar.lastModified,
   };
@@ -31,9 +32,12 @@ export async function writeDevelopSidecar(
   relativePath: string,
   settings: DevelopSettings,
   metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
-): Promise<void> {
-  const contents = isDefaultDevelopSettings(settings)
-    ? null
-    : serializeDevelopXmp(settings, metadata);
+  existingContents: string | null,
+): Promise<string | null> {
+  const contents = serializeDevelopXmp(settings, metadata, existingContents);
+  if (contents === null) {
+    return null;
+  }
   await getDarkroomAPI().writeSidecar(rootPath, relativePath, contents);
+  return contents;
 }

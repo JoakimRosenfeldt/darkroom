@@ -1,4 +1,5 @@
 import type { CropSettings, DevelopPlugin } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/xmp-value";
 
 export const DEFAULT_CROP_SETTINGS: CropSettings = {
   enabled: false,
@@ -14,15 +15,6 @@ export const DEFAULT_CROP_SETTINGS: CropSettings = {
   customAspectWidth: 1,
   customAspectHeight: 1,
 };
-
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
 
 function isDefault(settings: CropSettings): boolean {
   return (
@@ -47,12 +39,8 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
   defaults: DEFAULT_CROP_SETTINGS,
   isDefault,
   xmp: {
-    write: (settings) => {
-      if (!settings.enabled) {
-        return {} as Record<string, string>;
-      }
-      return {
-        "crs:HasCrop": "True",
+    write: (settings) => ({
+        "crs:HasCrop": settings.enabled ? "True" : "False",
         "crs:CropLeft": settings.x.toFixed(6),
         "crs:CropTop": settings.y.toFixed(6),
         "crs:CropRight": (settings.x + settings.width).toFixed(6),
@@ -63,8 +51,7 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
         "crs:LensManualDistortionAmount": String(
           Math.round(settings.distortion),
         ),
-      };
-    },
+      }),
     read: (props) => {
       const left = numberProp(props, "crs:CropLeft") ?? 0;
       const top = numberProp(props, "crs:CropTop") ?? 0;

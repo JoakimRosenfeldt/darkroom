@@ -241,25 +241,6 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-function toFloatRgba(image: DevelopImage): Float32Array {
-  const source =
-    image.rgb instanceof Uint16Array
-      ? image.rgb
-      : new Uint16Array(image.rgb.buffer);
-  const channels = Math.max(1, image.colors);
-  const maxValue = image.bits > 8 ? 65535 : 255;
-  const output = new Float32Array(image.width * image.height * 4);
-
-  for (let sourceIndex = 0, outputIndex = 0; outputIndex < output.length; sourceIndex += channels, outputIndex += 4) {
-    output[outputIndex] = source[sourceIndex] / maxValue;
-    output[outputIndex + 1] = source[sourceIndex + 1] / maxValue;
-    output[outputIndex + 2] = source[sourceIndex + 2] / maxValue;
-    output[outputIndex + 3] = 1;
-  }
-
-  return output;
-}
-
 export class DevelopRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
@@ -293,6 +274,13 @@ export class DevelopRenderer {
 
   async setImage(image: DevelopImage): Promise<void> {
     const gl = this.gl;
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    if (image.width > maxTextureSize || image.height > maxTextureSize) {
+      throw new Error(
+        `Image exceeds this device's ${maxTextureSize}px texture limit.`,
+      );
+    }
+
     const texture = gl.createTexture();
     if (!texture) {
       throw new Error("Could not create WebGL texture.");
@@ -304,26 +292,12 @@ export class DevelopRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    if (image.bits > 8 && image.rgb.length > 0) {
-      const floatLinear = gl.getExtension("OES_texture_float_linear");
-      if (!floatLinear) {
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      }
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA32F,
-        image.width,
-        image.height,
-        0,
-        gl.RGBA,
-        gl.FLOAT,
-        toFloatRgba(image),
-      );
-    } else {
-      const bitmap = await createImageBitmap(image.blob);
+    const bitmap = await createImageBitmap(image.blob);
+    try {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+      this.textureWidth = bitmap.width;
+      this.textureHeight = bitmap.height;
+    } finally {
       bitmap.close();
     }
 
@@ -331,8 +305,6 @@ export class DevelopRenderer {
       gl.deleteTexture(this.texture);
     }
     this.texture = texture;
-    this.textureWidth = image.width;
-    this.textureHeight = image.height;
   }
 
   resize(width: number, height: number): void {
@@ -344,7 +316,11 @@ export class DevelopRenderer {
     }
   }
 
-  render(settings: DevelopSettings, showOriginal: boolean): void {
+  render(
+    settings: DevelopSettings,
+    showOriginal: boolean,
+    contain = true,
+  ): void {
     const gl = this.gl;
     if (!this.texture) {
       return;
@@ -353,7 +329,9 @@ export class DevelopRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.applyContainViewport();
+    if (contain) {
+      this.applyContainViewport();
+    }
     gl.useProgram(this.program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -473,5 +451,42 @@ export class DevelopRenderer {
     w: number,
   ): void {
     this.gl.uniform4f(this.gl.getUniformLocation(this.program, name), x, y, z, w);
+  }
+}
+
+const MAX_EXPORT_PIXELS = 50_000_000;
+
+function exportSize(image: DevelopImage, settings: DevelopSettings): {
+  width: number;
+  height: number;
+} {
+  const crop = settings.crop;
+  if (!crop.enabled) {
+    return { width: image.width, height: image.height };
+  }
+  return {
+    width: Math.max(1, Math.round(image.width * crop.width)),
+    height: Math.max(1, Math.round(image.height * crop.height)),
+  };
+}
+
+export async function exportDevelopJpeg(
+  image: DevelopImage,
+  settings: DevelopSettings,
+): Promise<Blob> {
+  const { width, height } = exportSize(image, settings);
+  if (width * height > MAX_EXPORT_PIXELS) {
+    throw new Error("This edit exceeds the 50 megapixel export limit.");
+  }
+
+  const canvas = document.createElement("canvas");
+  const renderer = new DevelopRenderer(canvas);
+  try {
+    await renderer.setImage(image);
+    renderer.resize(width, height);
+    renderer.render(settings, false, false);
+    return await renderer.toBlob();
+  } finally {
+    renderer.dispose();
   }
 }

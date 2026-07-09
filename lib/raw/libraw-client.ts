@@ -43,7 +43,7 @@ function buildSettings(
 ): LibRawSettings {
   return {
     halfSize,
-    outputBps: options.thumbnail ? 8 : 16,
+    outputBps: 8,
     useCameraWb: true,
     userQual: options.thumbnail ? 0 : halfSize ? 1 : 2,
   };
@@ -189,6 +189,14 @@ export async function decodeWithLibRaw(
   input: Uint8Array,
   options: DecodeOptions = {},
 ): Promise<DecodedImage> {
+  if (options.fullResolution) {
+    const fullResolution = await decodeOpenedRaw(input, options, false);
+    if (fullResolution) {
+      return fullResolution;
+    }
+    throw new Error("Could not decode RAW image");
+  }
+
   if (options.thumbnail) {
     const embedded = await decodeEmbeddedThumbnail(input);
     if (embedded) {

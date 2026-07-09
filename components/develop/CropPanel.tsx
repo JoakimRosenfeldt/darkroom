@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ASPECT_RATIO_PRESETS,
   fitCropToAspectRatio,
@@ -20,16 +20,6 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
   const crop = useDevelopStore((state) => state.settings.crop);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const resetPlugin = useDevelopStore((state) => state.resetPlugin);
-  const [customWidth, setCustomWidth] = useState(String(crop.customAspectWidth));
-  const [customHeight, setCustomHeight] = useState(
-    String(crop.customAspectHeight),
-  );
-
-  useEffect(() => {
-    setCustomWidth(String(crop.customAspectWidth));
-    setCustomHeight(String(crop.customAspectHeight));
-  }, [crop.customAspectWidth, crop.customAspectHeight]);
-
   function selectAspectPreset(presetId: AspectRatioPresetId) {
     const ratio = resolveAspectRatio(
       presetId,
@@ -45,13 +35,9 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
     updatePlugin("crop", patch);
   }
 
-  function commitCustomAspect() {
-    const width = Number(customWidth);
-    const height = Number(customHeight);
-    const ratio = parseAspectRatioInput(customWidth, customHeight);
+  function commitCustomAspect(width: number, height: number) {
+    const ratio = parseAspectRatioInput(String(width), String(height));
     if (!ratio) {
-      setCustomWidth(String(crop.customAspectWidth));
-      setCustomHeight(String(crop.customAspectHeight));
       return;
     }
     const patch = {
@@ -111,43 +97,12 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         </div>
 
         {crop.aspectPreset === "custom" ? (
-          <div className="mb-3 flex items-center gap-2">
-            <label className="flex flex-1 items-center gap-1 text-xs text-lr-text-muted">
-              <span className="text-lr-text-dim">W</span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={customWidth}
-                onChange={(event) => setCustomWidth(event.target.value)}
-                onBlur={commitCustomAspect}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    commitCustomAspect();
-                  }
-                }}
-                className="w-full rounded border border-lr-border-subtle bg-lr-panel-raised px-2 py-1 font-mono text-[11px] text-lr-text"
-              />
-            </label>
-            <span className="text-xs text-lr-text-dim">:</span>
-            <label className="flex flex-1 items-center gap-1 text-xs text-lr-text-muted">
-              <span className="text-lr-text-dim">H</span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={customHeight}
-                onChange={(event) => setCustomHeight(event.target.value)}
-                onBlur={commitCustomAspect}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    commitCustomAspect();
-                  }
-                }}
-                className="w-full rounded border border-lr-border-subtle bg-lr-panel-raised px-2 py-1 font-mono text-[11px] text-lr-text"
-              />
-            </label>
-          </div>
+          <CustomAspectInputs
+            key={`${crop.customAspectWidth}:${crop.customAspectHeight}`}
+            width={crop.customAspectWidth}
+            height={crop.customAspectHeight}
+            onCommit={commitCustomAspect}
+          />
         ) : null}
 
         <p className="mb-1 mt-2 text-[11px] text-lr-text-dim">
@@ -165,5 +120,69 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         />
       </div>
     </aside>
+  );
+}
+
+function CustomAspectInputs({
+  width,
+  height,
+  onCommit,
+}: {
+  width: number;
+  height: number;
+  onCommit: (width: number, height: number) => void;
+}) {
+  const [customWidth, setCustomWidth] = useState(String(width));
+  const [customHeight, setCustomHeight] = useState(String(height));
+
+  function commit() {
+    const nextWidth = Number(customWidth);
+    const nextHeight = Number(customHeight);
+    if (!parseAspectRatioInput(customWidth, customHeight)) {
+      setCustomWidth(String(width));
+      setCustomHeight(String(height));
+      return;
+    }
+    onCommit(nextWidth, nextHeight);
+  }
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <AspectInput label="W" value={customWidth} onChange={setCustomWidth} onCommit={commit} />
+      <span className="text-xs text-lr-text-dim">:</span>
+      <AspectInput label="H" value={customHeight} onChange={setCustomHeight} onCommit={commit} />
+    </div>
+  );
+}
+
+function AspectInput({
+  label,
+  value,
+  onChange,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+}) {
+  return (
+    <label className="flex flex-1 items-center gap-1 text-xs text-lr-text-muted">
+      <span className="text-lr-text-dim">{label}</span>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onCommit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            onCommit();
+          }
+        }}
+        className="w-full rounded border border-lr-border-subtle bg-lr-panel-raised px-2 py-1 font-mono text-[11px] text-lr-text"
+      />
+    </label>
   );
 }

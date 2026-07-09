@@ -1,11 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
+  disposeDevelopImage,
+  loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
@@ -15,12 +17,11 @@ import {
   useEntryMetadataForId,
 } from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
-import {
-  DevelopCanvas,
-  type DevelopCanvasHandle,
-} from "@/components/develop/DevelopCanvas";
+import { DevelopCanvas } from "@/components/develop/DevelopCanvas";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
+import { exportDevelopJpeg } from "@/lib/develop/renderer";
+import { useDevelopStore } from "@/stores/develop-store";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 
@@ -57,7 +58,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     metadata,
     applyMetadata: applyDevelopMetadata,
   });
-  const canvasRef = useRef<DevelopCanvasHandle>(null);
+  const developSettings = useDevelopStore((state) => state.settings);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -104,12 +105,11 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   useEntryMetadataShortcuts([entry.id]);
 
   async function exportEditedJpeg() {
+    let exportImage: DevelopImage | null = null;
     try {
       setExportStatus("Exporting...");
-      const blob = await canvasRef.current?.exportJpeg();
-      if (!blob) {
-        throw new Error("Editor preview is not ready.");
-      }
+      exportImage = await loadDevelopExportImage(entry);
+      const blob = await exportDevelopJpeg(exportImage, developSettings);
       const targetPath = await getDarkroomAPI().saveExport(
         entry.name.replace(/\.[^.]+$/, "-darkroom.jpg"),
         await blob.arrayBuffer(),
@@ -119,6 +119,10 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setExportStatus(
         exportError instanceof Error ? exportError.message : "Export failed.",
       );
+    } finally {
+      if (exportImage) {
+        disposeDevelopImage(exportImage);
+      }
     }
   }
 
@@ -200,7 +204,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
           {decoded ? (
             <div className="relative flex-1">
-              <DevelopCanvas ref={canvasRef} image={decoded} alt={entry.name} />
+              <DevelopCanvas image={decoded} alt={entry.name} />
             </div>
           ) : null}
         </div>

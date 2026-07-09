@@ -1,13 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { DevelopRenderer } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -18,12 +12,7 @@ interface DevelopCanvasProps {
   alt: string;
 }
 
-export interface DevelopCanvasHandle {
-  exportJpeg(): Promise<Blob>;
-}
-
-export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>(
-  function DevelopCanvas({ image, alt }, ref) {
+export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<DevelopRenderer | null>(null);
   const settings = useDevelopStore((state) => state.settings);
@@ -31,16 +20,6 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useImperativeHandle(ref, () => ({
-    async exportJpeg() {
-      const renderer = rendererRef.current;
-      if (!renderer || !ready) {
-        throw new Error("Editor preview is not ready to export.");
-      }
-      return renderer.toBlob();
-    },
-  }), [ready]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -169,4 +148,4 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
       ) : null}
     </div>
   );
-});
+}

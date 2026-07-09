@@ -11,6 +11,7 @@
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && npm run build:electron && cross-env ELECTRON_DEV=1 electron .\"",
     "electron:start": "npm run build:electron && electron .",
     "dist": "npm run build && electron-builder",
+    "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mts",
     "lint": "eslint",
     "postinstall": "node scripts/patch-libraw.mjs && node scripts/ensure-electron.mjs"
   },

@@ -1,4 +1,5 @@
 import type { BasicSettings, DevelopPlugin } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/xmp-value";
 
 export const DEFAULT_BASIC_SETTINGS: BasicSettings = {
   exposure: 0,
@@ -12,15 +13,6 @@ export const DEFAULT_BASIC_SETTINGS: BasicSettings = {
   vibrance: 0,
   saturation: 0,
 };
-
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
 
 function isDefault(settings: BasicSettings): boolean {
   return Object.values(settings).every((value) => value === 0);

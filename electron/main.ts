@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -38,7 +39,61 @@ function resolveLibraryFile(rootPath: string, relativePath: string): string {
 function getSidecarPath(rootPath: string, relativePath: string): string {
   const source = resolveLibraryFile(rootPath, relativePath);
   const parsed = path.parse(source);
-  return path.join(parsed.dir, `${parsed.name}.xmp`);
+  const isRaw = parsed.ext.toLowerCase() === ".nef";
+  return path.join(
+    parsed.dir,
+    isRaw ? `${parsed.name}.xmp` : `${parsed.base}.xmp`,
+  );
+}
+
+async function assertRegularSidecar(sidecarPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(sidecarPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Refusing to follow a symbolic-link XMP sidecar.");
+    }
+    if (!stat.isFile()) {
+      throw new Error("XMP sidecar is not a regular file.");
+    }
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function writeSidecarAtomically(
+  sidecarPath: string,
+  contents: string,
+): Promise<void> {
+  await assertRegularSidecar(sidecarPath);
+  const temporaryPath = path.join(
+    path.dirname(sidecarPath),
+    `.${path.basename(sidecarPath)}.${randomUUID()}.tmp`,
+  );
+  try {
+    await fs.writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+    await fs.rename(temporaryPath, sidecarPath);
+  } finally {
+    await fs.unlink(temporaryPath).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return;
+      }
+      throw error;
+    });
+  }
 }
 
 function getPreloadPath(): string {
@@ -161,9 +216,13 @@ function registerIpcHandlers(): void {
     async (_event, rootPath: string, relativePath: string) => {
       const sidecarPath = getSidecarPath(rootPath, relativePath);
       try {
+        const exists = await assertRegularSidecar(sidecarPath);
+        if (!exists) {
+          return null;
+        }
         const [contents, stat] = await Promise.all([
           fs.readFile(sidecarPath, "utf8"),
-          fs.stat(sidecarPath),
+          fs.lstat(sidecarPath),
         ]);
         return { contents, lastModified: stat.mtimeMs };
       } catch (error) {
@@ -191,6 +250,10 @@ function registerIpcHandlers(): void {
       const sidecarPath = getSidecarPath(rootPath, relativePath);
       if (contents === null) {
         try {
+          const exists = await assertRegularSidecar(sidecarPath);
+          if (!exists) {
+            return;
+          }
           await fs.unlink(sidecarPath);
         } catch (error) {
           if (
@@ -206,7 +269,7 @@ function registerIpcHandlers(): void {
         return;
       }
 
-      await fs.writeFile(sidecarPath, contents, "utf8");
+      await writeSidecarAtomically(sidecarPath, contents);
     },
   );
 

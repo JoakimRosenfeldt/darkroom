@@ -5,14 +5,12 @@ export interface DevelopImage {
   width: number;
   height: number;
   metadata: Record<string, unknown>;
-  rgb: Uint8Array | Uint16Array | Uint8ClampedArray;
-  bits: number;
-  colors: number;
   blob: Blob;
   objectUrl: string;
 }
 
 const MAX_DEVELOP_IMAGES = 3;
+const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
 const inFlightImages = new Map<string, Promise<DevelopImage>>();
@@ -56,14 +54,14 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
     return activeLoad;
   }
 
-  const load = decodeEntry(entry, { thumbnail: false }).then((decoded) => {
+  const load = decodeEntry(entry, {
+    thumbnail: true,
+    maxEdge: PREVIEW_MAX_EDGE,
+  }).then((decoded) => {
     const image: DevelopImage = {
       width: decoded.width,
       height: decoded.height,
       metadata: decoded.metadata,
-      rgb: decoded.rgb,
-      bits: decoded.bits,
-      colors: decoded.colors,
       blob: decoded.blob,
       objectUrl: decoded.objectUrl,
     };
@@ -78,6 +76,23 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
   } finally {
     inFlightImages.delete(key);
   }
+}
+
+export async function loadDevelopExportImage(
+  entry: LibraryEntry,
+): Promise<DevelopImage> {
+  const decoded = await decodeEntry(entry, { fullResolution: true });
+  return {
+    width: decoded.width,
+    height: decoded.height,
+    metadata: decoded.metadata,
+    blob: decoded.blob,
+    objectUrl: decoded.objectUrl,
+  };
+}
+
+export function disposeDevelopImage(image: DevelopImage): void {
+  URL.revokeObjectURL(image.objectUrl);
 }
 
 export function preloadDevelopImages(
