@@ -58,6 +58,30 @@ const darkroom = {
   deleteFiles(absolutePaths: string[]): Promise<void> {
     return ipcRenderer.invoke("darkroom:delete-files", absolutePaths);
   },
+
+  readSidecar(
+    rootPath: string,
+    relativePath: string,
+  ): Promise<{ contents: string; lastModified: number } | null> {
+    return ipcRenderer.invoke("darkroom:read-sidecar", rootPath, relativePath);
+  },
+
+  writeSidecar(
+    rootPath: string,
+    relativePath: string,
+    contents: string,
+  ): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:write-sidecar",
+      rootPath,
+      relativePath,
+      contents,
+    );
+  },
+
+  saveExport(suggestedName: string, data: ArrayBuffer): Promise<string | null> {
+    return ipcRenderer.invoke("darkroom:save-export", suggestedName, data);
+  },
 };
 
 contextBridge.exposeInMainWorld("darkroom", darkroom);

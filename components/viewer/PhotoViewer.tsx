@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   loadDevelopImage,
@@ -15,6 +15,12 @@ import {
   useEntryMetadataForId,
 } from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
+import {
+  DevelopCanvas,
+  type DevelopCanvasHandle,
+} from "@/components/develop/DevelopCanvas";
+import { EditPanel } from "@/components/develop/EditPanel";
+import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { Filmstrip } from "./Filmstrip";
 import { MetadataPanel } from "./MetadataPanel";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
@@ -27,6 +33,7 @@ interface PhotoViewerProps {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const rootPath = useLibraryStore((state) => state.rootPath);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
@@ -39,6 +46,21 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
   );
+  const applyDevelopMetadata = useCallback(
+    (patch: Parameters<typeof applyMetadataToEntries>[1]) => {
+      applyMetadataToEntries([entry.id], patch);
+    },
+    [applyMetadataToEntries, entry.id],
+  );
+
+  useDevelopSettingsSync({
+    entry,
+    rootPath,
+    metadata,
+    applyMetadata: applyDevelopMetadata,
+  });
+  const canvasRef = useRef<DevelopCanvasHandle>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   useEffect(() => {
     setSelectedEntryId(entry.id);
@@ -82,6 +104,25 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   }, [entry, entries, activeIndex]);
 
   useEntryMetadataShortcuts([entry.id]);
+
+  async function exportEditedJpeg() {
+    try {
+      setExportStatus("Exporting...");
+      const blob = await canvasRef.current?.exportJpeg();
+      if (!blob) {
+        throw new Error("Editor preview is not ready.");
+      }
+      const targetPath = await getDarkroomAPI().saveExport(
+        entry.name.replace(/\.[^.]+$/, "-darkroom.jpg"),
+        await blob.arrayBuffer(),
+      );
+      setExportStatus(targetPath ? `Exported ${targetPath}` : "Export canceled");
+    } catch (exportError) {
+      setExportStatus(
+        exportError instanceof Error ? exportError.message : "Export failed.",
+      );
+    }
+  }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -131,13 +172,27 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       <div className="flex min-h-0 flex-1">
         <div className="relative flex min-w-0 flex-1 flex-col bg-[#0d0d0d]">
           <div className="absolute right-3 top-3 z-10">
-            <button
-              type="button"
-              onClick={() => setShowMetadata((value) => !value)}
-              className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
-            >
-              {showMetadata ? "Hide Info" : "Show Info"}
-            </button>
+            <div className="flex items-center gap-2">
+              {exportStatus ? (
+                <span className="max-w-64 truncate rounded bg-lr-panel/90 px-2 py-1 text-[11px] text-lr-text-dim">
+                  {exportStatus}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={exportEditedJpeg}
+                className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
+              >
+                Export JPEG
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMetadata((value) => !value)}
+                className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
+              >
+                {showMetadata ? "Hide Info" : "Show Info"}
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -154,17 +209,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
           {decoded ? (
             <div className="relative flex-1">
-              <Image
-                src={decoded.objectUrl}
-                alt={entry.name}
-                fill
-                unoptimized
-                className="object-contain"
-                priority
-              />
+              <DevelopCanvas ref={canvasRef} image={decoded} alt={entry.name} />
             </div>
           ) : null}
         </div>
+
+        {decoded ? <EditPanel /> : null}
 
         {showMetadata && decoded ? (
           <MetadataPanel

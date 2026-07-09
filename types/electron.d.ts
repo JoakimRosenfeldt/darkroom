@@ -23,6 +23,16 @@ export interface DarkroomAPI {
   writeCatalog(catalog: PhotoCatalog): Promise<void>;
   deleteCatalog(rootPath: string): Promise<void>;
   deleteFiles(absolutePaths: string[]): Promise<void>;
+  readSidecar(
+    rootPath: string,
+    relativePath: string,
+  ): Promise<{ contents: string; lastModified: number } | null>;
+  writeSidecar(
+    rootPath: string,
+    relativePath: string,
+    contents: string,
+  ): Promise<void>;
+  saveExport(suggestedName: string, data: ArrayBuffer): Promise<string | null>;
 }
 
 declare global {
