@@ -69,7 +69,7 @@ const darkroom = {
   writeSidecar(
     rootPath: string,
     relativePath: string,
-    contents: string | null,
+    contents: string,
   ): Promise<void> {
     return ipcRenderer.invoke(
       "darkroom:write-sidecar",

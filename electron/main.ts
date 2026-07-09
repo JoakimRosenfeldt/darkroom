@@ -24,6 +24,7 @@ let activeLibraryRoot: string | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
+const MAX_SIDECAR_BYTES = 4 * 1024 * 1024;
 
 async function activateLibraryRoot(rootPath: string): Promise<string> {
   const stat = await fs.stat(rootPath);
@@ -69,13 +70,22 @@ async function resolveLibraryFile(
   const absolute = path.resolve(activeLibraryRoot, relativePath);
   const relative = path.relative(activeLibraryRoot, absolute);
 
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (
+    !relativePath ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
     throw new Error("Sidecar path must stay inside the active library.");
   }
 
   const directory = await fs.realpath(path.dirname(absolute));
   const directoryRelative = path.relative(activeLibraryRoot, directory);
-  if (directoryRelative.startsWith("..") || path.isAbsolute(directoryRelative)) {
+  if (
+    directoryRelative === ".." ||
+    directoryRelative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(directoryRelative)
+  ) {
     throw new Error("Sidecar path cannot follow a symlink outside the library.");
   }
 
@@ -166,12 +176,22 @@ async function createWindow(): Promise<void> {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const expectedOrigin = isDev
+      ? new URL(DEV_SERVER_URL).origin
+      : `http://127.0.0.1:${staticServerPort}`;
+    if (new URL(url).origin !== expectedOrigin) {
+      event.preventDefault();
+    }
+  });
 
   await loadWindow(mainWindow);
 }
 
 function registerIpcHandlers(): void {
-  ipcMain.handle("darkroom:pick-folder", async () => {
+  ipcMain.handle("darkroom:pick-folder", async (event) => {
+    assertTrustedRenderer(event);
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
       title: "Select photo folder",
@@ -188,11 +208,13 @@ function registerIpcHandlers(): void {
     };
   });
 
-  ipcMain.handle("darkroom:scan-folder", async (_event, rootPath: string) => {
+  ipcMain.handle("darkroom:scan-folder", async (event, rootPath: string) => {
+    assertTrustedRenderer(event);
     return scanFolderTree(rootPath);
   });
 
-  ipcMain.handle("darkroom:read-file", async (_event, absolutePath: string) => {
+  ipcMain.handle("darkroom:read-file", async (event, absolutePath: string) => {
+    assertTrustedRenderer(event);
     const buffer = await readFileBuffer(absolutePath);
     return buffer.buffer.slice(
       buffer.byteOffset,
@@ -202,7 +224,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "darkroom:read-file-head",
-    async (_event, absolutePath: string, maxBytes: number) => {
+    async (event, absolutePath: string, maxBytes: number) => {
+      assertTrustedRenderer(event);
       const buffer = await readFileHead(absolutePath, maxBytes);
       return buffer.buffer.slice(
         buffer.byteOffset,
@@ -211,11 +234,13 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle("darkroom:stat-file", async (_event, absolutePath: string) => {
+  ipcMain.handle("darkroom:stat-file", async (event, absolutePath: string) => {
+    assertTrustedRenderer(event);
     return statFile(absolutePath);
   });
 
-  ipcMain.handle("darkroom:get-last-folder", async () => {
+  ipcMain.handle("darkroom:get-last-folder", async (event) => {
+    assertTrustedRenderer(event);
     const folderPath = await settingsStore.getLastFolder();
     if (folderPath) {
       try {
@@ -227,7 +252,8 @@ function registerIpcHandlers(): void {
     return folderPath;
   });
 
-  ipcMain.handle("darkroom:set-last-folder", async (_event, folderPath: string | null) => {
+  ipcMain.handle("darkroom:set-last-folder", async (event, folderPath: string | null) => {
+    assertTrustedRenderer(event);
     if (folderPath) {
       const requestedRoot = await fs.realpath(folderPath);
       if (requestedRoot !== activeLibraryRoot) {
@@ -239,25 +265,30 @@ function registerIpcHandlers(): void {
     await settingsStore.setLastFolder(folderPath);
   });
 
-  ipcMain.handle("darkroom:folder-exists", async (_event, folderPath: string) => {
+  ipcMain.handle("darkroom:folder-exists", async (event, folderPath: string) => {
+    assertTrustedRenderer(event);
     return folderExists(folderPath);
   });
 
-  ipcMain.handle("darkroom:catalog-read", async (_event, rootPath: string) => {
+  ipcMain.handle("darkroom:catalog-read", async (event, rootPath: string) => {
+    assertTrustedRenderer(event);
     return catalogStore.read(rootPath);
   });
 
-  ipcMain.handle("darkroom:catalog-write", async (_event, catalog) => {
+  ipcMain.handle("darkroom:catalog-write", async (event, catalog) => {
+    assertTrustedRenderer(event);
     await catalogStore.write(catalog);
   });
 
-  ipcMain.handle("darkroom:catalog-delete", async (_event, rootPath: string) => {
+  ipcMain.handle("darkroom:catalog-delete", async (event, rootPath: string) => {
+    assertTrustedRenderer(event);
     await catalogStore.remove(rootPath);
   });
 
   ipcMain.handle(
     "darkroom:delete-files",
-    async (_event, absolutePaths: string[]) => {
+    async (event, absolutePaths: string[]) => {
+      assertTrustedRenderer(event);
       await trashFiles(absolutePaths);
     },
   );
@@ -270,10 +301,11 @@ function registerIpcHandlers(): void {
         if (!await assertRegularSidecar(sidecarPath)) {
           return null;
         }
-        const [contents, stat] = await Promise.all([
-          fs.readFile(sidecarPath, "utf8"),
-          fs.lstat(sidecarPath),
-        ]);
+        const stat = await fs.lstat(sidecarPath);
+        if (stat.size > MAX_SIDECAR_BYTES) {
+          throw new Error("XMP sidecar is not a supported file size.");
+        }
+        const contents = await fs.readFile(sidecarPath, "utf8");
         return { contents, lastModified: stat.mtimeMs };
       } catch (error) {
         if (
