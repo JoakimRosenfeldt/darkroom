@@ -48,13 +48,19 @@ export const useDevelopStore = create<DevelopStore>((set) => ({
 
   updatePlugin: (pluginId, patch) =>
     set((state) => ({
-      settings: {
-        ...state.settings,
-        [pluginId]: {
-          ...state.settings[pluginId],
-          ...patch,
-        },
-      },
+      settings:
+        pluginId === "crop"
+          ? createDevelopSettings({
+              ...state.settings,
+              crop: { ...state.settings.crop, ...patch },
+            })
+          : {
+              ...state.settings,
+              [pluginId]: {
+                ...state.settings[pluginId],
+                ...patch,
+              },
+            },
     })),
 
   resetPlugin: (pluginId) =>

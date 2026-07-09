@@ -5,6 +5,7 @@ import {
 import {
   DEFAULT_CROP_SETTINGS,
   isDefaultCrop,
+  normalizeCrop,
 } from "@/lib/develop/plugins/crop";
 import {
   DEFAULT_CURVE_SETTINGS,
@@ -36,7 +37,7 @@ export function createDevelopSettings(
   patch: DevelopSettingsPatch = {},
 ): DevelopSettings {
   return {
-    crop: { ...DEFAULT_CROP_SETTINGS, ...patch.crop },
+    crop: normalizeCrop({ ...DEFAULT_CROP_SETTINGS, ...patch.crop }),
     basic: { ...DEFAULT_BASIC_SETTINGS, ...patch.basic },
     curve: { ...DEFAULT_CURVE_SETTINGS, ...patch.curve },
     mixer: { ...DEFAULT_MIXER_SETTINGS, ...patch.mixer },

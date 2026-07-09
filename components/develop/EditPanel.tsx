@@ -108,10 +108,10 @@ function CropControls() {
         />
         Enable crop
       </label>
-      <SliderRow label="Left" value={crop.x} min={0} max={0.95} step={0.01} onChange={(x) => updatePlugin("crop", { x })} />
-      <SliderRow label="Top" value={crop.y} min={0} max={0.95} step={0.01} onChange={(y) => updatePlugin("crop", { y })} />
-      <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} onChange={(width) => updatePlugin("crop", { width })} />
-      <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} onChange={(height) => updatePlugin("crop", { height })} />
+      <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} onChange={(x) => updatePlugin("crop", { x })} />
+      <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} onChange={(y) => updatePlugin("crop", { y })} />
+      <SliderRow label="Width" value={crop.width} min={0.05} max={1 - crop.x} step={0.01} onChange={(width) => updatePlugin("crop", { width })} />
+      <SliderRow label="Height" value={crop.height} min={0.05} max={1 - crop.y} step={0.01} onChange={(height) => updatePlugin("crop", { height })} />
       <SliderRow label="Straighten" value={crop.angle} min={-45} max={45} step={0.1} suffix="deg" onChange={(angle) => updatePlugin("crop", { angle })} />
       <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} onChange={(perspectiveX) => updatePlugin("crop", { perspectiveX })} />
       <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} onChange={(perspectiveY) => updatePlugin("crop", { perspectiveY })} />

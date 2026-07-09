@@ -19,6 +19,12 @@ interface UseDevelopSettingsSyncOptions {
   applyMetadata: (patch: Partial<EntryMetadata>) => void;
 }
 
+interface PendingPersist {
+  entryId: string;
+  timer: number;
+  flush: () => void;
+}
+
 export function useDevelopSettingsSync({
   entry,
   rootPath,
@@ -32,6 +38,7 @@ export function useDevelopSettingsSync({
   const hydratedEntryId = useRef<string | null>(null);
   const skipNextPersist = useRef(false);
   const metadataRef = useRef(metadata);
+  const pendingPersistRef = useRef<PendingPersist | null>(null);
   const [hydrationVersion, setHydrationVersion] = useState(0);
 
   useEffect(() => {
@@ -122,6 +129,19 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
+    return () => {
+      const pending = pendingPersistRef.current;
+      if (pending?.entryId !== entry.id) {
+        return;
+      }
+
+      window.clearTimeout(pending.timer);
+      pendingPersistRef.current = null;
+      pending.flush();
+    };
+  }, [entry.id]);
+
+  useEffect(() => {
     if (activeEntryId !== entry.id || hydratedEntryId.current !== entry.id) {
       return;
     }
@@ -131,7 +151,7 @@ export function useDevelopSettingsSync({
       return;
     }
 
-    const timer = window.setTimeout(() => {
+    const persist = () => {
       const develop = createDevelopSettings(settings);
       applyMetadata({ develop });
 
@@ -139,25 +159,51 @@ export function useDevelopSettingsSync({
         return;
       }
 
-      setSidecarStatus("saving");
+      const setStatusForEntry = (
+        status: Parameters<typeof setSidecarStatus>[0],
+        error?: string | null,
+      ) => {
+        if (useDevelopStore.getState().activeEntryId === entry.id) {
+          setSidecarStatus(status, error);
+        }
+      };
+
+      setStatusForEntry("saving");
       void writeDevelopSidecar(
         rootPath,
         entry.relativePath,
         develop,
-        metadataRef.current,
+        { rating: metadata.rating, colorLabel: metadata.colorLabel },
       )
-        .then(() => setSidecarStatus("saved"))
+        .then(() => setStatusForEntry("saved"))
         .catch((error) => {
-          setSidecarStatus(
+          setStatusForEntry(
             "error",
             error instanceof Error
               ? error.message
               : "Could not write XMP sidecar.",
           );
         });
+    };
+    const pending: PendingPersist = {
+      entryId: entry.id,
+      timer: 0,
+      flush: persist,
+    };
+    pending.timer = window.setTimeout(() => {
+      if (pendingPersistRef.current === pending) {
+        pendingPersistRef.current = null;
+      }
+      persist();
     }, PERSIST_DEBOUNCE_MS);
+    pendingPersistRef.current = pending;
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(pending.timer);
+      if (pendingPersistRef.current === pending) {
+        pendingPersistRef.current = null;
+      }
+    };
   }, [
     activeEntryId,
     entry.id,

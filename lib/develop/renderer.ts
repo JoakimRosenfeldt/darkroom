@@ -291,6 +291,33 @@ function toFloatRgba(
   return output;
 }
 
+function toUint8Rgba(image: DevelopImage): Uint8Array {
+  const source =
+    image.rgb instanceof Uint16Array
+      ? image.rgb
+      : new Uint16Array(
+          image.rgb.buffer,
+          image.rgb.byteOffset,
+          Math.floor(image.rgb.byteLength / Uint16Array.BYTES_PER_ELEMENT),
+        );
+  const channels = Math.max(1, image.colors);
+  const output = new Uint8Array(image.width * image.height * 4);
+
+  for (
+    let pixel = 0, outputIndex = 0;
+    outputIndex < output.length;
+    pixel += 1, outputIndex += 4
+  ) {
+    const sourceIndex = pixel * channels;
+    output[outputIndex] = Math.round((source[sourceIndex] / 65535) * 255);
+    output[outputIndex + 1] = Math.round((source[sourceIndex + 1] / 65535) * 255);
+    output[outputIndex + 2] = Math.round((source[sourceIndex + 2] / 65535) * 255);
+    output[outputIndex + 3] = 255;
+  }
+
+  return output;
+}
+
 export class DevelopRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
@@ -328,7 +355,10 @@ export class DevelopRenderer {
 
   async setImage(
     image: DevelopImage,
-    { useRawPixels = true }: { useRawPixels?: boolean } = {},
+    {
+      useRawPixels = true,
+      exportRawPixels = false,
+    }: { useRawPixels?: boolean; exportRawPixels?: boolean } = {},
   ): Promise<void> {
     const gl = this.gl;
     const texture = gl.createTexture();
@@ -344,25 +374,45 @@ export class DevelopRenderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
       if (useRawPixels && image.bits > 8 && image.rgb.length > 0) {
-        const size = previewSize(image, gl.getParameter(gl.MAX_TEXTURE_SIZE));
-        const floatLinear = gl.getExtension("OES_texture_float_linear");
-        if (!floatLinear) {
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        if (exportRawPixels) {
+          const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+          if (image.width > maxTextureSize || image.height > maxTextureSize) {
+            throw new Error("Image exceeds this GPU's maximum export texture size.");
+          }
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            image.width,
+            image.height,
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            toUint8Rgba(image),
+          );
+          this.textureWidth = image.width;
+          this.textureHeight = image.height;
+        } else {
+          const size = previewSize(image, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+          const floatLinear = gl.getExtension("OES_texture_float_linear");
+          if (!floatLinear) {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          }
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA32F,
+            size.width,
+            size.height,
+            0,
+            gl.RGBA,
+            gl.FLOAT,
+            toFloatRgba(image, size.width, size.height),
+          );
+          this.textureWidth = size.width;
+          this.textureHeight = size.height;
         }
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.RGBA32F,
-          size.width,
-          size.height,
-          0,
-          gl.RGBA,
-          gl.FLOAT,
-          toFloatRgba(image, size.width, size.height),
-        );
-        this.textureWidth = size.width;
-        this.textureHeight = size.height;
       } else {
         const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
         if (image.width > maxTextureSize || image.height > maxTextureSize) {
@@ -513,7 +563,7 @@ export class DevelopRenderer {
     canvas.height = image.height;
     const renderer = new DevelopRenderer(canvas, { preserveDrawingBuffer: true });
     try {
-      await renderer.setImage(image, { useRawPixels: false });
+      await renderer.setImage(image, { exportRawPixels: true });
       renderer.render(settings, false, false);
       renderer.gl.finish();
       return await renderer.toBlob();

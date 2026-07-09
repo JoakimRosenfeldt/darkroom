@@ -113,12 +113,12 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "\\") {
+      if (event.key === "b" || event.key === "B") {
         setShowOriginal(true);
       }
     }
     function onKeyUp(event: KeyboardEvent) {
-      if (event.key === "\\") {
+      if (event.key === "b" || event.key === "B") {
         setShowOriginal(false);
       }
     }
