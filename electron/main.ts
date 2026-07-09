@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -19,26 +20,86 @@ const DEV_SERVER_URL = process.env.DARKROOM_DEV_URL ?? "http://localhost:3000";
 
 let mainWindow: BrowserWindow | null = null;
 let staticServerPort: number | null = null;
+let activeLibraryRoot: string | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
 
-function resolveLibraryFile(rootPath: string, relativePath: string): string {
-  const root = path.resolve(rootPath);
-  const absolute = path.resolve(root, relativePath);
-  const relative = path.relative(root, absolute);
+async function activateLibraryRoot(rootPath: string): Promise<string> {
+  const stat = await fs.stat(rootPath);
+  if (!stat.isDirectory()) {
+    throw new Error("Library root must be a directory.");
+  }
+  const root = await fs.realpath(rootPath);
+  activeLibraryRoot = root;
+  return root;
+}
+
+function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
+  if (event.sender !== mainWindow?.webContents) {
+    throw new Error("Desktop API is only available to the main Darkroom window.");
+  }
+  if (!event.senderFrame) {
+    throw new Error("Desktop API request has no renderer frame.");
+  }
+
+  const expectedOrigin = isDev
+    ? new URL(DEV_SERVER_URL).origin
+    : `http://127.0.0.1:${staticServerPort}`;
+  if (new URL(event.senderFrame.url).origin !== expectedOrigin) {
+    throw new Error("Desktop API request came from an untrusted origin.");
+  }
+}
+
+async function resolveLibraryFile(
+  event: IpcMainInvokeEvent,
+  rootPath: string,
+  relativePath: string,
+): Promise<string> {
+  assertTrustedRenderer(event);
+  if (!activeLibraryRoot) {
+    throw new Error("No approved library folder is open.");
+  }
+
+  const requestedRoot = await fs.realpath(rootPath);
+  if (requestedRoot !== activeLibraryRoot) {
+    throw new Error("Sidecar path must use the active library.");
+  }
+
+  const absolute = path.resolve(activeLibraryRoot, relativePath);
+  const relative = path.relative(activeLibraryRoot, absolute);
 
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Sidecar path must stay inside the active library.");
   }
 
-  return absolute;
+  const directory = await fs.realpath(path.dirname(absolute));
+  const directoryRelative = path.relative(activeLibraryRoot, directory);
+  if (directoryRelative.startsWith("..") || path.isAbsolute(directoryRelative)) {
+    throw new Error("Sidecar path cannot follow a symlink outside the library.");
+  }
+
+  return path.join(directory, path.basename(absolute));
 }
 
-function getSidecarPath(rootPath: string, relativePath: string): string {
-  const source = resolveLibraryFile(rootPath, relativePath);
+async function getSidecarPath(
+  event: IpcMainInvokeEvent,
+  rootPath: string,
+  relativePath: string,
+): Promise<string> {
+  const source = await resolveLibraryFile(event, rootPath, relativePath);
   const parsed = path.parse(source);
   return path.join(parsed.dir, `${parsed.name}.xmp`);
+}
+
+async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, contents, "utf8");
+    await fs.rename(temporaryPath, filePath);
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 function getPreloadPath(): string {
@@ -91,7 +152,7 @@ function registerIpcHandlers(): void {
       return null;
     }
 
-    const folderPath = result.filePaths[0]!;
+    const folderPath = await activateLibraryRoot(result.filePaths[0]!);
     return {
       path: folderPath,
       name: getFolderName(folderPath),
@@ -126,10 +187,26 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("darkroom:get-last-folder", async () => {
-    return settingsStore.getLastFolder();
+    const folderPath = await settingsStore.getLastFolder();
+    if (folderPath) {
+      try {
+        await activateLibraryRoot(folderPath);
+      } catch {
+        activeLibraryRoot = null;
+      }
+    }
+    return folderPath;
   });
 
   ipcMain.handle("darkroom:set-last-folder", async (_event, folderPath: string | null) => {
+    if (folderPath) {
+      const requestedRoot = await fs.realpath(folderPath);
+      if (requestedRoot !== activeLibraryRoot) {
+        throw new Error("Library folder was not selected through Darkroom.");
+      }
+    } else {
+      activeLibraryRoot = null;
+    }
     await settingsStore.setLastFolder(folderPath);
   });
 
@@ -158,8 +235,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "darkroom:read-sidecar",
-    async (_event, rootPath: string, relativePath: string) => {
-      const sidecarPath = getSidecarPath(rootPath, relativePath);
+    async (event, rootPath: string, relativePath: string) => {
+      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
       try {
         const [contents, stat] = await Promise.all([
           fs.readFile(sidecarPath, "utf8"),
@@ -183,12 +260,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "darkroom:write-sidecar",
     async (
-      _event,
+      event,
       rootPath: string,
       relativePath: string,
       contents: string | null,
     ) => {
-      const sidecarPath = getSidecarPath(rootPath, relativePath);
+      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
       if (contents === null) {
         try {
           await fs.unlink(sidecarPath);
@@ -206,16 +283,20 @@ function registerIpcHandlers(): void {
         return;
       }
 
-      await fs.writeFile(sidecarPath, contents, "utf8");
+      await writeFileAtomically(sidecarPath, contents);
     },
   );
 
   ipcMain.handle(
     "darkroom:save-export",
-    async (_event, suggestedName: string, data: ArrayBuffer) => {
+    async (event, suggestedName: string, data: ArrayBuffer) => {
+      assertTrustedRenderer(event);
+      if (data.byteLength > 512 * 1024 * 1024) {
+        throw new Error("Export is too large.");
+      }
       const result = await dialog.showSaveDialog({
         title: "Export edited photo",
-        defaultPath: suggestedName,
+        defaultPath: path.basename(suggestedName),
         filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
       });
 

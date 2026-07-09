@@ -6,6 +6,7 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
+  loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
@@ -23,6 +24,7 @@ import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
+import { isEditableTarget } from "@/hooks/is-editable-target";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -104,9 +106,11 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   useEntryMetadataShortcuts([entry.id]);
 
   async function exportEditedJpeg() {
+    let exportImage: DevelopImage | null = null;
     try {
       setExportStatus("Exporting...");
-      const blob = await canvasRef.current?.exportJpeg();
+      exportImage = await loadDevelopExportImage(entry);
+      const blob = await canvasRef.current?.exportJpeg(exportImage);
       if (!blob) {
         throw new Error("Editor preview is not ready.");
       }
@@ -119,11 +123,18 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setExportStatus(
         exportError instanceof Error ? exportError.message : "Export failed.",
       );
+    } finally {
+      if (exportImage) {
+        URL.revokeObjectURL(exportImage.objectUrl);
+      }
     }
   }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
         router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
       }

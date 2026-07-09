@@ -18,7 +18,7 @@ interface DevelopCanvasProps {
 }
 
 export interface DevelopCanvasHandle {
-  exportJpeg(): Promise<Blob>;
+  exportJpeg(image: DevelopImage): Promise<Blob>;
 }
 
 export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>(
@@ -32,14 +32,14 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
   const [error, setError] = useState<string | null>(null);
 
   useImperativeHandle(ref, () => ({
-    async exportJpeg() {
+    async exportJpeg(exportImage) {
       const renderer = rendererRef.current;
       if (!renderer || !ready) {
         throw new Error("Editor preview is not ready to export.");
       }
-      return renderer.toBlob();
+      return renderer.exportJpeg(exportImage, settings);
     },
-  }), [ready]);
+  }), [ready, settings]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -99,8 +99,8 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
         return;
       }
       currentRenderer.resize(
-        currentContainer.clientWidth,
-        currentContainer.clientHeight,
+        currentContainer.clientWidth * window.devicePixelRatio,
+        currentContainer.clientHeight * window.devicePixelRatio,
       );
       currentRenderer.render(settings, showOriginal);
     }

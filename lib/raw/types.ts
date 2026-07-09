@@ -1,5 +1,6 @@
 export interface DecodeOptions {
   thumbnail?: boolean;
+  fullResolution?: boolean;
   maxEdge?: number;
   priority?: number;
   signal?: AbortSignal;

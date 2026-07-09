@@ -203,6 +203,13 @@ export async function decodeWithLibRaw(
     throw new Error("Could not decode RAW thumbnail");
   }
 
+  if (options.fullResolution) {
+    const fullResolution = await decodeOpenedRaw(input, options, false);
+    if (fullResolution) {
+      return fullResolution;
+    }
+  }
+
   const preview = await decodeOpenedRaw(input, options, true);
   if (preview) {
     return preview;

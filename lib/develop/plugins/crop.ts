@@ -1,4 +1,5 @@
 import type { CropSettings, DevelopPlugin } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/number-prop";
 
 export const DEFAULT_CROP_SETTINGS: CropSettings = {
   enabled: false,
@@ -11,15 +12,6 @@ export const DEFAULT_CROP_SETTINGS: CropSettings = {
   perspectiveY: 0,
   distortion: 0,
 };
-
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
 
 function isDefault(settings: CropSettings): boolean {
   return (
@@ -60,12 +52,15 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
       };
     },
     read: (props) => {
+      if (props["crs:HasCrop"] !== "True") {
+        return { ...DEFAULT_CROP_SETTINGS };
+      }
       const left = numberProp(props, "crs:CropLeft") ?? 0;
       const top = numberProp(props, "crs:CropTop") ?? 0;
       const right = numberProp(props, "crs:CropRight") ?? 1;
       const bottom = numberProp(props, "crs:CropBottom") ?? 1;
       return {
-        enabled: props["crs:HasCrop"] === "True" || left > 0 || top > 0,
+        enabled: true,
         x: left,
         y: top,
         width: Math.max(0.05, right - left),

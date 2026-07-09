@@ -4,6 +4,7 @@ import type {
   MixerColor,
   MixerSettings,
 } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/number-prop";
 
 export const MIXER_COLORS: MixerColor[] = [
   "red",
@@ -36,15 +37,6 @@ const DEFAULT_BAND: MixerBandSettings = {
 export const DEFAULT_MIXER_SETTINGS = Object.fromEntries(
   MIXER_COLORS.map((color) => [color, { ...DEFAULT_BAND }]),
 ) as MixerSettings;
-
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
 
 function isDefault(settings: MixerSettings): boolean {
   return MIXER_COLORS.every((color) =>

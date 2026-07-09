@@ -25,9 +25,49 @@ function collectDevelopProps(settings: DevelopSettings): Record<string, string> 
   return props;
 }
 
+const OWNED_XMP_KEYS = (() => {
+  const settings = createDevelopSettings();
+  settings.crop.enabled = true;
+  return new Set([
+    ...Object.keys(collectDevelopProps(settings)),
+    "xmp:Rating",
+    "xmp:Label",
+  ]);
+})();
+
+function getDescription(doc: Document): Element | null {
+  return doc.getElementsByTagNameNS("*", "Description")[0] ?? null;
+}
+
+function mergeDevelopProps(
+  existing: string,
+  props: Record<string, string>,
+): string {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(existing, "application/xml");
+  if (doc.querySelector("parsererror")) {
+    throw new Error("Could not parse existing XMP sidecar; refusing to overwrite it.");
+  }
+
+  const description = getDescription(doc);
+  if (!description) {
+    throw new Error("Existing XMP sidecar has no rdf:Description; refusing to overwrite it.");
+  }
+
+  for (const key of OWNED_XMP_KEYS) {
+    description.removeAttribute(key);
+  }
+  for (const [key, value] of Object.entries(props)) {
+    description.setAttribute(key, value);
+  }
+
+  return new XMLSerializer().serializeToString(doc);
+}
+
 export function serializeDevelopXmp(
   settings: DevelopSettings,
   metadata?: Pick<EntryMetadata, "rating" | "colorLabel">,
+  existing?: string | null,
 ): string {
   const props: Record<string, string> = {
     ...collectDevelopProps(settings),
@@ -38,6 +78,10 @@ export function serializeDevelopXmp(
   }
   if (metadata?.colorLabel) {
     props["xmp:Label"] = metadata.colorLabel;
+  }
+
+  if (existing) {
+    return mergeDevelopProps(existing, props);
   }
 
   const attributes = Object.entries(props)
@@ -65,7 +109,7 @@ function extractAttributes(xml: string): Record<string, string> {
     throw new Error("Could not parse XMP sidecar.");
   }
 
-  const description = doc.querySelector("Description");
+  const description = getDescription(doc);
   if (!description) {
     return {};
   }

@@ -32,6 +32,9 @@ export function useDevelopSettingsSync({
   const hydratedEntryId = useRef<string | null>(null);
   const skipNextPersist = useRef(false);
   const metadataRef = useRef(metadata);
+  const sidecarSourceRef = useRef<string | null>(null);
+  const sidecarWritableRef = useRef(true);
+  const sidecarWritesRef = useRef(Promise.resolve());
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -41,6 +44,8 @@ export function useDevelopSettingsSync({
     let active = true;
     skipNextPersist.current = true;
     hydratedEntryId.current = null;
+    sidecarSourceRef.current = null;
+    sidecarWritableRef.current = true;
     setActiveEntry(entry.id, metadataRef.current.develop);
     const hydrationStartHash = developSettingsHash(
       useDevelopStore.getState().settings,
@@ -64,6 +69,7 @@ export function useDevelopSettingsSync({
         if (!active) {
           return;
         }
+        sidecarSourceRef.current = sidecar?.source ?? null;
 
         const hasLocalEdits =
           developSettingsHash(useDevelopStore.getState().settings) !==
@@ -92,6 +98,7 @@ export function useDevelopSettingsSync({
         setSidecarStatus("saved");
       } catch (error) {
         if (active) {
+          sidecarWritableRef.current = false;
           setSidecarStatus(
             "error",
             error instanceof Error ? error.message : "Could not read XMP sidecar.",
@@ -128,22 +135,33 @@ export function useDevelopSettingsSync({
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      const develop = createDevelopSettings(settings);
-      applyMetadata({ develop });
+    const develop = createDevelopSettings(settings);
+    applyMetadata({ develop });
 
-      if (!rootPath) {
+    const timer = window.setTimeout(() => {
+      if (!rootPath || !sidecarWritableRef.current) {
         return;
       }
 
       setSidecarStatus("saving");
-      void writeDevelopSidecar(
-        rootPath,
-        entry.relativePath,
-        develop,
-        metadataRef.current,
-      )
-        .then(() => setSidecarStatus("saved"))
+      const write = () =>
+        writeDevelopSidecar(
+          rootPath,
+          entry.relativePath,
+          develop,
+          metadataRef.current,
+          sidecarSourceRef.current,
+        );
+      const queuedWrite = sidecarWritesRef.current.then(write, write);
+      sidecarWritesRef.current = queuedWrite.then(
+        () => undefined,
+        () => undefined,
+      );
+      void queuedWrite
+        .then((contents) => {
+          sidecarSourceRef.current = contents;
+          setSidecarStatus("saved");
+        })
         .catch((error) => {
           setSidecarStatus(
             "error",

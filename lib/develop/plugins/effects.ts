@@ -1,4 +1,5 @@
 import type { DevelopPlugin, EffectsSettings } from "@/lib/develop/types";
+import { numberProp } from "@/lib/develop/number-prop";
 
 export const DEFAULT_EFFECTS_SETTINGS: EffectsSettings = {
   vignette: 0,
@@ -6,15 +7,6 @@ export const DEFAULT_EFFECTS_SETTINGS: EffectsSettings = {
   sharpening: 0,
   noiseReduction: 0,
 };
-
-function numberProp(props: Record<string, string>, key: string): number | null {
-  const raw = props[key];
-  if (raw === undefined) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
 
 function isDefault(settings: EffectsSettings): boolean {
   return Object.values(settings).every((value) => value === 0);

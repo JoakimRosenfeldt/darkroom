@@ -242,10 +242,10 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
 }
 
 function toFloatRgba(image: DevelopImage): Float32Array {
-  const source =
-    image.rgb instanceof Uint16Array
-      ? image.rgb
-      : new Uint16Array(image.rgb.buffer);
+  const source = image.rgb;
+  if (!source) {
+    throw new Error("16-bit image data is unavailable.");
+  }
   const channels = Math.max(1, image.colors);
   const maxValue = image.bits > 8 ? 65535 : 255;
   const output = new Float32Array(image.width * image.height * 4);
@@ -264,12 +264,16 @@ export class DevelopRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
+  private readonly buffer: WebGLBuffer;
   private texture: WebGLTexture | null = null;
   private textureWidth = 1;
   private textureHeight = 1;
 
-  constructor(canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true });
+  constructor(
+    canvas: HTMLCanvasElement,
+    preserveDrawingBuffer = false,
+  ) {
+    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer });
     if (!gl) {
       throw new Error("WebGL2 is not available.");
     }
@@ -277,18 +281,22 @@ export class DevelopRenderer {
     this.canvas = canvas;
     this.gl = gl;
     this.program = createProgram(gl);
-    this.configureGeometry();
+    this.buffer = this.configureGeometry();
   }
 
-  private configureGeometry(): void {
+  private configureGeometry(): WebGLBuffer {
     const gl = this.gl;
     gl.useProgram(this.program);
     const buffer = gl.createBuffer();
+    if (!buffer) {
+      throw new Error("Could not create WebGL buffer.");
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, QUAD, gl.STATIC_DRAW);
     const location = gl.getAttribLocation(this.program, "a_position");
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
+    return buffer;
   }
 
   async setImage(image: DevelopImage): Promise<void> {
@@ -304,7 +312,7 @@ export class DevelopRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    if (image.bits > 8 && image.rgb.length > 0) {
+    if (image.bits > 8 && image.rgb?.length) {
       const floatLinear = gl.getExtension("OES_texture_float_linear");
       if (!floatLinear) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -344,7 +352,11 @@ export class DevelopRenderer {
     }
   }
 
-  render(settings: DevelopSettings, showOriginal: boolean): void {
+  render(
+    settings: DevelopSettings,
+    showOriginal: boolean,
+    contain = true,
+  ): void {
     const gl = this.gl;
     if (!this.texture) {
       return;
@@ -353,7 +365,9 @@ export class DevelopRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.applyContainViewport();
+    if (contain) {
+      this.applyContainViewport();
+    }
     gl.useProgram(this.program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -370,9 +384,18 @@ export class DevelopRenderer {
       settings.crop.height,
     );
     this.uniform1f("u_crop_angle", settings.crop.angle);
-    this.uniform1f("u_perspective_x", settings.crop.perspectiveX);
-    this.uniform1f("u_perspective_y", settings.crop.perspectiveY);
-    this.uniform1f("u_distortion", settings.crop.distortion);
+    this.uniform1f(
+      "u_perspective_x",
+      settings.crop.enabled ? settings.crop.perspectiveX : 0,
+    );
+    this.uniform1f(
+      "u_perspective_y",
+      settings.crop.enabled ? settings.crop.perspectiveY : 0,
+    );
+    this.uniform1f(
+      "u_distortion",
+      settings.crop.enabled ? settings.crop.distortion : 0,
+    );
 
     this.uniform1f("u_exposure", settings.basic.exposure);
     this.uniform1f("u_contrast", settings.basic.contrast);
@@ -422,7 +445,31 @@ export class DevelopRenderer {
       this.gl.deleteTexture(this.texture);
       this.texture = null;
     }
+    this.gl.deleteBuffer(this.buffer);
     this.gl.deleteProgram(this.program);
+  }
+
+  async exportJpeg(
+    image: DevelopImage,
+    settings: DevelopSettings,
+  ): Promise<Blob> {
+    const canvas = document.createElement("canvas");
+    const width = settings.crop.enabled
+      ? Math.max(1, Math.round(image.width * settings.crop.width))
+      : image.width;
+    const height = settings.crop.enabled
+      ? Math.max(1, Math.round(image.height * settings.crop.height))
+      : image.height;
+    const renderer = new DevelopRenderer(canvas, true);
+
+    try {
+      await renderer.setImage(image);
+      renderer.resize(width, height);
+      renderer.render(settings, false, false);
+      return await renderer.toBlob();
+    } finally {
+      renderer.dispose();
+    }
   }
 
   toBlob(type = "image/jpeg", quality = 0.92): Promise<Blob> {
