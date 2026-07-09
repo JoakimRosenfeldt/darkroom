@@ -1,20 +1,20 @@
 import type { EntryMetadata } from "@/lib/catalog/types";
 import { COLOR_LABELS } from "@/lib/catalog/types";
-import { DEVELOP_PLUGINS, createDevelopSettings } from "@/lib/develop/registry";
+import {
+  DEVELOP_PLUGINS,
+  createDevelopSettings,
+  isDefaultDevelopSettings,
+} from "@/lib/develop/registry";
 import type { DevelopSettings } from "@/lib/develop/types";
+
+const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const CRS_NS = "http://ns.adobe.com/camera-raw-settings/1.0/";
+const XMP_NS = "http://ns.adobe.com/xap/1.0/";
 
 export interface ParsedDevelopXmp {
   settings: DevelopSettings;
   rating?: EntryMetadata["rating"];
   colorLabel?: EntryMetadata["colorLabel"];
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
 }
 
 function collectDevelopProps(settings: DevelopSettings): Record<string, string> {
@@ -25,95 +25,65 @@ function collectDevelopProps(settings: DevelopSettings): Record<string, string> 
   return props;
 }
 
-const OWNED_XMP_KEYS = (() => {
-  const settings = createDevelopSettings();
-  settings.crop.enabled = true;
-  return new Set([
-    ...Object.keys(collectDevelopProps(settings)),
-    "xmp:Rating",
-    "xmp:Label",
-  ]);
-})();
-
-function getDescription(doc: Document): Element | null {
-  return doc.getElementsByTagNameNS("*", "Description")[0] ?? null;
+function createXmpDocument(): XMLDocument {
+  return new DOMParser().parseFromString(
+    `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="${RDF_NS}"><rdf:Description xmlns:crs="${CRS_NS}" xmlns:xmp="${XMP_NS}"/></rdf:RDF></x:xmpmeta>`,
+    "application/xml",
+  );
 }
 
-function mergeDevelopProps(
-  existing: string,
-  props: Record<string, string>,
-): string {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(existing, "application/xml");
-  if (doc.querySelector("parsererror")) {
-    throw new Error("Could not parse existing XMP sidecar; refusing to overwrite it.");
-  }
-
-  const description = getDescription(doc);
+function descriptionFor(doc: XMLDocument): Element {
+  const description = doc.getElementsByTagNameNS(RDF_NS, "Description")[0];
   if (!description) {
-    throw new Error("Existing XMP sidecar has no rdf:Description; refusing to overwrite it.");
+    throw new Error("Could not find an XMP description.");
+  }
+  return description;
+}
+
+function parseXmpDocument(xml: string): XMLDocument {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  if (doc.querySelector("parsererror")) {
+    throw new Error("Could not parse XMP sidecar.");
+  }
+  descriptionFor(doc);
+  return doc;
+}
+
+export function serializeDevelopXmp(
+  settings: DevelopSettings,
+  metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
+  existingContents: string | null,
+): string | null {
+  if (
+    existingContents === null &&
+    isDefaultDevelopSettings(settings) &&
+    metadata.rating === 0 &&
+    metadata.colorLabel === null
+  ) {
+    return null;
   }
 
-  for (const key of OWNED_XMP_KEYS) {
-    description.removeAttribute(key);
+  const doc = existingContents ? parseXmpDocument(existingContents) : createXmpDocument();
+  const description = descriptionFor(doc);
+  description.setAttribute("xmlns:crs", CRS_NS);
+  description.setAttribute("xmlns:xmp", XMP_NS);
+
+  for (const [key, value] of Object.entries(collectDevelopProps(settings))) {
+    description.setAttributeNS(CRS_NS, key, value);
   }
-  for (const [key, value] of Object.entries(props)) {
-    description.setAttribute(key, value);
+  description.setAttributeNS(XMP_NS, "xmp:Rating", String(metadata.rating));
+  if (metadata.colorLabel) {
+    description.setAttributeNS(XMP_NS, "xmp:Label", metadata.colorLabel);
+  } else {
+    description.removeAttributeNS(XMP_NS, "Label");
+    description.removeAttribute("xmp:Label");
   }
 
   return new XMLSerializer().serializeToString(doc);
 }
 
-export function serializeDevelopXmp(
-  settings: DevelopSettings,
-  metadata?: Pick<EntryMetadata, "rating" | "colorLabel">,
-  existing?: string | null,
-): string {
-  const props: Record<string, string> = {
-    ...collectDevelopProps(settings),
-  };
-
-  if (metadata?.rating) {
-    props["xmp:Rating"] = String(metadata.rating);
-  }
-  if (metadata?.colorLabel) {
-    props["xmp:Label"] = metadata.colorLabel;
-  }
-
-  if (existing) {
-    return mergeDevelopProps(existing, props);
-  }
-
-  const attributes = Object.entries(props)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `   ${key}="${escapeXml(value)}"`)
-    .join("\n");
-
-  return `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
- <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-  <rdf:Description
-   xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-   xmlns:xmp="http://ns.adobe.com/xap/1.0/"
-${attributes}
-  />
- </rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>`;
-}
-
 function extractAttributes(xml: string): Record<string, string> {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xml, "application/xml");
-  if (doc.querySelector("parsererror")) {
-    throw new Error("Could not parse XMP sidecar.");
-  }
-
-  const description = getDescription(doc);
-  if (!description) {
-    return {};
-  }
-
+  const description = descriptionFor(parseXmpDocument(xml));
   return Array.from(description.attributes).reduce<Record<string, string>>(
     (props, attribute) => {
       if (attribute.name.startsWith("crs:") || attribute.name.startsWith("xmp:")) {

@@ -3,10 +3,8 @@
 import { useEffect, useRef } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { LibraryEntry } from "@/lib/fs/types";
-import {
-  createDevelopSettings,
-  developSettingsHash,
-} from "@/lib/develop/registry";
+import { createDevelopSettings, developSettingsHash } from "@/lib/develop/registry";
+import type { DevelopSettings } from "@/lib/develop/types";
 import { readDevelopSidecar, writeDevelopSidecar } from "@/lib/develop/sidecar";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -19,6 +17,17 @@ interface UseDevelopSettingsSyncOptions {
   applyMetadata: (patch: Partial<EntryMetadata>) => void;
 }
 
+function snapshot(
+  settings: DevelopSettings,
+  metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
+): string {
+  return JSON.stringify({
+    settings,
+    rating: metadata.rating,
+    colorLabel: metadata.colorLabel,
+  });
+}
+
 export function useDevelopSettingsSync({
   entry,
   rootPath,
@@ -29,12 +38,16 @@ export function useDevelopSettingsSync({
   const activeEntryId = useDevelopStore((state) => state.activeEntryId);
   const setActiveEntry = useDevelopStore((state) => state.setActiveEntry);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
-  const hydratedEntryId = useRef<string | null>(null);
-  const skipNextPersist = useRef(false);
+  const sidecarStatus = useDevelopStore((state) => state.sidecarStatus);
   const metadataRef = useRef(metadata);
-  const sidecarSourceRef = useRef<string | null>(null);
-  const sidecarWritableRef = useRef(true);
-  const sidecarWritesRef = useRef(Promise.resolve());
+  const persistedSnapshotRef = useRef<string | null>(null);
+  const sidecarContentsRef = useRef<{ entryId: string; contents: string | null }>({
+    entryId: "",
+    contents: null,
+  });
+  const pendingWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const hydratedEntryIdRef = useRef<string | null>(null);
+  const canWriteSidecarRef = useRef(true);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -42,77 +55,80 @@ export function useDevelopSettingsSync({
 
   useEffect(() => {
     let active = true;
-    skipNextPersist.current = true;
-    hydratedEntryId.current = null;
-    sidecarSourceRef.current = null;
-    sidecarWritableRef.current = true;
+    hydratedEntryIdRef.current = null;
     setActiveEntry(entry.id, metadataRef.current.develop);
-    const hydrationStartHash = developSettingsHash(
-      useDevelopStore.getState().settings,
-    );
+    setSidecarStatus("loading");
+    const initialSettings = useDevelopStore.getState().settings;
+    const initialSnapshot = snapshot(initialSettings, metadataRef.current);
+    sidecarContentsRef.current = { entryId: entry.id, contents: null };
+    canWriteSidecarRef.current = true;
 
-    async function hydrateFromSidecar() {
-      if (!rootPath) {
-        if (
-          developSettingsHash(useDevelopStore.getState().settings) !==
-          hydrationStartHash
-        ) {
-          skipNextPersist.current = false;
-        }
-        hydratedEntryId.current = entry.id;
-        return;
-      }
+    async function hydrate(): Promise<void> {
+      let sidecarContents: string | null = null;
+      let persisted = initialSnapshot;
 
-      setSidecarStatus("loading");
       try {
-        const sidecar = await readDevelopSidecar(rootPath, entry.relativePath);
-        if (!active) {
-          return;
-        }
-        sidecarSourceRef.current = sidecar?.source ?? null;
-
-        const hasLocalEdits =
-          developSettingsHash(useDevelopStore.getState().settings) !==
-          hydrationStartHash;
-        if (
-          sidecar &&
-          !hasLocalEdits &&
-          sidecar.lastModified > metadataRef.current.updatedAt
-        ) {
-          const nextMetadata: Partial<EntryMetadata> = {
-            develop: sidecar.settings,
-          };
-          if (sidecar.rating !== undefined) {
-            nextMetadata.rating = sidecar.rating;
+        if (rootPath) {
+          const sidecar = await readDevelopSidecar(rootPath, entry.relativePath);
+          if (!active) {
+            return;
           }
-          if (sidecar.colorLabel !== undefined) {
-            nextMetadata.colorLabel = sidecar.colorLabel;
+          sidecarContents = sidecar?.contents ?? null;
+
+          const hasLocalChanges =
+            developSettingsHash(useDevelopStore.getState().settings) !==
+            developSettingsHash(initialSettings);
+          if (
+            sidecar &&
+            !hasLocalChanges &&
+            sidecar.lastModified > metadataRef.current.updatedAt
+          ) {
+            const nextMetadata: Partial<EntryMetadata> = {
+              develop: sidecar.settings,
+              ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+              ...(sidecar.colorLabel === undefined
+                ? {}
+                : { colorLabel: sidecar.colorLabel }),
+            };
+            setActiveEntry(entry.id, sidecar.settings);
+            applyMetadata(nextMetadata);
+            persisted = snapshot(sidecar.settings, {
+              rating: sidecar.rating ?? metadataRef.current.rating,
+              colorLabel: sidecar.colorLabel ?? metadataRef.current.colorLabel,
+            });
+          } else {
+            const currentSnapshot = snapshot(
+              useDevelopStore.getState().settings,
+              metadataRef.current,
+            );
+            persisted = currentSnapshot === initialSnapshot
+              ? currentSnapshot
+              : initialSnapshot;
           }
-          skipNextPersist.current = true;
-          setActiveEntry(entry.id, sidecar.settings);
-          applyMetadata(nextMetadata);
-        } else if (hasLocalEdits) {
-          skipNextPersist.current = false;
         }
 
-        setSidecarStatus("saved");
+        if (active) {
+          sidecarContentsRef.current = { entryId: entry.id, contents: sidecarContents };
+          persistedSnapshotRef.current = persisted;
+          setSidecarStatus("saved");
+        }
       } catch (error) {
         if (active) {
-          sidecarWritableRef.current = false;
+          canWriteSidecarRef.current = false;
           setSidecarStatus(
             "error",
             error instanceof Error ? error.message : "Could not read XMP sidecar.",
           );
+          persistedSnapshotRef.current = null;
         }
       } finally {
         if (active) {
-          hydratedEntryId.current = entry.id;
+          hydratedEntryIdRef.current = entry.id;
         }
       }
     }
 
-    void hydrateFromSidecar();
-
+    void hydrate();
     return () => {
       active = false;
     };
@@ -126,61 +142,79 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
-    if (activeEntryId !== entry.id || hydratedEntryId.current !== entry.id) {
+    if (
+      activeEntryId !== entry.id ||
+      hydratedEntryIdRef.current !== entry.id
+    ) {
       return;
     }
 
-    if (skipNextPersist.current) {
-      skipNextPersist.current = false;
+    const nextSnapshot = snapshot(settings, metadata);
+    if (nextSnapshot === persistedSnapshotRef.current) {
+      return;
+    }
+    if (rootPath && !canWriteSidecarRef.current) {
       return;
     }
 
-    const develop = createDevelopSettings(settings);
-    applyMetadata({ develop });
-
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!rootPath || !sidecarWritableRef.current) {
+      const develop = createDevelopSettings(settings);
+      applyMetadata({ develop });
+
+      if (!rootPath) {
+        persistedSnapshotRef.current = nextSnapshot;
         return;
       }
 
       setSidecarStatus("saving");
-      const write = () =>
-        writeDevelopSidecar(
+      const write = async (): Promise<void> => {
+        if (cancelled) {
+          return;
+        }
+        const sidecar = sidecarContentsRef.current;
+        const contents = await writeDevelopSidecar(
           rootPath,
           entry.relativePath,
           develop,
-          metadataRef.current,
-          sidecarSourceRef.current,
+          metadata,
+          sidecar.entryId === entry.id ? sidecar.contents : null,
         );
-      const queuedWrite = sidecarWritesRef.current.then(write, write);
-      sidecarWritesRef.current = queuedWrite.then(
-        () => undefined,
-        () => undefined,
-      );
-      void queuedWrite
-        .then((contents) => {
-          sidecarSourceRef.current = contents;
+        sidecarContentsRef.current = { entryId: entry.id, contents };
+        if (
+          useDevelopStore.getState().activeEntryId === entry.id &&
+          snapshot(useDevelopStore.getState().settings, metadataRef.current) ===
+            nextSnapshot
+        ) {
+          persistedSnapshotRef.current = nextSnapshot;
           setSidecarStatus("saved");
-        })
-        .catch((error) => {
+        }
+      };
+
+      const queued = pendingWriteRef.current.then(write, write);
+      pendingWriteRef.current = queued.catch(() => undefined);
+      void queued.catch((error) => {
+        if (!cancelled) {
           setSidecarStatus(
             "error",
-            error instanceof Error
-              ? error.message
-              : "Could not write XMP sidecar.",
+            error instanceof Error ? error.message : "Could not write XMP sidecar.",
           );
-        });
+        }
+      });
     }, PERSIST_DEBOUNCE_MS);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [
     activeEntryId,
     entry.id,
     entry.relativePath,
+    metadata,
     rootPath,
+    sidecarStatus,
     settings,
-    metadata.rating,
-    metadata.colorLabel,
     applyMetadata,
     setSidecarStatus,
   ]);

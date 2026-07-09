@@ -1,5 +1,5 @@
 import type { CropSettings, DevelopPlugin } from "@/lib/develop/types";
-import { numberProp } from "@/lib/develop/number-prop";
+import { numberProp } from "@/lib/develop/xmp-value";
 
 export const DEFAULT_CROP_SETTINGS: CropSettings = {
   enabled: false,
@@ -11,6 +11,9 @@ export const DEFAULT_CROP_SETTINGS: CropSettings = {
   perspectiveX: 0,
   perspectiveY: 0,
   distortion: 0,
+  aspectPreset: "original",
+  customAspectWidth: 1,
+  customAspectHeight: 1,
 };
 
 function isDefault(settings: CropSettings): boolean {
@@ -23,7 +26,10 @@ function isDefault(settings: CropSettings): boolean {
     settings.angle === 0 &&
     settings.perspectiveX === 0 &&
     settings.perspectiveY === 0 &&
-    settings.distortion === 0
+    settings.distortion === 0 &&
+    settings.aspectPreset === "original" &&
+    settings.customAspectWidth === 1 &&
+    settings.customAspectHeight === 1
   );
 }
 
@@ -33,12 +39,8 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
   defaults: DEFAULT_CROP_SETTINGS,
   isDefault,
   xmp: {
-    write: (settings) => {
-      if (!settings.enabled) {
-        return {} as Record<string, string>;
-      }
-      return {
-        "crs:HasCrop": "True",
+    write: (settings) => ({
+        "crs:HasCrop": settings.enabled ? "True" : "False",
         "crs:CropLeft": settings.x.toFixed(6),
         "crs:CropTop": settings.y.toFixed(6),
         "crs:CropRight": (settings.x + settings.width).toFixed(6),
@@ -49,18 +51,14 @@ export const cropPlugin: DevelopPlugin<"crop"> = {
         "crs:LensManualDistortionAmount": String(
           Math.round(settings.distortion),
         ),
-      };
-    },
+      }),
     read: (props) => {
-      if (props["crs:HasCrop"] !== "True") {
-        return { ...DEFAULT_CROP_SETTINGS };
-      }
       const left = numberProp(props, "crs:CropLeft") ?? 0;
       const top = numberProp(props, "crs:CropTop") ?? 0;
       const right = numberProp(props, "crs:CropRight") ?? 1;
       const bottom = numberProp(props, "crs:CropBottom") ?? 1;
       return {
-        enabled: true,
+        enabled: props["crs:HasCrop"] === "True" || left > 0 || top > 0,
         x: left,
         y: top,
         width: Math.max(0.05, right - left),

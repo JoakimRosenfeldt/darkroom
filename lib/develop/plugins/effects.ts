@@ -1,5 +1,5 @@
 import type { DevelopPlugin, EffectsSettings } from "@/lib/develop/types";
-import { numberProp } from "@/lib/develop/number-prop";
+import { numberProp } from "@/lib/develop/xmp-value";
 
 export const DEFAULT_EFFECTS_SETTINGS: EffectsSettings = {
   vignette: 0,

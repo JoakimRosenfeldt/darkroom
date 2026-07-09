@@ -5,30 +5,15 @@ export interface DevelopImage {
   width: number;
   height: number;
   metadata: Record<string, unknown>;
-  rgb?: Uint16Array;
-  bits: number;
-  colors: number;
   blob: Blob;
   objectUrl: string;
 }
 
-const MAX_DEVELOP_IMAGES = 2;
+const MAX_DEVELOP_IMAGES = 3;
+const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
 const inFlightImages = new Map<string, Promise<DevelopImage>>();
-
-function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): DevelopImage {
-  return {
-    width: decoded.width,
-    height: decoded.height,
-    metadata: decoded.metadata,
-    rgb: decoded.rgb instanceof Uint16Array ? decoded.rgb : undefined,
-    bits: decoded.bits,
-    colors: decoded.colors,
-    blob: decoded.blob,
-    objectUrl: decoded.objectUrl,
-  };
-}
 
 function cacheKey(entry: LibraryEntry): string {
   return `${entry.relativePath}:${entry.lastModified}`;
@@ -69,8 +54,17 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
     return activeLoad;
   }
 
-  const load = decodeEntry(entry, { thumbnail: false }).then((decoded) => {
-    const image = toDevelopImage(decoded);
+  const load = decodeEntry(entry, {
+    thumbnail: true,
+    maxEdge: PREVIEW_MAX_EDGE,
+  }).then((decoded) => {
+    const image: DevelopImage = {
+      width: decoded.width,
+      height: decoded.height,
+      metadata: decoded.metadata,
+      blob: decoded.blob,
+      objectUrl: decoded.objectUrl,
+    };
     rememberImage(key, image);
     return image;
   });
@@ -87,11 +81,18 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
 export async function loadDevelopExportImage(
   entry: LibraryEntry,
 ): Promise<DevelopImage> {
-  const decoded = await decodeEntry(entry, {
-    thumbnail: false,
-    fullResolution: true,
-  });
-  return toDevelopImage(decoded);
+  const decoded = await decodeEntry(entry, { fullResolution: true });
+  return {
+    width: decoded.width,
+    height: decoded.height,
+    metadata: decoded.metadata,
+    blob: decoded.blob,
+    objectUrl: decoded.objectUrl,
+  };
+}
+
+export function disposeDevelopImage(image: DevelopImage): void {
+  URL.revokeObjectURL(image.objectUrl);
 }
 
 export function preloadDevelopImages(

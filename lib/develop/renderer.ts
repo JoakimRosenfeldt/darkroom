@@ -241,39 +241,16 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-function toFloatRgba(image: DevelopImage): Float32Array {
-  const source = image.rgb;
-  if (!source) {
-    throw new Error("16-bit image data is unavailable.");
-  }
-  const channels = Math.max(1, image.colors);
-  const maxValue = image.bits > 8 ? 65535 : 255;
-  const output = new Float32Array(image.width * image.height * 4);
-
-  for (let sourceIndex = 0, outputIndex = 0; outputIndex < output.length; sourceIndex += channels, outputIndex += 4) {
-    output[outputIndex] = source[sourceIndex] / maxValue;
-    output[outputIndex + 1] = source[sourceIndex + 1] / maxValue;
-    output[outputIndex + 2] = source[sourceIndex + 2] / maxValue;
-    output[outputIndex + 3] = 1;
-  }
-
-  return output;
-}
-
 export class DevelopRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
-  private readonly buffer: WebGLBuffer;
   private texture: WebGLTexture | null = null;
   private textureWidth = 1;
   private textureHeight = 1;
 
-  constructor(
-    canvas: HTMLCanvasElement,
-    preserveDrawingBuffer = false,
-  ) {
-    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer });
+  constructor(canvas: HTMLCanvasElement) {
+    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true });
     if (!gl) {
       throw new Error("WebGL2 is not available.");
     }
@@ -281,26 +258,29 @@ export class DevelopRenderer {
     this.canvas = canvas;
     this.gl = gl;
     this.program = createProgram(gl);
-    this.buffer = this.configureGeometry();
+    this.configureGeometry();
   }
 
-  private configureGeometry(): WebGLBuffer {
+  private configureGeometry(): void {
     const gl = this.gl;
     gl.useProgram(this.program);
     const buffer = gl.createBuffer();
-    if (!buffer) {
-      throw new Error("Could not create WebGL buffer.");
-    }
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, QUAD, gl.STATIC_DRAW);
     const location = gl.getAttribLocation(this.program, "a_position");
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
-    return buffer;
   }
 
   async setImage(image: DevelopImage): Promise<void> {
     const gl = this.gl;
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    if (image.width > maxTextureSize || image.height > maxTextureSize) {
+      throw new Error(
+        `Image exceeds this device's ${maxTextureSize}px texture limit.`,
+      );
+    }
+
     const texture = gl.createTexture();
     if (!texture) {
       throw new Error("Could not create WebGL texture.");
@@ -312,26 +292,12 @@ export class DevelopRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    if (image.bits > 8 && image.rgb?.length) {
-      const floatLinear = gl.getExtension("OES_texture_float_linear");
-      if (!floatLinear) {
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      }
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA32F,
-        image.width,
-        image.height,
-        0,
-        gl.RGBA,
-        gl.FLOAT,
-        toFloatRgba(image),
-      );
-    } else {
-      const bitmap = await createImageBitmap(image.blob);
+    const bitmap = await createImageBitmap(image.blob);
+    try {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+      this.textureWidth = bitmap.width;
+      this.textureHeight = bitmap.height;
+    } finally {
       bitmap.close();
     }
 
@@ -339,8 +305,6 @@ export class DevelopRenderer {
       gl.deleteTexture(this.texture);
     }
     this.texture = texture;
-    this.textureWidth = image.width;
-    this.textureHeight = image.height;
   }
 
   resize(width: number, height: number): void {
@@ -384,18 +348,9 @@ export class DevelopRenderer {
       settings.crop.height,
     );
     this.uniform1f("u_crop_angle", settings.crop.angle);
-    this.uniform1f(
-      "u_perspective_x",
-      settings.crop.enabled ? settings.crop.perspectiveX : 0,
-    );
-    this.uniform1f(
-      "u_perspective_y",
-      settings.crop.enabled ? settings.crop.perspectiveY : 0,
-    );
-    this.uniform1f(
-      "u_distortion",
-      settings.crop.enabled ? settings.crop.distortion : 0,
-    );
+    this.uniform1f("u_perspective_x", settings.crop.perspectiveX);
+    this.uniform1f("u_perspective_y", settings.crop.perspectiveY);
+    this.uniform1f("u_distortion", settings.crop.distortion);
 
     this.uniform1f("u_exposure", settings.basic.exposure);
     this.uniform1f("u_contrast", settings.basic.contrast);
@@ -445,31 +400,7 @@ export class DevelopRenderer {
       this.gl.deleteTexture(this.texture);
       this.texture = null;
     }
-    this.gl.deleteBuffer(this.buffer);
     this.gl.deleteProgram(this.program);
-  }
-
-  async exportJpeg(
-    image: DevelopImage,
-    settings: DevelopSettings,
-  ): Promise<Blob> {
-    const canvas = document.createElement("canvas");
-    const width = settings.crop.enabled
-      ? Math.max(1, Math.round(image.width * settings.crop.width))
-      : image.width;
-    const height = settings.crop.enabled
-      ? Math.max(1, Math.round(image.height * settings.crop.height))
-      : image.height;
-    const renderer = new DevelopRenderer(canvas, true);
-
-    try {
-      await renderer.setImage(image);
-      renderer.resize(width, height);
-      renderer.render(settings, false, false);
-      return await renderer.toBlob();
-    } finally {
-      renderer.dispose();
-    }
   }
 
   toBlob(type = "image/jpeg", quality = 0.92): Promise<Blob> {
@@ -520,5 +451,42 @@ export class DevelopRenderer {
     w: number,
   ): void {
     this.gl.uniform4f(this.gl.getUniformLocation(this.program, name), x, y, z, w);
+  }
+}
+
+const MAX_EXPORT_PIXELS = 50_000_000;
+
+function exportSize(image: DevelopImage, settings: DevelopSettings): {
+  width: number;
+  height: number;
+} {
+  const crop = settings.crop;
+  if (!crop.enabled) {
+    return { width: image.width, height: image.height };
+  }
+  return {
+    width: Math.max(1, Math.round(image.width * crop.width)),
+    height: Math.max(1, Math.round(image.height * crop.height)),
+  };
+}
+
+export async function exportDevelopJpeg(
+  image: DevelopImage,
+  settings: DevelopSettings,
+): Promise<Blob> {
+  const { width, height } = exportSize(image, settings);
+  if (width * height > MAX_EXPORT_PIXELS) {
+    throw new Error("This edit exceeds the 50 megapixel export limit.");
+  }
+
+  const canvas = document.createElement("canvas");
+  const renderer = new DevelopRenderer(canvas);
+  try {
+    await renderer.setImage(image);
+    renderer.resize(width, height);
+    renderer.render(settings, false, false);
+    return await renderer.toBlob();
+  } finally {
+    renderer.dispose();
   }
 }

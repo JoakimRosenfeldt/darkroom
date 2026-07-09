@@ -89,10 +89,39 @@ async function getSidecarPath(
 ): Promise<string> {
   const source = await resolveLibraryFile(event, rootPath, relativePath);
   const parsed = path.parse(source);
-  return path.join(parsed.dir, `${parsed.name}.xmp`);
+  return path.join(
+    parsed.dir,
+    parsed.ext.toLowerCase() === ".nef"
+      ? `${parsed.name}.xmp`
+      : `${parsed.base}.xmp`,
+  );
+}
+
+async function assertRegularSidecar(sidecarPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(sidecarPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error("Refusing to follow a symbolic-link XMP sidecar.");
+    }
+    if (!stat.isFile()) {
+      throw new Error("XMP sidecar is not a regular file.");
+    }
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
+  await assertRegularSidecar(filePath);
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporaryPath, contents, "utf8");
@@ -238,9 +267,12 @@ function registerIpcHandlers(): void {
     async (event, rootPath: string, relativePath: string) => {
       const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
       try {
+        if (!await assertRegularSidecar(sidecarPath)) {
+          return null;
+        }
         const [contents, stat] = await Promise.all([
           fs.readFile(sidecarPath, "utf8"),
-          fs.stat(sidecarPath),
+          fs.lstat(sidecarPath),
         ]);
         return { contents, lastModified: stat.mtimeMs };
       } catch (error) {
@@ -268,6 +300,9 @@ function registerIpcHandlers(): void {
       const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
       if (contents === null) {
         try {
+          if (!await assertRegularSidecar(sidecarPath)) {
+            return;
+          }
           await fs.unlink(sidecarPath);
         } catch (error) {
           if (
