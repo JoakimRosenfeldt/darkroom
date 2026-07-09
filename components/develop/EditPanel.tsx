@@ -1,6 +1,6 @@
 "use client";
 
-import { DEVELOP_PLUGINS, DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { DevelopPluginId, MixerColor } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -16,6 +16,14 @@ const MIXER_LABELS: Record<MixerColor, string> = {
   purple: "Purple",
   magenta: "Magenta",
 };
+
+const EDIT_SECTIONS: ReadonlyArray<{ id: DevelopPluginId; label: string }> = [
+  { id: "crop", label: "Crop & Transform" },
+  { id: "basic", label: "Basic" },
+  { id: "curve", label: "Tone Curve" },
+  { id: "mixer", label: "Color Mixer" },
+  { id: "effects", label: "Effects & Details" },
+];
 
 export function EditPanel() {
   const resetAll = useDevelopStore((state) => state.resetAll);
@@ -44,8 +52,8 @@ export function EditPanel() {
       </div>
 
       <div className="flex-1 overflow-auto">
-        {DEVELOP_PLUGINS.map((plugin) => (
-          <PluginSection key={plugin.id} id={plugin.id} label={plugin.label} />
+        {EDIT_SECTIONS.map((section) => (
+          <PluginSection key={section.id} id={section.id} label={section.label} />
         ))}
       </div>
     </aside>

@@ -37,9 +37,9 @@ export const DevelopCanvas = forwardRef<DevelopCanvasHandle, DevelopCanvasProps>
       if (!renderer || !ready) {
         throw new Error("Editor preview is not ready to export.");
       }
-      return renderer.toBlob();
+      return renderer.exportJpeg(image, settings);
     },
-  }), [ready]);
+  }), [image, ready, settings]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

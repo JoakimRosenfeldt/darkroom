@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { LibraryEntry } from "@/lib/fs/types";
 import {
@@ -32,6 +32,7 @@ export function useDevelopSettingsSync({
   const hydratedEntryId = useRef<string | null>(null);
   const skipNextPersist = useRef(false);
   const metadataRef = useRef(metadata);
+  const [hydrationVersion, setHydrationVersion] = useState(0);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -55,6 +56,7 @@ export function useDevelopSettingsSync({
           skipNextPersist.current = false;
         }
         hydratedEntryId.current = entry.id;
+        setHydrationVersion((version) => version + 1);
         return;
       }
 
@@ -100,6 +102,7 @@ export function useDevelopSettingsSync({
       } finally {
         if (active) {
           hydratedEntryId.current = entry.id;
+          setHydrationVersion((version) => version + 1);
         }
       }
     }
@@ -159,6 +162,7 @@ export function useDevelopSettingsSync({
     activeEntryId,
     entry.id,
     entry.relativePath,
+    hydrationVersion,
     rootPath,
     settings,
     metadata.rating,

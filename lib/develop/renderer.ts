@@ -162,7 +162,7 @@ float random(vec2 co) {
   return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-vec3 adjust_effects(vec3 color, vec2 uv) {
+vec3 adjust_effects(vec3 color) {
   vec2 centered = v_uv - 0.5;
   float vignette = smoothstep(0.85, 0.15, length(centered));
   color *= mix(1.0, vignette, max(0.0, -u_vignette) * 0.012);
@@ -196,11 +196,13 @@ void main() {
   vec3 color = adjust_basic(center);
   color = adjust_curve(color);
   color = adjust_mixer(color);
-  color = adjust_effects(color, uv);
+  color = adjust_effects(color);
   out_color = vec4(clamp(color, 0.0, 1.0), 1.0);
 }`;
 
 const QUAD = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+const MAX_PREVIEW_PIXELS = 4_000_000;
+const MAX_EXPORT_PIXELS = 40_000_000;
 
 function compileShader(
   gl: WebGL2RenderingContext,
@@ -241,20 +243,49 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   return program;
 }
 
-function toFloatRgba(image: DevelopImage): Float32Array {
+function previewSize(
+  image: DevelopImage,
+  maxTextureSize: number,
+): { width: number; height: number } {
+  const scale = Math.min(
+    1,
+    Math.sqrt(MAX_PREVIEW_PIXELS / (image.width * image.height)),
+    maxTextureSize / Math.max(image.width, image.height),
+  );
+  return {
+    width: Math.max(1, Math.floor(image.width * scale)),
+    height: Math.max(1, Math.floor(image.height * scale)),
+  };
+}
+
+function toFloatRgba(
+  image: DevelopImage,
+  width: number,
+  height: number,
+): Float32Array {
   const source =
     image.rgb instanceof Uint16Array
       ? image.rgb
-      : new Uint16Array(image.rgb.buffer);
+      : new Uint16Array(
+          image.rgb.buffer,
+          image.rgb.byteOffset,
+          Math.floor(image.rgb.byteLength / Uint16Array.BYTES_PER_ELEMENT),
+        );
   const channels = Math.max(1, image.colors);
   const maxValue = image.bits > 8 ? 65535 : 255;
-  const output = new Float32Array(image.width * image.height * 4);
+  const output = new Float32Array(width * height * 4);
 
-  for (let sourceIndex = 0, outputIndex = 0; outputIndex < output.length; sourceIndex += channels, outputIndex += 4) {
-    output[outputIndex] = source[sourceIndex] / maxValue;
-    output[outputIndex + 1] = source[sourceIndex + 1] / maxValue;
-    output[outputIndex + 2] = source[sourceIndex + 2] / maxValue;
-    output[outputIndex + 3] = 1;
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = Math.min(image.height - 1, Math.floor((y * image.height) / height));
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = Math.min(image.width - 1, Math.floor((x * image.width) / width));
+      const sourceIndex = (sourceY * image.width + sourceX) * channels;
+      const outputIndex = (y * width + x) * 4;
+      output[outputIndex] = source[sourceIndex] / maxValue;
+      output[outputIndex + 1] = source[sourceIndex + 1] / maxValue;
+      output[outputIndex + 2] = source[sourceIndex + 2] / maxValue;
+      output[outputIndex + 3] = 1;
+    }
   }
 
   return output;
@@ -267,9 +298,13 @@ export class DevelopRenderer {
   private texture: WebGLTexture | null = null;
   private textureWidth = 1;
   private textureHeight = 1;
+  private readonly uniformLocations = new Map<string, WebGLUniformLocation | null>();
 
-  constructor(canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true });
+  constructor(
+    canvas: HTMLCanvasElement,
+    { preserveDrawingBuffer = false }: { preserveDrawingBuffer?: boolean } = {},
+  ) {
+    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer });
     if (!gl) {
       throw new Error("WebGL2 is not available.");
     }
@@ -291,48 +326,66 @@ export class DevelopRenderer {
     gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
   }
 
-  async setImage(image: DevelopImage): Promise<void> {
+  async setImage(
+    image: DevelopImage,
+    { useRawPixels = true }: { useRawPixels?: boolean } = {},
+  ): Promise<void> {
     const gl = this.gl;
     const texture = gl.createTexture();
     if (!texture) {
       throw new Error("Could not create WebGL texture.");
     }
 
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    try {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    if (image.bits > 8 && image.rgb.length > 0) {
-      const floatLinear = gl.getExtension("OES_texture_float_linear");
-      if (!floatLinear) {
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      if (useRawPixels && image.bits > 8 && image.rgb.length > 0) {
+        const size = previewSize(image, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+        const floatLinear = gl.getExtension("OES_texture_float_linear");
+        if (!floatLinear) {
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA32F,
+          size.width,
+          size.height,
+          0,
+          gl.RGBA,
+          gl.FLOAT,
+          toFloatRgba(image, size.width, size.height),
+        );
+        this.textureWidth = size.width;
+        this.textureHeight = size.height;
+      } else {
+        const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        if (image.width > maxTextureSize || image.height > maxTextureSize) {
+          throw new Error("Image exceeds this GPU's maximum export texture size.");
+        }
+        const bitmap = await createImageBitmap(image.blob);
+        try {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+        } finally {
+          bitmap.close();
+        }
+        this.textureWidth = image.width;
+        this.textureHeight = image.height;
       }
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA32F,
-        image.width,
-        image.height,
-        0,
-        gl.RGBA,
-        gl.FLOAT,
-        toFloatRgba(image),
-      );
-    } else {
-      const bitmap = await createImageBitmap(image.blob);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-      bitmap.close();
+    } catch (error) {
+      gl.deleteTexture(texture);
+      throw error;
     }
 
     if (this.texture) {
       gl.deleteTexture(this.texture);
     }
     this.texture = texture;
-    this.textureWidth = image.width;
-    this.textureHeight = image.height;
   }
 
   resize(width: number, height: number): void {
@@ -344,7 +397,11 @@ export class DevelopRenderer {
     }
   }
 
-  render(settings: DevelopSettings, showOriginal: boolean): void {
+  render(
+    settings: DevelopSettings,
+    showOriginal: boolean,
+    contain = true,
+  ): void {
     const gl = this.gl;
     if (!this.texture) {
       return;
@@ -353,7 +410,9 @@ export class DevelopRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.applyContainViewport();
+    if (contain) {
+      this.applyContainViewport();
+    }
     gl.useProgram(this.program);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -441,6 +500,28 @@ export class DevelopRenderer {
     });
   }
 
+  async exportJpeg(
+    image: DevelopImage,
+    settings: DevelopSettings,
+  ): Promise<Blob> {
+    if (image.width * image.height > MAX_EXPORT_PIXELS) {
+      throw new Error("Image is too large to export safely on this device.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const renderer = new DevelopRenderer(canvas, { preserveDrawingBuffer: true });
+    try {
+      await renderer.setImage(image, { useRawPixels: false });
+      renderer.render(settings, false, false);
+      renderer.gl.finish();
+      return await renderer.toBlob();
+    } finally {
+      renderer.dispose();
+    }
+  }
+
   private uniformMixer(settings: DevelopSettings): void {
     const values = new Float32Array(24);
     for (const [index, color] of MIXER_COLORS.entries()) {
@@ -449,20 +530,19 @@ export class DevelopRenderer {
       values[base + 1] = settings.mixer[color].saturation;
       values[base + 2] = settings.mixer[color].luminance;
     }
-    const location = this.gl.getUniformLocation(this.program, "u_mixer");
-    this.gl.uniform1fv(location, values);
+    this.gl.uniform1fv(this.uniformLocation("u_mixer"), values);
   }
 
   private uniform1i(name: string, value: number): void {
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, name), value);
+    this.gl.uniform1i(this.uniformLocation(name), value);
   }
 
   private uniform1f(name: string, value: number): void {
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, name), value);
+    this.gl.uniform1f(this.uniformLocation(name), value);
   }
 
   private uniform2f(name: string, x: number, y: number): void {
-    this.gl.uniform2f(this.gl.getUniformLocation(this.program, name), x, y);
+    this.gl.uniform2f(this.uniformLocation(name), x, y);
   }
 
   private uniform4f(
@@ -472,6 +552,13 @@ export class DevelopRenderer {
     z: number,
     w: number,
   ): void {
-    this.gl.uniform4f(this.gl.getUniformLocation(this.program, name), x, y, z, w);
+    this.gl.uniform4f(this.uniformLocation(name), x, y, z, w);
+  }
+
+  private uniformLocation(name: string): WebGLUniformLocation | null {
+    if (!this.uniformLocations.has(name)) {
+      this.uniformLocations.set(name, this.gl.getUniformLocation(this.program, name));
+    }
+    return this.uniformLocations.get(name) ?? null;
   }
 }

@@ -30,7 +30,7 @@ export interface DarkroomAPI {
   writeSidecar(
     rootPath: string,
     relativePath: string,
-    contents: string | null,
+    contents: string,
   ): Promise<void>;
   saveExport(suggestedName: string, data: ArrayBuffer): Promise<string | null>;
 }

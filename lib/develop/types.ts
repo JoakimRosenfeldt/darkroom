@@ -63,19 +63,3 @@ export interface DevelopSettings {
 }
 
 export type DevelopPluginId = keyof DevelopSettings;
-
-export type DevelopPluginSettings<T extends DevelopPluginId> =
-  DevelopSettings[T];
-
-export interface XmpPluginAdapter<T extends DevelopPluginId> {
-  write(settings: DevelopSettings[T]): Record<string, string>;
-  read(props: Record<string, string>): Partial<DevelopSettings[T]>;
-}
-
-export interface DevelopPlugin<T extends DevelopPluginId> {
-  id: T;
-  label: string;
-  defaults: DevelopSettings[T];
-  isDefault(settings: DevelopSettings[T]): boolean;
-  xmp: XmpPluginAdapter<T>;
-}
