@@ -13,6 +13,14 @@ export function resolveProfile(
   return PROFILES.find((profile) => profile.detect(file)) ?? null;
 }
 
+export function decodeEntry(
+  entry: LibraryEntry,
+  options: DecodeOptions & { thumbnail: true; rawSource?: "embedded" },
+): Promise<DecodedImage & { blob: Blob; objectUrl: string }>;
+export function decodeEntry(
+  entry: LibraryEntry,
+  options?: DecodeOptions,
+): Promise<DecodedImage>;
 export async function decodeEntry(
   entry: LibraryEntry,
   options?: DecodeOptions,
@@ -25,7 +33,10 @@ export async function decodeEntry(
   const decode = async () => {
     const file = await getFileFromEntry(entry);
     const buffer = new Uint8Array(await file.arrayBuffer());
-    return profile.decode(buffer, options);
+    return profile.decode(buffer, {
+      ...options,
+      relativePath: entry.relativePath,
+    });
   };
 
   if (options?.thumbnail) {

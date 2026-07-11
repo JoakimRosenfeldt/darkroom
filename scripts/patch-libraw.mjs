@@ -9,7 +9,7 @@ const indexPath = join(
 
 let content = readFileSync(indexPath, "utf8");
 
-if (content.includes("error:e")) {
+if (content.includes("error:e") || content.includes("reject(new Error(")) {
   console.log("libraw-wasm already patched");
   process.exit(0);
 }

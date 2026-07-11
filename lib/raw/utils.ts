@@ -3,6 +3,7 @@ export function rgbDataToBlob(
   width: number,
   height: number,
   bits: number,
+  maxEdge?: number,
 ): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -41,8 +42,21 @@ export function rgbDataToBlob(
   }
 
   context.putImageData(imageData, 0, 0);
+  let outputCanvas = canvas;
+  if (maxEdge && Math.max(width, height) > maxEdge) {
+    const scale = maxEdge / Math.max(width, height);
+    outputCanvas = document.createElement("canvas");
+    outputCanvas.width = Math.max(1, Math.round(width * scale));
+    outputCanvas.height = Math.max(1, Math.round(height * scale));
+    const outputContext = outputCanvas.getContext("2d");
+    if (!outputContext) {
+      throw new Error("Could not create canvas context");
+    }
+    outputContext.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
+  }
+
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
+    outputCanvas.toBlob((blob) => {
       if (!blob) {
         reject(new Error("Failed to encode image"));
         return;
@@ -50,6 +64,16 @@ export function rgbDataToBlob(
       resolve(blob);
     }, "image/jpeg", 0.92);
   });
+}
+
+export function orientedImageSize(
+  width: number,
+  height: number,
+  flip: number,
+): { width: number; height: number } {
+  return flip === 5 || flip === 6
+    ? { width: height, height: width }
+    : { width, height };
 }
 
 export function formatMetadataValue(value: unknown): string {

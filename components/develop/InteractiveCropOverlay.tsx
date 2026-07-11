@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyCropDrag,
+  clampCropRect,
   computeContainedImageRect,
   type CropHandle,
   resolveAspectRatio,
@@ -93,6 +94,7 @@ export function InteractiveCropOverlay({
     crop.customAspectWidth,
     crop.customAspectHeight,
   );
+  const cropRect = clampCropRect(crop);
 
   function onPointerDown(handle: CropHandle, event: React.PointerEvent) {
     if (!crop.enabled) {
@@ -106,10 +108,10 @@ export function InteractiveCropOverlay({
       startX: event.clientX,
       startY: event.clientY,
       startCrop: {
-        x: crop.x,
-        y: crop.y,
-        width: crop.width,
-        height: crop.height,
+        x: cropRect.x,
+        y: cropRect.y,
+        width: cropRect.width,
+        height: cropRect.height,
       },
     };
   }
@@ -188,12 +190,10 @@ export function InteractiveCropOverlay({
         <div
           className="absolute cursor-move border border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)]"
           style={{
-            left: `${crop.x * 100}%`,
-            top: `${crop.y * 100}%`,
-            width: `${crop.width * 100}%`,
-            height: `${crop.height * 100}%`,
-            transform: `rotate(${crop.angle}deg)`,
-            transformOrigin: "center center",
+            left: `${cropRect.x * 100}%`,
+            top: `${cropRect.y * 100}%`,
+            width: `${cropRect.width * 100}%`,
+            height: `${cropRect.height * 100}%`,
           }}
           onPointerDown={(event) => onPointerDown("move", event)}
           onPointerMove={onPointerMove}

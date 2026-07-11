@@ -12,6 +12,11 @@ import {
   trashFiles,
 } from "./fs-service";
 import { createCatalogStore } from "./catalog-store";
+import {
+  createNefDecoderService,
+  type NefDecodeRequest,
+  type NefDecoderCommand,
+} from "./nef-decoder-service";
 import { createSettingsStore } from "./settings";
 import { getAppRoot, getOutDir, startStaticServer } from "./static-server";
 
@@ -25,6 +30,28 @@ let activeLibraryRoot: string | null = null;
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
 const MAX_SIDECAR_BYTES = 4 * 1024 * 1024;
+
+function getNefDecoderCommand(): NefDecoderCommand | null {
+  const privateHelper = process.env.DARKROOM_NEF_HELPER_PATH;
+  if (!app.isPackaged && privateHelper && path.isAbsolute(privateHelper)) {
+    return { executable: privateHelper };
+  }
+  if (!app.isPackaged && process.env.DARKROOM_ENABLE_NEF_MOCK === "1") {
+    return {
+      executable: process.execPath,
+      fixedArgs: [path.join(app.getAppPath(), "native/nikon-nef-decoder/mock-decoder.mjs")],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+  }
+  if (process.platform !== "darwin" && process.platform !== "win32") return null;
+  return {
+    executable: path.join(
+      process.resourcesPath,
+      "nikon-nef-decoder",
+      process.platform === "win32" ? "nikon-nef-decoder.exe" : "nikon-nef-decoder",
+    ),
+  };
+}
 
 async function activateLibraryRoot(rootPath: string): Promise<string> {
   const stat = await fs.stat(rootPath);
@@ -190,6 +217,11 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  const nefDecoder = createNefDecoderService({
+    helper: getNefDecoderCommand(),
+    tempRoot: app.getPath("temp"),
+  });
+
   ipcMain.handle("darkroom:pick-folder", async (event) => {
     assertTrustedRenderer(event);
     const result = await dialog.showOpenDialog({
@@ -238,6 +270,14 @@ function registerIpcHandlers(): void {
     assertTrustedRenderer(event);
     return statFile(absolutePath);
   });
+
+  ipcMain.handle(
+    "darkroom:decode-nef",
+    async (event, request: NefDecodeRequest) => {
+      assertTrustedRenderer(event);
+      return nefDecoder.decode(activeLibraryRoot, request);
+    },
+  );
 
   ipcMain.handle("darkroom:get-last-folder", async (event) => {
     assertTrustedRenderer(event);
