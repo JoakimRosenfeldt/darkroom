@@ -1,10 +1,7 @@
-import type { XmpProps } from "@/lib/develop/types";
-
 export function numberProp(
-  props: XmpProps,
+  props: Record<string, string>,
   key: string,
 ): number | null {
-  const prop = props[key];
-  const value = typeof prop === "string" ? Number(prop) : Number.NaN;
+  const value = Number(props[key]);
   return Number.isFinite(value) ? value : null;
 }

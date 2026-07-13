@@ -24,7 +24,6 @@ import { exportDevelopJpeg } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
-import { isEditableTarget } from "@/hooks/is-editable-target";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -137,9 +136,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || isEditableTarget(event.target)) {
-        return;
-      }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
         router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
       }

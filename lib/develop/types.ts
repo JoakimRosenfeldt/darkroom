@@ -28,14 +28,11 @@ export interface CropSettings {
   customAspectHeight: number;
 }
 
-export type CurveChannel = "rgb" | "red" | "green" | "blue";
-
-export interface CurvePoint {
-  x: number;
-  y: number;
+export interface CurveSettings {
+  shadows: number;
+  midtones: number;
+  highlights: number;
 }
-
-export type CurveSettings = Record<CurveChannel, CurvePoint[]>;
 
 export type MixerColor =
   | "red"
@@ -75,12 +72,9 @@ export type DevelopPluginId = keyof DevelopSettings;
 export type DevelopPluginSettings<T extends DevelopPluginId> =
   DevelopSettings[T];
 
-export type XmpValue = string | string[];
-export type XmpProps = Record<string, XmpValue>;
-
 export interface XmpPluginAdapter<T extends DevelopPluginId> {
-  write(settings: DevelopSettings[T]): XmpProps;
-  read(props: XmpProps): Partial<DevelopSettings[T]>;
+  write(settings: DevelopSettings[T]): Record<string, string>;
+  read(props: Record<string, string>): Partial<DevelopSettings[T]>;
 }
 
 export interface DevelopPlugin<T extends DevelopPluginId> {

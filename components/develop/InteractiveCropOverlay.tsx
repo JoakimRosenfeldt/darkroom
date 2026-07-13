@@ -41,16 +41,6 @@ const HANDLE_POSITIONS: Array<{
   { handle: "w", className: "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2" },
 ];
 
-const EDGE_HIT_AREAS: Array<{
-  handle: CropHandle;
-  className: string;
-}> = [
-  { handle: "n", className: "left-3 right-3 top-0 h-3" },
-  { handle: "e", className: "bottom-3 right-0 top-3 w-3" },
-  { handle: "s", className: "bottom-0 left-3 right-3 h-3" },
-  { handle: "w", className: "bottom-3 left-0 top-3 w-3" },
-];
-
 export function InteractiveCropOverlay({
   imageWidth,
   imageHeight,
@@ -214,17 +204,6 @@ export function InteractiveCropOverlay({
               <div key={index} className="border border-white/20" />
             ))}
           </div>
-
-          {EDGE_HIT_AREAS.map(({ handle, className }) => (
-            <div
-              key={handle}
-              className={`absolute z-10 ${className}`}
-              style={{ cursor: HANDLE_CURSORS[handle] }}
-              onPointerDown={(event) => onPointerDown(handle, event)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-            />
-          ))}
 
           {HANDLE_POSITIONS.map(({ handle, className }) => (
             <div
