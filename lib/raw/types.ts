@@ -1,5 +1,7 @@
 export interface DecodeOptions {
+  relativePath?: string;
   thumbnail?: boolean;
+  rawSource?: "embedded" | "developed";
   fullResolution?: boolean;
   maxEdge?: number;
   priority?: number;
@@ -13,8 +15,8 @@ export interface DecodedImage {
   bits: number;
   colors: number;
   metadata: Record<string, unknown>;
-  blob: Blob;
-  objectUrl: string;
+  blob?: Blob;
+  objectUrl?: string;
 }
 
 export interface ImageProfile {

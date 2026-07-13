@@ -1,4 +1,5 @@
 import type { PhotoCatalog } from "../lib/catalog/types";
+import type { NefDecodeRequest, NefDecodeResult } from "../electron/nef-decoder-service";
 
 export interface ScannedFile {
   name: string;
@@ -16,6 +17,7 @@ export interface DarkroomAPI {
   readFile(absolutePath: string): Promise<ArrayBuffer>;
   readFileHead(absolutePath: string, maxBytes: number): Promise<ArrayBuffer>;
   statFile(absolutePath: string): Promise<{ size: number; lastModified: number }>;
+  decodeNef(request: NefDecodeRequest): Promise<NefDecodeResult>;
   getLastFolder(): Promise<string | null>;
   setLastFolder(folderPath: string | null): Promise<void>;
   folderExists(folderPath: string): Promise<boolean>;

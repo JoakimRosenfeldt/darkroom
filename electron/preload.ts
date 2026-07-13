@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { PhotoCatalog } from "../lib/catalog/types";
+import type { NefDecodeRequest, NefDecodeResult } from "./nef-decoder-service";
 
 interface ScannedFile {
   name: string;
@@ -29,6 +30,10 @@ const darkroom = {
 
   statFile(absolutePath: string): Promise<{ size: number; lastModified: number }> {
     return ipcRenderer.invoke("darkroom:stat-file", absolutePath);
+  },
+
+  decodeNef(request: NefDecodeRequest): Promise<NefDecodeResult> {
+    return ipcRenderer.invoke("darkroom:decode-nef", request);
   },
 
   getLastFolder(): Promise<string | null> {

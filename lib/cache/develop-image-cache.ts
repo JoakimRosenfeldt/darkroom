@@ -2,11 +2,19 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { decodeEntry } from "@/lib/raw/decode";
 
 export interface DevelopImage {
+  /** Oriented dimensions used by the editor and crop controls. */
   width: number;
   height: number;
+  /** Stored pixel dimensions used only for direct texture uploads. */
+  sourceWidth: number;
+  sourceHeight: number;
+  orientation: number;
   metadata: Record<string, unknown>;
-  blob: Blob;
-  objectUrl: string;
+  rgb: Uint8Array | Uint16Array | Uint8ClampedArray;
+  bits: number;
+  colors: number;
+  blob?: Blob;
+  objectUrl?: string;
 }
 
 const MAX_DEVELOP_IMAGES = 3;
@@ -14,6 +22,30 @@ const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
 const inFlightImages = new Map<string, Promise<DevelopImage>>();
+
+function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): DevelopImage {
+  const orientation = decoded.metadata.decoderProvenance === "nikon-sdk" &&
+    Number.isInteger(decoded.metadata.orientation) &&
+    Number(decoded.metadata.orientation) >= 1 &&
+    Number(decoded.metadata.orientation) <= 8
+    ? Number(decoded.metadata.orientation)
+    : 1;
+  const rotated = orientation >= 5;
+
+  return {
+    width: rotated ? decoded.height : decoded.width,
+    height: rotated ? decoded.width : decoded.height,
+    sourceWidth: decoded.width,
+    sourceHeight: decoded.height,
+    orientation,
+    metadata: decoded.metadata,
+    rgb: decoded.rgb,
+    bits: decoded.bits,
+    colors: decoded.colors,
+    blob: decoded.blob,
+    objectUrl: decoded.objectUrl,
+  };
+}
 
 function cacheKey(entry: LibraryEntry): string {
   return `${entry.relativePath}:${entry.lastModified}`;
@@ -33,7 +65,7 @@ function rememberImage(key: string, image: DevelopImage): void {
     }
 
     const oldest = imageCache.get(oldestKey);
-    if (oldest) {
+    if (oldest?.objectUrl) {
       URL.revokeObjectURL(oldest.objectUrl);
     }
     imageCache.delete(oldestKey);
@@ -56,15 +88,10 @@ export async function loadDevelopImage(entry: LibraryEntry): Promise<DevelopImag
 
   const load = decodeEntry(entry, {
     thumbnail: true,
+    rawSource: "developed",
     maxEdge: PREVIEW_MAX_EDGE,
   }).then((decoded) => {
-    const image: DevelopImage = {
-      width: decoded.width,
-      height: decoded.height,
-      metadata: decoded.metadata,
-      blob: decoded.blob,
-      objectUrl: decoded.objectUrl,
-    };
+    const image = toDevelopImage(decoded);
     rememberImage(key, image);
     return image;
   });
@@ -82,17 +109,13 @@ export async function loadDevelopExportImage(
   entry: LibraryEntry,
 ): Promise<DevelopImage> {
   const decoded = await decodeEntry(entry, { fullResolution: true });
-  return {
-    width: decoded.width,
-    height: decoded.height,
-    metadata: decoded.metadata,
-    blob: decoded.blob,
-    objectUrl: decoded.objectUrl,
-  };
+  return toDevelopImage(decoded);
 }
 
 export function disposeDevelopImage(image: DevelopImage): void {
-  URL.revokeObjectURL(image.objectUrl);
+  if (image.objectUrl) {
+    URL.revokeObjectURL(image.objectUrl);
+  }
 }
 
 export function preloadDevelopImages(

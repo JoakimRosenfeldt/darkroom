@@ -109,12 +109,20 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     try {
       setExportStatus("Exporting...");
       exportImage = await loadDevelopExportImage(entry);
+      const usesEmbeddedFallback = exportImage.metadata.decoderProvenance === "embedded";
+      if (usesEmbeddedFallback) {
+        setExportStatus("Exporting embedded preview — full RAW unavailable...");
+      }
       const blob = await exportDevelopJpeg(exportImage, developSettings);
       const targetPath = await getDarkroomAPI().saveExport(
         entry.name.replace(/\.[^.]+$/, "-darkroom.jpg"),
         await blob.arrayBuffer(),
       );
-      setExportStatus(targetPath ? `Exported ${targetPath}` : "Export canceled");
+      setExportStatus(targetPath
+        ? `${usesEmbeddedFallback ? "Exported embedded preview" : "Exported"} ${targetPath}`
+        : usesEmbeddedFallback
+          ? "Export canceled — embedded preview fallback"
+          : "Export canceled");
     } catch (exportError) {
       setExportStatus(
         exportError instanceof Error ? exportError.message : "Export failed.",

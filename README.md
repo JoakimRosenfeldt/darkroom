@@ -9,7 +9,7 @@ Built as an **Electron** app with a Next.js UI, native folder access, and automa
 - **Native folder import** — pick a directory and browse supported images in place
 - **No uploads** — files are read on demand from disk
 - **Persistent library** — your last folder is remembered across app restarts
-- **RAW support (NEF)** — Nikon NEF files decode via [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm)
+- **RAW support (NEF)** — Nikon NEF files decode via [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm), with the native Nikon SDK as a macOS fallback
 - **Standard images** — JPEG, PNG, and WebP via native browser decoding
 - **Virtualized grid** — handles large libraries without rendering every tile at once
 - **Thumbnail cache** — decoded previews cached in IndexedDB by path and modification time
@@ -38,6 +38,10 @@ npm run dist
 ```
 
 Installers are written to `release/`.
+
+The macOS arm64 package injects the approved Nikon runtime from
+`~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another private
+location. Packaging fails when a required runtime file is missing.
 
 ## Architecture
 
@@ -90,7 +94,7 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 | Format | Profile ID | Decoder |
 |--------|------------|---------|
-| NEF    | `nef`      | libraw-wasm |
+| NEF    | `nef`      | libraw-wasm, then Nikon SDK fallback on macOS arm64 |
 | JPEG   | `standard` | Browser `createImageBitmap` |
 | PNG    | `standard` | Browser `createImageBitmap` |
 | WebP   | `standard` | Browser `createImageBitmap` |

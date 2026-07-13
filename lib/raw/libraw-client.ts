@@ -1,6 +1,6 @@
 import type { LibRawSettings } from "libraw-wasm";
 import type { DecodeOptions, DecodedImage } from "./types";
-import { rgbDataToBlob } from "./utils";
+import { orientedImageSize, rgbDataToBlob } from "./utils";
 
 type LibRawInstance = InstanceType<
   Awaited<typeof import("libraw-wasm")>["default"]
@@ -55,13 +55,17 @@ function buildFromEmbeddedThumbnail(
 ): DecodedImage {
   const blob = new Blob([thumbnail.data as BlobPart], { type: "image/jpeg" });
   const objectUrl = URL.createObjectURL(blob);
+  const size = orientedImageSize(
+    thumbnail.width,
+    thumbnail.height,
+    Number(metadata.flip),
+  );
   return {
-    width: thumbnail.width,
-    height: thumbnail.height,
+    ...size,
     rgb: thumbnail.data,
     bits: 8,
     colors: 3,
-    metadata,
+    metadata: { ...metadata, decoderProvenance: "embedded" },
     blob,
     objectUrl,
   };
@@ -76,22 +80,29 @@ async function buildFromImageData(
     colors: number;
   },
   metadata: Record<string, unknown>,
+  maxEdge?: number,
 ): Promise<DecodedImage> {
+  const scale = maxEdge
+    ? Math.min(1, maxEdge / Math.max(image.width, image.height))
+    : 1;
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
   const blob = await rgbDataToBlob(
     image.data,
     image.width,
     image.height,
     image.bits,
+    maxEdge,
   );
   const objectUrl = URL.createObjectURL(blob);
 
   return {
-    width: image.width,
-    height: image.height,
-    rgb: image.data,
+    width,
+    height,
+    rgb: scale === 1 ? image.data : new Uint8Array(0),
     bits: image.bits,
     colors: image.colors,
-    metadata,
+    metadata: { ...metadata, decoderProvenance: "libraw" },
     blob,
     objectUrl,
   };
@@ -113,28 +124,20 @@ async function decodeOpenedRaw(
     const metadataRecord = structuredClone(
       metadata as Record<string, unknown>,
     );
-
-    if (options.thumbnail) {
-      const thumbnail = await raw.thumbnailData();
-      if (
-        thumbnail?.data?.length &&
-        thumbnail.width > 0 &&
-        thumbnail.height > 0
-      ) {
-        return buildFromEmbeddedThumbnail(thumbnail, metadataRecord);
-      }
-    }
-
     const image = await raw.imageData();
     if (!image?.data?.length || image.width <= 0 || image.height <= 0) {
       return null;
     }
 
-    return buildFromImageData(image, metadataRecord);
+    return buildFromImageData(
+      image,
+      metadataRecord,
+      halfSize ? options.maxEdge : undefined,
+    );
   });
 }
 
-async function decodeEmbeddedThumbnail(
+export async function decodeEmbeddedThumbnail(
   input: Uint8Array,
 ): Promise<DecodedImage | null> {
   return runLibRaw(async (raw) => {
@@ -198,14 +201,23 @@ export async function decodeWithLibRaw(
   }
 
   if (options.thumbnail) {
-    const embedded = await decodeEmbeddedThumbnail(input);
-    if (embedded) {
-      return embedded;
+    if (options.rawSource !== "developed") {
+      const embedded = await decodeEmbeddedThumbnail(input);
+      if (embedded) {
+        return embedded;
+      }
     }
 
     const thumbnail = await decodeOpenedRaw(input, options, true);
     if (thumbnail) {
+      if (options.rawSource === "developed") {
+        thumbnail.metadata.developSource = "raw";
+      }
       return thumbnail;
+    }
+
+    if (options.rawSource === "developed") {
+      throw new Error("Could not process RAW thumbnail");
     }
 
     throw new Error("Could not decode RAW thumbnail");

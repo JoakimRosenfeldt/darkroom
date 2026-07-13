@@ -10,14 +10,14 @@
     "build": "npm run build:next && npm run build:electron",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && npm run build:electron && cross-env ELECTRON_DEV=1 electron .\"",
     "electron:start": "npm run build:electron && electron .",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build && node scripts/package-release.mjs",
     "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mts",
     "lint": "eslint",
     "postinstall": "node scripts/patch-libraw.mjs && node scripts/ensure-electron.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.3",
-    "libraw-wasm": "^1.4.0",
+    "libraw-wasm": "^1.6.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -56,9 +56,38 @@
     },
     "mac": {
       "category": "public.app-category.photography",
+      "extraResources": [
+        {
+          "from": "${env.DARKROOM_NEF_SDK_FROM}/spike/DarkroomNefSpike.app/Contents",
+          "to": "nikon-nef-decoder",
+          "filter": [
+            "MacOS/nikon-nef-decoder",
+            "Frameworks/**/*",
+            "Resources/**/*"
+          ]
+        },
+        {
+          "from": "${env.DARKROOM_NEF_SDK_FROM}/Image SDK/Library/Mac/Doc/Third Party Legal Notices.rtf",
+          "to": "nikon-nef-decoder/Third Party Legal Notices.rtf"
+        },
+        {
+          "from": "${env.DARKROOM_NEF_SDK_FROM}/spike/DarkroomNefSpike.app/Contents/Resources/prm.bin",
+          "to": "prm.bin"
+        }
+      ],
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {

@@ -1,4 +1,5 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import { clampCropRect } from "@/lib/develop/crop-geometry";
 import type { DevelopSettings } from "@/lib/develop/types";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 
@@ -13,16 +14,25 @@ void main() {
 
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+#ifdef INTEGER_TEXTURE
+precision highp usampler2D;
+uniform highp usampler2D u_image;
+#else
 precision highp sampler2D;
+uniform sampler2D u_image;
+#endif
 
 in vec2 v_uv;
 out vec4 out_color;
 
-uniform sampler2D u_image;
 uniform vec2 u_texel;
+uniform vec2 u_source_texel;
+uniform int u_orientation;
+uniform float u_input_linear;
 uniform float u_show_original;
 
 uniform float u_crop_enabled;
+uniform float u_crop_output;
 uniform vec4 u_crop;
 uniform float u_crop_angle;
 uniform float u_perspective_x;
@@ -53,22 +63,69 @@ float luma(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+vec3 decode_transfer(vec3 color) {
+  if (u_input_linear < 0.5) return color;
+  vec3 low = color * 12.92;
+  vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+  return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+}
+
+vec3 sample_image(vec2 uv) {
+#ifdef INTEGER_TEXTURE
+  ivec2 dimensions = textureSize(u_image, 0);
+  vec2 position = uv * vec2(dimensions) - 0.5;
+  ivec2 low = ivec2(floor(position));
+  ivec2 high = low + 1;
+  vec2 weight = fract(position);
+  low = clamp(low, ivec2(0), dimensions - 1);
+  high = clamp(high, ivec2(0), dimensions - 1);
+  vec3 top = mix(
+    vec3(texelFetch(u_image, ivec2(low.x, low.y), 0).rgb),
+    vec3(texelFetch(u_image, ivec2(high.x, low.y), 0).rgb),
+    weight.x
+  );
+  vec3 bottom = mix(
+    vec3(texelFetch(u_image, ivec2(low.x, high.y), 0).rgb),
+    vec3(texelFetch(u_image, ivec2(high.x, high.y), 0).rgb),
+    weight.x
+  );
+  return decode_transfer(mix(top, bottom, weight.y) / 65535.0);
+#else
+  return decode_transfer(texture(u_image, uv).rgb);
+#endif
+}
+
+vec2 orient_uv(vec2 uv) {
+  if (u_orientation == 2) return vec2(1.0 - uv.x, uv.y);
+  if (u_orientation == 3) return vec2(1.0 - uv.x, 1.0 - uv.y);
+  if (u_orientation == 4) return vec2(uv.x, 1.0 - uv.y);
+  if (u_orientation == 5) return vec2(uv.y, uv.x);
+  if (u_orientation == 6) return vec2(uv.y, 1.0 - uv.x);
+  if (u_orientation == 7) return vec2(1.0 - uv.y, 1.0 - uv.x);
+  if (u_orientation == 8) return vec2(1.0 - uv.y, uv.x);
+  return uv;
+}
+
 vec2 transform_uv(vec2 uv) {
   uv = vec2(uv.x, 1.0 - uv.y);
 
   if (u_crop_enabled > 0.5) {
     vec2 crop_center = u_crop.xy + u_crop.zw * 0.5;
-    vec2 p = uv - 0.5;
+    if (u_crop_output > 0.5) {
+      uv = u_crop.xy + uv * u_crop.zw;
+    }
+
+    vec2 p = (uv - crop_center) / u_texel;
     float angle = radians(-u_crop_angle);
     mat2 rotation = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
     p = rotation * p;
-    uv = crop_center + p * u_crop.zw;
-  }
+    uv = crop_center + p * u_texel;
 
+  }
   vec2 centered = uv - 0.5;
   uv += vec2(centered.y * u_perspective_x, centered.x * u_perspective_y) * 0.002;
   uv += centered * dot(centered, centered) * u_distortion * 0.001;
-  return uv;
+  return orient_uv(uv);
 }
 
 vec3 adjust_basic(vec3 color) {
@@ -82,16 +139,16 @@ vec3 adjust_basic(vec3 color) {
   float lum = luma(color);
   float shadow_mask = smoothstep(0.7, 0.0, lum);
   float highlight_mask = smoothstep(0.35, 1.0, lum);
-  color += shadow_mask * u_shadows * 0.005;
-  color += highlight_mask * u_highlights * 0.004;
-  color += smoothstep(0.72, 1.0, lum) * u_whites * 0.004;
-  color += smoothstep(0.25, 0.0, lum) * u_blacks * 0.004;
-  color = (color - 0.5) * (1.0 + u_contrast * 0.01) + 0.5;
+  color += shadow_mask * u_shadows * 0.0015;
+  color += highlight_mask * u_highlights * 0.0012;
+  color += smoothstep(0.72, 1.0, lum) * u_whites * 0.0012;
+  color += smoothstep(0.25, 0.0, lum) * u_blacks * 0.0012;
+  color = (color - 0.5) * (1.0 + u_contrast * 0.0035) + 0.5;
 
   float average = (color.r + color.g + color.b) / 3.0;
   float saturation = max(max(color.r, color.g), color.b) - min(min(color.r, color.g), color.b);
-  float vibrance = u_vibrance * 0.01 * (1.0 - saturation);
-  color = mix(vec3(average), color, 1.0 + u_saturation * 0.01 + vibrance);
+  float vibrance = u_vibrance * 0.0035 * (1.0 - saturation);
+  color = mix(vec3(average), color, 1.0 + u_saturation * 0.0035 + vibrance);
   return color;
 }
 
@@ -101,7 +158,7 @@ vec3 adjust_curve(vec3 color) {
     (1.0 - smoothstep(0.0, 0.45, lum)) * u_curve_shadows +
     (1.0 - abs(lum - 0.5) * 2.0) * u_curve_midtones +
     smoothstep(0.55, 1.0, lum) * u_curve_highlights;
-  return color + lift * 0.004;
+  return color + lift * 0.0012;
 }
 
 vec3 rgb_to_hsl(vec3 c) {
@@ -172,23 +229,21 @@ vec3 adjust_effects(vec3 color, vec2 uv) {
 }
 
 void main() {
-  vec2 uv = transform_uv(v_uv);
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-    out_color = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
+  vec2 min_uv = u_source_texel * 0.5;
+  vec2 max_uv = 1.0 - min_uv;
+  vec2 uv = clamp(transform_uv(v_uv), min_uv, max_uv);
 
-  vec3 center = texture(u_image, uv).rgb;
+  vec3 center = sample_image(uv);
   if (u_show_original > 0.5) {
     out_color = vec4(center, 1.0);
     return;
   }
 
   vec3 neighbors =
-    texture(u_image, uv + vec2(u_texel.x, 0.0)).rgb +
-    texture(u_image, uv - vec2(u_texel.x, 0.0)).rgb +
-    texture(u_image, uv + vec2(0.0, u_texel.y)).rgb +
-    texture(u_image, uv - vec2(0.0, u_texel.y)).rgb;
+    sample_image(clamp(uv + vec2(u_source_texel.x, 0.0), min_uv, max_uv)) +
+    sample_image(clamp(uv - vec2(u_source_texel.x, 0.0), min_uv, max_uv)) +
+    sample_image(clamp(uv + vec2(0.0, u_source_texel.y), min_uv, max_uv)) +
+    sample_image(clamp(uv - vec2(0.0, u_source_texel.y), min_uv, max_uv));
   vec3 average = neighbors * 0.25;
   center = mix(center, average, u_noise_reduction * 0.003);
   center += (center - average) * u_sharpening * 0.015;
@@ -221,13 +276,23 @@ function compileShader(
   return shader;
 }
 
-function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
+function createProgram(
+  gl: WebGL2RenderingContext,
+  integerTexture = false,
+): WebGLProgram {
   const vertex = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const fragment = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+  const fragment = compileShader(
+    gl,
+    gl.FRAGMENT_SHADER,
+    integerTexture
+      ? FRAGMENT_SHADER.replace("#version 300 es\n", "#version 300 es\n#define INTEGER_TEXTURE\n")
+      : FRAGMENT_SHADER,
+  );
   const program = gl.createProgram();
   if (!program) {
     throw new Error("Could not create WebGL program.");
   }
+  gl.bindAttribLocation(program, 0, "a_position");
   gl.attachShader(program, vertex);
   gl.attachShader(program, fragment);
   gl.linkProgram(program);
@@ -245,9 +310,17 @@ export class DevelopRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
+  private readonly integerProgram: WebGLProgram;
+  private activeProgram: WebGLProgram;
+  private readonly geometry: WebGLBuffer;
   private texture: WebGLTexture | null = null;
   private textureWidth = 1;
   private textureHeight = 1;
+  private displayWidth = 1;
+  private displayHeight = 1;
+  private integerTexture = false;
+  private inputLinear = false;
+  private orientation = 1;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true });
@@ -258,24 +331,61 @@ export class DevelopRenderer {
     this.canvas = canvas;
     this.gl = gl;
     this.program = createProgram(gl);
+    this.integerProgram = createProgram(gl, true);
+    this.activeProgram = this.program;
+    const geometry = gl.createBuffer();
+    if (!geometry) {
+      gl.deleteProgram(this.program);
+      gl.deleteProgram(this.integerProgram);
+      throw new Error("Could not create WebGL geometry.");
+    }
+    this.geometry = geometry;
     this.configureGeometry();
   }
 
   private configureGeometry(): void {
     const gl = this.gl;
-    gl.useProgram(this.program);
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.useProgram(this.activeProgram);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.geometry);
     gl.bufferData(gl.ARRAY_BUFFER, QUAD, gl.STATIC_DRAW);
-    const location = gl.getAttribLocation(this.program, "a_position");
-    gl.enableVertexAttribArray(location);
-    gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   }
 
   async setImage(image: DevelopImage): Promise<void> {
     const gl = this.gl;
+    const nativePixels = image.metadata.decoderProvenance === "nikon-sdk" &&
+      image.rgb instanceof Uint16Array;
+    const metadataWidth = Number(image.metadata.sourceWidth);
+    const metadataHeight = Number(image.metadata.sourceHeight);
+    const sourceWidth = Number.isInteger(metadataWidth) && metadataWidth > 0
+      ? metadataWidth
+      : image.sourceWidth;
+    const sourceHeight = Number.isInteger(metadataHeight) && metadataHeight > 0
+      ? metadataHeight
+      : image.sourceHeight;
+    const orientation = image.orientation;
+    const rotated = orientation >= 5 && orientation <= 8;
+
+    if (
+      nativePixels &&
+      (!Number.isInteger(sourceWidth) ||
+        !Number.isInteger(sourceHeight) ||
+        sourceWidth <= 0 ||
+        sourceHeight <= 0 ||
+        image.colors !== 3 ||
+        image.bits !== 16 ||
+        image.rgb.length !== sourceWidth * sourceHeight * 3 ||
+        orientation < 1 ||
+        orientation > 8 ||
+        image.width !== (rotated ? sourceHeight : sourceWidth) ||
+        image.height !== (rotated ? sourceWidth : sourceHeight))
+    ) {
+      throw new Error("Nikon decoder returned invalid pixel dimensions.");
+    }
+
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
-    if (image.width > maxTextureSize || image.height > maxTextureSize) {
+    if (sourceWidth > maxTextureSize || sourceHeight > maxTextureSize) {
       throw new Error(
         `Image exceeds this device's ${maxTextureSize}px texture limit.`,
       );
@@ -289,17 +399,80 @@ export class DevelopRenderer {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    this.integerTexture = false;
 
-    const bitmap = await createImageBitmap(image.blob);
-    try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-      this.textureWidth = bitmap.width;
-      this.textureHeight = bitmap.height;
-    } finally {
-      bitmap.close();
+    if (nativePixels) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      while (gl.getError() !== gl.NO_ERROR) {
+        // Clear errors so only the RGB16UI upload determines fallback behavior.
+      }
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGB16UI,
+        sourceWidth,
+        sourceHeight,
+        0,
+        gl.RGB_INTEGER,
+        gl.UNSIGNED_SHORT,
+        image.rgb,
+      );
+      this.integerTexture = gl.getError() === gl.NO_ERROR;
+      if (!this.integerTexture) {
+        const rgba = new Uint8Array(sourceWidth * sourceHeight * 4);
+        for (let source = 0, target = 0; source < image.rgb.length; source += 3, target += 4) {
+          rgba[target] = image.rgb[source] >> 8;
+          rgba[target + 1] = image.rgb[source + 1] >> 8;
+          rgba[target + 2] = image.rgb[source + 2] >> 8;
+          rgba[target + 3] = 255;
+        }
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          sourceWidth,
+          sourceHeight,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          rgba,
+        );
+        if (gl.getError() !== gl.NO_ERROR) {
+          gl.deleteTexture(texture);
+          throw new Error("Could not upload Nikon decoder pixels.");
+        }
+      }
+      image.metadata.rendererPrecision = this.integerTexture
+        ? "rgb16ui"
+        : "rgba8-fallback";
+      this.textureWidth = sourceWidth;
+      this.textureHeight = sourceHeight;
+    } else {
+      if (!image.blob) {
+        gl.deleteTexture(texture);
+        throw new Error("Image preview is unavailable.");
+      }
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      const bitmap = await createImageBitmap(image.blob);
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+        this.textureWidth = bitmap.width;
+        this.textureHeight = bitmap.height;
+      } finally {
+        bitmap.close();
+      }
     }
+
+    this.displayWidth = image.width;
+    this.displayHeight = image.height;
+    this.orientation = nativePixels ? orientation : 1;
+    this.inputLinear = nativePixels && image.metadata.transferFunction === "linear";
+    this.activeProgram = this.integerTexture ? this.integerProgram : this.program;
 
     if (this.texture) {
       gl.deleteTexture(this.texture);
@@ -319,7 +492,7 @@ export class DevelopRenderer {
   render(
     settings: DevelopSettings,
     showOriginal: boolean,
-    contain = true,
+    cropOutput = false,
   ): void {
     const gl = this.gl;
     if (!this.texture) {
@@ -329,23 +502,28 @@ export class DevelopRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (contain) {
+    if (!cropOutput) {
       this.applyContainViewport();
     }
-    gl.useProgram(this.program);
+    gl.useProgram(this.activeProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     this.uniform1i("u_image", 0);
-    this.uniform2f("u_texel", 1 / this.textureWidth, 1 / this.textureHeight);
+    this.uniform2f("u_texel", 1 / this.displayWidth, 1 / this.displayHeight);
+    this.uniform2f("u_source_texel", 1 / this.textureWidth, 1 / this.textureHeight);
+    this.uniform1i("u_orientation", this.orientation);
+    this.uniform1f("u_input_linear", this.inputLinear ? 1 : 0);
     this.uniform1f("u_show_original", showOriginal ? 1 : 0);
 
+    const crop = clampCropRect(settings.crop);
     this.uniform1f("u_crop_enabled", settings.crop.enabled ? 1 : 0);
+    this.uniform1f("u_crop_output", cropOutput ? 1 : 0);
     this.uniform4f(
       "u_crop",
-      settings.crop.x,
-      settings.crop.y,
-      settings.crop.width,
-      settings.crop.height,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
     );
     this.uniform1f("u_crop_angle", settings.crop.angle);
     this.uniform1f("u_perspective_x", settings.crop.perspectiveX);
@@ -377,7 +555,7 @@ export class DevelopRenderer {
 
   private applyContainViewport(): void {
     const canvasRatio = this.canvas.width / this.canvas.height;
-    const imageRatio = this.textureWidth / this.textureHeight;
+    const imageRatio = this.displayWidth / this.displayHeight;
     let width = this.canvas.width;
     let height = this.canvas.height;
 
@@ -400,7 +578,9 @@ export class DevelopRenderer {
       this.gl.deleteTexture(this.texture);
       this.texture = null;
     }
+    this.gl.deleteBuffer(this.geometry);
     this.gl.deleteProgram(this.program);
+    this.gl.deleteProgram(this.integerProgram);
   }
 
   toBlob(type = "image/jpeg", quality = 0.92): Promise<Blob> {
@@ -427,20 +607,20 @@ export class DevelopRenderer {
       values[base + 1] = settings.mixer[color].saturation;
       values[base + 2] = settings.mixer[color].luminance;
     }
-    const location = this.gl.getUniformLocation(this.program, "u_mixer");
+    const location = this.gl.getUniformLocation(this.activeProgram, "u_mixer");
     this.gl.uniform1fv(location, values);
   }
 
   private uniform1i(name: string, value: number): void {
-    this.gl.uniform1i(this.gl.getUniformLocation(this.program, name), value);
+    this.gl.uniform1i(this.gl.getUniformLocation(this.activeProgram, name), value);
   }
 
   private uniform1f(name: string, value: number): void {
-    this.gl.uniform1f(this.gl.getUniformLocation(this.program, name), value);
+    this.gl.uniform1f(this.gl.getUniformLocation(this.activeProgram, name), value);
   }
 
   private uniform2f(name: string, x: number, y: number): void {
-    this.gl.uniform2f(this.gl.getUniformLocation(this.program, name), x, y);
+    this.gl.uniform2f(this.gl.getUniformLocation(this.activeProgram, name), x, y);
   }
 
   private uniform4f(
@@ -450,7 +630,7 @@ export class DevelopRenderer {
     z: number,
     w: number,
   ): void {
-    this.gl.uniform4f(this.gl.getUniformLocation(this.program, name), x, y, z, w);
+    this.gl.uniform4f(this.gl.getUniformLocation(this.activeProgram, name), x, y, z, w);
   }
 }
 
@@ -464,9 +644,10 @@ function exportSize(image: DevelopImage, settings: DevelopSettings): {
   if (!crop.enabled) {
     return { width: image.width, height: image.height };
   }
+  const rect = clampCropRect(crop);
   return {
-    width: Math.max(1, Math.round(image.width * crop.width)),
-    height: Math.max(1, Math.round(image.height * crop.height)),
+    width: Math.max(1, Math.round(image.width * rect.width)),
+    height: Math.max(1, Math.round(image.height * rect.height)),
   };
 }
 
@@ -484,7 +665,7 @@ export async function exportDevelopJpeg(
   try {
     await renderer.setImage(image);
     renderer.resize(width, height);
-    renderer.render(settings, false, false);
+    renderer.render(settings, false, true);
     return await renderer.toBlob();
   } finally {
     renderer.dispose();

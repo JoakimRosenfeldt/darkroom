@@ -20,6 +20,7 @@ export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const usesEmbeddedRawPreview = image.metadata.developSource === "embedded";
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -114,14 +115,16 @@ export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
   if (error) {
     return (
       <div className="relative h-full w-full">
-        <Image
-          src={image.objectUrl}
-          alt={alt}
-          fill
-          unoptimized
-          className="object-contain"
-          priority
-        />
+        {image.objectUrl ? (
+          <Image
+            src={image.objectUrl}
+            alt={alt}
+            fill
+            unoptimized
+            className="object-contain"
+            preload
+          />
+        ) : null}
         <div className="absolute left-3 top-3 rounded border border-red-500/40 bg-red-950/80 px-3 py-2 text-xs text-red-100">
           Editing preview unavailable: {error}
         </div>
@@ -141,6 +144,11 @@ export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
         imageWidth={image.width}
         imageHeight={image.height}
       />
+      {usesEmbeddedRawPreview ? (
+        <div className="absolute bottom-3 left-3 rounded bg-amber-950/90 px-2 py-1 text-[11px] text-amber-100">
+          RAW processing unavailable — editing embedded preview
+        </div>
+      ) : null}
       {showOriginal ? (
         <div className="absolute left-3 top-3 rounded bg-lr-panel/90 px-2 py-1 text-[11px] uppercase tracking-wider text-lr-text-muted">
           Before

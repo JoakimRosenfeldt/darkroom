@@ -47,7 +47,13 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
   }
 
   function commitCustomAspect(width: number, height: number) {
-    const ratio = parseAspectRatioInput(String(width), String(height));
+    const ratio = resolveAspectRatio(
+      "custom",
+      imageWidth,
+      imageHeight,
+      width,
+      height,
+    );
     if (!ratio) {
       return;
     }
