@@ -1,6 +1,9 @@
 import { basicPlugin } from "@/lib/develop/plugins/basic";
 import { cropPlugin } from "@/lib/develop/plugins/crop";
-import { curvePlugin } from "@/lib/develop/plugins/curve";
+import {
+  curvePlugin,
+  normalizeCurveSettings,
+} from "@/lib/develop/plugins/curve";
 import { effectsPlugin } from "@/lib/develop/plugins/effects";
 import { mixerPlugin } from "@/lib/develop/plugins/mixer";
 import type {
@@ -32,7 +35,7 @@ export function createDevelopSettings(
   patch: Partial<DevelopSettings> = {},
 ): DevelopSettings {
   const defaults = structuredClone(DEFAULT_DEVELOP_SETTINGS);
-  return {
+  const settings = {
     ...defaults,
     ...Object.fromEntries(
       Object.entries(patch).map(([pluginId, pluginSettings]) => [
@@ -43,7 +46,9 @@ export function createDevelopSettings(
         },
       ]),
     ),
-  };
+  } as DevelopSettings;
+  settings.curve = normalizeCurveSettings(patch.curve ?? settings.curve);
+  return settings;
 }
 
 export function isDefaultDevelopSettings(settings: DevelopSettings): boolean {

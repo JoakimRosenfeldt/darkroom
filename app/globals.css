@@ -49,6 +49,47 @@ body {
   font-size: 13px;
 }
 
+.develop-slider {
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.develop-slider::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--develop-slider-track, var(--lr-text-dim));
+}
+
+.develop-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -4px;
+  border: 1px solid var(--lr-bg);
+  border-radius: 50%;
+  background: var(--lr-text-muted);
+}
+
+.develop-slider:hover::-webkit-slider-thumb {
+  background: var(--lr-text);
+}
+
+.develop-slider:focus-visible {
+  outline: none;
+}
+
+.develop-slider:focus-visible::-webkit-slider-thumb {
+  background: var(--lr-text);
+  box-shadow: 0 0 0 2px var(--lr-panel), 0 0 0 3px var(--lr-text-muted);
+}
+
+.develop-slider:disabled {
+  cursor: default;
+}
+
 /* Lightroom-style thin scrollbars */
 ::-webkit-scrollbar {
   width: 8px;

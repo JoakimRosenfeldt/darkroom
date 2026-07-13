@@ -28,11 +28,14 @@ export interface CropSettings {
   customAspectHeight: number;
 }
 
-export interface CurveSettings {
-  shadows: number;
-  midtones: number;
-  highlights: number;
+export type CurveChannel = "rgb" | "red" | "green" | "blue";
+
+export interface CurvePoint {
+  x: number;
+  y: number;
 }
+
+export type CurveSettings = Record<CurveChannel, CurvePoint[]>;
 
 export type MixerColor =
   | "red"

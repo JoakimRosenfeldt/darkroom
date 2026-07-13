@@ -1,10 +1,12 @@
 "use client";
 
-import { DEVELOP_PLUGINS, DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import { DEVELOP_PLUGINS } from "@/lib/develop/registry";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { DevelopPluginId, MixerColor } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { SliderRow } from "@/components/develop/SliderRow";
+import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
+import { useState } from "react";
 
 const EDIT_PLUGINS = DEVELOP_PLUGINS.filter((plugin) => plugin.id !== "crop");
 
@@ -17,6 +19,37 @@ const MIXER_LABELS: Record<MixerColor, string> = {
   blue: "Blue",
   purple: "Purple",
   magenta: "Magenta",
+};
+
+type MixerMode = "hue" | "saturation" | "luminance" | "all";
+
+const MIXER_MODES: { id: MixerMode; label: string }[] = [
+  { id: "hue", label: "Hue" },
+  { id: "saturation", label: "Saturation" },
+  { id: "luminance", label: "Luminance" },
+  { id: "all", label: "All" },
+];
+
+const COLOR_HEX: Record<MixerColor, string> = {
+  red: "#d64d52",
+  orange: "#df8438",
+  yellow: "#d9c83f",
+  green: "#55a85c",
+  aqua: "#4cb8b5",
+  blue: "#4d78c9",
+  purple: "#8b63c5",
+  magenta: "#c35b9e",
+};
+
+const HUE_TRACKS: Record<MixerColor, string> = {
+  red: "linear-gradient(90deg, #bd4f83, #d64d52, #df7438)",
+  orange: "linear-gradient(90deg, #d64d52, #df8438, #d9b83f)",
+  yellow: "linear-gradient(90deg, #df8438, #d9c83f, #75a94d)",
+  green: "linear-gradient(90deg, #d9c83f, #55a85c, #45aaa0)",
+  aqua: "linear-gradient(90deg, #55a85c, #4cb8b5, #4d8bc9)",
+  blue: "linear-gradient(90deg, #4cb8b5, #4d78c9, #7767c6)",
+  purple: "linear-gradient(90deg, #4d78c9, #8b63c5, #bd5aa7)",
+  magenta: "linear-gradient(90deg, #8b63c5, #c35b9e, #d64d52)",
 };
 
 export function EditPanel() {
@@ -88,11 +121,10 @@ function PluginSection({
 function BasicControls() {
   const basic = useDevelopStore((state) => state.settings.basic);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const defaults = DEFAULT_DEVELOP_SETTINGS.basic;
 
   return (
     <div>
-      <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => updatePlugin("basic", { exposure })} onReset={() => updatePlugin("basic", { exposure: defaults.exposure })} />
+      <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => updatePlugin("basic", { exposure })} />
       <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => updatePlugin("basic", { contrast })} />
       <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => updatePlugin("basic", { highlights })} />
       <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => updatePlugin("basic", { shadows })} />
@@ -110,31 +142,75 @@ function CurveControls() {
   const curve = useDevelopStore((state) => state.settings.curve);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
-  return (
-    <div>
-      <SliderRow label="Shadows" value={curve.shadows} min={-100} max={100} onChange={(shadows) => updatePlugin("curve", { shadows })} />
-      <SliderRow label="Midtones" value={curve.midtones} min={-100} max={100} onChange={(midtones) => updatePlugin("curve", { midtones })} />
-      <SliderRow label="Highlights" value={curve.highlights} min={-100} max={100} onChange={(highlights) => updatePlugin("curve", { highlights })} />
-    </div>
-  );
+  return <ToneCurveEditor settings={curve} onChange={(settings) => updatePlugin("curve", settings)} />;
 }
 
 function MixerControls() {
+  const [mode, setMode] = useState<MixerMode>("hue");
   const mixer = useDevelopStore((state) => state.settings.mixer);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
-  return (
-    <div className="space-y-3">
+  const rows = (property: Exclude<MixerMode, "all">) => (
+    <div>
       {MIXER_COLORS.map((color) => (
-        <div key={color}>
-          <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
-            {MIXER_LABELS[color]}
-          </h3>
-          <SliderRow label="Hue" value={mixer[color].hue} min={-100} max={100} onChange={(hue) => updatePlugin("mixer", { [color]: { ...mixer[color], hue } })} />
-          <SliderRow label="Sat" value={mixer[color].saturation} min={-100} max={100} onChange={(saturation) => updatePlugin("mixer", { [color]: { ...mixer[color], saturation } })} />
-          <SliderRow label="Lum" value={mixer[color].luminance} min={-100} max={100} onChange={(luminance) => updatePlugin("mixer", { [color]: { ...mixer[color], luminance } })} />
-        </div>
+        <SliderRow
+          key={color}
+          label={MIXER_LABELS[color]}
+          value={mixer[color][property]}
+          min={-100}
+          max={100}
+          track={
+            property === "hue"
+              ? HUE_TRACKS[color]
+              : property === "saturation"
+                ? `linear-gradient(90deg, #555, ${COLOR_HEX[color]})`
+                : `linear-gradient(90deg, #151515, ${COLOR_HEX[color]}, #e8e8e8)`
+          }
+          onChange={(value) =>
+            updatePlugin("mixer", {
+              [color]: { ...mixer[color], [property]: value },
+            })
+          }
+        />
       ))}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="mb-2 grid grid-cols-4 border-b border-lr-border-subtle" role="tablist" aria-label="HSL adjustment">
+        {MIXER_MODES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={mode === item.id}
+            onClick={() => setMode(item.id)}
+            className={`border-b px-1 py-1.5 text-[10px] ${
+              mode === item.id
+                ? "border-lr-text-muted text-lr-text"
+                : "border-transparent text-lr-text-dim hover:text-lr-text-muted"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "all" ? (
+        <div className="space-y-3">
+          {(["hue", "saturation", "luminance"] as const).map((property) => (
+            <section key={property}>
+              <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+                {property}
+              </h3>
+              {rows(property)}
+            </section>
+          ))}
+        </div>
+      ) : (
+        rows(mode)
+      )}
     </div>
   );
 }

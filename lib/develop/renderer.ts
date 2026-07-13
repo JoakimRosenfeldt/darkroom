@@ -2,6 +2,10 @@ import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { clampCropRect } from "@/lib/develop/crop-geometry";
 import type { DevelopSettings } from "@/lib/develop/types";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
+import {
+  createCurveLut,
+  CURVE_LUT_SIZE,
+} from "@/lib/develop/plugins/curve";
 
 const VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
@@ -50,9 +54,7 @@ uniform float u_tint;
 uniform float u_vibrance;
 uniform float u_saturation;
 
-uniform float u_curve_shadows;
-uniform float u_curve_midtones;
-uniform float u_curve_highlights;
+uniform vec4 u_curve[${CURVE_LUT_SIZE}];
 uniform float u_mixer[24];
 uniform float u_vignette;
 uniform float u_grain;
@@ -152,13 +154,24 @@ vec3 adjust_basic(vec3 color) {
   return color;
 }
 
+float sample_curve(float value, int channel) {
+  float position = clamp(value, 0.0, 1.0) * ${CURVE_LUT_SIZE - 1}.0;
+  int low = int(floor(position));
+  int high = min(low + 1, ${CURVE_LUT_SIZE - 1});
+  return mix(u_curve[low][channel], u_curve[high][channel], fract(position));
+}
+
 vec3 adjust_curve(vec3 color) {
-  float lum = luma(color);
-  float lift =
-    (1.0 - smoothstep(0.0, 0.45, lum)) * u_curve_shadows +
-    (1.0 - abs(lum - 0.5) * 2.0) * u_curve_midtones +
-    smoothstep(0.55, 1.0, lum) * u_curve_highlights;
-  return color + lift * 0.0012;
+  vec3 master = vec3(
+    sample_curve(color.r, 0),
+    sample_curve(color.g, 0),
+    sample_curve(color.b, 0)
+  );
+  return vec3(
+    sample_curve(master.r, 1),
+    sample_curve(master.g, 2),
+    sample_curve(master.b, 3)
+  );
 }
 
 vec3 rgb_to_hsl(vec3 c) {
@@ -541,9 +554,7 @@ export class DevelopRenderer {
     this.uniform1f("u_vibrance", settings.basic.vibrance);
     this.uniform1f("u_saturation", settings.basic.saturation);
 
-    this.uniform1f("u_curve_shadows", settings.curve.shadows);
-    this.uniform1f("u_curve_midtones", settings.curve.midtones);
-    this.uniform1f("u_curve_highlights", settings.curve.highlights);
+    this.uniformCurve(settings);
     this.uniformMixer(settings);
     this.uniform1f("u_vignette", settings.effects.vignette);
     this.uniform1f("u_grain", settings.effects.grain);
@@ -609,6 +620,11 @@ export class DevelopRenderer {
     }
     const location = this.gl.getUniformLocation(this.activeProgram, "u_mixer");
     this.gl.uniform1fv(location, values);
+  }
+
+  private uniformCurve(settings: DevelopSettings): void {
+    const location = this.gl.getUniformLocation(this.activeProgram, "u_curve");
+    this.gl.uniform4fv(location, createCurveLut(settings.curve));
   }
 
   private uniform1i(name: string, value: number): void {
