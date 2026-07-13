@@ -123,7 +123,7 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         ) : null}
 
         <p className="mb-1 mt-2 text-[11px] text-lr-text-dim">
-          Drag inside the image to move or resize the crop.
+          Drag the crop edges to resize; drag inside to move.
         </p>
 
         <SliderRow
@@ -138,8 +138,8 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         />
         <SliderRow label="Left" value={crop.x} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(x) => updateCrop({ x })} />
         <SliderRow label="Top" value={crop.y} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(y) => updateCrop({ y })} />
-        <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} disabled={!crop.enabled} onChange={(width) => updateCrop({ width })} />
-        <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} disabled={!crop.enabled} onChange={(height) => updateCrop({ height })} />
+        <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} disabled={!crop.enabled} resetValue={1} onChange={(width) => updateCrop({ width })} />
+        <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} disabled={!crop.enabled} resetValue={1} onChange={(height) => updateCrop({ height })} />
         <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveX) => updatePlugin("crop", { perspectiveX })} />
         <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveY) => updatePlugin("crop", { perspectiveY })} />
         <SliderRow label="Distortion" value={crop.distortion} min={-100} max={100} disabled={!crop.enabled} onChange={(distortion) => updatePlugin("crop", { distortion })} />

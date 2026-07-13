@@ -2,6 +2,10 @@ import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { clampCropRect } from "@/lib/develop/crop-geometry";
 import type { DevelopSettings } from "@/lib/develop/types";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
+import {
+  createCurveLut,
+  CURVE_LUT_SIZE,
+} from "@/lib/develop/plugins/curve";
 
 const VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
@@ -50,9 +54,7 @@ uniform float u_tint;
 uniform float u_vibrance;
 uniform float u_saturation;
 
-uniform float u_curve_shadows;
-uniform float u_curve_midtones;
-uniform float u_curve_highlights;
+uniform highp sampler2D u_curve;
 uniform float u_mixer[24];
 uniform float u_vignette;
 uniform float u_grain;
@@ -152,13 +154,28 @@ vec3 adjust_basic(vec3 color) {
   return color;
 }
 
+float sample_curve(float value, int channel) {
+  float position = clamp(value, 0.0, 1.0) * ${CURVE_LUT_SIZE - 1}.0;
+  int low = int(floor(position));
+  int high = min(low + 1, ${CURVE_LUT_SIZE - 1});
+  return mix(
+    texelFetch(u_curve, ivec2(low, 0), 0)[channel],
+    texelFetch(u_curve, ivec2(high, 0), 0)[channel],
+    fract(position)
+  );
+}
+
 vec3 adjust_curve(vec3 color) {
-  float lum = luma(color);
-  float lift =
-    (1.0 - smoothstep(0.0, 0.45, lum)) * u_curve_shadows +
-    (1.0 - abs(lum - 0.5) * 2.0) * u_curve_midtones +
-    smoothstep(0.55, 1.0, lum) * u_curve_highlights;
-  return color + lift * 0.0012;
+  vec3 master = vec3(
+    sample_curve(color.r, 0),
+    sample_curve(color.g, 0),
+    sample_curve(color.b, 0)
+  );
+  return vec3(
+    sample_curve(master.r, 1),
+    sample_curve(master.g, 2),
+    sample_curve(master.b, 3)
+  );
 }
 
 vec3 rgb_to_hsl(vec3 c) {
@@ -202,9 +219,19 @@ vec3 hsl_to_rgb(vec3 hsl) {
 }
 
 vec3 adjust_mixer(vec3 color) {
+  const float centers[8] = float[8](
+    0.0,
+    0.0833333333,
+    0.1666666667,
+    0.3333333333,
+    0.5,
+    0.6666666667,
+    0.75,
+    0.8333333333
+  );
   vec3 hsl = rgb_to_hsl(clamp(color, 0.0, 1.0));
   for (int i = 0; i < 8; i++) {
-    float center = float(i) / 8.0;
+    float center = centers[i];
     float distance = min(abs(hsl.x - center), 1.0 - abs(hsl.x - center));
     float weight = smoothstep(0.18, 0.0, distance);
     int base = i * 3;
@@ -313,6 +340,8 @@ export class DevelopRenderer {
   private readonly integerProgram: WebGLProgram;
   private activeProgram: WebGLProgram;
   private readonly geometry: WebGLBuffer;
+  private readonly curveTexture: WebGLTexture;
+  private curveSettings: DevelopSettings["curve"] | null = null;
   private texture: WebGLTexture | null = null;
   private textureWidth = 1;
   private textureHeight = 1;
@@ -333,8 +362,34 @@ export class DevelopRenderer {
     this.program = createProgram(gl);
     this.integerProgram = createProgram(gl, true);
     this.activeProgram = this.program;
+    const curveTexture = gl.createTexture();
+    if (!curveTexture) {
+      gl.deleteProgram(this.program);
+      gl.deleteProgram(this.integerProgram);
+      throw new Error("Could not create curve texture.");
+    }
+    this.curveTexture = curveTexture;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, curveTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA32F,
+      CURVE_LUT_SIZE,
+      1,
+      0,
+      gl.RGBA,
+      gl.FLOAT,
+      null,
+    );
+    gl.activeTexture(gl.TEXTURE0);
     const geometry = gl.createBuffer();
     if (!geometry) {
+      gl.deleteTexture(this.curveTexture);
       gl.deleteProgram(this.program);
       gl.deleteProgram(this.integerProgram);
       throw new Error("Could not create WebGL geometry.");
@@ -396,6 +451,7 @@ export class DevelopRenderer {
       throw new Error("Could not create WebGL texture.");
     }
 
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -541,9 +597,7 @@ export class DevelopRenderer {
     this.uniform1f("u_vibrance", settings.basic.vibrance);
     this.uniform1f("u_saturation", settings.basic.saturation);
 
-    this.uniform1f("u_curve_shadows", settings.curve.shadows);
-    this.uniform1f("u_curve_midtones", settings.curve.midtones);
-    this.uniform1f("u_curve_highlights", settings.curve.highlights);
+    this.uniformCurve(settings);
     this.uniformMixer(settings);
     this.uniform1f("u_vignette", settings.effects.vignette);
     this.uniform1f("u_grain", settings.effects.grain);
@@ -579,6 +633,7 @@ export class DevelopRenderer {
       this.texture = null;
     }
     this.gl.deleteBuffer(this.geometry);
+    this.gl.deleteTexture(this.curveTexture);
     this.gl.deleteProgram(this.program);
     this.gl.deleteProgram(this.integerProgram);
   }
@@ -609,6 +664,28 @@ export class DevelopRenderer {
     }
     const location = this.gl.getUniformLocation(this.activeProgram, "u_mixer");
     this.gl.uniform1fv(location, values);
+  }
+
+  private uniformCurve(settings: DevelopSettings): void {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.curveTexture);
+    if (settings.curve !== this.curveSettings) {
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        CURVE_LUT_SIZE,
+        1,
+        gl.RGBA,
+        gl.FLOAT,
+        createCurveLut(settings.curve),
+      );
+      this.curveSettings = settings.curve;
+    }
+    this.uniform1i("u_curve", 1);
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   private uniform1i(name: string, value: number): void {
