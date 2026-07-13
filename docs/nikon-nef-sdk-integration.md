@@ -1,16 +1,18 @@
 # Nikon NEF/NRW SDK integration gate and plan
 
-Status: **local macOS HE\* integration verified; release packaging remains blocked**.
+Status: **macOS arm64 runtime packaging and HE\* decode verified**.
 
 This is a clean-room architecture note based on Darkroom's source, Nikon's
 public SDK pages, and the non-confidential legal review checklist. It does not
 contain or describe confidential Nikon API material.
 
-The user separately accepted Nikon's download agreement and supplied SDK
-version 1.46.0 in private storage. No Nikon library, executable, header, sample,
-or other SDK artifact is present in this repository. The files under
+The user separately accepted Nikon's download agreement, supplied SDK version
+1.46.0 in private storage, and confirmed redistribution approval. No Nikon
+library, executable, header, sample, or other SDK artifact is present in this
+repository. The files under
 `native/nikon-nef-decoder/` remain a public contract, a mock process, and its
-test. The private helper and SDK stay outside source control.
+test. The private helper and SDK stay outside source control and are injected
+only by the release build.
 
 Public Nikon references, checked 2026-07-10:
 
@@ -47,8 +49,8 @@ Darkroom is an Electron main process plus a Next.js static renderer:
 6. Crop behavior remains renderer-owned. The private Nikon helper physically
    normalizes SDK output and reports orientation 1; LibRaw and embedded sources
    retain their existing orientation path.
-7. Electron currently packages `electron-dist`, the static `out` directory,
-   and `package.json`. No native helper or SDK runtime is currently included.
+7. macOS arm64 releases package the private helper, required SDK runtime,
+   profiles, parameter data, and third-party notice under app resources.
 
 LibRaw remains the default for Develop and export. The native path is invoked
 only after a LibRaw processing failure for a `.nef` file. Every native failure,
@@ -70,16 +72,16 @@ supported and receives no Nikon helper. The macOS runtime is effectively
 macOS 13+ because of its bundled Boost libraries; Windows requires the matching
 VC++ runtime.
 
-## Legal go/no-go gate
+## Remaining release gates
 
-The release decision remains **NO-GO** until every item below has written,
+Redistribution approval is confirmed. Public release remains **NO-GO** until
+the remaining signing, notice, deployment, and clean-machine items have written,
 retained evidence:
 
-- [Done locally] An authorized human accepted the download agreement and
-  supplied SDK 1.46.0. This does not establish redistribution permission.
-- Counsel or the product owner confirms whether redistribution is permitted and
-  identifies every condition, including downstream EULA obligations, required
-  notices, and any Nikon third-party-beneficiary language.
+- [Done] An authorized human accepted the download agreement, supplied SDK
+  1.46.0, and confirmed redistribution approval.
+- Retain the approval and every condition, including downstream EULA
+  obligations, required notices, and any Nikon third-party-beneficiary language.
 - Counsel resolves the SDK/archive/documentation confidentiality terms against
   Darkroom's public repository. SDK artifacts and any confidential build inputs
   remain in private storage.
@@ -90,8 +92,8 @@ retained evidence:
   re-signing of a Nikon artifact is required.
 - Intel macOS and Windows ARM64 are separately confirmed or explicitly excluded.
 
-Passing this gate authorizes an isolated spike. It does not by itself authorize
-committing proprietary files to the public repository or releasing a package.
+Passing the remaining gates authorizes public release. It does not authorize
+committing proprietary files to the public repository.
 
 ## Stable helper boundary
 
@@ -199,15 +201,17 @@ architecture in a private, access-controlled build environment:
 - Preserve vendor signatures where required and sign the helper/app only in the
   order approved by Nikon and the platform vendor.
 
-## Licence-gated electron-builder plan
+## Electron-builder packaging
 
-Do not implement this section until both redistribution and signing are
-approved.
+macOS arm64 packaging is implemented after redistribution approval. Windows
+packaging still requires a production Windows helper, and Linux remains
+SDK-free.
 
-1. Add platform-and-architecture-specific `extraResources` entries containing
+1. [Done for macOS arm64] Add platform-and-architecture-specific
+   `extraResources` entries containing
    only the Darkroom helper, the exact required Nikon runtime files, the approved
-   notices, and the private manifest. Keep these files outside the ASAR so the
-   operating system loader can access them.
+   notices. Keep these files outside the ASAR so the operating system loader can
+   access them.
 2. Use separate macOS arm64 and x64 resources unless the archive and licence
    permit a universal helper and compatible universal Nikon libraries. Do not
    merge, thin, patch, change install names, or alter rpaths in a Nikon binary
@@ -215,9 +219,10 @@ approved.
 3. Add Windows x64 resources. Add Windows ARM64 only after Nikon confirms it and
    supplies the needed architecture. Restrict DLL resolution to the helper's
    resource directory.
-4. Locate packaged helpers from `process.resourcesPath`; keep an explicit
-   development-only path for privately built local artifacts. Absence resolves
-   to `SDK_UNAVAILABLE`, not an application crash.
+4. [Done for macOS arm64] Locate packaged helpers from
+   `process.resourcesPath`; keep an explicit development-only path for privately
+   built local artifacts. Absence resolves to `SDK_UNAVAILABLE`, not an
+   application crash.
 5. Exclude all Nikon resources and the helper from Linux packages. Linux keeps
    LibRaw and the embedded fallback and reports a clear
    `nikon-sdk-unavailable` diagnostic when an unsupported NEF reaches Develop or

@@ -45,11 +45,9 @@ function getNefDecoderCommand(): NefDecoderCommand | null {
   }
   if (process.platform !== "darwin" && process.platform !== "win32") return null;
   return {
-    executable: path.join(
-      process.resourcesPath,
-      "nikon-nef-decoder",
-      process.platform === "win32" ? "nikon-nef-decoder.exe" : "nikon-nef-decoder",
-    ),
+    executable: process.platform === "darwin"
+      ? path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder")
+      : path.join(process.resourcesPath, "nikon-nef-decoder", "nikon-nef-decoder.exe"),
   };
 }
 
