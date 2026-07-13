@@ -43,11 +43,9 @@ function getNefDecoderCommand(): NefDecoderCommand | null {
       env: { ELECTRON_RUN_AS_NODE: "1" },
     };
   }
-  if (process.platform !== "darwin" && process.platform !== "win32") return null;
+  if (process.platform !== "darwin") return null;
   return {
-    executable: process.platform === "darwin"
-      ? path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder")
-      : path.join(process.resourcesPath, "nikon-nef-decoder", "nikon-nef-decoder.exe"),
+    executable: path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder"),
   };
 }
 

@@ -10,6 +10,13 @@ if (process.platform === "darwin") {
   const required = [
     "spike/DarkroomNefSpike.app/Contents/MacOS/nikon-nef-decoder",
     "spike/DarkroomNefSpike.app/Contents/Frameworks/libImgSDK.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libRCSigProc.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_atomic-clang-darwin150-mt-1_82.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_filesystem-clang-darwin150-mt-1_82.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_system-clang-darwin150-mt-1_82.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_thread-clang-darwin150-mt-1_82.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libtbb.dylib",
+    "spike/DarkroomNefSpike.app/Contents/Frameworks/libtbbmalloc.dylib",
     "spike/DarkroomNefSpike.app/Contents/Frameworks/Elm.framework/Versions/A/Elm",
     "spike/DarkroomNefSpike.app/Contents/Resources/NKsRGB.icm",
     "spike/DarkroomNefSpike.app/Contents/Resources/prm.bin",

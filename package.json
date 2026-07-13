@@ -72,7 +72,7 @@
         },
         {
           "from": "${env.DARKROOM_NEF_SDK_FROM}/spike/DarkroomNefSpike.app/Contents/Resources/prm.bin",
-          "to": "Contents/Resources/prm.bin"
+          "to": "prm.bin"
         }
       ],
       "target": [

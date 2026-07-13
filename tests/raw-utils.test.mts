@@ -18,6 +18,7 @@ test("RAW preview pixels are capped before their single JPEG encode", async () =
     width: number;
     height: number;
     encodes: number;
+    pixels: number[];
   }> = [];
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
 
@@ -29,12 +30,14 @@ test("RAW preview pixels are capped before their single JPEG encode", async () =
           width: 0,
           height: 0,
           encodes: 0,
+          pixels: [] as number[],
           getContext: () => ({
             createImageData: (width: number, height: number) => ({
               data: new Uint8ClampedArray(width * height * 4),
             }),
-            drawImage: () => undefined,
-            putImageData: () => undefined,
+            putImageData: (imageData: { data: Uint8ClampedArray }) => {
+              canvas.pixels = Array.from(imageData.data);
+            },
           }),
           toBlob: (callback: (blob: Blob) => void) => {
             canvas.encodes += 1;
@@ -48,7 +51,7 @@ test("RAW preview pixels are capped before their single JPEG encode", async () =
   });
 
   try {
-    await rgbDataToBlob(new Uint8Array(4 * 2 * 3), 4, 2, 8, 2);
+    await rgbDataToBlob(Uint8Array.from({ length: 4 * 2 * 3 }, (_, index) => index), 4, 2, 8, 2);
   } finally {
     if (originalDocument) {
       Object.defineProperty(globalThis, "document", originalDocument);
@@ -59,9 +62,7 @@ test("RAW preview pixels are capped before their single JPEG encode", async () =
 
   assert.deepEqual(
     canvases.map(({ width, height, encodes }) => ({ width, height, encodes })),
-    [
-      { width: 4, height: 2, encodes: 0 },
-      { width: 2, height: 1, encodes: 1 },
-    ],
+    [{ width: 2, height: 1, encodes: 1 }],
   );
+  assert.deepEqual(canvases[0].pixels, [8, 9, 10, 255, 14, 15, 16, 255]);
 });

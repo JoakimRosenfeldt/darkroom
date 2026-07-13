@@ -85,7 +85,7 @@ export function InteractiveCropOverlay({
     const observer = new ResizeObserver(measureImageRect);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [measureImageRect]);
+  }, [measureImageRect, crop.enabled]);
 
   const aspectRatio = resolveAspectRatio(
     crop.aspectPreset,

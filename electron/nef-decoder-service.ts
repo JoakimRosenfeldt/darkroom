@@ -213,7 +213,7 @@ function runHelper(
   output: string,
   request: NefDecodeRequest,
   timeoutMs: number,
-): Promise<string> {
+): Promise<void> {
   const args = [
     ...(command.fixedArgs ?? []),
     "--input", input,
@@ -250,13 +250,13 @@ function runHelper(
       stderr = Buffer.concat([stderr, chunk.subarray(0, MAX_STDERR_BYTES - stderr.byteLength)]);
     });
 
-    const finish = (error?: DecodeError, value = "") => {
+    const finish = (error?: DecodeError) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       if (killDeadline) clearTimeout(killDeadline);
       if (error) reject(error);
-      else resolve(value);
+      else resolve();
     };
 
     const timeout = setTimeout(() => {
@@ -277,7 +277,7 @@ function runHelper(
       if (timedOut) {
         finish(new DecodeError("TIMEOUT", "Nikon decoder timed out."));
       } else if (code === 0) {
-        finish(undefined, stderr.toString("utf8"));
+        finish();
       } else {
         finish(helperFailure(stderr.toString("utf8")));
       }
@@ -436,7 +436,7 @@ export function createNefDecoderService(options: NefDecoderServiceOptions) {
   const waiting: Array<() => void> = [];
 
   async function limited<T>(work: () => Promise<T>): Promise<T> {
-    if (active >= 2) await new Promise<void>((resolve) => waiting.push(resolve));
+    while (active >= 2) await new Promise<void>((resolve) => waiting.push(resolve));
     active += 1;
     try {
       return await work();

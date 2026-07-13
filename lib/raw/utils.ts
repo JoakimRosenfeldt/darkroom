@@ -5,58 +5,63 @@ export function rgbDataToBlob(
   bits: number,
   maxEdge?: number,
 ): Promise<Blob> {
+  const scale = maxEdge
+    ? Math.min(1, maxEdge / Math.max(width, height))
+    : 1;
+  const outputWidth = Math.max(1, Math.round(width * scale));
+  const outputHeight = Math.max(1, Math.round(height * scale));
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("Could not create canvas context");
   }
 
-  const imageData = context.createImageData(width, height);
+  const imageData = context.createImageData(outputWidth, outputHeight);
   const pixels = imageData.data;
+  const source = bits === 8 && data instanceof Uint8Array
+    ? data
+    : data instanceof Uint16Array
+      ? data
+      : new Uint16Array(data.buffer, data.byteOffset, data.byteLength / 2);
+  const sourceMax = source instanceof Uint16Array ? 65_535 : 255;
+  const channels = source.length / (width * height);
+  const copiedChannels = channels === 4 ? 4 : 3;
 
-  if (bits === 8 && data instanceof Uint8Array) {
-    const channels = data.length / (width * height);
-    if (channels === 3) {
-      for (let i = 0, j = 0; i < data.length; i += 3, j += 4) {
-        pixels[j] = data[i];
-        pixels[j + 1] = data[i + 1];
-        pixels[j + 2] = data[i + 2];
-        pixels[j + 3] = 255;
+  for (let y = 0; y < outputHeight; y += 1) {
+    const sourceY = Math.max(0, (y + 0.5) * height / outputHeight - 0.5);
+    const y0 = Math.floor(sourceY);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const yWeight = sourceY - y0;
+    for (let x = 0; x < outputWidth; x += 1) {
+      const sourceX = Math.max(0, (x + 0.5) * width / outputWidth - 0.5);
+      const x0 = Math.floor(sourceX);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const xWeight = sourceX - x0;
+      const topLeft = (y0 * width + x0) * channels;
+      const topRight = (y0 * width + x1) * channels;
+      const bottomLeft = (y1 * width + x0) * channels;
+      const bottomRight = (y1 * width + x1) * channels;
+      const target = (y * outputWidth + x) * 4;
+
+      for (let channel = 0; channel < copiedChannels; channel += 1) {
+        const top = source[topLeft + channel] * (1 - xWeight) +
+          source[topRight + channel] * xWeight;
+        const bottom = source[bottomLeft + channel] * (1 - xWeight) +
+          source[bottomRight + channel] * xWeight;
+        pixels[target + channel] = Math.round(
+          ((top * (1 - yWeight) + bottom * yWeight) / sourceMax) * 255,
+        );
       }
-    } else {
-      pixels.set(data.subarray(0, pixels.length));
-    }
-  } else {
-    const source = data instanceof Uint16Array ? data : new Uint16Array(data.buffer);
-    const channels = source.length / (width * height);
-    const max = 65535;
-
-    for (let i = 0, j = 0; i < source.length; i += channels, j += 4) {
-      pixels[j] = Math.round((source[i] / max) * 255);
-      pixels[j + 1] = Math.round((source[i + 1] / max) * 255);
-      pixels[j + 2] = Math.round((source[i + 2] / max) * 255);
-      pixels[j + 3] = 255;
+      if (copiedChannels === 3) pixels[target + 3] = 255;
     }
   }
 
   context.putImageData(imageData, 0, 0);
-  let outputCanvas = canvas;
-  if (maxEdge && Math.max(width, height) > maxEdge) {
-    const scale = maxEdge / Math.max(width, height);
-    outputCanvas = document.createElement("canvas");
-    outputCanvas.width = Math.max(1, Math.round(width * scale));
-    outputCanvas.height = Math.max(1, Math.round(height * scale));
-    const outputContext = outputCanvas.getContext("2d");
-    if (!outputContext) {
-      throw new Error("Could not create canvas context");
-    }
-    outputContext.drawImage(canvas, 0, 0, outputCanvas.width, outputCanvas.height);
-  }
 
   return new Promise((resolve, reject) => {
-    outputCanvas.toBlob((blob) => {
+    canvas.toBlob((blob) => {
       if (!blob) {
         reject(new Error("Failed to encode image"));
         return;
