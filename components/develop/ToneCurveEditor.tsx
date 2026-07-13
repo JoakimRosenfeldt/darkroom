@@ -1,5 +1,3 @@
-"use client";
-
 import { useRef, useState } from "react";
 import type {
   KeyboardEvent,
@@ -7,6 +5,7 @@ import type {
 } from "react";
 import {
   DEFAULT_CURVE_SETTINGS,
+  CURVE_LUT_SIZE,
   sampleCurve,
 } from "@/lib/develop/plugins/curve";
 import type {
@@ -18,7 +17,7 @@ import type {
 const SIZE = 256;
 const INSET = 8;
 const PLOT_SIZE = SIZE - INSET * 2;
-const MIN_GAP = 1 / 255;
+const MIN_GAP = 1 / (CURVE_LUT_SIZE - 1);
 
 const CHANNELS: { id: CurveChannel; label: string; color: string }[] = [
   { id: "rgb", label: "RGB", color: "#d4d4d4" },
@@ -35,8 +34,8 @@ function svgPoint(point: CurvePoint): { x: number; y: number } {
 }
 
 function pathFor(points: CurvePoint[]): string {
-  return Array.from({ length: 64 }, (_, index) => {
-    const x = index / 63;
+  return Array.from({ length: CURVE_LUT_SIZE }, (_, index) => {
+    const x = index / (CURVE_LUT_SIZE - 1);
     const point = svgPoint({ x, y: sampleCurve(points, x) });
     return `${index === 0 ? "M" : "L"}${point.x} ${point.y}`;
   }).join(" ");
@@ -88,6 +87,16 @@ export function ToneCurveEditor({
       return;
     }
     const point = eventPoint(event.clientX, event.clientY);
+    const existingIndex = points.findIndex(
+      (current) => Math.abs(current.x - point.x) < MIN_GAP,
+    );
+    if (existingIndex >= 0) {
+      commitPoint(existingIndex, { ...point, x: points[existingIndex].x });
+      setSelected(existingIndex);
+      dragIndex.current = existingIndex;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
     const next = [...points, point].sort((a, b) => a.x - b.x);
     const index = next.indexOf(point);
     onChange({ ...settings, [channel]: next });

@@ -75,9 +75,12 @@ export type DevelopPluginId = keyof DevelopSettings;
 export type DevelopPluginSettings<T extends DevelopPluginId> =
   DevelopSettings[T];
 
+export type XmpValue = string | string[];
+export type XmpProps = Record<string, XmpValue>;
+
 export interface XmpPluginAdapter<T extends DevelopPluginId> {
-  write(settings: DevelopSettings[T]): Record<string, string>;
-  read(props: Record<string, string>): Partial<DevelopSettings[T]>;
+  write(settings: DevelopSettings[T]): XmpProps;
+  read(props: XmpProps): Partial<DevelopSettings[T]>;
 }
 
 export interface DevelopPlugin<T extends DevelopPluginId> {

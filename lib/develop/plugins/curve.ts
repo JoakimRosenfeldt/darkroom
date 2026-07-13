@@ -3,10 +3,11 @@ import type {
   CurvePoint,
   CurveSettings,
   DevelopPlugin,
+  XmpValue,
 } from "@/lib/develop/types";
 
 export const CURVE_CHANNELS: CurveChannel[] = ["rgb", "red", "green", "blue"];
-export const CURVE_LUT_SIZE = 64;
+export const CURVE_LUT_SIZE = 256;
 
 const LINEAR_CURVE: CurvePoint[] = [
   { x: 0, y: 0 },
@@ -40,13 +41,19 @@ export function normalizeCurvePoints(value: unknown): CurvePoint[] {
     .map((point) => ({ x: clamp(point.x), y: clamp(point.y) }))
     .sort((a, b) => a.x - b.x);
 
-  if (points.length < 2) {
+  const unique = points.filter(
+    (point, index) =>
+      index === points.length - 1 ||
+      Math.round(point.x * 255) !== Math.round(points[index + 1].x * 255),
+  );
+
+  if (unique.length < 2) {
     return LINEAR_CURVE.map((point) => ({ ...point }));
   }
 
-  points[0].x = 0;
-  points[points.length - 1].x = 1;
-  return points;
+  unique[0].x = 0;
+  unique[unique.length - 1].x = 1;
+  return unique;
 }
 
 export function normalizeCurveSettings(value: unknown): CurveSettings {
@@ -100,8 +107,24 @@ export function sampleCurve(points: CurvePoint[], input: number): number {
       const after = points[Math.min(points.length - 1, index + 1)];
       const leftWidth = right.x - before.x;
       const rightWidth = after.x - left.x;
-      const leftSlope = leftWidth === 0 ? 0 : (right.y - before.y) / leftWidth;
-      const rightSlope = rightWidth === 0 ? 0 : (after.y - left.y) / rightWidth;
+      let leftSlope = leftWidth === 0 ? 0 : (right.y - before.y) / leftWidth;
+      let rightSlope = rightWidth === 0 ? 0 : (after.y - left.y) / rightWidth;
+      const segmentSlope = (right.y - left.y) / width;
+      if (segmentSlope === 0) {
+        leftSlope = 0;
+        rightSlope = 0;
+      } else {
+        if (leftSlope * segmentSlope < 0) leftSlope = 0;
+        if (rightSlope * segmentSlope < 0) rightSlope = 0;
+        const magnitude = Math.hypot(
+          leftSlope / segmentSlope,
+          rightSlope / segmentSlope,
+        );
+        if (magnitude > 3) {
+          leftSlope *= 3 / magnitude;
+          rightSlope *= 3 / magnitude;
+        }
+      }
       const squared = amount * amount;
       const cubed = squared * amount;
       return clamp(
@@ -128,17 +151,18 @@ export function createCurveLut(settings: CurveSettings): Float32Array {
   return values;
 }
 
-function curveProp(points: CurvePoint[]): string {
-  return points
-    .map(({ x, y }) => `${Math.round(x * 255)}, ${Math.round(y * 255)}`)
-    .join("; ");
+function curveProp(points: CurvePoint[]): string[] {
+  return normalizeCurvePoints(points).map(
+    ({ x, y }) => `${Math.round(x * 255)}, ${Math.round(y * 255)}`,
+  );
 }
 
-function parseCurve(value: string | undefined): CurvePoint[] | undefined {
+function parseCurve(value: XmpValue | undefined): CurvePoint[] | undefined {
   if (!value) {
     return undefined;
   }
-  const points = value.split(";").map((pair) => {
+  const pairs = Array.isArray(value) ? value : value.split(";");
+  const points = pairs.map((pair) => {
     const [x, y] = pair.split(",").map((part) => Number(part.trim()) / 255);
     return { x, y };
   });
@@ -165,6 +189,7 @@ export const curvePlugin: DevelopPlugin<"curve"> = {
   isDefault,
   xmp: {
     write: (settings) => ({
+      "crs:ToneCurveName2012": "Custom",
       "crs:ToneCurvePV2012": curveProp(settings.rgb),
       "crs:ToneCurvePV2012Red": curveProp(settings.red),
       "crs:ToneCurvePV2012Green": curveProp(settings.green),
