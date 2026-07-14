@@ -71,25 +71,28 @@ export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
     if (!canvas || !renderer || !container || !ready) {
       return;
     }
-    const currentCanvas = canvas;
     const currentContainer = container;
     const currentRenderer = renderer;
 
-    function render() {
-      if (!currentCanvas || !currentContainer) {
-        return;
-      }
+    function resize() {
       currentRenderer.resize(
         currentContainer.clientWidth,
         currentContainer.clientHeight,
       );
-      currentRenderer.render(settings, showOriginal);
+      const state = useDevelopStore.getState();
+      currentRenderer.render(state.settings, state.showOriginal);
     }
 
-    render();
-    const observer = new ResizeObserver(render);
+    resize();
+    const observer = new ResizeObserver(resize);
     observer.observe(currentContainer);
     return () => observer.disconnect();
+  }, [ready]);
+
+  useEffect(() => {
+    if (ready) {
+      rendererRef.current?.render(settings, showOriginal);
+    }
   }, [settings, showOriginal, ready]);
 
   useEffect(() => {
