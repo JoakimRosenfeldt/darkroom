@@ -46,7 +46,7 @@ function isDefault(settings: MixerSettings): boolean {
 
 export const mixerPlugin: DevelopPlugin<"mixer"> = {
   id: "mixer",
-  label: "Color Mixer",
+  label: "HSL / Color",
   defaults: DEFAULT_MIXER_SETTINGS,
   isDefault,
   xmp: {
