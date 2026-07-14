@@ -224,25 +224,32 @@ export function DevelopCanvas({
       className="relative h-full w-full overflow-hidden"
       onWheel={onWheel}
     >
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 h-full w-full"
-        style={cropActive ? {
-          transform: `translate(${previewTransform.x}px, ${previewTransform.y}px) scale(${previewTransform.scale}) translate(${cropImageOffset.x * imageRect.width}px, ${cropImageOffset.y * imageRect.height}px)`,
+      <div
+        className="absolute inset-0"
+        style={{
+          transform: `translate(${previewTransform.x}px, ${previewTransform.y}px) scale(${previewTransform.scale})`,
           transformOrigin: "0 0",
-        } : undefined}
-      />
-      {cropActive && cropDraft ? (
-        <InteractiveCropOverlay
-          crop={cropDraft}
-          imageOffset={cropImageOffset}
-          imageRect={imageRect}
-          imageWidth={image.width}
-          imageHeight={image.height}
-          previewScale={previewTransform.scale}
-          onChange={onCropChange}
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 h-full w-full"
+          style={cropActive ? {
+            transform: `translate(${cropImageOffset.x * imageRect.width}px, ${cropImageOffset.y * imageRect.height}px)`,
+          } : undefined}
         />
-      ) : null}
+        {cropActive && cropDraft ? (
+          <InteractiveCropOverlay
+            crop={cropDraft}
+            imageOffset={cropImageOffset}
+            imageRect={imageRect}
+            imageWidth={image.width}
+            imageHeight={image.height}
+            previewScale={previewTransform.scale}
+            onChange={onCropChange}
+          />
+        ) : null}
+      </div>
       {!ready ? (
         <div className="absolute inset-0 flex items-center justify-center text-xs uppercase tracking-wider text-lr-text-dim">
           Preparing editor...
