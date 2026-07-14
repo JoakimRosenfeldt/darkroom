@@ -11,6 +11,7 @@ import {
 import { useDevelopStore } from "@/stores/develop-store";
 
 interface InteractiveCropOverlayProps {
+  active: boolean;
   imageWidth: number;
   imageHeight: number;
 }
@@ -31,17 +32,28 @@ const HANDLE_POSITIONS: Array<{
   handle: CropHandle;
   className: string;
 }> = [
-  { handle: "nw", className: "left-0 top-0 -translate-x-1/2 -translate-y-1/2" },
-  { handle: "n", className: "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2" },
-  { handle: "ne", className: "right-0 top-0 translate-x-1/2 -translate-y-1/2" },
-  { handle: "e", className: "right-0 top-1/2 translate-x-1/2 -translate-y-1/2" },
-  { handle: "se", className: "right-0 bottom-0 translate-x-1/2 translate-y-1/2" },
-  { handle: "s", className: "left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2" },
-  { handle: "sw", className: "left-0 bottom-0 -translate-x-1/2 translate-y-1/2" },
-  { handle: "w", className: "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2" },
+  { handle: "nw", className: "left-0 top-0" },
+  { handle: "n", className: "left-1/2 top-0 -translate-x-1/2" },
+  { handle: "ne", className: "right-0 top-0" },
+  { handle: "e", className: "right-0 top-1/2 -translate-y-1/2" },
+  { handle: "se", className: "bottom-0 right-0" },
+  { handle: "s", className: "bottom-0 left-1/2 -translate-x-1/2" },
+  { handle: "sw", className: "bottom-0 left-0" },
+  { handle: "w", className: "left-0 top-1/2 -translate-y-1/2" },
+];
+
+const EDGE_HIT_AREAS: Array<{
+  handle: CropHandle;
+  className: string;
+}> = [
+  { handle: "n", className: "left-3 right-3 top-0 h-3" },
+  { handle: "e", className: "bottom-3 right-0 top-3 w-3" },
+  { handle: "s", className: "bottom-0 left-3 right-3 h-3" },
+  { handle: "w", className: "bottom-3 left-0 top-3 w-3" },
 ];
 
 export function InteractiveCropOverlay({
+  active,
   imageWidth,
   imageHeight,
 }: InteractiveCropOverlayProps) {
@@ -85,7 +97,7 @@ export function InteractiveCropOverlay({
     const observer = new ResizeObserver(measureImageRect);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [measureImageRect, crop.enabled]);
+  }, [measureImageRect, crop.enabled, active]);
 
   const aspectRatio = resolveAspectRatio(
     crop.aspectPreset,
@@ -95,6 +107,10 @@ export function InteractiveCropOverlay({
     crop.customAspectHeight,
   );
   const cropRect = clampCropRect(crop);
+
+  if (!active) {
+    return null;
+  }
 
   function onPointerDown(handle: CropHandle, event: React.PointerEvent) {
     if (!crop.enabled) {
@@ -177,7 +193,7 @@ export function InteractiveCropOverlay({
   }
 
   return (
-    <div ref={containerRef} className="absolute inset-0">
+    <div ref={containerRef} className="absolute inset-0 touch-none select-none">
       <div
         className="absolute overflow-hidden"
         style={{
@@ -188,7 +204,7 @@ export function InteractiveCropOverlay({
         }}
       >
         <div
-          className="absolute cursor-move border border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)]"
+          className="absolute cursor-move border border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]"
           style={{
             left: `${cropRect.x * 100}%`,
             top: `${cropRect.y * 100}%`,
@@ -205,10 +221,21 @@ export function InteractiveCropOverlay({
             ))}
           </div>
 
+          {EDGE_HIT_AREAS.map(({ handle, className }) => (
+            <div
+              key={handle}
+              className={`absolute z-10 ${className}`}
+              style={{ cursor: HANDLE_CURSORS[handle] }}
+              onPointerDown={(event) => onPointerDown(handle, event)}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+            />
+          ))}
+
           {HANDLE_POSITIONS.map(({ handle, className }) => (
             <div
               key={handle}
-              className={`absolute z-10 h-3 w-3 rounded-full border border-white/90 bg-lr-accent ${className}`}
+              className={`absolute z-20 h-3 w-3 rounded-sm border border-white bg-lr-accent shadow-sm ${className}`}
               style={{ cursor: HANDLE_CURSORS[handle] }}
               onPointerDown={(event) => onPointerDown(handle, event)}
               onPointerMove={onPointerMove}

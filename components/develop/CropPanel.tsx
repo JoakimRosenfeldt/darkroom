@@ -101,6 +101,7 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
             <button
               key={preset.id}
               type="button"
+              aria-pressed={crop.aspectPreset === preset.id}
               onClick={() => selectAspectPreset(preset.id)}
               className={`rounded border px-2 py-1.5 text-left text-[11px] ${
                 crop.aspectPreset === preset.id
@@ -123,7 +124,7 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         ) : null}
 
         <p className="mb-1 mt-2 text-[11px] text-lr-text-dim">
-          Drag inside the image to move or resize the crop.
+          Drag the frame to move it. Pull an edge or corner to resize.
         </p>
 
         <SliderRow

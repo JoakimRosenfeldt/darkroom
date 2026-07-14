@@ -10,9 +10,10 @@ import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOver
 interface DevelopCanvasProps {
   image: DevelopImage;
   alt: string;
+  cropActive: boolean;
 }
 
-export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
+export function DevelopCanvas({ image, alt, cropActive }: DevelopCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<DevelopRenderer | null>(null);
   const settings = useDevelopStore((state) => state.settings);
@@ -144,6 +145,7 @@ export function DevelopCanvas({ image, alt }: DevelopCanvasProps) {
         </div>
       ) : null}
       <InteractiveCropOverlay
+        active={cropActive}
         imageWidth={image.width}
         imageHeight={image.height}
       />

@@ -19,6 +19,7 @@ import {
 import { useLibraryStore } from "@/stores/library-store";
 import { DevelopCanvas } from "@/components/develop/DevelopCanvas";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
+import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { exportDevelopJpeg } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -40,6 +41,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   );
   const metadata = useEntryMetadataForId(entry.id);
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
+  const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const activeIndex = useMemo(
@@ -135,6 +137,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     }
   }
 
+  function selectDevelopPanel(panel: DevelopPanelId) {
+    const opening = activePanel !== panel;
+    setActivePanel(opening ? panel : null);
+    if (opening && panel === "crop" && !developSettings.crop.enabled) {
+      useDevelopStore.getState().updatePlugin("crop", { enabled: true });
+    }
+  }
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || isEditableTarget(event.target)) {
@@ -151,13 +161,17 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         router.push(`/photo?id=${encodeURIComponent(entries[activeIndex + 1].id)}`);
       }
       if (event.key === "Escape") {
-        router.push("/");
+        if (activePanel === "crop") {
+          setActivePanel(null);
+        } else {
+          router.push("/");
+        }
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, activeIndex, router]);
+  }, [entries, activeIndex, router, activePanel]);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -216,12 +230,23 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
           {decoded ? (
             <div className="relative flex-1">
-              <DevelopCanvas image={decoded} alt={entry.name} />
+              <DevelopCanvas
+                image={decoded}
+                alt={entry.name}
+                cropActive={activePanel === "crop"}
+              />
             </div>
           ) : null}
         </div>
 
-        {decoded ? <DevelopSidePanels decoded={decoded} entry={entry} /> : null}
+        {decoded ? (
+          <DevelopSidePanels
+            decoded={decoded}
+            entry={entry}
+            activePanel={activePanel}
+            onSelect={selectDevelopPanel}
+          />
+        ) : null}
       </div>
 
       <Filmstrip
