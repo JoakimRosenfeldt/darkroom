@@ -28,7 +28,7 @@ interface DevelopCanvasProps {
   ) => void;
 }
 
-const MIN_PREVIEW_ZOOM = 1;
+const MIN_PREVIEW_ZOOM = 0.25;
 const MAX_PREVIEW_ZOOM = 8;
 
 export function DevelopCanvas({
@@ -166,14 +166,13 @@ export function DevelopCanvas({
         MIN_PREVIEW_ZOOM,
         Math.min(MAX_PREVIEW_ZOOM, current.scale * Math.exp(-event.deltaY * 0.001)),
       );
-      if (scale === 1) {
-        return { scale: 1, x: 0, y: 0 };
-      }
       const ratio = scale / current.scale;
+      const xLimit = bounds.width * (1 - scale);
+      const yLimit = bounds.height * (1 - scale);
       return {
         scale,
-        x: Math.max(bounds.width * (1 - scale), Math.min(0, pointerX - (pointerX - current.x) * ratio)),
-        y: Math.max(bounds.height * (1 - scale), Math.min(0, pointerY - (pointerY - current.y) * ratio)),
+        x: Math.max(Math.min(0, xLimit), Math.min(Math.max(0, xLimit), pointerX - (pointerX - current.x) * ratio)),
+        y: Math.max(Math.min(0, yLimit), Math.min(Math.max(0, yLimit), pointerY - (pointerY - current.y) * ratio)),
       };
     });
   }
