@@ -272,7 +272,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       />
 
       <div className="flex min-h-0 flex-1">
-        <div className="relative flex min-w-0 flex-1 flex-col bg-[#0d0d0d]">
+        <div className="relative flex min-w-0 flex-1 flex-col bg-lr-bg">
           <div className="absolute right-3 top-3 z-10">
             <div className="flex items-center gap-2">
               {exportStatus ? (
