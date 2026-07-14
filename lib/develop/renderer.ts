@@ -557,7 +557,7 @@ export class DevelopRenderer {
   render(
     settings: DevelopSettings,
     showOriginal: boolean,
-    cropOutput = false,
+    mode: "source" | "crop-preview" | "export" = "source",
   ): void {
     const gl = this.gl;
     if (!this.texture) {
@@ -567,8 +567,13 @@ export class DevelopRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (!cropOutput) {
+    const crop = clampCropRect(settings.crop);
+    if (mode === "source") {
       this.applyContainViewport();
+    } else if (mode === "crop-preview") {
+      this.applyContainViewport(
+        this.displayWidth * crop.width / (this.displayHeight * crop.height),
+      );
     }
     gl.useProgram(this.activeProgram);
     gl.activeTexture(gl.TEXTURE0);
@@ -580,9 +585,8 @@ export class DevelopRenderer {
     this.uniform1f("u_input_linear", this.inputLinear ? 1 : 0);
     this.uniform1f("u_show_original", showOriginal ? 1 : 0);
 
-    const crop = clampCropRect(settings.crop);
     this.uniform1f("u_crop_enabled", settings.crop.enabled ? 1 : 0);
-    this.uniform1f("u_crop_output", cropOutput ? 1 : 0);
+    this.uniform1f("u_crop_output", mode === "source" ? 0 : 1);
     this.uniform4f(
       "u_crop",
       crop.x,
@@ -616,9 +620,10 @@ export class DevelopRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  private applyContainViewport(): void {
+  private applyContainViewport(
+    imageRatio = this.displayWidth / this.displayHeight,
+  ): void {
     const canvasRatio = this.canvas.width / this.canvas.height;
-    const imageRatio = this.displayWidth / this.displayHeight;
     let width = this.canvas.width;
     let height = this.canvas.height;
 
@@ -751,7 +756,7 @@ export async function exportDevelopJpeg(
   try {
     await renderer.setImage(image);
     renderer.resize(width, height);
-    renderer.render(settings, false, true);
+    renderer.render(settings, false, "export");
     return await renderer.toBlob();
   } finally {
     renderer.dispose();

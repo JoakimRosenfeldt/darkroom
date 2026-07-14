@@ -6,22 +6,58 @@ import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { DevelopRenderer } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
 import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOverlay";
+import { computeContainedImageRect } from "@/lib/develop/crop-geometry";
+import type { CropSettings } from "@/lib/develop/types";
+
+export interface CropPreviewTransform {
+  scale: number;
+  x: number;
+  y: number;
+}
 
 interface DevelopCanvasProps {
   image: DevelopImage;
   alt: string;
   cropActive: boolean;
+  cropDraft: CropSettings | null;
+  cropImageOffset: { x: number; y: number };
+  previewTransform: CropPreviewTransform;
+  onCropChange: (crop: CropSettings, preserveFrame?: boolean) => void;
+  onPreviewTransformChange: (
+    update: (current: CropPreviewTransform) => CropPreviewTransform,
+  ) => void;
 }
 
-export function DevelopCanvas({ image, alt, cropActive }: DevelopCanvasProps) {
+const MIN_PREVIEW_ZOOM = 1;
+const MAX_PREVIEW_ZOOM = 8;
+
+export function DevelopCanvas({
+  image,
+  alt,
+  cropActive,
+  cropDraft,
+  cropImageOffset,
+  previewTransform,
+  onCropChange,
+  onPreviewTransformChange,
+}: DevelopCanvasProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<DevelopRenderer | null>(null);
+  const cropDraftRef = useRef(cropDraft);
   const settings = useDevelopStore((state) => state.settings);
   const showOriginal = useDevelopStore((state) => state.showOriginal);
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [imageRect, setImageRect] = useState(() =>
+    computeContainedImageRect(1, 1, image.width, image.height),
+  );
   const usesEmbeddedRawPreview = image.metadata.developSource === "embedded";
+
+  useEffect(() => {
+    cropDraftRef.current = cropDraft;
+  }, [cropDraft]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -68,7 +104,7 @@ export function DevelopCanvas({ image, alt, cropActive }: DevelopCanvasProps) {
   useEffect(() => {
     const canvas = canvasRef.current;
     const renderer = rendererRef.current;
-    const container = canvas?.parentElement;
+    const container = containerRef.current;
     if (!canvas || !renderer || !container || !ready) {
       return;
     }
@@ -80,21 +116,67 @@ export function DevelopCanvas({ image, alt, cropActive }: DevelopCanvasProps) {
         currentContainer.clientWidth,
         currentContainer.clientHeight,
       );
+      setImageRect(
+        computeContainedImageRect(
+          currentContainer.clientWidth,
+          currentContainer.clientHeight,
+          image.width,
+          image.height,
+        ),
+      );
       const state = useDevelopStore.getState();
-      currentRenderer.render(state.settings, state.showOriginal);
+      const draft = cropDraftRef.current;
+      currentRenderer.render(
+        draft ? { ...state.settings, crop: draft } : state.settings,
+        state.showOriginal,
+        draft ? "source" : state.settings.crop.enabled ? "crop-preview" : "source",
+      );
     }
 
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(currentContainer);
     return () => observer.disconnect();
-  }, [ready]);
+  }, [ready, image.height, image.width]);
 
   useEffect(() => {
     if (ready) {
-      rendererRef.current?.render(settings, showOriginal);
+      const previewSettings = cropDraft
+        ? { ...settings, crop: cropDraft }
+        : settings;
+      rendererRef.current?.render(
+        previewSettings,
+        showOriginal,
+        cropDraft ? "source" : settings.crop.enabled ? "crop-preview" : "source",
+      );
     }
-  }, [settings, showOriginal, ready]);
+  }, [settings, showOriginal, ready, cropDraft]);
+
+  function onWheel(event: React.WheelEvent) {
+    const container = containerRef.current;
+    if (!cropActive || !container) {
+      return;
+    }
+    event.preventDefault();
+    const bounds = container.getBoundingClientRect();
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    onPreviewTransformChange((current) => {
+      const scale = Math.max(
+        MIN_PREVIEW_ZOOM,
+        Math.min(MAX_PREVIEW_ZOOM, current.scale * Math.exp(-event.deltaY * 0.001)),
+      );
+      if (scale === 1) {
+        return { scale: 1, x: 0, y: 0 };
+      }
+      const ratio = scale / current.scale;
+      return {
+        scale,
+        x: Math.max(bounds.width * (1 - scale), Math.min(0, pointerX - (pointerX - current.x) * ratio)),
+        y: Math.max(bounds.height * (1 - scale), Math.min(0, pointerY - (pointerY - current.y) * ratio)),
+      };
+    });
+  }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -137,18 +219,35 @@ export function DevelopCanvas({ image, alt, cropActive }: DevelopCanvasProps) {
   }
 
   return (
-    <div className="relative h-full w-full">
-      <canvas ref={canvasRef} className="h-full w-full" />
+    <div
+      ref={containerRef}
+      className="relative h-full w-full overflow-hidden"
+      onWheel={onWheel}
+    >
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full"
+        style={cropActive ? {
+          transform: `translate(${previewTransform.x}px, ${previewTransform.y}px) scale(${previewTransform.scale}) translate(${cropImageOffset.x * imageRect.width}px, ${cropImageOffset.y * imageRect.height}px)`,
+          transformOrigin: "0 0",
+        } : undefined}
+      />
+      {cropActive && cropDraft ? (
+        <InteractiveCropOverlay
+          crop={cropDraft}
+          imageOffset={cropImageOffset}
+          imageRect={imageRect}
+          imageWidth={image.width}
+          imageHeight={image.height}
+          previewScale={previewTransform.scale}
+          onChange={onCropChange}
+        />
+      ) : null}
       {!ready ? (
         <div className="absolute inset-0 flex items-center justify-center text-xs uppercase tracking-wider text-lr-text-dim">
           Preparing editor...
         </div>
       ) : null}
-      <InteractiveCropOverlay
-        active={cropActive}
-        imageWidth={image.width}
-        imageHeight={image.height}
-      />
       {usesEmbeddedRawPreview ? (
         <div className="absolute bottom-3 left-3 rounded bg-amber-950/90 px-2 py-1 text-[11px] text-amber-100">
           RAW processing unavailable — editing embedded preview

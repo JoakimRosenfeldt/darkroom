@@ -1,23 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import {
   applyCropDrag,
   clampCropRect,
-  computeContainedImageRect,
   type CropHandle,
+  type ImageRect,
   resolveAspectRatio,
 } from "@/lib/develop/crop-geometry";
-import { useDevelopStore } from "@/stores/develop-store";
+import type { CropSettings } from "@/lib/develop/types";
 
 interface InteractiveCropOverlayProps {
-  active: boolean;
+  crop: CropSettings;
+  imageOffset: { x: number; y: number };
+  imageRect: ImageRect;
   imageWidth: number;
   imageHeight: number;
+  previewScale: number;
+  onChange: (crop: CropSettings, preserveFrame?: boolean) => void;
 }
 
 const HANDLE_CURSORS: Record<CropHandle, string> = {
-  move: "move",
+  move: "grab",
   n: "ns-resize",
   s: "ns-resize",
   e: "ew-resize",
@@ -53,51 +57,21 @@ const EDGE_HIT_AREAS: Array<{
 ];
 
 export function InteractiveCropOverlay({
-  active,
+  crop,
+  imageOffset,
+  imageRect,
   imageWidth,
   imageHeight,
+  previewScale,
+  onChange,
 }: InteractiveCropOverlayProps) {
-  const crop = useDevelopStore((state) => state.settings.crop);
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [imageRect, setImageRect] = useState({
-    x: 0,
-    y: 0,
-    width: 1,
-    height: 1,
-  });
   const dragRef = useRef<{
     handle: CropHandle;
     startX: number;
     startY: number;
     startCrop: { x: number; y: number; width: number; height: number };
   } | null>(null);
-
-  const measureImageRect = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    setImageRect(
-      computeContainedImageRect(
-        container.clientWidth,
-        container.clientHeight,
-        imageWidth,
-        imageHeight,
-      ),
-    );
-  }, [imageWidth, imageHeight]);
-
-  useEffect(() => {
-    measureImageRect();
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    const observer = new ResizeObserver(measureImageRect);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [measureImageRect, crop.enabled, active]);
 
   const aspectRatio = resolveAspectRatio(
     crop.aspectPreset,
@@ -108,14 +82,7 @@ export function InteractiveCropOverlay({
   );
   const cropRect = clampCropRect(crop);
 
-  if (!active) {
-    return null;
-  }
-
   function onPointerDown(handle: CropHandle, event: React.PointerEvent) {
-    if (!crop.enabled) {
-      updatePlugin("crop", { enabled: true });
-    }
     event.preventDefault();
     event.stopPropagation();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -138,16 +105,17 @@ export function InteractiveCropOverlay({
       return;
     }
 
-    const deltaX = (event.clientX - drag.startX) / imageRect.width;
-    const deltaY = (event.clientY - drag.startY) / imageRect.height;
+    const deltaX = (event.clientX - drag.startX) / (imageRect.width * previewScale);
+    const deltaY = (event.clientY - drag.startY) / (imageRect.height * previewScale);
+    const movingImage = drag.handle === "move";
     const next = applyCropDrag(
       drag.startCrop,
       drag.handle,
-      deltaX,
-      deltaY,
+      movingImage ? -deltaX : deltaX,
+      movingImage ? -deltaY : deltaY,
       aspectRatio,
     );
-    updatePlugin("crop", next);
+    onChange({ ...crop, ...next }, movingImage);
   }
 
   function onPointerUp(event: React.PointerEvent) {
@@ -157,92 +125,47 @@ export function InteractiveCropOverlay({
     }
   }
 
-  function enableCropOnImageClick(event: React.PointerEvent) {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    const bounds = container.getBoundingClientRect();
-    const rect = computeContainedImageRect(
-      container.clientWidth,
-      container.clientHeight,
-      imageWidth,
-      imageHeight,
-    );
-    const localX = event.clientX - bounds.left - rect.x;
-    const localY = event.clientY - bounds.top - rect.y;
-    if (
-      localX < 0 ||
-      localY < 0 ||
-      localX > rect.width ||
-      localY > rect.height
-    ) {
-      return;
-    }
-    updatePlugin("crop", { enabled: true });
-  }
-
-  if (!crop.enabled) {
-    return (
-      <div
-        ref={containerRef}
-        className="absolute inset-0 cursor-crosshair"
-        onPointerDown={enableCropOnImageClick}
-      />
-    );
-  }
-
   return (
-    <div ref={containerRef} className="absolute inset-0 touch-none select-none">
+    <div ref={containerRef} className="absolute inset-0 touch-none select-none overflow-hidden">
       <div
-        className="absolute overflow-hidden"
+        className="absolute cursor-grab border border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] active:cursor-grabbing"
         style={{
-          left: imageRect.x,
-          top: imageRect.y,
-          width: imageRect.width,
-          height: imageRect.height,
+          left: imageRect.x + (cropRect.x + imageOffset.x) * imageRect.width,
+          top: imageRect.y + (cropRect.y + imageOffset.y) * imageRect.height,
+          width: cropRect.width * imageRect.width,
+          height: cropRect.height * imageRect.height,
         }}
+        onPointerDown={(event) => onPointerDown("move", event)}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
       >
-        <div
-          className="absolute cursor-move border border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]"
-          style={{
-            left: `${cropRect.x * 100}%`,
-            top: `${cropRect.y * 100}%`,
-            width: `${cropRect.width * 100}%`,
-            height: `${cropRect.height * 100}%`,
-          }}
-          onPointerDown={(event) => onPointerDown("move", event)}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        >
-          <div className="pointer-events-none grid h-full w-full grid-cols-3 grid-rows-3">
-            {Array.from({ length: 9 }, (_, index) => (
-              <div key={index} className="border border-white/20" />
-            ))}
-          </div>
-
-          {EDGE_HIT_AREAS.map(({ handle, className }) => (
-            <div
-              key={handle}
-              className={`absolute z-10 ${className}`}
-              style={{ cursor: HANDLE_CURSORS[handle] }}
-              onPointerDown={(event) => onPointerDown(handle, event)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-            />
-          ))}
-
-          {HANDLE_POSITIONS.map(({ handle, className }) => (
-            <div
-              key={handle}
-              className={`absolute z-20 h-3 w-3 rounded-sm border border-white bg-lr-accent shadow-sm ${className}`}
-              style={{ cursor: HANDLE_CURSORS[handle] }}
-              onPointerDown={(event) => onPointerDown(handle, event)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-            />
+        <div className="pointer-events-none grid h-full w-full grid-cols-3 grid-rows-3">
+          {Array.from({ length: 9 }, (_, index) => (
+            <div key={index} className="border border-white/20" />
           ))}
         </div>
+
+        {EDGE_HIT_AREAS.map(({ handle, className }) => (
+          <div
+            key={handle}
+            className={`absolute z-10 ${className}`}
+            style={{ cursor: HANDLE_CURSORS[handle] }}
+            onPointerDown={(event) => onPointerDown(handle, event)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+        ))}
+
+        {HANDLE_POSITIONS.map(({ handle, className }) => (
+          <div
+            key={handle}
+            className={`absolute z-20 h-3 w-3 rounded-sm border border-white bg-lr-accent shadow-sm ${className}`}
+            style={{ cursor: HANDLE_CURSORS[handle] }}
+            onPointerDown={(event) => onPointerDown(handle, event)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+        ))}
       </div>
     </div>
   );
