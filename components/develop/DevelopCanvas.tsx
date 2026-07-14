@@ -235,6 +235,7 @@ export function DevelopCanvas({
           className="absolute inset-0 h-full w-full"
           style={cropActive ? {
             transform: `translate(${cropImageOffset.x * imageRect.width}px, ${cropImageOffset.y * imageRect.height}px)`,
+            clipPath: `inset(${imageRect.y}px ${imageRect.x}px)`,
           } : undefined}
         />
         {cropActive && cropDraft ? (
