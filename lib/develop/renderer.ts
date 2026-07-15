@@ -77,6 +77,16 @@ vec3 linearize_srgb(vec3 color) {
   return mix(high, low, lessThanEqual(color, vec3(0.04045)));
 }
 
+vec3 adjust_exposure(vec3 color) {
+  vec3 linear = linearize_srgb(color);
+  float gain = pow(2.0, u_exposure);
+  vec3 exposed = linear * gain;
+  if (u_exposure > 0.0) {
+    exposed /= 1.0 + linear * (gain - 1.0);
+  }
+  return encode_srgb(exposed);
+}
+
 vec3 decode_transfer(vec3 color) {
   if (u_input_linear < 0.5) return color;
   return encode_srgb(color);
@@ -141,7 +151,7 @@ vec2 transform_uv(vec2 uv) {
 }
 
 vec3 adjust_basic(vec3 color) {
-  color = encode_srgb(linearize_srgb(color) * pow(2.0, u_exposure));
+  color = adjust_exposure(color);
   color *= vec3(
     1.0 + u_temperature * 0.00008 + u_tint * 0.00002,
     1.0 - abs(u_tint) * 0.00003,
