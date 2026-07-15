@@ -55,6 +55,7 @@ export function SliderRow({
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
+        onDoubleClick={() => onChange(resetValue)}
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}
         className="develop-slider"
       />
