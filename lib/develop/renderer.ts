@@ -65,11 +65,27 @@ float luma(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+vec3 encode_srgb(vec3 color) {
+  vec3 low = color * 12.92;
+  vec3 high = 1.055 * pow(max(color, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+  return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+}
+
+vec3 linearize_srgb(vec3 color) {
+  vec3 low = color / 12.92;
+  vec3 high = pow(max((color + 0.055) / 1.055, vec3(0.0)), vec3(2.4));
+  return mix(high, low, lessThanEqual(color, vec3(0.04045)));
+}
+
+vec3 adjust_exposure(vec3 color) {
+  vec3 linear = linearize_srgb(color);
+  float gain = pow(2.0, u_exposure);
+  return encode_srgb(linear * gain);
+}
+
 vec3 decode_transfer(vec3 color) {
   if (u_input_linear < 0.5) return color;
-  vec3 low = color * 12.92;
-  vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-  return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+  return encode_srgb(color);
 }
 
 vec3 sample_image(vec2 uv) {
@@ -131,7 +147,7 @@ vec2 transform_uv(vec2 uv) {
 }
 
 vec3 adjust_basic(vec3 color) {
-  color *= pow(2.0, u_exposure);
+  color = adjust_exposure(color);
   color *= vec3(
     1.0 + u_temperature * 0.00008 + u_tint * 0.00002,
     1.0 - abs(u_tint) * 0.00003,
@@ -557,7 +573,7 @@ export class DevelopRenderer {
   render(
     settings: DevelopSettings,
     showOriginal: boolean,
-    cropOutput = false,
+    mode: "source" | "crop-preview" | "export" = "source",
   ): void {
     const gl = this.gl;
     if (!this.texture) {
@@ -565,10 +581,15 @@ export class DevelopRenderer {
     }
 
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 1);
+    gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (!cropOutput) {
+    const crop = clampCropRect(settings.crop);
+    if (mode === "source") {
       this.applyContainViewport();
+    } else if (mode === "crop-preview") {
+      this.applyContainViewport(
+        this.displayWidth * crop.width / (this.displayHeight * crop.height),
+      );
     }
     gl.useProgram(this.activeProgram);
     gl.activeTexture(gl.TEXTURE0);
@@ -580,9 +601,8 @@ export class DevelopRenderer {
     this.uniform1f("u_input_linear", this.inputLinear ? 1 : 0);
     this.uniform1f("u_show_original", showOriginal ? 1 : 0);
 
-    const crop = clampCropRect(settings.crop);
     this.uniform1f("u_crop_enabled", settings.crop.enabled ? 1 : 0);
-    this.uniform1f("u_crop_output", cropOutput ? 1 : 0);
+    this.uniform1f("u_crop_output", mode === "source" ? 0 : 1);
     this.uniform4f(
       "u_crop",
       crop.x,
@@ -616,9 +636,10 @@ export class DevelopRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  private applyContainViewport(): void {
+  private applyContainViewport(
+    imageRatio = this.displayWidth / this.displayHeight,
+  ): void {
     const canvasRatio = this.canvas.width / this.canvas.height;
-    const imageRatio = this.displayWidth / this.displayHeight;
     let width = this.canvas.width;
     let height = this.canvas.height;
 
@@ -751,7 +772,7 @@ export async function exportDevelopJpeg(
   try {
     await renderer.setImage(image);
     renderer.resize(width, height);
-    renderer.render(settings, false, true);
+    renderer.render(settings, false, "export");
     return await renderer.toBlob();
   } finally {
     renderer.dispose();

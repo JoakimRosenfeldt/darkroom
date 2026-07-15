@@ -8,27 +8,37 @@ import {
   resolveAspectRatio,
   type AspectRatioPresetId,
 } from "@/lib/develop/crop-geometry";
-import { useDevelopStore } from "@/stores/develop-store";
+import type { CropSettings } from "@/lib/develop/types";
 import { SliderRow } from "@/components/develop/SliderRow";
-import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 
 interface CropPanelProps {
+  crop: CropSettings;
   imageWidth: number;
   imageHeight: number;
+  onChange: (crop: CropSettings, preserveFrame?: boolean) => void;
+  onReset: () => void;
+  onApply: () => void;
+  onCancel: () => void;
 }
 
-export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
-  const crop = useDevelopStore((state) => state.settings.crop);
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const resetPlugin = useDevelopStore((state) => state.resetPlugin);
-
+export function CropPanel({
+  crop,
+  imageWidth,
+  imageHeight,
+  onChange,
+  onReset,
+  onApply,
+  onCancel,
+}: CropPanelProps) {
   function updateCrop(patch: Partial<typeof crop>) {
     const next = { ...crop, ...patch };
-    updatePlugin("crop", {
-      ...patch,
-      width: Math.min(next.width, 1 - next.x),
-      height: Math.min(next.height, 1 - next.y),
-    });
+    onChange({
+      ...next,
+      x: "x" in patch ? Math.min(next.x, 1 - crop.width) : next.x,
+      y: "y" in patch ? Math.min(next.y, 1 - crop.height) : next.y,
+      width: "width" in patch ? Math.min(next.width, 1 - crop.x) : next.width,
+      height: "height" in patch ? Math.min(next.height, 1 - crop.y) : next.height,
+    }, "x" in patch || "y" in patch);
   }
 
   function selectAspectPreset(presetId: AspectRatioPresetId) {
@@ -39,11 +49,11 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
       crop.customAspectWidth,
       crop.customAspectHeight,
     );
-    const patch = {
+    onChange({
+      ...crop,
       aspectPreset: presetId,
-      ...(ratio && crop.enabled ? fitCropToAspectRatio(crop, ratio) : {}),
-    };
-    updatePlugin("crop", patch);
+      ...(ratio ? fitCropToAspectRatio(crop, ratio) : {}),
+    });
   }
 
   function commitCustomAspect(width: number, height: number) {
@@ -57,13 +67,13 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
     if (!ratio) {
       return;
     }
-    const patch = {
+    onChange({
+      ...crop,
       aspectPreset: "custom" as const,
       customAspectWidth: width,
       customAspectHeight: height,
-      ...(crop.enabled ? fitCropToAspectRatio(crop, ratio) : {}),
-    };
-    updatePlugin("crop", patch);
+      ...fitCropToAspectRatio(crop, ratio),
+    });
   }
 
   return (
@@ -74,7 +84,7 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         </h2>
         <button
           type="button"
-          onClick={() => resetPlugin("crop")}
+          onClick={onReset}
           className="rounded border border-lr-border-subtle px-2 py-1 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
         >
           Reset
@@ -82,17 +92,6 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
       </div>
 
       <div className="flex-1 overflow-auto px-3 py-3">
-        <label className="mb-3 flex items-center gap-2 text-xs text-lr-text-muted">
-          <input
-            type="checkbox"
-            checked={crop.enabled}
-            onChange={(event) => event.target.checked
-              ? updatePlugin("crop", { enabled: true })
-              : updatePlugin("crop", DEFAULT_CROP_SETTINGS)}
-          />
-          Enable crop
-        </label>
-
         <p className="mb-1 text-[11px] uppercase tracking-wider text-lr-text-dim">
           Aspect ratio
         </p>
@@ -101,6 +100,7 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
             <button
               key={preset.id}
               type="button"
+              aria-pressed={crop.aspectPreset === preset.id}
               onClick={() => selectAspectPreset(preset.id)}
               className={`rounded border px-2 py-1.5 text-left text-[11px] ${
                 crop.aspectPreset === preset.id
@@ -123,7 +123,8 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
         ) : null}
 
         <p className="mb-1 mt-2 text-[11px] text-lr-text-dim">
-          Drag inside the image to move or resize the crop.
+          Drag the image to position it. Pull an edge or corner to resize.
+          Scroll over the image to inspect it more closely.
         </p>
 
         <SliderRow
@@ -133,16 +134,37 @@ export function CropPanel({ imageWidth, imageHeight }: CropPanelProps) {
           max={45}
           step={0.1}
           suffix="°"
-          disabled={!crop.enabled}
-          onChange={(angle) => updatePlugin("crop", { angle })}
+          onChange={(angle) => onChange({ ...crop, angle })}
         />
-        <SliderRow label="Left" value={crop.x} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(x) => updateCrop({ x })} />
-        <SliderRow label="Top" value={crop.y} min={0} max={0.95} step={0.01} disabled={!crop.enabled} onChange={(y) => updateCrop({ y })} />
-        <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} disabled={!crop.enabled} resetValue={1} onChange={(width) => updateCrop({ width })} />
-        <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} disabled={!crop.enabled} resetValue={1} onChange={(height) => updateCrop({ height })} />
-        <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveX) => updatePlugin("crop", { perspectiveX })} />
-        <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} disabled={!crop.enabled} onChange={(perspectiveY) => updatePlugin("crop", { perspectiveY })} />
-        <SliderRow label="Distortion" value={crop.distortion} min={-100} max={100} disabled={!crop.enabled} onChange={(distortion) => updatePlugin("crop", { distortion })} />
+        <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} onChange={(x) => updateCrop({ x })} />
+        <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} onChange={(y) => updateCrop({ y })} />
+        <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} resetValue={1} onChange={(width) => updateCrop({ width })} />
+        <SliderRow label="Height" value={crop.height} min={0.05} max={1} step={0.01} resetValue={1} onChange={(height) => updateCrop({ height })} />
+        <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} onChange={(perspectiveX) => onChange({ ...crop, perspectiveX })} />
+        <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} onChange={(perspectiveY) => onChange({ ...crop, perspectiveY })} />
+        <SliderRow label="Distortion" value={crop.distortion} min={-100} max={100} onChange={(distortion) => onChange({ ...crop, distortion })} />
+      </div>
+
+      <div className="border-t border-lr-border-subtle px-3 py-3">
+        <p className="mb-2 text-[10px] uppercase tracking-wider text-lr-text-dim">
+          Enter apply · Esc cancel
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-lr-border-subtle px-3 py-1.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onApply}
+            className="rounded bg-lr-accent px-3 py-1.5 text-xs font-medium text-[#0d0d0d] hover:bg-lr-accent-hover"
+          >
+            Apply
+          </button>
+        </div>
       </div>
     </aside>
   );

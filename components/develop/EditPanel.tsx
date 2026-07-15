@@ -54,7 +54,6 @@ const HUE_TRACKS: Record<MixerColor, string> = {
 
 export function EditPanel() {
   const resetAll = useDevelopStore((state) => state.resetAll);
-  const sidecarStatus = useDevelopStore((state) => state.sidecarStatus);
   const sidecarError = useDevelopStore((state) => state.sidecarError);
 
   return (
@@ -64,10 +63,9 @@ export function EditPanel() {
           <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-muted">
             Edit
           </h2>
-          <p className="text-[10px] text-lr-text-dim">
-            XMP {sidecarStatus}
-            {sidecarError ? `: ${sidecarError}` : ""}
-          </p>
+          {sidecarError ? (
+            <p className="text-[10px] text-lr-text-dim">XMP: {sidecarError}</p>
+          ) : null}
         </div>
         <button
           type="button"

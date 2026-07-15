@@ -1,22 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import {
   applyCropDrag,
   clampCropRect,
-  computeContainedImageRect,
   type CropHandle,
+  type ImageRect,
   resolveAspectRatio,
 } from "@/lib/develop/crop-geometry";
-import { useDevelopStore } from "@/stores/develop-store";
+import type { CropSettings } from "@/lib/develop/types";
 
 interface InteractiveCropOverlayProps {
+  crop: CropSettings;
+  imageOffset: { x: number; y: number };
+  imageRect: ImageRect;
   imageWidth: number;
   imageHeight: number;
+  previewScale: number;
+  onChange: (crop: CropSettings, preserveFrame?: boolean) => void;
 }
 
 const HANDLE_CURSORS: Record<CropHandle, string> = {
-  move: "move",
+  move: "grab",
   n: "ns-resize",
   s: "ns-resize",
   e: "ew-resize",
@@ -31,61 +36,42 @@ const HANDLE_POSITIONS: Array<{
   handle: CropHandle;
   className: string;
 }> = [
-  { handle: "nw", className: "left-0 top-0 -translate-x-1/2 -translate-y-1/2" },
-  { handle: "n", className: "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2" },
-  { handle: "ne", className: "right-0 top-0 translate-x-1/2 -translate-y-1/2" },
-  { handle: "e", className: "right-0 top-1/2 translate-x-1/2 -translate-y-1/2" },
-  { handle: "se", className: "right-0 bottom-0 translate-x-1/2 translate-y-1/2" },
-  { handle: "s", className: "left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2" },
-  { handle: "sw", className: "left-0 bottom-0 -translate-x-1/2 translate-y-1/2" },
-  { handle: "w", className: "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2" },
+  { handle: "nw", className: "-left-px -top-px h-5 w-5 border-l-2 border-t-2" },
+  { handle: "n", className: "-top-px left-1/2 h-3 w-6 -translate-x-1/2 border-t-2" },
+  { handle: "ne", className: "-right-px -top-px h-5 w-5 border-r-2 border-t-2" },
+  { handle: "e", className: "-right-px top-1/2 h-6 w-3 -translate-y-1/2 border-r-2" },
+  { handle: "se", className: "-bottom-px -right-px h-5 w-5 border-b-2 border-r-2" },
+  { handle: "s", className: "-bottom-px left-1/2 h-3 w-6 -translate-x-1/2 border-b-2" },
+  { handle: "sw", className: "-bottom-px -left-px h-5 w-5 border-b-2 border-l-2" },
+  { handle: "w", className: "-left-px top-1/2 h-6 w-3 -translate-y-1/2 border-l-2" },
+];
+
+const EDGE_HIT_AREAS: Array<{
+  handle: CropHandle;
+  className: string;
+}> = [
+  { handle: "n", className: "left-3 right-3 top-0 h-3" },
+  { handle: "e", className: "bottom-3 right-0 top-3 w-3" },
+  { handle: "s", className: "bottom-0 left-3 right-3 h-3" },
+  { handle: "w", className: "bottom-3 left-0 top-3 w-3" },
 ];
 
 export function InteractiveCropOverlay({
+  crop,
+  imageOffset,
+  imageRect,
   imageWidth,
   imageHeight,
+  previewScale,
+  onChange,
 }: InteractiveCropOverlayProps) {
-  const crop = useDevelopStore((state) => state.settings.crop);
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [imageRect, setImageRect] = useState({
-    x: 0,
-    y: 0,
-    width: 1,
-    height: 1,
-  });
   const dragRef = useRef<{
     handle: CropHandle;
     startX: number;
     startY: number;
     startCrop: { x: number; y: number; width: number; height: number };
   } | null>(null);
-
-  const measureImageRect = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    setImageRect(
-      computeContainedImageRect(
-        container.clientWidth,
-        container.clientHeight,
-        imageWidth,
-        imageHeight,
-      ),
-    );
-  }, [imageWidth, imageHeight]);
-
-  useEffect(() => {
-    measureImageRect();
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    const observer = new ResizeObserver(measureImageRect);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [measureImageRect, crop.enabled]);
 
   const aspectRatio = resolveAspectRatio(
     crop.aspectPreset,
@@ -97,9 +83,6 @@ export function InteractiveCropOverlay({
   const cropRect = clampCropRect(crop);
 
   function onPointerDown(handle: CropHandle, event: React.PointerEvent) {
-    if (!crop.enabled) {
-      updatePlugin("crop", { enabled: true });
-    }
     event.preventDefault();
     event.stopPropagation();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -122,16 +105,17 @@ export function InteractiveCropOverlay({
       return;
     }
 
-    const deltaX = (event.clientX - drag.startX) / imageRect.width;
-    const deltaY = (event.clientY - drag.startY) / imageRect.height;
+    const deltaX = (event.clientX - drag.startX) / (imageRect.width * previewScale);
+    const deltaY = (event.clientY - drag.startY) / (imageRect.height * previewScale);
+    const movingImage = drag.handle === "move";
     const next = applyCropDrag(
       drag.startCrop,
       drag.handle,
-      deltaX,
-      deltaY,
+      movingImage ? -deltaX : deltaX,
+      movingImage ? -deltaY : deltaY,
       aspectRatio,
     );
-    updatePlugin("crop", next);
+    onChange({ ...crop, ...next }, movingImage);
   }
 
   function onPointerUp(event: React.PointerEvent) {
@@ -141,81 +125,56 @@ export function InteractiveCropOverlay({
     }
   }
 
-  function enableCropOnImageClick(event: React.PointerEvent) {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    const bounds = container.getBoundingClientRect();
-    const rect = computeContainedImageRect(
-      container.clientWidth,
-      container.clientHeight,
-      imageWidth,
-      imageHeight,
-    );
-    const localX = event.clientX - bounds.left - rect.x;
-    const localY = event.clientY - bounds.top - rect.y;
-    if (
-      localX < 0 ||
-      localY < 0 ||
-      localX > rect.width ||
-      localY > rect.height
-    ) {
-      return;
-    }
-    updatePlugin("crop", { enabled: true });
-  }
-
-  if (!crop.enabled) {
-    return (
-      <div
-        ref={containerRef}
-        className="absolute inset-0 cursor-crosshair"
-        onPointerDown={enableCropOnImageClick}
-      />
-    );
-  }
-
   return (
-    <div ref={containerRef} className="absolute inset-0">
+    <div
+      ref={containerRef}
+      className="absolute touch-none select-none overflow-hidden"
+      style={{
+        left: imageRect.x + imageOffset.x * imageRect.width,
+        top: imageRect.y + imageOffset.y * imageRect.height,
+        width: imageRect.width,
+        height: imageRect.height,
+      }}
+    >
       <div
-        className="absolute overflow-hidden"
+        className="absolute cursor-grab border border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] active:cursor-grabbing"
         style={{
-          left: imageRect.x,
-          top: imageRect.y,
-          width: imageRect.width,
-          height: imageRect.height,
+          left: cropRect.x * imageRect.width,
+          top: cropRect.y * imageRect.height,
+          width: cropRect.width * imageRect.width,
+          height: cropRect.height * imageRect.height,
         }}
+        onPointerDown={(event) => onPointerDown("move", event)}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
       >
-        <div
-          className="absolute cursor-move border border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)]"
-          style={{
-            left: `${cropRect.x * 100}%`,
-            top: `${cropRect.y * 100}%`,
-            width: `${cropRect.width * 100}%`,
-            height: `${cropRect.height * 100}%`,
-          }}
-          onPointerDown={(event) => onPointerDown("move", event)}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-        >
-          <div className="pointer-events-none grid h-full w-full grid-cols-3 grid-rows-3">
-            {Array.from({ length: 9 }, (_, index) => (
-              <div key={index} className="border border-white/20" />
-            ))}
-          </div>
-
-          {HANDLE_POSITIONS.map(({ handle, className }) => (
-            <div
-              key={handle}
-              className={`absolute z-10 h-3 w-3 rounded-full border border-white/90 bg-lr-accent ${className}`}
-              style={{ cursor: HANDLE_CURSORS[handle] }}
-              onPointerDown={(event) => onPointerDown(handle, event)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-            />
+        <div className="pointer-events-none grid h-full w-full grid-cols-3 grid-rows-3">
+          {Array.from({ length: 9 }, (_, index) => (
+            <div key={index} className="border border-white/20" />
           ))}
         </div>
+
+        {EDGE_HIT_AREAS.map(({ handle, className }) => (
+          <div
+            key={handle}
+            className={`absolute z-10 ${className}`}
+            style={{ cursor: HANDLE_CURSORS[handle] }}
+            onPointerDown={(event) => onPointerDown(handle, event)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+        ))}
+
+        {HANDLE_POSITIONS.map(({ handle, className }) => (
+          <div
+            key={handle}
+            className={`absolute z-20 border-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.85)] ${className}`}
+            style={{ cursor: HANDLE_CURSORS[handle] }}
+            onPointerDown={(event) => onPointerDown(handle, event)}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+        ))}
       </div>
     </div>
   );

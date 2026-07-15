@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
@@ -17,10 +17,16 @@ import {
   useEntryMetadataForId,
 } from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
-import { DevelopCanvas } from "@/components/develop/DevelopCanvas";
+import {
+  DevelopCanvas,
+  type CropPreviewTransform,
+} from "@/components/develop/DevelopCanvas";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
+import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { exportDevelopJpeg } from "@/lib/develop/renderer";
+import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
+import type { CropSettings } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
@@ -40,6 +46,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   );
   const metadata = useEntryMetadataForId(entry.id);
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
+  const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
+  const [cropDraft, setCropDraft] = useState<CropSettings | null>(null);
+  const cropDraftRef = useRef<CropSettings | null>(null);
+  const [cropImageOffset, setCropImageOffset] = useState({ x: 0, y: 0 });
+  const [cropPreviewTransform, setCropPreviewTransform] =
+    useState<CropPreviewTransform>({ scale: 1, x: 0, y: 0 });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const activeIndex = useMemo(
@@ -60,6 +72,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     applyMetadata: applyDevelopMetadata,
   });
   const developSettings = useDevelopStore((state) => state.settings);
+  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -135,12 +148,81 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     }
   }
 
+  const discardCrop = useCallback((nextPanel: DevelopPanelId | null = "edit") => {
+    cropDraftRef.current = null;
+    setCropDraft(null);
+    setCropImageOffset({ x: 0, y: 0 });
+    setCropPreviewTransform({ scale: 1, x: 0, y: 0 });
+    setActivePanel(nextPanel);
+  }, []);
+
+  const applyCrop = useCallback(() => {
+    const draft = cropDraftRef.current;
+    if (draft) {
+      updatePlugin("crop", draft);
+    }
+    discardCrop("edit");
+  }, [discardCrop, updatePlugin]);
+
+  function changeCrop(next: CropSettings, preserveFrame = false) {
+    const current = cropDraftRef.current;
+    if (preserveFrame && current) {
+      setCropImageOffset((offset) => ({
+        x: offset.x + current.x - next.x,
+        y: offset.y + current.y - next.y,
+      }));
+    }
+    cropDraftRef.current = next;
+    setCropDraft(next);
+  }
+
+  function resetCrop() {
+    const next = { ...DEFAULT_CROP_SETTINGS, enabled: true };
+    cropDraftRef.current = next;
+    setCropDraft(next);
+    setCropImageOffset({ x: 0, y: 0 });
+    setCropPreviewTransform({ scale: 1, x: 0, y: 0 });
+  }
+
+  function selectDevelopPanel(panel: DevelopPanelId) {
+    if (activePanel === "crop") {
+      discardCrop(panel === "crop" ? "edit" : panel);
+      return;
+    }
+    if (panel === "crop") {
+      const draft = { ...developSettings.crop, enabled: true };
+      cropDraftRef.current = draft;
+      setCropDraft(draft);
+      setCropImageOffset({ x: 0, y: 0 });
+      setCropPreviewTransform({ scale: 1, x: 0, y: 0 });
+      setActivePanel("crop");
+      return;
+    }
+    setActivePanel((current) => (current === panel ? null : panel));
+  }
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || isEditableTarget(event.target)) {
+      if (event.defaultPrevented) {
+        return;
+      }
+      if (activePanel === "crop" && cropDraftRef.current) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          discardCrop("edit");
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applyCrop();
+          return;
+        }
+      }
+      if (isEditableTarget(event.target)) {
         return;
       }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
+        discardCrop("edit");
         router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
       }
       if (
@@ -148,6 +230,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         activeIndex >= 0 &&
         activeIndex < entries.length - 1
       ) {
+        discardCrop("edit");
         router.push(`/photo?id=${encodeURIComponent(entries[activeIndex + 1].id)}`);
       }
       if (event.key === "Escape") {
@@ -157,7 +240,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, activeIndex, router]);
+  }, [entries, activeIndex, router, activePanel, applyCrop, discardCrop]);
+
+  function selectPhoto(id: string) {
+    discardCrop("edit");
+    router.push(`/photo?id=${encodeURIComponent(id)}`);
+  }
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -184,7 +272,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       />
 
       <div className="flex min-h-0 flex-1">
-        <div className="relative flex min-w-0 flex-1 flex-col bg-[#0d0d0d]">
+        <div className="relative flex min-w-0 flex-1 flex-col bg-lr-bg">
           <div className="absolute right-3 top-3 z-10">
             <div className="flex items-center gap-2">
               {exportStatus ? (
@@ -216,18 +304,39 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
           {decoded ? (
             <div className="relative flex-1">
-              <DevelopCanvas image={decoded} alt={entry.name} />
+              <DevelopCanvas
+                image={decoded}
+                alt={entry.name}
+                cropActive={activePanel === "crop"}
+                cropDraft={cropDraft}
+                cropImageOffset={cropImageOffset}
+                previewTransform={cropPreviewTransform}
+                onCropChange={changeCrop}
+                onPreviewTransformChange={setCropPreviewTransform}
+              />
             </div>
           ) : null}
         </div>
 
-        {decoded ? <DevelopSidePanels decoded={decoded} entry={entry} /> : null}
+        {decoded ? (
+          <DevelopSidePanels
+            decoded={decoded}
+            entry={entry}
+            activePanel={activePanel}
+            cropDraft={cropDraft}
+            onSelect={selectDevelopPanel}
+            onCropChange={changeCrop}
+            onCropReset={resetCrop}
+            onCropApply={applyCrop}
+            onCropCancel={() => discardCrop("edit")}
+          />
+        ) : null}
       </div>
 
       <Filmstrip
         entries={entries}
         activeId={entry.id}
-        onSelect={(id) => router.push(`/photo?id=${encodeURIComponent(id)}`)}
+        onSelect={selectPhoto}
       />
     </div>
   );
