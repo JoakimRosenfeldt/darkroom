@@ -47,6 +47,7 @@ body {
   color: var(--lr-text);
   font-family: var(--font-geist-sans), "Segoe UI", system-ui, sans-serif;
   font-size: 13px;
+  user-select: none;
 }
 
 .develop-slider {
