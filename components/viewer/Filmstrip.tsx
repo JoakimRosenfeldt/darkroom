@@ -95,7 +95,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
 
       <div
         ref={scrollRef}
-        className="min-w-0 flex-1 overflow-x-auto px-1 py-2"
+        className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden px-1 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <div
           className="relative h-full"

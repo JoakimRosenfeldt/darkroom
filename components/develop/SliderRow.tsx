@@ -28,7 +28,7 @@ export function SliderRow({
   onChange,
 }: SliderRowProps) {
   const decimalPlaces = step.toString().split(".")[1]?.length ?? 0;
-  const displayValue = Number(value.toFixed(decimalPlaces));
+  const displayValue = value.toFixed(decimalPlaces);
 
   return (
     <div className={`grid grid-cols-[86px_1fr_42px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
@@ -59,7 +59,7 @@ export function SliderRow({
         className="develop-slider"
       />
       <span className="text-right font-mono text-[10px] text-lr-text-muted">
-        {displayValue > 0 ? "+" : ""}
+        {value > 0 ? "+" : ""}
         {displayValue}
         {suffix}
       </span>

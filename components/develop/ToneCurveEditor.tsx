@@ -18,6 +18,7 @@ const SIZE = 256;
 const INSET = 8;
 const PLOT_SIZE = SIZE - INSET * 2;
 const MIN_GAP = 1 / (CURVE_LUT_SIZE - 1);
+const DRAG_SENSITIVITY = 0.5;
 
 const CHANNELS: { id: CurveChannel; label: string; color: string }[] = [
   { id: "rgb", label: "RGB", color: "#d4d4d4" },
@@ -50,7 +51,11 @@ export function ToneCurveEditor({
 }) {
   const [channel, setChannel] = useState<CurveChannel>("rgb");
   const [selected, setSelected] = useState<number | null>(null);
-  const dragIndex = useRef<number | null>(null);
+  const drag = useRef<{
+    index: number;
+    pointer: CurvePoint;
+    point: CurvePoint;
+  } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const points = settings[channel];
   const channelInfo = CHANNELS.find((item) => item.id === channel)!;
@@ -93,7 +98,11 @@ export function ToneCurveEditor({
     if (existingIndex >= 0) {
       commitPoint(existingIndex, { ...point, x: points[existingIndex].x });
       setSelected(existingIndex);
-      dragIndex.current = existingIndex;
+      drag.current = {
+        index: existingIndex,
+        pointer: point,
+        point: { ...point, x: points[existingIndex].x },
+      };
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
@@ -101,7 +110,7 @@ export function ToneCurveEditor({
     const index = next.indexOf(point);
     onChange({ ...settings, [channel]: next });
     setSelected(index);
-    dragIndex.current = index;
+    drag.current = { index, pointer: point, point };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -184,16 +193,24 @@ export function ToneCurveEditor({
         aria-label={`${channelInfo.label} point curve. Click to add a point and drag points to adjust.`}
         onPointerDown={addPoint}
         onPointerMove={(event) => {
-          if (dragIndex.current === null) {
+          if (!drag.current) {
             return;
           }
-          commitPoint(dragIndex.current, eventPoint(event.clientX, event.clientY));
+          const pointer = eventPoint(event.clientX, event.clientY);
+          commitPoint(drag.current.index, {
+            x:
+              drag.current.point.x +
+              (pointer.x - drag.current.pointer.x) * DRAG_SENSITIVITY,
+            y:
+              drag.current.point.y +
+              (pointer.y - drag.current.pointer.y) * DRAG_SENSITIVITY,
+          });
         }}
         onPointerUp={() => {
-          dragIndex.current = null;
+          drag.current = null;
         }}
         onPointerCancel={() => {
-          dragIndex.current = null;
+          drag.current = null;
         }}
         className="block w-full touch-none cursor-crosshair rounded-sm border border-lr-border bg-[#181818]"
       >
@@ -229,7 +246,11 @@ export function ToneCurveEditor({
               onPointerDown={(event) => {
                 event.stopPropagation();
                 setSelected(index);
-                dragIndex.current = index;
+                drag.current = {
+                  index,
+                  pointer: eventPoint(event.clientX, event.clientY),
+                  point,
+                };
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
               className="cursor-grab outline-none focus-visible:stroke-[3px] active:cursor-grabbing"

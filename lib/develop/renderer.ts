@@ -65,11 +65,21 @@ float luma(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+vec3 encode_srgb(vec3 color) {
+  vec3 low = color * 12.92;
+  vec3 high = 1.055 * pow(max(color, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+  return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+}
+
+vec3 linearize_srgb(vec3 color) {
+  vec3 low = color / 12.92;
+  vec3 high = pow(max((color + 0.055) / 1.055, vec3(0.0)), vec3(2.4));
+  return mix(high, low, lessThanEqual(color, vec3(0.04045)));
+}
+
 vec3 decode_transfer(vec3 color) {
   if (u_input_linear < 0.5) return color;
-  vec3 low = color * 12.92;
-  vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-  return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+  return encode_srgb(color);
 }
 
 vec3 sample_image(vec2 uv) {
@@ -131,7 +141,7 @@ vec2 transform_uv(vec2 uv) {
 }
 
 vec3 adjust_basic(vec3 color) {
-  color *= pow(2.0, u_exposure);
+  color = encode_srgb(linearize_srgb(color) * pow(2.0, u_exposure));
   color *= vec3(
     1.0 + u_temperature * 0.00008 + u_tint * 0.00002,
     1.0 - abs(u_tint) * 0.00003,
