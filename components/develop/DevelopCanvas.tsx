@@ -379,15 +379,7 @@ export function DevelopCanvas({
   return (
     <div
       ref={containerRef}
-      className={`relative h-full w-full overflow-hidden ${
-        cropActive || !ready
-          ? ""
-          : viewTransform.scale > 1
-            ? panning
-              ? "cursor-grabbing"
-              : "cursor-grab"
-            : "cursor-zoom-in"
-      }`}
+      className="relative h-full w-full overflow-hidden"
       onWheel={onWheel}
       onClick={onClick}
       onPointerDown={onPointerDown}
