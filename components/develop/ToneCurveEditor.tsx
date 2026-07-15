@@ -60,13 +60,21 @@ export function ToneCurveEditor({
   const points = settings[channel];
   const channelInfo = CHANNELS.find((item) => item.id === channel)!;
 
-  const eventPoint = (clientX: number, clientY: number): CurvePoint => {
+  const eventPoint = (
+    clientX: number,
+    clientY: number,
+    clamp = true,
+  ): CurvePoint => {
     const rect = svgRef.current!.getBoundingClientRect();
     const x = ((clientX - rect.left) / rect.width) * SIZE;
     const y = ((clientY - rect.top) / rect.height) * SIZE;
+    const point = {
+      x: (x - INSET) / PLOT_SIZE,
+      y: 1 - (y - INSET) / PLOT_SIZE,
+    };
     return {
-      x: Math.min(1, Math.max(0, (x - INSET) / PLOT_SIZE)),
-      y: Math.min(1, Math.max(0, 1 - (y - INSET) / PLOT_SIZE)),
+      x: clamp ? Math.min(1, Math.max(0, point.x)) : point.x,
+      y: clamp ? Math.min(1, Math.max(0, point.y)) : point.y,
     };
   };
 
@@ -81,7 +89,7 @@ export function ToneCurveEditor({
       const maxX = isLast ? 1 : points[index + 1].x - MIN_GAP;
       return {
         x: isFirst ? 0 : isLast ? 1 : Math.min(maxX, Math.max(minX, point.x)),
-        y: point.y,
+        y: Math.min(1, Math.max(0, point.y)),
       };
     });
     onChange({ ...settings, [channel]: next });
@@ -196,7 +204,7 @@ export function ToneCurveEditor({
           if (!drag.current) {
             return;
           }
-          const pointer = eventPoint(event.clientX, event.clientY);
+          const pointer = eventPoint(event.clientX, event.clientY, false);
           commitPoint(drag.current.index, {
             x:
               drag.current.point.x +

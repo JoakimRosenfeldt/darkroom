@@ -80,11 +80,7 @@ vec3 linearize_srgb(vec3 color) {
 vec3 adjust_exposure(vec3 color) {
   vec3 linear = linearize_srgb(color);
   float gain = pow(2.0, u_exposure);
-  vec3 exposed = linear * gain;
-  if (u_exposure > 0.0) {
-    exposed /= 1.0 + linear * (gain - 1.0);
-  }
-  return encode_srgb(exposed);
+  return encode_srgb(linear * gain);
 }
 
 vec3 decode_transfer(vec3 color) {
