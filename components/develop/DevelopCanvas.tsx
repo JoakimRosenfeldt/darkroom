@@ -30,6 +30,20 @@ interface DevelopCanvasProps {
 
 const MIN_PREVIEW_ZOOM = 0.25;
 const MAX_PREVIEW_ZOOM = 8;
+const DETAIL_ZOOM = 2;
+const FIT_TRANSFORM: CropPreviewTransform = { scale: 1, x: 0, y: 0 };
+
+function clampZoomOffset(
+  viewportSize: number,
+  imageStart: number,
+  imageSize: number,
+  scale: number,
+  offset: number,
+): number {
+  const min = viewportSize - (imageStart + imageSize) * scale;
+  const max = -imageStart * scale;
+  return min > max ? (min + max) / 2 : Math.min(max, Math.max(min, offset));
+}
 
 export function DevelopCanvas({
   image,
@@ -50,6 +64,7 @@ export function DevelopCanvas({
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewTransform, setViewTransform] = useState(FIT_TRANSFORM);
   const [imageRect, setImageRect] = useState(() =>
     computeContainedImageRect(1, 1, image.width, image.height),
   );
@@ -69,6 +84,7 @@ export function DevelopCanvas({
     let active = true;
     setReady(false);
     setError(null);
+    setViewTransform(FIT_TRANSFORM);
 
     async function loadRenderer() {
       try {
@@ -112,9 +128,10 @@ export function DevelopCanvas({
     const currentRenderer = renderer;
 
     function resize() {
+      const renderScale = cropActive ? 1 : viewTransform.scale;
       currentRenderer.resize(
-        currentContainer.clientWidth,
-        currentContainer.clientHeight,
+        currentContainer.clientWidth * renderScale,
+        currentContainer.clientHeight * renderScale,
       );
       setImageRect(
         computeContainedImageRect(
@@ -137,7 +154,7 @@ export function DevelopCanvas({
     const observer = new ResizeObserver(resize);
     observer.observe(currentContainer);
     return () => observer.disconnect();
-  }, [ready, image.height, image.width]);
+  }, [ready, image.height, image.width, cropActive, viewTransform.scale]);
 
   useEffect(() => {
     if (ready) {
@@ -174,6 +191,59 @@ export function DevelopCanvas({
         x: Math.max(Math.min(0, xLimit), Math.min(Math.max(0, xLimit), pointerX - (pointerX - current.x) * ratio)),
         y: Math.max(Math.min(0, yLimit), Math.min(Math.max(0, yLimit), pointerY - (pointerY - current.y) * ratio)),
       };
+    });
+  }
+
+  function onClick(event: React.MouseEvent<HTMLDivElement>) {
+    const container = containerRef.current;
+    if (cropActive || !ready || !container) {
+      return;
+    }
+    const bounds = container.getBoundingClientRect();
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    const sourceWidth = settings.crop.enabled
+      ? image.width * settings.crop.width
+      : image.width;
+    const sourceHeight = settings.crop.enabled
+      ? image.height * settings.crop.height
+      : image.height;
+    const rect = computeContainedImageRect(
+      bounds.width,
+      bounds.height,
+      sourceWidth,
+      sourceHeight,
+    );
+    const imageX = (pointerX - viewTransform.x) / viewTransform.scale;
+    const imageY = (pointerY - viewTransform.y) / viewTransform.scale;
+    if (
+      imageX < rect.x ||
+      imageX > rect.x + rect.width ||
+      imageY < rect.y ||
+      imageY > rect.y + rect.height
+    ) {
+      return;
+    }
+    if (viewTransform.scale > 1) {
+      setViewTransform(FIT_TRANSFORM);
+      return;
+    }
+    setViewTransform({
+      scale: DETAIL_ZOOM,
+      x: clampZoomOffset(
+        bounds.width,
+        rect.x,
+        rect.width,
+        DETAIL_ZOOM,
+        bounds.width / 2 - pointerX * DETAIL_ZOOM,
+      ),
+      y: clampZoomOffset(
+        bounds.height,
+        rect.y,
+        rect.height,
+        DETAIL_ZOOM,
+        bounds.height / 2 - pointerY * DETAIL_ZOOM,
+      ),
     });
   }
 
@@ -217,16 +287,25 @@ export function DevelopCanvas({
     );
   }
 
+  const activeTransform = cropActive ? previewTransform : viewTransform;
+
   return (
     <div
       ref={containerRef}
-      className="relative h-full w-full overflow-hidden"
+      className={`relative h-full w-full overflow-hidden ${
+        cropActive || !ready
+          ? ""
+          : viewTransform.scale > 1
+            ? "cursor-zoom-out"
+            : "cursor-zoom-in"
+      }`}
       onWheel={onWheel}
+      onClick={onClick}
     >
       <div
         className="absolute inset-0"
         style={{
-          transform: `translate(${previewTransform.x}px, ${previewTransform.y}px) scale(${previewTransform.scale})`,
+          transform: `translate(${activeTransform.x}px, ${activeTransform.y}px) scale(${activeTransform.scale})`,
           transformOrigin: "0 0",
         }}
       >
