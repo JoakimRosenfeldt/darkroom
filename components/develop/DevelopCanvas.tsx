@@ -303,7 +303,11 @@ export function DevelopCanvas({
       onClick={onClick}
     >
       <div
-        className="absolute inset-0"
+        className={`absolute inset-0 ${
+          cropActive
+            ? ""
+            : "will-change-transform transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+        }`}
         style={{
           transform: `translate(${activeTransform.x}px, ${activeTransform.y}px) scale(${activeTransform.scale})`,
           transformOrigin: "0 0",
