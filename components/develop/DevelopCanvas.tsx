@@ -59,12 +59,22 @@ export function DevelopCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<DevelopRenderer | null>(null);
   const cropDraftRef = useRef(cropDraft);
+  const panRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
   const settings = useDevelopStore((state) => state.settings);
   const showOriginal = useDevelopStore((state) => state.showOriginal);
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewTransform, setViewTransform] = useState(FIT_TRANSFORM);
+  const [panning, setPanning] = useState(false);
   const [imageRect, setImageRect] = useState(() =>
     computeContainedImageRect(1, 1, image.width, image.height),
   );
@@ -194,7 +204,102 @@ export function DevelopCanvas({
     });
   }
 
+  function getViewImageRect(width: number, height: number) {
+    return computeContainedImageRect(
+      width,
+      height,
+      settings.crop.enabled ? image.width * settings.crop.width : image.width,
+      settings.crop.enabled ? image.height * settings.crop.height : image.height,
+    );
+  }
+
+  function isInsideImage(x: number, y: number, rect: typeof imageRect) {
+    const imageX = (x - viewTransform.x) / viewTransform.scale;
+    const imageY = (y - viewTransform.y) / viewTransform.scale;
+    return (
+      imageX >= rect.x &&
+      imageX <= rect.x + rect.width &&
+      imageY >= rect.y &&
+      imageY <= rect.y + rect.height
+    );
+  }
+
+  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (cropActive || viewTransform.scale <= 1) {
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - bounds.left;
+    const y = event.clientY - bounds.top;
+    if (!isInsideImage(x, y, getViewImageRect(bounds.width, bounds.height))) {
+      return;
+    }
+    panRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: viewTransform.x,
+      y: viewTransform.y,
+      moved: false,
+    };
+    setPanning(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) {
+      return;
+    }
+    const deltaX = event.clientX - pan.startX;
+    const deltaY = event.clientY - pan.startY;
+    if (!pan.moved && Math.hypot(deltaX, deltaY) < 4) {
+      return;
+    }
+    pan.moved = true;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const rect = getViewImageRect(bounds.width, bounds.height);
+    setViewTransform((current) => ({
+      ...current,
+      x: clampZoomOffset(
+        bounds.width,
+        rect.x,
+        rect.width,
+        current.scale,
+        pan.x + deltaX,
+      ),
+      y: clampZoomOffset(
+        bounds.height,
+        rect.y,
+        rect.height,
+        current.scale,
+        pan.y + deltaY,
+      ),
+    }));
+  }
+
+  function finishPan(
+    event: React.PointerEvent<HTMLDivElement>,
+    suppressClick = true,
+  ) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) {
+      return;
+    }
+    suppressClickRef.current = suppressClick && pan.moved;
+    panRef.current = null;
+    setPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   function onClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
     const container = containerRef.current;
     if (cropActive || !ready || !container) {
       return;
@@ -202,26 +307,8 @@ export function DevelopCanvas({
     const bounds = container.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
     const pointerY = event.clientY - bounds.top;
-    const sourceWidth = settings.crop.enabled
-      ? image.width * settings.crop.width
-      : image.width;
-    const sourceHeight = settings.crop.enabled
-      ? image.height * settings.crop.height
-      : image.height;
-    const rect = computeContainedImageRect(
-      bounds.width,
-      bounds.height,
-      sourceWidth,
-      sourceHeight,
-    );
-    const imageX = (pointerX - viewTransform.x) / viewTransform.scale;
-    const imageY = (pointerY - viewTransform.y) / viewTransform.scale;
-    if (
-      imageX < rect.x ||
-      imageX > rect.x + rect.width ||
-      imageY < rect.y ||
-      imageY > rect.y + rect.height
-    ) {
+    const rect = getViewImageRect(bounds.width, bounds.height);
+    if (!isInsideImage(pointerX, pointerY, rect)) {
       return;
     }
     if (viewTransform.scale > 1) {
@@ -296,15 +383,21 @@ export function DevelopCanvas({
         cropActive || !ready
           ? ""
           : viewTransform.scale > 1
-            ? "cursor-zoom-out"
+            ? panning
+              ? "cursor-grabbing"
+              : "cursor-grab"
             : "cursor-zoom-in"
       }`}
       onWheel={onWheel}
       onClick={onClick}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={finishPan}
+      onPointerCancel={(event) => finishPan(event, false)}
     >
       <div
         className={`absolute inset-0 ${
-          cropActive
+          cropActive || panning
             ? ""
             : "will-change-transform transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
         }`}
