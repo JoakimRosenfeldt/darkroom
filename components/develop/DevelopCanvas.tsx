@@ -32,11 +32,6 @@ const MIN_PREVIEW_ZOOM = 0.25;
 const MAX_PREVIEW_ZOOM = 8;
 const DETAIL_ZOOM = 2;
 const FIT_TRANSFORM: CropPreviewTransform = { scale: 1, x: 0, y: 0 };
-const VIEW_CURSORS = {
-  zoom: "url('/cursors/zoom-in.svg') 9 9, zoom-in",
-  grab: "url('/cursors/grab.svg') 12 10, grab",
-  grabbing: "url('/cursors/grabbing.svg') 12 10, grabbing",
-};
 
 function clampZoomOffset(
   viewportSize: number,
@@ -380,19 +375,19 @@ export function DevelopCanvas({
   }
 
   const activeTransform = cropActive ? previewTransform : viewTransform;
-  const cursor = cropActive || !ready
-    ? undefined
-    : viewTransform.scale <= 1
-      ? VIEW_CURSORS.zoom
-      : panning
-        ? VIEW_CURSORS.grabbing
-        : VIEW_CURSORS.grab;
 
   return (
     <div
       ref={containerRef}
-      className="relative h-full w-full overflow-hidden"
-      style={{ cursor }}
+      className={`relative h-full w-full overflow-hidden ${
+        cropActive || !ready
+          ? ""
+          : viewTransform.scale > 1
+            ? panning
+              ? "cursor-grabbing"
+              : "cursor-grab"
+            : "cursor-zoom-in"
+      }`}
       onWheel={onWheel}
       onClick={onClick}
       onPointerDown={onPointerDown}
