@@ -35,7 +35,10 @@ function getActionTargets(
   return [entryId];
 }
 
-export function useLibraryContextMenu(visibleOrder: string[]) {
+export function useLibraryContextMenu(
+  visibleOrder: string[],
+  onExport?: (entryIds: string[]) => void,
+) {
   const router = useRouter();
   const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
@@ -207,6 +210,15 @@ export function useLibraryContextMenu(visibleOrder: string[]) {
               }}
             >
               Open in Develop
+            </ContextMenuItem>
+
+            <ContextMenuItem
+              onClick={() => {
+                onExport?.(actionTargets);
+                closeMenu();
+              }}
+            >
+              Export selected…
             </ContextMenuItem>
 
             <ContextMenuSeparator />

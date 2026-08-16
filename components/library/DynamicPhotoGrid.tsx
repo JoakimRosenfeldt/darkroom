@@ -189,7 +189,7 @@ export function DynamicPhotoGrid({
             return (
               <div
                 key={virtualRow.key}
-                className="absolute left-0 top-0 flex items-stretch"
+                className="absolute left-0 top-0 flex items-start"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   width: `${containerWidth}px`,

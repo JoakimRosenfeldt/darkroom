@@ -1,6 +1,18 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { PhotoCatalog } from "../lib/catalog/types";
 import type { NefDecodeRequest, NefDecodeResult } from "./nef-decoder-service";
+import type {
+  ExportDestinationRequest,
+  ExportEncodeOptions,
+  ExportFinalizeResult,
+  ExportFormatDescriptor,
+  ExportPixelPayload,
+  ExportResult,
+} from "./export-service";
+import type {
+  ExportOptionsSettings,
+  ExportOptionsSettingsInput,
+} from "./settings";
 
 interface ScannedFile {
   name: string;
@@ -84,8 +96,45 @@ const darkroom = {
     );
   },
 
-  saveExport(suggestedName: string, data: ArrayBuffer): Promise<string | null> {
-    return ipcRenderer.invoke("darkroom:save-export", suggestedName, data);
+  getExportFormats(): Promise<ExportFormatDescriptor[]> {
+    return ipcRenderer.invoke("darkroom:get-export-formats");
+  },
+
+  chooseExportDestination(
+    request: ExportDestinationRequest,
+  ): Promise<{ token: string } | null> {
+    return ipcRenderer.invoke("darkroom:choose-export-destination", request);
+  },
+
+  encodeAndSaveExport(
+    token: string,
+    basename: string,
+    pixels: ArrayBuffer | Uint8Array | ExportPixelPayload,
+    options: ExportEncodeOptions,
+  ): Promise<ExportResult> {
+    return ipcRenderer.invoke(
+      "darkroom:encode-and-save-export",
+      token,
+      basename,
+      pixels,
+      options,
+    );
+  },
+
+  finalizeExport(token: string): Promise<ExportFinalizeResult> {
+    return ipcRenderer.invoke("darkroom:finalize-export", token);
+  },
+
+  getExportOptions(): Promise<ExportOptionsSettings> {
+    return ipcRenderer.invoke("darkroom:get-export-options");
+  },
+
+  setExportOptions(options: ExportOptionsSettingsInput): Promise<void> {
+    return ipcRenderer.invoke("darkroom:set-export-options", options);
+  },
+
+  showInFolder(revealToken: string): Promise<void> {
+    return ipcRenderer.invoke("darkroom:show-in-folder", revealToken);
   },
 };
 

@@ -31,6 +31,7 @@ interface LibraryToolbarProps {
   onCurationFilterChange: (filter: CurationFilter) => void;
   onThumbSizeChange: (size: number) => void;
   onViewModeChange: (mode: GridViewMode) => void;
+  onExport: () => void;
 }
 
 export function LibraryToolbar({
@@ -45,11 +46,13 @@ export function LibraryToolbar({
   onCurationFilterChange,
   onThumbSizeChange,
   onViewModeChange,
+  onExport,
 }: LibraryToolbarProps) {
   const {
     folderName,
     importState,
     needsFolderAccess,
+    selectedEntryIds,
     clearLibrary,
   } = useLibraryStore();
 
@@ -99,6 +102,16 @@ export function LibraryToolbar({
         title="Clear saved library and reset folder access"
       >
         Reset
+      </button>
+
+      <button
+        type="button"
+        onClick={onExport}
+        disabled={selectedEntryIds.length === 0 || needsFolderAccess}
+        className="h-7 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-40"
+        title={selectedEntryIds.length === 0 ? "Select photos to export" : "Export selected photos"}
+      >
+        Export selected…
       </button>
 
       <div className="mx-1 h-4 w-px bg-lr-border-subtle" />

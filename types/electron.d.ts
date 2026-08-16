@@ -1,5 +1,17 @@
 import type { PhotoCatalog } from "../lib/catalog/types";
 import type { NefDecodeRequest, NefDecodeResult } from "../electron/nef-decoder-service";
+import type {
+  ExportDestinationRequest,
+  ExportEncodeOptions,
+  ExportFinalizeResult,
+  ExportFormatDescriptor,
+  ExportPixelPayload,
+  ExportResult,
+} from "../electron/export-service";
+import type {
+  ExportOptionsSettings,
+  ExportOptionsSettingsInput,
+} from "../electron/settings";
 
 export interface ScannedFile {
   name: string;
@@ -34,7 +46,20 @@ export interface DarkroomAPI {
     relativePath: string,
     contents: string,
   ): Promise<void>;
-  saveExport(suggestedName: string, data: ArrayBuffer): Promise<string | null>;
+  getExportFormats(): Promise<ExportFormatDescriptor[]>;
+  chooseExportDestination(
+    request: ExportDestinationRequest,
+  ): Promise<{ token: string } | null>;
+  encodeAndSaveExport(
+    token: string,
+    basename: string,
+    pixels: ArrayBuffer | Uint8Array | ExportPixelPayload,
+    options: ExportEncodeOptions,
+  ): Promise<ExportResult>;
+  finalizeExport(token: string): Promise<ExportFinalizeResult>;
+  getExportOptions(): Promise<ExportOptionsSettings>;
+  setExportOptions(options: ExportOptionsSettingsInput): Promise<void>;
+  showInFolder(revealToken: string): Promise<void>;
 }
 
 declare global {

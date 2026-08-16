@@ -1,4 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +24,13 @@ import {
   type NefDecodeRequest,
   type NefDecoderCommand,
 } from "./nef-decoder-service";
+import {
+  createExportService,
+  resolveApprovedExportSources,
+  type ExportEncodeOptions,
+  type ExportDestinationRequest,
+  type ExportPixelPayload,
+} from "./export-service";
 import { createSettingsStore } from "./settings";
 import { getAppRoot, getOutDir, startStaticServer } from "./static-server";
 
@@ -217,6 +231,11 @@ function registerIpcHandlers(): void {
     helper: getNefDecoderCommand(),
     tempRoot: app.getPath("temp"),
   });
+  const exportService = createExportService(dialog, (exportedPath) => {
+    shell.showItemInFolder(exportedPath);
+  }, {
+    provenancePath: path.join(app.getPath("userData"), "export-provenance.json"),
+  });
 
   ipcMain.handle("darkroom:pick-folder", async (event) => {
     assertTrustedRenderer(event);
@@ -390,25 +409,68 @@ function registerIpcHandlers(): void {
     },
   );
 
+  ipcMain.handle("darkroom:get-export-formats", async (event) => {
+    assertTrustedRenderer(event);
+    return exportService.getExportFormats();
+  });
+
   ipcMain.handle(
-    "darkroom:save-export",
-    async (event, suggestedName: string, data: ArrayBuffer) => {
+    "darkroom:choose-export-destination",
+    async (event, request: ExportDestinationRequest) => {
       assertTrustedRenderer(event);
-      if (data.byteLength > 512 * 1024 * 1024) {
-        throw new Error("Export is too large.");
+      if (
+        typeof request !== "object" ||
+        request === null ||
+        !Number.isInteger(request.count) ||
+        request.count <= 0
+      ) {
+        throw new Error("Export destination request is invalid.");
       }
-      const result = await dialog.showSaveDialog({
-        title: "Export edited photo",
-        defaultPath: path.basename(suggestedName),
-        filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
-      });
+      const sources = await resolveApprovedExportSources(activeLibraryRoot);
+      return exportService.chooseExportDestination(request, sources);
+    },
+  );
 
-      if (result.canceled || !result.filePath) {
-        return null;
-      }
+  ipcMain.handle(
+    "darkroom:encode-and-save-export",
+    async (
+      event,
+      token: string,
+      basename: string,
+      pixels: ArrayBuffer | Uint8Array | ExportPixelPayload,
+      options: ExportEncodeOptions,
+    ) => {
+      assertTrustedRenderer(event);
+      return exportService.encodeAndSaveExport(token, basename, pixels, options);
+    },
+  );
 
-      await fs.writeFile(result.filePath, Buffer.from(new Uint8Array(data)));
-      return result.filePath;
+  ipcMain.handle("darkroom:get-export-options", async (event) => {
+    assertTrustedRenderer(event);
+    return settingsStore.getExportOptions();
+  });
+
+  ipcMain.handle(
+    "darkroom:set-export-options",
+    async (event, options) => {
+      assertTrustedRenderer(event);
+      await settingsStore.setExportOptions(options);
+    },
+  );
+
+  ipcMain.handle(
+    "darkroom:finalize-export",
+    async (event, token: string) => {
+      assertTrustedRenderer(event);
+      return exportService.finalizeExport(token);
+    },
+  );
+
+  ipcMain.handle(
+    "darkroom:show-in-folder",
+    async (event, revealToken: string) => {
+      assertTrustedRenderer(event);
+      exportService.showInFolder(revealToken);
     },
   );
 }
