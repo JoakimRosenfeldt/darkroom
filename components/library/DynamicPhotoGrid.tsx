@@ -53,6 +53,19 @@ function formatRowDate(lastModified: number | undefined): string {
   return `${String(date.getDate()).padStart(2, "0")} ${MONTH_LABELS[date.getMonth()]}`;
 }
 
+function getRowDateKey(lastModified: number | undefined): string {
+  if (lastModified === undefined) {
+    return "unknown";
+  }
+
+  const date = new Date(lastModified);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
 function getParentFolderName(relativePath: string): string | null {
   const parts = relativePath.split(/[\\/]+/).filter(Boolean);
   return parts.length > 1 ? parts.at(-2) ?? null : null;
@@ -99,11 +112,28 @@ export function DynamicPhotoGrid({
     [entries, aspectRatios, containerWidth, rowHeight],
   );
 
+  const rowStartsDateGroup = useMemo(
+    () =>
+      rows.map((row, index) => {
+        if (index === 0) {
+          return true;
+        }
+
+        return (
+          getRowDateKey(row.tiles[0]?.entry.lastModified) !==
+          getRowDateKey(rows[index - 1]?.tiles[0]?.entry.lastModified)
+        );
+      }),
+    [rows],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) =>
-      (rows[index]?.height ?? rowHeight) + ROW_HEADER_OVERHEAD + ROW_GAP,
+      (rows[index]?.height ?? rowHeight) +
+      (rowStartsDateGroup[index] ? ROW_HEADER_OVERHEAD : 0) +
+      ROW_GAP,
     overscan: 4,
   });
 
@@ -139,11 +169,12 @@ export function DynamicPhotoGrid({
 
   const visibleRows = useMemo(
     () =>
-      rows.map((row) => ({
-        height: row.height + ROW_HEADER_OVERHEAD,
+      rows.map((row, index) => ({
+        height: row.height +
+          (rowStartsDateGroup[index] ? ROW_HEADER_OVERHEAD : 0),
         entryIds: row.tiles.map((tile) => tile.entry.id),
       })),
-    [rows],
+    [rows, rowStartsDateGroup],
   );
 
   useEffect(() => {
@@ -222,6 +253,7 @@ export function DynamicPhotoGrid({
             if (!row) {
               return null;
             }
+            const showHeader = rowStartsDateGroup[virtualRow.index] ?? false;
 
             return (
               <div
@@ -230,22 +262,21 @@ export function DynamicPhotoGrid({
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   width: `${containerWidth}px`,
-                  height: `${row.height + ROW_HEADER_OVERHEAD}px`,
+                  height: `${row.height + (showHeader ? ROW_HEADER_OVERHEAD : 0)}px`,
                   gap: `${ROW_HEADER_GAP}px`,
                 }}
               >
-                <div className="flex h-4 min-w-0 items-center gap-2">
-                  <span className="shrink-0 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-lr-text-faint">
-                    {formatRowDate(row.tiles[0]?.entry.lastModified)}
-                    {getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")
-                      ? ` · ${getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")}`
-                      : ""}
-                  </span>
-                  <div className="h-px flex-1 bg-lr-panel-raised" />
-                  <span className="shrink-0 font-mono text-[11px] leading-4 text-lr-text-faint">
-                    {row.tiles.length} {row.tiles.length === 1 ? "photo" : "photos"}
-                  </span>
-                </div>
+                {showHeader ? (
+                  <div className="flex h-4 min-w-0 items-center gap-2">
+                    <span className="shrink-0 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-lr-text-faint">
+                      {formatRowDate(row.tiles[0]?.entry.lastModified)}
+                      {getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")
+                        ? ` · ${getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")}`
+                        : ""}
+                    </span>
+                    <div className="h-px flex-1 bg-lr-panel-raised" />
+                  </div>
+                ) : null}
                 <div
                   className="flex items-start"
                   style={{

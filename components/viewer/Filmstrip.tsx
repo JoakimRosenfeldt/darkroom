@@ -6,18 +6,25 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { PhotoTile } from "@/components/library/PhotoTile";
 import { useLibraryStore } from "@/stores/library-store";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import { IconChevronLeft, IconChevronRight } from "@/components/shell/icons";
 
 interface FilmstripProps {
   entries: LibraryEntry[];
   activeId: string;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onSelect: (id: string, modifiers: SelectEntryModifiers) => void;
 }
 
 const THUMB_SIZE = 76;
 const THUMB_GAP = 8;
 
-export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
+export function Filmstrip({
+  entries,
+  activeId,
+  selectedIds,
+  onSelect,
+}: FilmstripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const getScrollRoot = useCallback(() => scrollRef.current, []);
@@ -57,7 +64,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
     }
     const next = entries[activeIndex + direction];
     if (next) {
-      onSelect(next.id);
+      onSelect(next.id, {});
     }
   }
 
@@ -111,7 +118,15 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
               <button
                 key={entry.id}
                 type="button"
-                onClick={() => onSelect(entry.id)}
+                aria-current={entry.id === activeId ? "true" : undefined}
+                aria-pressed={selectedIds.includes(entry.id)}
+                aria-label={`Select ${entry.name}`}
+                onClick={(event) =>
+                  onSelect(entry.id, {
+                    shift: event.shiftKey,
+                    toggle: event.metaKey || event.ctrlKey,
+                  })
+                }
                 className="absolute top-0 shrink-0"
                 style={{
                   width: `${THUMB_SIZE}px`,
@@ -123,11 +138,14 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
                   entry={entry}
                   width={THUMB_SIZE}
                   height={THUMB_SIZE}
-                  selected={entry.id === activeId}
+                  selected={selectedIds.includes(entry.id)}
                   metadata={getEntryMetadata(entryMetadata, entry.id)}
                   compact
                   getScrollRoot={getScrollRoot}
                 />
+                {entry.id === activeId ? (
+                  <span className="pointer-events-none absolute inset-x-7 bottom-1 z-30 h-0.5 rounded-full bg-lr-text" />
+                ) : null}
               </button>
             );
           })}
@@ -148,7 +166,11 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
           {activeIndex >= 0 ? `${activeIndex + 1} / ${entries.length}` : "—"}
         </span>
         <span className="text-[10px] uppercase tracking-[0.08em] text-lr-text-muted">
-          {activeIndex >= 0 ? "Current" : "Photos"}
+          {selectedIds.length > 1
+            ? `${selectedIds.length} selected`
+            : activeIndex >= 0
+              ? "Current"
+              : "Photos"}
         </span>
       </div>
     </div>

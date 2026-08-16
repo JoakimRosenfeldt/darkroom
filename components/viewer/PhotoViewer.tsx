@@ -14,6 +14,7 @@ import {
   useEntryMetadataForId,
 } from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import {
   DevelopCanvas,
   type CropPreviewTransform,
@@ -37,6 +38,8 @@ interface PhotoViewerProps {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
+  const selectEntry = useLibraryStore((state) => state.selectEntry);
   const rootPath = useLibraryStore((state) => state.rootPath);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
@@ -54,6 +57,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const activeIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
+  );
+  const visibleOrder = useMemo(() => entries.map((item) => item.id), [entries]);
+  const selectionTargets = useMemo(
+    () =>
+      selectedEntryIds.length > 0 && selectedEntryIds.includes(entry.id)
+        ? selectedEntryIds
+        : [entry.id],
+    [entry.id, selectedEntryIds],
   );
   const applyDevelopMetadata = useCallback(
     (patch: Parameters<typeof applyMetadataToEntries>[1]) => {
@@ -74,7 +85,9 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
-    setSelectedEntryId(entry.id);
+    if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
+      setSelectedEntryId(entry.id);
+    }
   }, [entry.id, setSelectedEntryId]);
 
   useEffect(() => {
@@ -114,7 +127,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     };
   }, [entry, entries, activeIndex]);
 
-  useEntryMetadataShortcuts([entry.id], exportOpen);
+  useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
   const discardCrop = useCallback((nextPanel: DevelopPanelId | null = "edit") => {
     cropDraftRef.current = null;
@@ -178,6 +191,37 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     discardCrop("edit");
   }
 
+  const selectPhoto = useCallback(
+    (id: string, modifiers: SelectEntryModifiers = {}) => {
+      const removing = Boolean(
+        modifiers.toggle && selectedEntryIds.includes(id),
+      );
+      if (removing && selectedEntryIds.length === 1) {
+        return;
+      }
+
+      const remaining = removing
+        ? selectedEntryIds.filter((selectedId) => selectedId !== id)
+        : selectedEntryIds;
+      selectEntry(id, modifiers, visibleOrder);
+      discardCrop("edit");
+
+      const nextActiveId =
+        removing && id === entry.id ? remaining.at(-1) : removing ? entry.id : id;
+      if (nextActiveId && nextActiveId !== entry.id) {
+        router.push(`/photo?id=${encodeURIComponent(nextActiveId)}`);
+      }
+    },
+    [
+      discardCrop,
+      entry.id,
+      router,
+      selectEntry,
+      selectedEntryIds,
+      visibleOrder,
+    ],
+  );
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       // The export dialog owns keyboard handling while it is mounted. In
@@ -204,16 +248,20 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         return;
       }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
-        discardCrop("edit");
-        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
+        event.preventDefault();
+        selectPhoto(entries[activeIndex - 1].id, {
+          shift: event.shiftKey,
+        });
       }
       if (
         event.key === "ArrowRight" &&
         activeIndex >= 0 &&
         activeIndex < entries.length - 1
       ) {
-        discardCrop("edit");
-        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex + 1].id)}`);
+        event.preventDefault();
+        selectPhoto(entries[activeIndex + 1].id, {
+          shift: event.shiftKey,
+        });
       }
       if (event.key === "Escape") {
         router.push("/");
@@ -230,12 +278,8 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     applyCrop,
     discardCrop,
     exportOpen,
+    selectPhoto,
   ]);
-
-  function selectPhoto(id: string) {
-    discardCrop("edit");
-    router.push(`/photo?id=${encodeURIComponent(id)}`);
-  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-lr-toolbar">
@@ -262,7 +306,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               onClick={() => setExportOpen(true)}
               className="h-8 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover"
             >
-              Export…
+              Export{selectionTargets.length > 1 ? ` ${selectionTargets.length}` : ""}…
             </button>
           </div>
 
@@ -296,14 +340,17 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
           <EntryMetadataBar
             entryId={entry.id}
             metadata={metadata}
-            onPick={() => applyMetadataToEntries([entry.id], { pick: "pick" })}
-            onReject={() => applyMetadataToEntries([entry.id], { pick: "reject" })}
-            onClearPick={() => applyMetadataToEntries([entry.id], { pick: "none" })}
-            onRating={(rating) => applyMetadataToEntries([entry.id], { rating })}
+            onPick={() => applyMetadataToEntries(selectionTargets, { pick: "pick" })}
+            onReject={() => applyMetadataToEntries(selectionTargets, { pick: "reject" })}
+            onClearPick={() => applyMetadataToEntries(selectionTargets, { pick: "none" })}
+            onRating={(rating) => applyMetadataToEntries(selectionTargets, { rating })}
             onColorLabel={(label) => {
               const current = metadata.colorLabel;
-              applyMetadataToEntries([entry.id], {
-                colorLabel: current === label ? null : label,
+              applyMetadataToEntries(selectionTargets, {
+                colorLabel:
+                  selectionTargets.length === 1 && current === label
+                    ? null
+                    : label,
               });
             }}
           />
@@ -328,11 +375,15 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         <Filmstrip
           entries={entries}
           activeId={entry.id}
+          selectedIds={selectionTargets}
           onSelect={selectPhoto}
         />
       </div>
       {exportOpen ? (
-        <ExportDialog entries={[entry]} onClose={() => setExportOpen(false)} />
+        <ExportDialog
+          entries={entries.filter((item) => selectionTargets.includes(item.id))}
+          onClose={() => setExportOpen(false)}
+        />
       ) : null}
     </div>
   );

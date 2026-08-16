@@ -43,7 +43,6 @@ export const PhotoTile = memo(function PhotoTile({
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isNearViewport, setIsNearViewport] = useState(false);
-  const [intersectionRatio, setIntersectionRatio] = useState(0);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
 
@@ -73,7 +72,6 @@ export const PhotoTile = memo(function PhotoTile({
 
     if (!("IntersectionObserver" in window)) {
       setIsNearViewport(true);
-      setIntersectionRatio(1);
       return;
     }
 
@@ -84,12 +82,10 @@ export const PhotoTile = memo(function PhotoTile({
           return;
         }
         setIsNearViewport(observed.isIntersecting);
-        setIntersectionRatio(observed.intersectionRatio);
       },
       {
         root,
         rootMargin: compact ? "160px 320px" : "320px",
-        threshold: [0, 0.25, 0.5, 0.75, 1],
       },
     );
     observer.observe(element);
@@ -98,23 +94,17 @@ export const PhotoTile = memo(function PhotoTile({
   }, [compact, getScrollRoot]);
 
   useEffect(() => {
-    if (!isNearViewport) {
+    if (!isNearViewport || thumbnailUrl) {
       return;
     }
 
     let active = true;
     const controller = new AbortController();
 
-    const loadPriority = selected
-      ? 30
-      : intersectionRatio >= 0.5
-        ? 20 + Math.round(intersectionRatio * 5)
-        : 12;
-
     async function loadThumbnail() {
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
-          priority: loadPriority,
+          priority: 20,
           signal: controller.signal,
         });
         if (!active) {
@@ -143,7 +133,7 @@ export const PhotoTile = memo(function PhotoTile({
       active = false;
       controller.abort();
     };
-  }, [entry, decodeEdge, isNearViewport, selected, intersectionRatio]);
+  }, [entry, decodeEdge, isNearViewport, thumbnailUrl]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
@@ -192,6 +182,13 @@ export const PhotoTile = memo(function PhotoTile({
 
       {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}
 
+      {selected ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 rounded-[6px] border-2 border-lr-accent"
+        />
+      ) : null}
+
     </div>
   );
 
@@ -203,6 +200,7 @@ export const PhotoTile = memo(function PhotoTile({
     return (
       <button
         type="button"
+        aria-pressed={selected}
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
         onClick={(event) =>
           onSelect(entry.id, {

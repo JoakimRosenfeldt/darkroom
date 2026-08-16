@@ -4,13 +4,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
-import {
-  LibraryToolbar,
-  type CurationFilter,
-  type FilterOption,
-  type GridViewMode,
-  type SortOption,
-} from "@/components/shell/LibraryToolbar";
+import { LibraryToolbar } from "@/components/shell/LibraryToolbar";
 import { SidePanel } from "@/components/shell/SidePanel";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
@@ -36,6 +30,7 @@ import { StarRatingControl } from "@/components/library/StarRatingControl";
 import { COLOR_LABEL_HEX, getEntryMetadata } from "@/lib/catalog/defaults";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import { COLOR_LABELS } from "@/lib/catalog/types";
+import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 
 export default function HomePage() {
   const router = useRouter();
@@ -65,11 +60,8 @@ export default function HomePage() {
     }
   }, [archivedEntryIds.length, catalogView.type, setCatalogView]);
 
-  const [sort, setSort] = useState<SortOption>("date");
-  const [filter, setFilter] = useState<FilterOption>("all");
-  const [curationFilter, setCurationFilter] = useState<CurationFilter>("all");
-  const [thumbSize, setThumbSize] = useState(180);
-  const [viewMode, setViewMode] = useState<GridViewMode>("dynamic");
+  const [viewSettings, updateViewSettings] = useLibraryViewSettings();
+  const { sort, filter, curationFilter, thumbSize, viewMode } = viewSettings;
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
 
@@ -160,11 +152,17 @@ export default function HomePage() {
             curationFilter={curationFilter}
             thumbSize={thumbSize}
             viewMode={viewMode}
-            onSortChange={setSort}
-            onFilterChange={setFilter}
-            onCurationFilterChange={setCurationFilter}
-            onThumbSizeChange={setThumbSize}
-            onViewModeChange={setViewMode}
+            onSortChange={(next) => updateViewSettings({ sort: next })}
+            onFilterChange={(next) => updateViewSettings({ filter: next })}
+            onCurationFilterChange={(next) =>
+              updateViewSettings({ curationFilter: next })
+            }
+            onThumbSizeChange={(next) =>
+              updateViewSettings({ thumbSize: next })
+            }
+            onViewModeChange={(next) =>
+              updateViewSettings({ viewMode: next })
+            }
             onExport={() => setExportEntryIds(selectedEntryIds)}
           />
 
