@@ -389,9 +389,9 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   }, [summary]);
 
   const content = (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4" role="presentation">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0a0908]/62 p-4" role="presentation">
       <div
-        className="w-full max-w-[430px] overflow-hidden rounded-lg border border-lr-border bg-lr-panel shadow-2xl"
+        className="w-full max-w-[520px] overflow-hidden rounded-xl border border-lr-border bg-lr-panel-raised shadow-[0_32px_64px_rgba(0,0,0,.6)]"
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
@@ -615,14 +615,14 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         ) : null}
       </div>
       <style jsx>{`
-        .control { width: 100%; height: 29px; border: 1px solid rgb(71 68 66); border-radius: 4px; background: rgb(43 40 39); padding: 0 8px; color: rgb(236 231 227); font-size: 12px; outline: none; }
-        .control:focus { border-color: rgb(217 160 102); }
-        .button-primary, .button-secondary { height: 29px; border-radius: 4px; padding: 0 11px; font-size: 12px; transition: background .15s, color .15s; }
-        .button-primary { background: rgb(217 160 102); color: rgb(35 27 23); }
-        .button-primary:hover { background: rgb(230 177 120); }
+        .control { width: 100%; height: 34px; border: 1px solid #3a3633; border-radius: 8px; background: #1b1917; padding: 0 10px; color: #ece7e3; font-size: 12px; outline: none; }
+        .control:focus { border-color: #8fb8e0; }
+        .button-primary, .button-secondary { height: 32px; border-radius: 8px; padding: 0 12px; font-size: 12px; transition: background .15s, color .15s; }
+        .button-primary { background: #8fb8e0; color: #14202a; }
+        .button-primary:hover { background: #a6c9ec; }
         .button-primary:disabled { cursor: not-allowed; opacity: .45; }
-        .button-secondary { border: 1px solid rgb(71 68 66); color: rgb(185 177 171); }
-        .button-secondary:hover { background: rgb(56 53 51); color: rgb(236 231 227); }
+        .button-secondary { border: 1px solid #3a3633; color: #b9b1ab; }
+        .button-secondary:hover { background: #2b2827; color: #ece7e3; }
       `}</style>
     </div>
   );

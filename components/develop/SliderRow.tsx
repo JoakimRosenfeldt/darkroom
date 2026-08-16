@@ -31,13 +31,13 @@ export function SliderRow({
   const displayValue = value.toFixed(decimalPlaces);
 
   return (
-    <div className={`grid grid-cols-[86px_1fr_42px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
+    <div className={`grid grid-cols-[96px_1fr_52px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
       <button
         type="button"
         disabled={disabled}
         aria-label={`Reset ${label}`}
         onClick={() => onChange(resetValue)}
-        className="group cursor-pointer select-none rounded-sm text-left text-lr-text-dim hover:text-lr-text-muted focus-visible:outline focus-visible:outline-lr-text-dim disabled:pointer-events-none"
+        className="group cursor-pointer select-none rounded-sm text-left text-lr-text-muted hover:text-lr-text focus-visible:outline focus-visible:outline-lr-text-dim disabled:pointer-events-none"
       >
         <span aria-hidden="true" className="group-hover:hidden group-focus-visible:hidden">
           {label}
@@ -59,7 +59,7 @@ export function SliderRow({
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}
         className="develop-slider"
       />
-      <span className="text-right font-mono text-[10px] text-lr-text-muted">
+      <span className="text-right font-mono text-[11px] text-lr-text-muted">
         {value > 0 ? "+" : ""}
         {displayValue}
         {suffix}

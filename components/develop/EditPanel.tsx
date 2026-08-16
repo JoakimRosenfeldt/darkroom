@@ -52,28 +52,42 @@ const HUE_TRACKS: Record<MixerColor, string> = {
   magenta: "linear-gradient(90deg, #8b63c5, #c35b9e, #d64d52)",
 };
 
-export function EditPanel() {
-  const resetAll = useDevelopStore((state) => state.resetAll);
+interface EditPanelProps {
+  onResetAll: () => void;
+}
+
+export function EditPanel({ onResetAll }: EditPanelProps) {
   const sidecarError = useDevelopStore((state) => state.sidecarError);
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-      <div className="flex items-center justify-between border-b border-lr-border-subtle px-3 py-2">
+    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
         <div>
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-muted">
-            Edit
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+            Develop
           </h2>
           {sidecarError ? (
-            <p className="text-[10px] text-lr-text-dim">XMP: {sidecarError}</p>
+            <p className="text-[10px] text-lr-danger">XMP: {sidecarError}</p>
           ) : null}
         </div>
         <button
           type="button"
-          onClick={resetAll}
-          className="rounded border border-lr-border-subtle px-2 py-1 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+          onClick={onResetAll}
+          className="rounded-md border border-lr-border-subtle px-2.5 py-1.5 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
         >
-          Reset All
+          Reset all
         </button>
+      </div>
+
+      <div className="flex gap-1.5 overflow-hidden border-b border-lr-border-subtle px-3 py-2.5" aria-label="Develop sections">
+        {EDIT_PLUGINS.map((plugin) => (
+          <span
+            key={plugin.id}
+            className="shrink-0 rounded-full border border-lr-border-subtle bg-lr-panel-raised px-2.5 py-1 text-[10px] tracking-[0.04em] text-lr-text-muted"
+          >
+            {plugin.label}
+          </span>
+        ))}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -96,10 +110,10 @@ function PluginSection({
 
   return (
     <details open className="border-b border-lr-border-subtle">
-      <summary className="flex cursor-pointer select-none items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim hover:text-lr-text-muted">
+      <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted hover:text-lr-text">
         {label}
       </summary>
-      <div className="px-3 pb-3">
+      <div className="px-4 pb-4">
         {id === "basic" ? <BasicControls /> : null}
         {id === "curve" ? <CurveControls /> : null}
         {id === "mixer" ? <MixerControls /> : null}
@@ -107,7 +121,7 @@ function PluginSection({
         <button
           type="button"
           onClick={() => resetPlugin(id)}
-          className="mt-2 rounded border border-lr-border-subtle px-2 py-1 text-[11px] text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text-muted"
+          className="mt-3 rounded-md border border-lr-border-subtle px-2.5 py-1.5 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
         >
           Reset {label}
         </button>
@@ -187,7 +201,7 @@ function MixerControls() {
             className={`border-b px-1 py-1.5 text-[10px] ${
               mode === item.id
                 ? "border-lr-text-muted text-lr-text"
-                : "border-transparent text-lr-text-dim hover:text-lr-text-muted"
+                : "border-transparent text-lr-text-muted hover:text-lr-text"
             }`}
           >
             {item.label}
@@ -199,7 +213,7 @@ function MixerControls() {
         <div className="space-y-3">
           {(["hue", "saturation", "luminance"] as const).map((property) => (
             <section key={property}>
-              <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+              <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-lr-text-muted">
                 {property}
               </h3>
               {rows(property)}

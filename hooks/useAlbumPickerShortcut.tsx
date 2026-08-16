@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { isEditableTarget } from "@/hooks/is-editable-target";
 import { AlbumPickerPopup } from "@/components/library/AlbumPickerPopup";
 import { RemovePhotosPopup } from "@/components/library/RemovePhotosPopup";
@@ -37,6 +37,18 @@ export function useAlbumPickerShortcut({
   );
 
   const overlayOpen = albumPickerOpen || removePopupOpen;
+
+  const openAlbumPicker = useCallback(() => {
+    if (!disabled && !isArchiveView && entryIds.length > 0) {
+      setAlbumPickerOpen(true);
+    }
+  }, [disabled, entryIds.length, isArchiveView]);
+
+  const openRemovePopup = useCallback(() => {
+    if (!disabled && entryIds.length > 0) {
+      setRemovePopupOpen(true);
+    }
+  }, [disabled, entryIds.length]);
 
   useEffect(() => {
     if (disabled || overlayOpen || entryIds.length === 0) {
@@ -91,5 +103,11 @@ export function useAlbumPickerShortcut({
     />
   ) : null;
 
-  return { albumPicker, removePopup, overlayOpen };
+  return {
+    albumPicker,
+    removePopup,
+    overlayOpen,
+    openAlbumPicker,
+    openRemovePopup,
+  };
 }

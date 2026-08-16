@@ -17,6 +17,7 @@ interface DevelopSidePanelsProps {
   activePanel: DevelopPanelId | null;
   cropDraft: CropSettings | null;
   onSelect: (panel: DevelopPanelId) => void;
+  onResetAll: () => void;
   onCropChange: (crop: CropSettings, preserveFrame?: boolean) => void;
   onCropReset: () => void;
   onCropApply: () => void;
@@ -29,6 +30,7 @@ export function DevelopSidePanels({
   activePanel,
   cropDraft,
   onSelect,
+  onResetAll,
   onCropChange,
   onCropReset,
   onCropApply,
@@ -36,25 +38,30 @@ export function DevelopSidePanels({
 }: DevelopSidePanelsProps) {
   return (
     <>
-      {activePanel === "crop" && cropDraft ? (
-        <CropPanel
-          crop={cropDraft}
-          imageWidth={decoded.width}
-          imageHeight={decoded.height}
-          onChange={onCropChange}
-          onReset={onCropReset}
-          onApply={onCropApply}
-          onCancel={onCropCancel}
-        />
-      ) : null}
-      {activePanel === "edit" ? <EditPanel /> : null}
-      {activePanel === "info" ? (
+      {activePanel === "crop" ? (
+        <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+          <div className="flex-1 overflow-auto">
+            <CropPanel
+              crop={cropDraft}
+              active
+              imageWidth={decoded.width}
+              imageHeight={decoded.height}
+              onChange={onCropChange}
+              onReset={onCropReset}
+              onApply={onCropApply}
+              onCancel={onCropCancel}
+            />
+          </div>
+        </aside>
+      ) : activePanel === "info" ? (
         <MetadataPanel
           metadata={decoded.metadata}
           fileName={entry.name}
           profileId={entry.profileId}
         />
-      ) : null}
+      ) : (
+        <EditPanel onResetAll={onResetAll} />
+      )}
       <DevelopPanelRail activePanel={activePanel} onSelect={onSelect} />
     </>
   );

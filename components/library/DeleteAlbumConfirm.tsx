@@ -48,7 +48,7 @@ export function DeleteAlbumConfirm({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[#0a0908]/60 pt-[18vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -58,7 +58,7 @@ export function DeleteAlbumConfirm({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="w-80 overflow-hidden rounded-lg border border-lr-border bg-lr-panel shadow-xl outline-none"
+        className="w-80 overflow-hidden rounded-xl border border-lr-border bg-lr-panel-raised shadow-[0_32px_64px_rgba(0,0,0,.6)] outline-none"
         role="alertdialog"
         aria-label={`Delete album ${album.name}`}
       >

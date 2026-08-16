@@ -79,10 +79,10 @@ export function MetadataPanel({
       : null;
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-      <div className="flex items-center gap-2 border-b border-lr-border-subtle px-3 py-2">
+    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="flex items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <IconInfo className="h-3.5 w-3.5 text-lr-text-dim" />
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-muted">
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
           Metadata
         </h2>
       </div>
@@ -130,10 +130,10 @@ function MetadataSection({
 }) {
   return (
     <details open={defaultOpen} className="border-b border-lr-border-subtle">
-      <summary className="cursor-pointer select-none px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim hover:text-lr-text-muted">
+      <summary className="cursor-pointer select-none px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted hover:text-lr-text">
         {title}
       </summary>
-      <dl className="px-3 pb-2">{children}</dl>
+      <dl className="px-4 pb-3">{children}</dl>
     </details>
   );
 }
@@ -148,8 +148,8 @@ function MetadataRow({
   mono?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[88px_1fr] gap-2 py-1 text-xs">
-      <dt className="text-lr-text-dim">{label}</dt>
+    <div className="grid grid-cols-[96px_1fr] gap-2 py-1.5 text-xs">
+      <dt className="text-lr-text-muted">{label}</dt>
       <dd
         className={[
           "break-words text-lr-text",

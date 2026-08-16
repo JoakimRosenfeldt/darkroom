@@ -210,7 +210,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   return createPortal(
     <>
       <div
-        className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
+        className="fixed inset-0 z-50 flex items-start justify-center bg-[#0a0908]/60 pt-[18vh]"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget && !confirmDiskDelete) {
             onClose();
@@ -220,7 +220,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
         <div
           ref={dialogRef}
           tabIndex={-1}
-          className="w-80 overflow-hidden rounded-lg border border-lr-border bg-lr-panel shadow-xl outline-none"
+          className="w-80 overflow-hidden rounded-xl border border-lr-border bg-lr-panel-raised shadow-[0_24px_48px_rgba(0,0,0,.55)] outline-none"
           role="dialog"
           aria-label={isArchiveView ? "Archive actions" : "Remove photos"}
         >
