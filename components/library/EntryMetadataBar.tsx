@@ -22,14 +22,27 @@ export function EntryMetadataBadges({
   return (
     <>
       {colorLabel ? (
-        <div
-          className="pointer-events-none absolute bottom-0 left-0 top-0 w-1"
+        <span
+          className="pointer-events-none absolute left-2 top-2 h-2 w-2 rounded-[2px] shadow-[0_0_0_1.5px_rgba(15,13,12,.7)]"
           style={{ backgroundColor: COLOR_LABEL_HEX[colorLabel] }}
         />
       ) : null}
 
-      {showPick ? (
-        <div className="pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[10px] border-t-[10px] border-l-transparent border-t-white/90" />
+      {showPick || metadata.pick === "reject" ? (
+        <span
+          className={[
+            "pointer-events-none absolute left-5 top-1.5 rounded-[4px] bg-[#0f0d0c]/80 px-1.5 py-0.5 font-mono text-[9px]",
+            showPick ? "text-[#8fd0a0]" : "text-lr-danger",
+          ].join(" ")}
+        >
+          {showPick ? "PICK" : "REJ"}
+        </span>
+      ) : null}
+
+      {metadata.rating > 0 ? (
+        <span className="pointer-events-none absolute right-2 top-1.5 rounded-[4px] bg-[#0f0d0c]/80 px-1.5 py-0.5 font-mono text-[9px] text-lr-accent">
+          {metadata.rating}★
+        </span>
       ) : null}
     </>
   );
@@ -54,7 +67,7 @@ export function EntryMetadataBar({
   onColorLabel,
 }: EntryMetadataBarProps) {
   return (
-    <div className="flex h-9 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-panel px-3">
+    <div className="flex h-11 shrink-0 items-center gap-3 border-t border-lr-border-subtle bg-lr-toolbar px-4">
       <div className="flex items-center gap-1">
         <MetadataButton
           active={metadata.pick === "pick"}
@@ -79,14 +92,14 @@ export function EntryMetadataBar({
         </MetadataButton>
       </div>
 
-      <div className="h-4 w-px bg-lr-border-subtle" />
+      <div className="h-5 w-px bg-lr-border-subtle" />
 
       <StarRatingControl
         value={metadata.rating}
         onChange={onRating}
       />
 
-      <div className="h-4 w-px bg-lr-border-subtle" />
+      <div className="h-5 w-px bg-lr-border-subtle" />
 
       <div className="flex items-center gap-1.5">
         {COLOR_LABELS.map((label) => (
@@ -96,7 +109,7 @@ export function EntryMetadataBar({
             onClick={() => onColorLabel(label)}
             title={`${label} label`}
             className={[
-              "h-3.5 w-3.5 rounded-full border transition",
+              "h-3.5 w-3.5 rounded-[4px] border transition",
               metadata.colorLabel === label
                 ? "border-white/80 ring-1 ring-white/40"
                 : "border-transparent opacity-70 hover:opacity-100",
@@ -126,7 +139,7 @@ function MetadataButton({
       onClick={onClick}
       title={title}
       className={[
-        "rounded px-2 py-1 transition",
+        "rounded-md px-2.5 py-1.5 transition",
         active
           ? "bg-lr-selection text-lr-text"
           : "text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text",

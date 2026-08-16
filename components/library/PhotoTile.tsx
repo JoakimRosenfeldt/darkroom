@@ -43,7 +43,6 @@ export const PhotoTile = memo(function PhotoTile({
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [isNearViewport, setIsNearViewport] = useState(false);
-  const [intersectionRatio, setIntersectionRatio] = useState(0);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
 
@@ -73,7 +72,6 @@ export const PhotoTile = memo(function PhotoTile({
 
     if (!("IntersectionObserver" in window)) {
       setIsNearViewport(true);
-      setIntersectionRatio(1);
       return;
     }
 
@@ -84,12 +82,10 @@ export const PhotoTile = memo(function PhotoTile({
           return;
         }
         setIsNearViewport(observed.isIntersecting);
-        setIntersectionRatio(observed.intersectionRatio);
       },
       {
         root,
         rootMargin: compact ? "160px 320px" : "320px",
-        threshold: [0, 0.25, 0.5, 0.75, 1],
       },
     );
     observer.observe(element);
@@ -98,23 +94,17 @@ export const PhotoTile = memo(function PhotoTile({
   }, [compact, getScrollRoot]);
 
   useEffect(() => {
-    if (!isNearViewport) {
+    if (!isNearViewport || thumbnailUrl) {
       return;
     }
 
     let active = true;
     const controller = new AbortController();
 
-    const loadPriority = selected
-      ? 30
-      : intersectionRatio >= 0.5
-        ? 20 + Math.round(intersectionRatio * 5)
-        : 12;
-
     async function loadThumbnail() {
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
-          priority: loadPriority,
+          priority: 20,
           signal: controller.signal,
         });
         if (!active) {
@@ -143,7 +133,7 @@ export const PhotoTile = memo(function PhotoTile({
       active = false;
       controller.abort();
     };
-  }, [entry, decodeEdge, isNearViewport, selected, intersectionRatio]);
+  }, [entry, decodeEdge, isNearViewport, thumbnailUrl]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
@@ -152,11 +142,11 @@ export const PhotoTile = memo(function PhotoTile({
     <div
       ref={tileRef}
       className={[
-        "group relative shrink-0 overflow-hidden border-2 bg-[#141414]",
+        "group relative shrink-0 overflow-hidden rounded-[6px] bg-[#0f0d0c] ring-1 ring-inset ring-transparent",
         selected
-          ? "border-lr-accent"
-          : "border-transparent hover:border-lr-border",
-        compact ? "" : "transition-shadow duration-100 ease-out",
+          ? "ring-2 ring-inset ring-lr-accent"
+          : "hover:ring-1 hover:ring-inset hover:ring-lr-border",
+        compact ? "" : "transition-[box-shadow,transform] duration-150 ease-out",
       ].join(" ")}
       style={{ width, height }}
     >
@@ -176,10 +166,10 @@ export const PhotoTile = memo(function PhotoTile({
       )}
 
       {!compact ? (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 pb-1 pt-6 opacity-0 transition-opacity group-hover:opacity-100">
-          <p className="truncate text-[10px] text-white/90">{entry.name}</p>
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0f0d0c]/95 via-[#0f0d0c]/65 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100">
+          <p className="truncate font-mono text-[10px] text-lr-text">{entry.name}</p>
           {entry.profileId && entry.profileId !== "standard" ? (
-            <p className="text-[9px] uppercase tracking-wide text-lr-accent">
+            <p className="font-mono text-[9px] uppercase tracking-wide text-lr-accent">
               {entry.profileId}
             </p>
           ) : null}
@@ -187,14 +177,18 @@ export const PhotoTile = memo(function PhotoTile({
       ) : null}
 
       {isRejected ? (
-        <div className="pointer-events-none absolute inset-0 bg-black/50" />
+        <div className="pointer-events-none absolute inset-0 bg-[#0f0d0c]/55" />
       ) : null}
 
       {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}
 
       {selected ? (
-        <div className="absolute left-0 top-0 h-0 w-0 border-r-[10px] border-t-[10px] border-r-transparent border-t-lr-accent" />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 rounded-[6px] border-2 border-lr-accent"
+        />
       ) : null}
+
     </div>
   );
 
@@ -206,6 +200,7 @@ export const PhotoTile = memo(function PhotoTile({
     return (
       <button
         type="button"
+        aria-pressed={selected}
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
         onClick={(event) =>
           onSelect(entry.id, {

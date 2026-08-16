@@ -53,7 +53,6 @@ export function LibraryToolbar({
     importState,
     needsFolderAccess,
     selectedEntryIds,
-    clearLibrary,
   } = useLibraryStore();
 
   const activeRatingFilter = getRatingFromCurationFilter(curationFilter);
@@ -63,117 +62,25 @@ export function LibraryToolbar({
   }
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-panel px-2">
+    <div className="flex h-14 shrink-0 min-w-0 items-center gap-2 overflow-x-auto border-b border-lr-border-subtle bg-lr-toolbar px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex min-w-[145px] shrink-0 flex-col gap-0.5">
+        <span className="text-sm font-semibold tracking-tight text-lr-text">
+          {folderName ?? "Library"}
+        </span>
+        <span className="font-mono text-[10px] text-lr-text-muted">
+          {photoCount} photo{photoCount === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="mx-1 h-6 w-px shrink-0 bg-lr-border-subtle" />
       {needsFolderAccess ? (
         <FolderPickerButton
           mode="restore"
-          className="flex h-7 items-center gap-1.5 rounded bg-lr-accent/20 px-2.5 text-xs text-lr-accent transition hover:bg-lr-accent/30"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-lr-selection px-2.5 text-xs text-lr-accent transition hover:bg-lr-panel-hover"
         >
           <IconFolder className="h-3.5 w-3.5" />
           {importState === "restoring" ? "Re-linking..." : "Re-link folder"}
         </FolderPickerButton>
       ) : null}
-
-      <FolderPickerButton
-        mode="import"
-        className="flex h-7 items-center gap-1.5 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838]"
-      >
-        <IconFolder className="h-3.5 w-3.5 text-lr-accent" />
-        {importState === "importing"
-          ? "Importing..."
-          : needsFolderAccess
-            ? "Import different folder"
-            : "Import"}
-      </FolderPickerButton>
-
-      {folderName && !needsFolderAccess ? (
-        <FolderPickerButton
-          mode="restore"
-          className="h-7 rounded px-2 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
-        >
-          {importState === "restoring" ? "Restoring..." : "Re-link"}
-        </FolderPickerButton>
-      ) : null}
-
-      <button
-        type="button"
-        onClick={() => void clearLibrary()}
-        className="h-7 rounded px-2 text-xs text-lr-text-dim transition hover:bg-lr-panel-raised hover:text-red-400"
-        title="Clear saved library and reset folder access"
-      >
-        Reset
-      </button>
-
-      <button
-        type="button"
-        onClick={onExport}
-        disabled={selectedEntryIds.length === 0 || needsFolderAccess}
-        className="h-7 rounded bg-lr-panel-raised px-2.5 text-xs text-lr-text transition hover:bg-[#383838] disabled:cursor-not-allowed disabled:opacity-40"
-        title={selectedEntryIds.length === 0 ? "Select photos to export" : "Export selected photos"}
-      >
-        Export selected…
-      </button>
-
-      <div className="mx-1 h-4 w-px bg-lr-border-subtle" />
-
-      <span className="truncate text-xs text-lr-text-muted">
-        {folderName ?? "No folder selected"}
-      </span>
-
-      {folderName && !needsFolderAccess ? (
-        <span className="text-xs text-lr-text-dim">
-          · {photoCount} photo{photoCount === 1 ? "" : "s"}
-        </span>
-      ) : null}
-
-      <div className="flex-1" />
-
-      <div className="flex items-center rounded border border-lr-border-subtle bg-lr-panel-raised p-0.5">
-        <button
-          type="button"
-          onClick={() => onViewModeChange("grid")}
-          className={[
-            "flex h-6 items-center gap-1 rounded px-2 text-[11px] transition",
-            viewMode === "grid"
-              ? "bg-lr-selection text-lr-text"
-              : "text-lr-text-muted hover:text-lr-text",
-          ].join(" ")}
-          title="Square grid"
-        >
-          <IconGrid className="h-3 w-3" />
-          Grid
-        </button>
-        <button
-          type="button"
-          onClick={() => onViewModeChange("dynamic")}
-          className={[
-            "flex h-6 items-center gap-1 rounded px-2 text-[11px] transition",
-            viewMode === "dynamic"
-              ? "bg-lr-selection text-lr-text"
-              : "text-lr-text-muted hover:text-lr-text",
-          ].join(" ")}
-          title="Dynamic grid (fixed height, variable width)"
-        >
-          <IconDynamicGrid className="h-3 w-3" />
-          Dynamic
-        </button>
-      </div>
-
-      <label className="flex items-center gap-1.5 text-xs text-lr-text-muted">
-        <span className="text-[11px] text-lr-text-dim">
-          {viewMode === "grid" ? "Size" : "Row height"}
-        </span>
-        <input
-          type="range"
-          min={120}
-          max={320}
-          step={20}
-          value={thumbSize}
-          onChange={(event) => onThumbSizeChange(Number(event.target.value))}
-          className="h-1 w-20 cursor-pointer accent-lr-accent"
-          title="Thumbnail size"
-        />
-      </label>
 
       <StarRatingControl
         value={activeRatingFilter}
@@ -188,7 +95,7 @@ export function LibraryToolbar({
         onChange={(event) =>
           onCurationFilterChange(event.target.value as CurationFilter)
         }
-        className="h-7 rounded border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
+        className="h-8 shrink-0 rounded-lg border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
       >
         <option value="all">All Curation</option>
         <option value="picked">Picked</option>
@@ -206,7 +113,7 @@ export function LibraryToolbar({
         onChange={(event) =>
           onFilterChange(event.target.value as FilterOption)
         }
-        className="h-7 rounded border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
+        className="h-8 shrink-0 rounded-lg border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
       >
         <option value="all">All Photos</option>
         <option value="raw">RAW</option>
@@ -216,13 +123,70 @@ export function LibraryToolbar({
       <select
         value={sort}
         onChange={(event) => onSortChange(event.target.value as SortOption)}
-        className="h-7 rounded border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
+        className="h-8 shrink-0 rounded-lg border border-lr-border-subtle bg-lr-panel-raised px-2 text-xs text-lr-text outline-none"
       >
         <option value="name">Sort: File Name</option>
         <option value="date">Sort: Capture Date</option>
         <option value="rating">Sort: Rating</option>
         <option value="pick">Sort: Pick Status</option>
       </select>
+
+      <div className="flex-1" />
+
+      <div className="flex shrink-0 items-center rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-[3px]">
+        <button
+          type="button"
+          onClick={() => onViewModeChange("dynamic")}
+          className={[
+            "flex h-7 items-center gap-1 rounded-md px-2.5 text-[11px] transition",
+            viewMode === "dynamic"
+              ? "bg-lr-selection text-lr-text"
+              : "text-lr-text-muted hover:text-lr-text",
+          ].join(" ")}
+          title="Justified rows"
+        >
+          <IconDynamicGrid className="h-3 w-3" />
+          Rows
+        </button>
+        <button
+          type="button"
+          onClick={() => onViewModeChange("grid")}
+          className={[
+            "flex h-7 items-center gap-1 rounded-md px-2.5 text-[11px] transition",
+            viewMode === "grid"
+              ? "bg-lr-selection text-lr-text"
+              : "text-lr-text-muted hover:text-lr-text",
+          ].join(" ")}
+          title="Contact sheet"
+        >
+          <IconGrid className="h-3 w-3" />
+          Sheet
+        </button>
+      </div>
+
+      <label className="flex shrink-0 items-center gap-1.5 text-xs text-lr-text-muted">
+        <span className="text-[11px] text-lr-text-muted">Size</span>
+        <input
+          type="range"
+          min={120}
+          max={320}
+          step={20}
+          value={thumbSize}
+          onChange={(event) => onThumbSizeChange(Number(event.target.value))}
+          className="h-1 w-20 cursor-pointer accent-lr-accent"
+          title="Thumbnail size"
+        />
+      </label>
+
+      <button
+        type="button"
+        onClick={onExport}
+        disabled={selectedEntryIds.length === 0 || needsFolderAccess}
+        className="h-8 shrink-0 rounded-lg bg-lr-accent px-3 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+        title={selectedEntryIds.length === 0 ? "Select photos to export" : "Export selected photos"}
+      >
+        Export{selectedEntryIds.length > 0 ? ` ${selectedEntryIds.length}` : ""}
+      </button>
     </div>
   );
 }

@@ -18,7 +18,7 @@ const PANELS: Array<{ id: DevelopPanelId; label: string; icon: typeof IconSlider
 export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProps) {
   return (
     <nav
-      className="flex w-11 shrink-0 flex-col items-center gap-1 border-l border-lr-border-subtle bg-lr-panel py-2"
+      className="flex w-14 shrink-0 flex-col items-center gap-1.5 border-l border-lr-border-subtle bg-lr-panel py-3"
       aria-label="Develop panels"
     >
       {PANELS.map(({ id, label, icon: Icon }) => {
@@ -32,7 +32,7 @@ export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProp
             aria-pressed={isActive}
             onClick={() => onSelect(id)}
             className={[
-              "flex h-9 w-9 items-center justify-center rounded transition",
+              "flex h-10 w-10 items-center justify-center rounded-[9px] transition",
               isActive
                 ? "bg-lr-panel-raised text-lr-text"
                 : "text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text-muted",

@@ -45,7 +45,7 @@ export function DeleteFromDiskConfirm({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-start justify-center bg-black/60 pt-[18vh]"
+      className="fixed inset-0 z-[60] flex items-start justify-center bg-[#0a0908]/65 pt-[18vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -55,7 +55,7 @@ export function DeleteFromDiskConfirm({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="w-80 overflow-hidden rounded-lg border border-red-500/30 bg-lr-panel shadow-xl outline-none"
+        className="w-80 overflow-hidden rounded-xl border border-lr-danger/50 bg-lr-panel-raised shadow-[0_32px_64px_rgba(0,0,0,.6)] outline-none"
         role="alertdialog"
         aria-label="Remove photos from disk"
       >

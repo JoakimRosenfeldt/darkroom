@@ -33,6 +33,7 @@ export function SidePanel() {
   const createAlbum = useLibraryStore((state) => state.createAlbum);
   const renameAlbum = useLibraryStore((state) => state.renameAlbum);
   const deleteAlbum = useLibraryStore((state) => state.deleteAlbum);
+  const clearLibrary = useLibraryStore((state) => state.clearLibrary);
 
   const [creatingAlbum, setCreatingAlbum] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
@@ -84,43 +85,44 @@ export function SidePanel() {
 
   return (
     <>
-    <aside className="flex w-52 shrink-0 flex-col border-r border-lr-border-subtle bg-lr-panel">
-      <div className="border-b border-lr-border-subtle px-3 py-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-lr-text-dim">
-          Catalog
-        </h2>
-      </div>
+      <aside className="flex w-[248px] shrink-0 flex-col border-r border-lr-border-subtle bg-lr-panel">
+        <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+            Catalog
+          </h2>
+          <FolderPickerButton
+            mode="import"
+            className="flex h-6 w-6 items-center justify-center rounded-md border border-lr-border-subtle text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text"
+          >
+            <IconPlus className="h-3 w-3" />
+            <span className="sr-only">Import folder</span>
+          </FolderPickerButton>
+        </div>
 
-      <div className="flex-1 overflow-auto py-1">
-        <section className="px-2 py-1">
+      <div className="flex-1 overflow-auto py-2">
+        <section className="px-2">
           <div className="flex items-center justify-between px-2 py-1">
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
               Folders
             </h3>
             <div className="flex items-center gap-0.5">
               {needsFolderAccess ? (
                 <FolderPickerButton
                   mode="restore"
-                  className="flex h-5 w-5 items-center justify-center rounded text-lr-accent transition hover:bg-lr-panel-raised"
+                  className="flex h-6 w-6 items-center justify-center rounded-md border border-lr-border-subtle text-lr-accent transition hover:bg-lr-panel-hover"
                 >
                   <IconFolder className="h-3 w-3" />
                 </FolderPickerButton>
               ) : null}
-              <FolderPickerButton
-                mode="import"
-                className="flex h-5 w-5 items-center justify-center rounded text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
-              >
-                <IconPlus className="h-3 w-3" />
-              </FolderPickerButton>
             </div>
           </div>
 
           {folderName ? (
-            <div className="mb-1 truncate px-2 text-[11px] text-lr-text-dim">
+            <div className="mb-2 truncate px-2 text-[11px] text-lr-text-muted">
               {folderName}
             </div>
           ) : (
-            <div className="mb-1 px-2 text-[11px] text-lr-text-dim">
+            <div className="mb-2 px-2 text-[11px] text-lr-text-muted">
               No folder linked
             </div>
           )}
@@ -169,15 +171,15 @@ export function SidePanel() {
               ) : null}
             </ul>
           ) : (
-            <p className="px-2 py-1.5 text-xs text-lr-text-dim">
+            <p className="px-2 py-2 text-xs text-lr-text-muted">
               Import a folder to browse subfolders.
             </p>
           )}
         </section>
 
-        <section className="mt-2 px-2 py-1">
+        <section className="mt-4 px-2">
           <div className="flex items-center justify-between px-2 py-1">
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
               Albums
             </h3>
             <button
@@ -187,7 +189,7 @@ export function SidePanel() {
                 setNewAlbumName("");
               }}
               disabled={!hasImportedFolder}
-              className="flex h-5 w-5 items-center justify-center rounded text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text disabled:opacity-40"
               title="New album"
             >
               <IconPlus className="h-3 w-3" />
@@ -218,7 +220,7 @@ export function SidePanel() {
                 }}
                 placeholder="Album name"
                 autoFocus
-                className="w-full rounded border border-lr-border-subtle bg-lr-panel-raised px-2 py-1 text-xs text-lr-text outline-none focus:border-lr-accent"
+                className="w-full rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-2 text-xs text-lr-text outline-none focus:border-lr-accent"
               />
             </div>
           ) : null}
@@ -243,7 +245,7 @@ export function SidePanel() {
                       }}
                       onBlur={() => handleRenameAlbum(album.id)}
                       autoFocus
-                      className="mx-2 flex-1 rounded border border-lr-border-subtle bg-lr-panel-raised px-2 py-1 text-xs text-lr-text outline-none focus:border-lr-accent"
+                      className="mx-2 flex-1 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-2 text-xs text-lr-text outline-none focus:border-lr-accent"
                     />
                   ) : (
                     <>
@@ -269,7 +271,7 @@ export function SidePanel() {
                       <button
                         type="button"
                         onClick={() => handleDeleteAlbum(album)}
-                        className="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-lr-text-dim opacity-0 transition hover:bg-lr-panel-raised hover:text-red-400 group-hover:opacity-100"
+                        className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-lr-text-faint opacity-0 transition hover:bg-lr-panel-hover hover:text-lr-danger group-hover:opacity-100"
                         title="Delete album"
                       >
                         <IconTrash className="h-3 w-3" />
@@ -280,24 +282,46 @@ export function SidePanel() {
               ))}
             </ul>
           ) : (
-            <p className="px-2 py-1.5 text-xs text-lr-text-dim">
+            <p className="px-2 py-2 text-xs text-lr-text-muted">
               Create albums to group photos.
             </p>
           )}
         </section>
       </div>
-    </aside>
 
-    {albumPendingDelete ? (
-      <DeleteAlbumConfirm
-        album={albumPendingDelete}
-        onConfirm={() => {
-          deleteAlbum(albumPendingDelete.id);
-          setAlbumPendingDelete(null);
-        }}
-        onClose={() => setAlbumPendingDelete(null)}
-      />
-    ) : null}
+      <div className="flex items-center gap-2 border-t border-lr-border-subtle px-4 py-3">
+        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text-muted">
+          {folderName ?? "No folder linked"}
+        </span>
+        {folderName ? (
+          <FolderPickerButton
+            mode="restore"
+            className="shrink-0 text-[11px] text-lr-text-muted transition hover:text-lr-text"
+          >
+            Re-link
+          </FolderPickerButton>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => void clearLibrary()}
+            className="shrink-0 text-[11px] text-lr-text-dim transition hover:text-lr-danger"
+          title="Clear saved library and reset folder access"
+        >
+          Reset
+        </button>
+      </div>
+      </aside>
+
+      {albumPendingDelete ? (
+        <DeleteAlbumConfirm
+          album={albumPendingDelete}
+          onConfirm={() => {
+            deleteAlbum(albumPendingDelete.id);
+            setAlbumPendingDelete(null);
+          }}
+          onClose={() => setAlbumPendingDelete(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -387,7 +411,7 @@ function CatalogItem({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       className={[
-        "flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs transition",
+        "flex w-full items-center justify-between rounded-[7px] px-2.5 py-2 text-left text-[13px] transition",
         isActive
           ? "bg-lr-selection text-lr-text"
           : "text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text",
@@ -398,7 +422,7 @@ function CatalogItem({
         {icon}
         <span className="truncate">{label}</span>
       </span>
-      <span className="ml-2 shrink-0 text-lr-text-dim">{count}</span>
+      <span className="ml-2 shrink-0 text-lr-text-muted">{count}</span>
     </button>
   );
 }

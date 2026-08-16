@@ -17,8 +17,8 @@ interface PhotoGridProps {
   onPhotoContextMenu?: (entryId: string, event: React.MouseEvent) => void;
 }
 
-const ROW_GAP = 4;
-const TILE_GAP = 2;
+const ROW_GAP = 12;
+const TILE_GAP = 12;
 
 export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContextMenu }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -90,7 +90,7 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto p-1">
+    <div ref={parentRef} className="h-full overflow-auto p-4">
       {!layoutReady ? (
         <div className="flex h-full min-h-[200px] items-center justify-center text-xs text-lr-text-dim">
           Preparing layout...

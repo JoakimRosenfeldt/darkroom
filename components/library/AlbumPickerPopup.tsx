@@ -126,7 +126,7 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[18vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[#0a0908]/60 pt-[18vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -134,7 +134,7 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
       }}
     >
       <div
-        className="w-80 overflow-hidden rounded-lg border border-lr-border bg-lr-panel shadow-xl"
+        className="w-80 overflow-hidden rounded-xl border border-lr-border bg-lr-panel-raised shadow-[0_24px_48px_rgba(0,0,0,.55)]"
         role="dialog"
         aria-label="Add to album"
       >

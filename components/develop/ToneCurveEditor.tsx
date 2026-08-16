@@ -21,7 +21,7 @@ const MIN_GAP = 1 / (CURVE_LUT_SIZE - 1);
 const DRAG_SENSITIVITY = 0.5;
 
 const CHANNELS: { id: CurveChannel; label: string; color: string }[] = [
-  { id: "rgb", label: "RGB", color: "#d4d4d4" },
+  { id: "rgb", label: "RGB", color: "#ece7e3" },
   { id: "red", label: "R", color: "#ef6767" },
   { id: "green", label: "G", color: "#62c979" },
   { id: "blue", label: "B", color: "#69a7f5" },
@@ -168,10 +168,10 @@ export function ToneCurveEditor({
                 setChannel(item.id);
                 setSelected(null);
               }}
-              className={`min-w-8 rounded-sm border px-2 py-1 text-[10px] font-semibold ${
+              className={`min-w-8 rounded-md border px-2 py-1 text-[10px] font-semibold ${
                 channel === item.id
                   ? "border-lr-text-dim bg-lr-panel-raised text-lr-text"
-                  : "border-transparent text-lr-text-dim hover:text-lr-text-muted"
+                  : "border-transparent text-lr-text-muted hover:text-lr-text"
               }`}
               style={{ color: channel === item.id ? item.color : undefined }}
             >
@@ -188,7 +188,7 @@ export function ToneCurveEditor({
             });
             setSelected(null);
           }}
-          className="text-[10px] text-lr-text-dim hover:text-lr-text-muted"
+          className="text-[10px] text-lr-text-muted hover:text-lr-text"
         >
           Reset channel
         </button>
@@ -220,7 +220,7 @@ export function ToneCurveEditor({
         onPointerCancel={() => {
           drag.current = null;
         }}
-        className="block w-full touch-none cursor-crosshair rounded-sm border border-lr-border bg-[#181818]"
+        className="block w-full touch-none cursor-crosshair rounded-md border border-lr-border bg-[#131110]"
       >
         <rect x={INSET} y={INSET} width={PLOT_SIZE} height={PLOT_SIZE} fill="transparent" pointerEvents="none" />
         {[0.25, 0.5, 0.75].map((position) => (
@@ -239,7 +239,7 @@ export function ToneCurveEditor({
               cx={position.x}
               cy={position.y}
               r={selected === index ? 5 : 4}
-              fill="#1a1a1a"
+              fill="#191614"
               stroke={channelInfo.color}
               strokeWidth="2"
               tabIndex={0}
@@ -267,7 +267,7 @@ export function ToneCurveEditor({
         })}
       </svg>
 
-      <div className="mt-1 flex justify-between text-[10px] text-lr-text-dim">
+      <div className="mt-1 flex justify-between text-[10px] text-lr-text-muted">
         <span>Double-click a point to remove</span>
         <span className="font-mono">
           {selectedPoint

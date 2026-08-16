@@ -6,18 +6,25 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { PhotoTile } from "@/components/library/PhotoTile";
 import { useLibraryStore } from "@/stores/library-store";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import { IconChevronLeft, IconChevronRight } from "@/components/shell/icons";
 
 interface FilmstripProps {
   entries: LibraryEntry[];
   activeId: string;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onSelect: (id: string, modifiers: SelectEntryModifiers) => void;
 }
 
-const THUMB_SIZE = 72;
-const THUMB_GAP = 2;
+const THUMB_SIZE = 76;
+const THUMB_GAP = 8;
 
-export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
+export function Filmstrip({
+  entries,
+  activeId,
+  selectedIds,
+  onSelect,
+}: FilmstripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const getScrollRoot = useCallback(() => scrollRef.current, []);
@@ -57,18 +64,18 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
     }
     const next = entries[activeIndex + direction];
     if (next) {
-      onSelect(next.id);
+      onSelect(next.id, {});
     }
   }
 
   return (
-    <div className="flex h-[88px] shrink-0 items-stretch border-t border-lr-border-subtle bg-lr-panel">
-      <div className="flex flex-col border-r border-lr-border-subtle">
+    <div className="flex h-[104px] shrink-0 items-stretch border-t border-lr-border-subtle bg-lr-panel">
+      <div className="flex w-[52px] flex-col border-r border-lr-border-subtle">
         <button
           type="button"
           onClick={() => selectRelative(-1)}
           disabled={activeIndex <= 0}
-          className="flex flex-1 items-center justify-center px-2 text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
+          className="flex flex-1 items-center justify-center text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
           aria-label="Previous photo"
         >
           <IconChevronLeft className="h-4 w-4" />
@@ -77,7 +84,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
           type="button"
           onClick={() => selectRelative(1)}
           disabled={activeIndex < 0 || activeIndex >= entries.length - 1}
-          className="flex flex-1 items-center justify-center px-2 text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
+          className="flex flex-1 items-center justify-center border-t border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
           aria-label="Next photo"
         >
           <IconChevronRight className="h-4 w-4" />
@@ -87,7 +94,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
       <button
         type="button"
         onClick={() => scrollBy(-1)}
-        className="flex w-6 shrink-0 items-center justify-center text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text"
+        className="flex w-6 shrink-0 items-center justify-center text-lr-text-faint hover:bg-lr-panel-raised hover:text-lr-text"
         aria-label="Scroll left"
       >
         <IconChevronLeft className="h-3 w-3" />
@@ -95,7 +102,7 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
 
       <div
         ref={scrollRef}
-        className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden px-1 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden px-3 py-[14px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <div
           className="relative h-full"
@@ -111,7 +118,15 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
               <button
                 key={entry.id}
                 type="button"
-                onClick={() => onSelect(entry.id)}
+                aria-current={entry.id === activeId ? "true" : undefined}
+                aria-pressed={selectedIds.includes(entry.id)}
+                aria-label={`Select ${entry.name}`}
+                onClick={(event) =>
+                  onSelect(entry.id, {
+                    shift: event.shiftKey,
+                    toggle: event.metaKey || event.ctrlKey,
+                  })
+                }
                 className="absolute top-0 shrink-0"
                 style={{
                   width: `${THUMB_SIZE}px`,
@@ -123,11 +138,14 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
                   entry={entry}
                   width={THUMB_SIZE}
                   height={THUMB_SIZE}
-                  selected={entry.id === activeId}
+                  selected={selectedIds.includes(entry.id)}
                   metadata={getEntryMetadata(entryMetadata, entry.id)}
                   compact
                   getScrollRoot={getScrollRoot}
                 />
+                {entry.id === activeId ? (
+                  <span className="pointer-events-none absolute inset-x-7 bottom-1 z-30 h-0.5 rounded-full bg-lr-text" />
+                ) : null}
               </button>
             );
           })}
@@ -137,14 +155,23 @@ export function Filmstrip({ entries, activeId, onSelect }: FilmstripProps) {
       <button
         type="button"
         onClick={() => scrollBy(1)}
-        className="flex w-6 shrink-0 items-center justify-center text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text"
+        className="flex w-6 shrink-0 items-center justify-center text-lr-text-faint hover:bg-lr-panel-raised hover:text-lr-text"
         aria-label="Scroll right"
       >
         <IconChevronRight className="h-3 w-3" />
       </button>
 
-      <div className="flex w-16 shrink-0 items-center justify-center border-l border-lr-border-subtle text-[11px] text-lr-text-dim">
-        {activeIndex >= 0 ? `${activeIndex + 1}/${entries.length}` : "—"}
+      <div className="flex w-24 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-lr-border-subtle">
+        <span className="font-mono text-[13px] text-lr-text">
+          {activeIndex >= 0 ? `${activeIndex + 1} / ${entries.length}` : "—"}
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-lr-text-muted">
+          {selectedIds.length > 1
+            ? `${selectedIds.length} selected`
+            : activeIndex >= 0
+              ? "Current"
+              : "Photos"}
+        </span>
       </div>
     </div>
   );

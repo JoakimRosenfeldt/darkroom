@@ -19,8 +19,57 @@ interface DynamicPhotoGridProps {
   onPhotoContextMenu?: (entryId: string, event: React.MouseEvent) => void;
 }
 
-const ROW_GAP = 4;
-const TILE_GAP = 2;
+const ROW_GAP = 20;
+const TILE_GAP = 8;
+const ROW_HEADER_HEIGHT = 16;
+const ROW_HEADER_GAP = 8;
+const ROW_HEADER_OVERHEAD = ROW_HEADER_HEIGHT + ROW_HEADER_GAP;
+
+const MONTH_LABELS = [
+  "JAN",
+  "FEB",
+  "MAR",
+  "APR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AUG",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DEC",
+];
+
+function formatRowDate(lastModified: number | undefined): string {
+  if (lastModified === undefined) {
+    return "—";
+  }
+
+  const date = new Date(lastModified);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return `${String(date.getDate()).padStart(2, "0")} ${MONTH_LABELS[date.getMonth()]}`;
+}
+
+function getRowDateKey(lastModified: number | undefined): string {
+  if (lastModified === undefined) {
+    return "unknown";
+  }
+
+  const date = new Date(lastModified);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function getParentFolderName(relativePath: string): string | null {
+  const parts = relativePath.split(/[\\/]+/).filter(Boolean);
+  return parts.length > 1 ? parts.at(-2) ?? null : null;
+}
 
 export function DynamicPhotoGrid({
   entries,
@@ -63,10 +112,28 @@ export function DynamicPhotoGrid({
     [entries, aspectRatios, containerWidth, rowHeight],
   );
 
+  const rowStartsDateGroup = useMemo(
+    () =>
+      rows.map((row, index) => {
+        if (index === 0) {
+          return true;
+        }
+
+        return (
+          getRowDateKey(row.tiles[0]?.entry.lastModified) !==
+          getRowDateKey(rows[index - 1]?.tiles[0]?.entry.lastModified)
+        );
+      }),
+    [rows],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => (rows[index]?.height ?? rowHeight) + ROW_GAP,
+    estimateSize: (index) =>
+      (rows[index]?.height ?? rowHeight) +
+      (rowStartsDateGroup[index] ? ROW_HEADER_OVERHEAD : 0) +
+      ROW_GAP,
     overscan: 4,
   });
 
@@ -102,11 +169,12 @@ export function DynamicPhotoGrid({
 
   const visibleRows = useMemo(
     () =>
-      rows.map((row) => ({
-        height: row.height,
+      rows.map((row, index) => ({
+        height: row.height +
+          (rowStartsDateGroup[index] ? ROW_HEADER_OVERHEAD : 0),
         entryIds: row.tiles.map((tile) => tile.entry.id),
       })),
-    [rows],
+    [rows, rowStartsDateGroup],
   );
 
   useEffect(() => {
@@ -170,7 +238,7 @@ export function DynamicPhotoGrid({
   }
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto p-1">
+    <div ref={parentRef} className="h-full overflow-auto p-4">
       {!layoutReady ? (
         <div className="flex h-full min-h-[200px] items-center justify-center text-xs text-lr-text-dim">
           Preparing layout...
@@ -185,32 +253,53 @@ export function DynamicPhotoGrid({
             if (!row) {
               return null;
             }
+            const showHeader = rowStartsDateGroup[virtualRow.index] ?? false;
 
             return (
               <div
                 key={virtualRow.key}
-                className="absolute left-0 top-0 flex items-start"
+                className="absolute left-0 top-0 flex flex-col items-stretch"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   width: `${containerWidth}px`,
-                  height: `${row.height}px`,
-                  gap: `${TILE_GAP}px`,
+                  height: `${row.height + (showHeader ? ROW_HEADER_OVERHEAD : 0)}px`,
+                  gap: `${ROW_HEADER_GAP}px`,
                 }}
               >
-                {row.tiles.map((tile) => (
-                  <PhotoTile
-                    key={tile.entry.id}
-                    entry={tile.entry}
-                    width={tile.width}
-                    height={tile.height}
-                    fit="cover"
-                    selected={selectedEntryIds.includes(tile.entry.id)}
-                    metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
-                    onSelect={handleSelect}
-                    onContextMenu={onPhotoContextMenu}
-                    getScrollRoot={getScrollRoot}
-                  />
-                ))}
+                {showHeader ? (
+                  <div className="flex h-4 min-w-0 items-center gap-2">
+                    <span className="shrink-0 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-lr-text-faint">
+                      {formatRowDate(row.tiles[0]?.entry.lastModified)}
+                      {getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")
+                        ? ` · ${getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")}`
+                        : ""}
+                    </span>
+                    <div className="h-px flex-1 bg-lr-panel-raised" />
+                  </div>
+                ) : null}
+                <div
+                  className="flex items-start"
+                  style={{
+                    width: `${containerWidth}px`,
+                    height: `${row.height}px`,
+                    gap: `${TILE_GAP}px`,
+                  }}
+                >
+                  {row.tiles.map((tile) => (
+                    <PhotoTile
+                      key={tile.entry.id}
+                      entry={tile.entry}
+                      width={tile.width}
+                      height={tile.height}
+                      fit="cover"
+                      selected={selectedEntryIds.includes(tile.entry.id)}
+                      metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
+                      onSelect={handleSelect}
+                      onContextMenu={onPhotoContextMenu}
+                      getScrollRoot={getScrollRoot}
+                    />
+                  ))}
+                </div>
               </div>
             );
           })}

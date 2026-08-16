@@ -8,12 +8,13 @@ import {
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
-import { TopBar } from "@/components/shell/TopBar";
+import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import {
   EntryMetadataBar,
   useEntryMetadataForId,
 } from "@/components/library/EntryMetadataBar";
 import { useLibraryStore } from "@/stores/library-store";
+import type { SelectEntryModifiers } from "@/stores/library-store";
 import {
   DevelopCanvas,
   type CropPreviewTransform,
@@ -37,6 +38,8 @@ interface PhotoViewerProps {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
+  const selectEntry = useLibraryStore((state) => state.selectEntry);
   const rootPath = useLibraryStore((state) => state.rootPath);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
@@ -55,6 +58,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
   );
+  const visibleOrder = useMemo(() => entries.map((item) => item.id), [entries]);
+  const selectionTargets = useMemo(
+    () =>
+      selectedEntryIds.length > 0 && selectedEntryIds.includes(entry.id)
+        ? selectedEntryIds
+        : [entry.id],
+    [entry.id, selectedEntryIds],
+  );
   const applyDevelopMetadata = useCallback(
     (patch: Parameters<typeof applyMetadataToEntries>[1]) => {
       applyMetadataToEntries([entry.id], patch);
@@ -70,10 +81,13 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   });
   const developSettings = useDevelopStore((state) => state.settings);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
+  const resetAll = useDevelopStore((state) => state.resetAll);
   const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
-    setSelectedEntryId(entry.id);
+    if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
+      setSelectedEntryId(entry.id);
+    }
   }, [entry.id, setSelectedEntryId]);
 
   useEffect(() => {
@@ -113,7 +127,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     };
   }, [entry, entries, activeIndex]);
 
-  useEntryMetadataShortcuts([entry.id], exportOpen);
+  useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
   const discardCrop = useCallback((nextPanel: DevelopPanelId | null = "edit") => {
     cropDraftRef.current = null;
@@ -165,8 +179,48 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setActivePanel("crop");
       return;
     }
-    setActivePanel((current) => (current === panel ? null : panel));
+    if (panel === "info") {
+      setActivePanel((current) => (current === "info" ? "edit" : "info"));
+      return;
+    }
+    setActivePanel("edit");
   }
+
+  function resetAllDevelopSettings() {
+    resetAll();
+    discardCrop("edit");
+  }
+
+  const selectPhoto = useCallback(
+    (id: string, modifiers: SelectEntryModifiers = {}) => {
+      const removing = Boolean(
+        modifiers.toggle && selectedEntryIds.includes(id),
+      );
+      if (removing && selectedEntryIds.length === 1) {
+        return;
+      }
+
+      const remaining = removing
+        ? selectedEntryIds.filter((selectedId) => selectedId !== id)
+        : selectedEntryIds;
+      selectEntry(id, modifiers, visibleOrder);
+      discardCrop("edit");
+
+      const nextActiveId =
+        removing && id === entry.id ? remaining.at(-1) : removing ? entry.id : id;
+      if (nextActiveId && nextActiveId !== entry.id) {
+        router.push(`/photo?id=${encodeURIComponent(nextActiveId)}`);
+      }
+    },
+    [
+      discardCrop,
+      entry.id,
+      router,
+      selectEntry,
+      selectedEntryIds,
+      visibleOrder,
+    ],
+  );
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -194,16 +248,20 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         return;
       }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
-        discardCrop("edit");
-        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex - 1].id)}`);
+        event.preventDefault();
+        selectPhoto(entries[activeIndex - 1].id, {
+          shift: event.shiftKey,
+        });
       }
       if (
         event.key === "ArrowRight" &&
         activeIndex >= 0 &&
         activeIndex < entries.length - 1
       ) {
-        discardCrop("edit");
-        router.push(`/photo?id=${encodeURIComponent(entries[activeIndex + 1].id)}`);
+        event.preventDefault();
+        selectPhoto(entries[activeIndex + 1].id, {
+          shift: event.shiftKey,
+        });
       }
       if (event.key === "Escape") {
         router.push("/");
@@ -220,65 +278,52 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     applyCrop,
     discardCrop,
     exportOpen,
+    selectPhoto,
   ]);
 
-  function selectPhoto(id: string) {
-    discardCrop("edit");
-    router.push(`/photo?id=${encodeURIComponent(id)}`);
-  }
-
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      <TopBar
-        activeModule="develop"
-        showBack
-        title={entry.name}
-        developPhotoId={entry.id}
-      />
+    <div className="flex h-screen overflow-hidden bg-lr-toolbar">
+      <ModuleSpine activeModule="develop" developPhotoId={entry.id} />
 
-      <EntryMetadataBar
-        entryId={entry.id}
-        metadata={metadata}
-        onPick={() => applyMetadataToEntries([entry.id], { pick: "pick" })}
-        onReject={() => applyMetadataToEntries([entry.id], { pick: "reject" })}
-        onClearPick={() => applyMetadataToEntries([entry.id], { pick: "none" })}
-        onRating={(rating) => applyMetadataToEntries([entry.id], { rating })}
-        onColorLabel={(label) => {
-          const current = metadata.colorLabel;
-          applyMetadataToEntries([entry.id], {
-            colorLabel: current === label ? null : label,
-          });
-        }}
-      />
-
-      <div className="flex min-h-0 flex-1">
-        <div className="relative flex min-w-0 flex-1 flex-col bg-lr-bg">
-          <div className="absolute right-3 top-3 z-10">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setExportOpen(true)}
-                className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
-              >
-                Export…
-              </button>
-            </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 flex-1">
+          <div className="relative flex min-w-0 flex-1 flex-col bg-lr-canvas">
+          <div className="flex h-12 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-toolbar px-4">
+            <span className="font-mono text-xs text-lr-text">{entry.name}</span>
+            <span className="rounded-md border border-lr-border-subtle px-1.5 py-0.5 font-mono text-[10px] text-lr-accent">
+              {entry.profileId?.toUpperCase() ?? "PHOTO"}
+            </span>
+            <span className="truncate font-mono text-[11px] text-lr-text-muted">
+              {decoded
+                ? `${decoded.width} × ${decoded.height}`
+                : loading
+                  ? "Preparing preview…"
+                  : "Preview unavailable"}
+            </span>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => setExportOpen(true)}
+              className="h-8 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover"
+            >
+              Export{selectionTargets.length > 1 ? ` ${selectionTargets.length}` : ""}…
+            </button>
           </div>
 
-          {loading ? (
-            <div className="flex flex-1 items-center justify-center text-xs uppercase tracking-wider text-lr-text-dim">
-              Decoding...
-            </div>
-          ) : null}
+          <div className="relative min-h-0 flex-1">
+            {loading ? (
+              <div className="flex h-full items-center justify-center text-xs uppercase tracking-wider text-lr-text-faint">
+                Decoding...
+              </div>
+            ) : null}
 
-          {error ? (
-            <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-red-400">
-              {error}
-            </div>
-          ) : null}
+            {error ? (
+              <div className="flex h-full items-center justify-center px-6 text-center text-sm text-lr-danger">
+                {error}
+              </div>
+            ) : null}
 
-          {decoded ? (
-            <div className="relative flex-1">
+            {decoded ? (
               <DevelopCanvas
                 image={decoded}
                 alt={entry.name}
@@ -289,32 +334,56 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                 onCropChange={changeCrop}
                 onPreviewTransformChange={setCropPreviewTransform}
               />
-            </div>
+            ) : null}
+          </div>
+
+          <EntryMetadataBar
+            entryId={entry.id}
+            metadata={metadata}
+            onPick={() => applyMetadataToEntries(selectionTargets, { pick: "pick" })}
+            onReject={() => applyMetadataToEntries(selectionTargets, { pick: "reject" })}
+            onClearPick={() => applyMetadataToEntries(selectionTargets, { pick: "none" })}
+            onRating={(rating) => applyMetadataToEntries(selectionTargets, { rating })}
+            onColorLabel={(label) => {
+              const current = metadata.colorLabel;
+              applyMetadataToEntries(selectionTargets, {
+                colorLabel:
+                  selectionTargets.length === 1 && current === label
+                    ? null
+                    : label,
+              });
+            }}
+          />
+          </div>
+
+          {decoded ? (
+            <DevelopSidePanels
+              decoded={decoded}
+              entry={entry}
+              activePanel={activePanel}
+              cropDraft={cropDraft}
+              onSelect={selectDevelopPanel}
+              onResetAll={resetAllDevelopSettings}
+              onCropChange={changeCrop}
+              onCropReset={resetCrop}
+              onCropApply={applyCrop}
+              onCropCancel={() => discardCrop("edit")}
+            />
           ) : null}
         </div>
 
-        {decoded ? (
-          <DevelopSidePanels
-            decoded={decoded}
-            entry={entry}
-            activePanel={activePanel}
-            cropDraft={cropDraft}
-            onSelect={selectDevelopPanel}
-            onCropChange={changeCrop}
-            onCropReset={resetCrop}
-            onCropApply={applyCrop}
-            onCropCancel={() => discardCrop("edit")}
-          />
-        ) : null}
+        <Filmstrip
+          entries={entries}
+          activeId={entry.id}
+          selectedIds={selectionTargets}
+          onSelect={selectPhoto}
+        />
       </div>
-
-      <Filmstrip
-        entries={entries}
-        activeId={entry.id}
-        onSelect={selectPhoto}
-      />
       {exportOpen ? (
-        <ExportDialog entries={[entry]} onClose={() => setExportOpen(false)} />
+        <ExportDialog
+          entries={entries.filter((item) => selectionTargets.includes(item.id))}
+          onClose={() => setExportOpen(false)}
+        />
       ) : null}
     </div>
   );
