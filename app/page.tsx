@@ -31,6 +31,7 @@ import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { useAlbumPickerShortcut } from "@/hooks/useAlbumPickerShortcut";
 import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
 import { useLibraryStore } from "@/stores/library-store";
+import { ExportDialog } from "@/components/export/ExportDialog";
 
 export default function HomePage() {
   const router = useRouter();
@@ -63,6 +64,7 @@ export default function HomePage() {
   const [thumbSize, setThumbSize] = useState(180);
   const [viewMode, setViewMode] = useState<GridViewMode>("grid");
   const [gridRows, setGridRows] = useState<string[][]>([]);
+  const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
 
   const libraryEntries = useMemo(
     () => filterArchivedEntries(entries, archivedEntryIds),
@@ -108,12 +110,12 @@ export default function HomePage() {
   );
 
   const { openContextMenu, contextMenu, actionOverlayOpen } =
-    useLibraryContextMenu(visibleOrder);
+    useLibraryContextMenu(visibleOrder, setExportEntryIds);
 
   const { albumPicker, removePopup, overlayOpen } = useAlbumPickerShortcut({
     selectedEntryId,
     selectedEntryIds,
-    disabled: actionOverlayOpen,
+    disabled: actionOverlayOpen || exportEntryIds !== null,
   });
 
   useLibraryGridShortcuts({
@@ -123,7 +125,7 @@ export default function HomePage() {
     selectedEntryId,
     selectedEntryIds,
     onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
-    disabled: overlayOpen || actionOverlayOpen,
+    disabled: overlayOpen || actionOverlayOpen || exportEntryIds !== null,
     metadataShortcutsDisabled: catalogView.type === "archive",
   });
 
@@ -150,6 +152,7 @@ export default function HomePage() {
             onCurationFilterChange={setCurationFilter}
             onThumbSizeChange={setThumbSize}
             onViewModeChange={setViewMode}
+            onExport={() => setExportEntryIds(selectedEntryIds)}
           />
 
           <main className="min-h-0 flex-1 bg-lr-bg">
@@ -267,6 +270,12 @@ export default function HomePage() {
           </main>
         </div>
       </div>
+      {exportEntryIds ? (
+        <ExportDialog
+          entries={entries.filter((entry) => exportEntryIds.includes(entry.id))}
+          onClose={() => setExportEntryIds(null)}
+        />
+      ) : null}
     </div>
   );
 }

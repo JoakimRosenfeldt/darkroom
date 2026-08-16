@@ -1,6 +1,7 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { clampCropRect } from "@/lib/develop/crop-geometry";
 import type { DevelopSettings } from "@/lib/develop/types";
+import type { RawExportRenderResult } from "@/lib/export/types";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import {
   createCurveLut,
@@ -668,20 +669,32 @@ export class DevelopRenderer {
     this.gl.deleteProgram(this.integerProgram);
   }
 
-  toBlob(type = "image/jpeg", quality = 0.92): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-      this.canvas.toBlob(
-        (blob) => {
-          if (!blob) {
-            reject(new Error("Could not export edited image."));
-            return;
-          }
-          resolve(blob);
-        },
-        type,
-        quality,
-      );
-    });
+  readPixels(): Uint8Array {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    if (width < 1 || height < 1) {
+      throw new Error("Could not read an empty export.");
+    }
+
+    const pixels = new Uint8Array(width * height * 4);
+    this.gl.readPixels(0, 0, width, height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+    const error = this.gl.getError();
+    if (error !== this.gl.NO_ERROR) {
+      throw new Error("Could not read edited image pixels.");
+    }
+
+    // WebGL's readback starts at the bottom row; encoders expect top-to-bottom rows.
+    const row = new Uint8Array(width * 4);
+    const rowLength = row.length;
+    for (let y = 0; y < Math.floor(height / 2); y += 1) {
+      const topOffset = y * rowLength;
+      const bottomOffset = (height - y - 1) * rowLength;
+      row.set(pixels.subarray(topOffset, topOffset + rowLength));
+      pixels.copyWithin(topOffset, bottomOffset, bottomOffset + rowLength);
+      pixels.set(row, bottomOffset);
+    }
+
+    return pixels;
   }
 
   private uniformMixer(settings: DevelopSettings): void {
@@ -758,23 +771,45 @@ function exportSize(image: DevelopImage, settings: DevelopSettings): {
   };
 }
 
-export async function exportDevelopJpeg(
+export type RenderDevelopExportResult = RawExportRenderResult;
+
+/**
+ * Render a developed image at its full cropped resolution and return raw RGBA.
+ * Pass a renderer to reuse its WebGL context across a batch.
+ */
+export async function renderDevelopExport(
   image: DevelopImage,
   settings: DevelopSettings,
-): Promise<Blob> {
+  renderer?: DevelopRenderer,
+): Promise<RenderDevelopExportResult> {
   const { width, height } = exportSize(image, settings);
   if (width * height > MAX_EXPORT_PIXELS) {
     throw new Error("This edit exceeds the 50 megapixel export limit.");
   }
 
-  const canvas = document.createElement("canvas");
-  const renderer = new DevelopRenderer(canvas, true);
+  const ownsRenderer = !renderer;
+  const activeRenderer = renderer ?? new DevelopRenderer(
+    document.createElement("canvas"),
+    true,
+  );
   try {
-    await renderer.setImage(image);
-    renderer.resize(width, height);
-    renderer.render(settings, false, "export");
-    return await renderer.toBlob();
+    await activeRenderer.setImage(image);
+    activeRenderer.resize(width, height);
+    activeRenderer.render(settings, false, "export");
+    const embeddedPreview = image.metadata.decoderProvenance === "embedded";
+    return {
+      pixels: activeRenderer.readPixels(),
+      width,
+      height,
+      provenance: embeddedPreview ? "embedded-preview" : "decoded",
+      embeddedPreview,
+      ...(embeddedPreview
+        ? { warning: "RAW export uses its embedded preview." }
+        : {}),
+    };
   } finally {
-    renderer.dispose();
+    if (ownsRenderer) {
+      activeRenderer.dispose();
+    }
   }
 }

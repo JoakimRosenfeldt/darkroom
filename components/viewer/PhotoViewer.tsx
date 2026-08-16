@@ -3,11 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
-  disposeDevelopImage,
-  loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
@@ -24,10 +21,10 @@ import {
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
-import { exportDevelopJpeg } from "@/lib/develop/renderer";
 import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 import type { CropSettings } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
+import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { isEditableTarget } from "@/hooks/is-editable-target";
@@ -73,7 +70,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   });
   const developSettings = useDevelopStore((state) => state.settings);
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
     setSelectedEntryId(entry.id);
@@ -116,37 +113,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     };
   }, [entry, entries, activeIndex]);
 
-  useEntryMetadataShortcuts([entry.id]);
-
-  async function exportEditedJpeg() {
-    let exportImage: DevelopImage | null = null;
-    try {
-      setExportStatus("Exporting...");
-      exportImage = await loadDevelopExportImage(entry);
-      const usesEmbeddedFallback = exportImage.metadata.decoderProvenance === "embedded";
-      if (usesEmbeddedFallback) {
-        setExportStatus("Exporting embedded preview — full RAW unavailable...");
-      }
-      const blob = await exportDevelopJpeg(exportImage, developSettings);
-      const targetPath = await getDarkroomAPI().saveExport(
-        entry.name.replace(/\.[^.]+$/, "-darkroom.jpg"),
-        await blob.arrayBuffer(),
-      );
-      setExportStatus(targetPath
-        ? `${usesEmbeddedFallback ? "Exported embedded preview" : "Exported"} ${targetPath}`
-        : usesEmbeddedFallback
-          ? "Export canceled — embedded preview fallback"
-          : "Export canceled");
-    } catch (exportError) {
-      setExportStatus(
-        exportError instanceof Error ? exportError.message : "Export failed.",
-      );
-    } finally {
-      if (exportImage) {
-        disposeDevelopImage(exportImage);
-      }
-    }
-  }
+  useEntryMetadataShortcuts([entry.id], exportOpen);
 
   const discardCrop = useCallback((nextPanel: DevelopPanelId | null = "edit") => {
     cropDraftRef.current = null;
@@ -203,6 +170,11 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // The export dialog owns keyboard handling while it is mounted. In
+      // particular, do not navigate away and unmount an in-flight export.
+      if (exportOpen) {
+        return;
+      }
       if (event.defaultPrevented) {
         return;
       }
@@ -240,7 +212,15 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, activeIndex, router, activePanel, applyCrop, discardCrop]);
+  }, [
+    entries,
+    activeIndex,
+    router,
+    activePanel,
+    applyCrop,
+    discardCrop,
+    exportOpen,
+  ]);
 
   function selectPhoto(id: string) {
     discardCrop("edit");
@@ -275,17 +255,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         <div className="relative flex min-w-0 flex-1 flex-col bg-lr-bg">
           <div className="absolute right-3 top-3 z-10">
             <div className="flex items-center gap-2">
-              {exportStatus ? (
-                <span className="max-w-64 truncate rounded bg-lr-panel/90 px-2 py-1 text-[11px] text-lr-text-dim">
-                  {exportStatus}
-                </span>
-              ) : null}
               <button
                 type="button"
-                onClick={exportEditedJpeg}
+                onClick={() => setExportOpen(true)}
                 className="rounded border border-lr-border-subtle bg-lr-panel/90 px-2.5 py-1 text-[11px] text-lr-text-muted backdrop-blur hover:text-lr-text"
               >
-                Export JPEG
+                Export…
               </button>
             </div>
           </div>
@@ -338,6 +313,9 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         activeId={entry.id}
         onSelect={selectPhoto}
       />
+      {exportOpen ? (
+        <ExportDialog entries={[entry]} onClose={() => setExportOpen(false)} />
+      ) : null}
     </div>
   );
 }

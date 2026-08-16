@@ -5,6 +5,7 @@ import type { EntryMetadata } from "@/lib/catalog/types";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDevelopSettings, developSettingsHash } from "@/lib/develop/registry";
 import type { DevelopSettings } from "@/lib/develop/types";
+import { resolveDevelopSettings } from "@/lib/export/settings";
 import { readDevelopSidecar, writeDevelopSidecar } from "@/lib/develop/sidecar";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -56,7 +57,7 @@ export function useDevelopSettingsSync({
   useEffect(() => {
     let active = true;
     hydratedEntryIdRef.current = null;
-    setActiveEntry(entry.id, metadataRef.current.develop);
+    setActiveEntry(entry.id, resolveDevelopSettings(null, metadataRef.current));
     setSidecarStatus("loading");
     const initialSettings = useDevelopStore.getState().settings;
     const initialSnapshot = snapshot(initialSettings, metadataRef.current);
@@ -83,16 +84,20 @@ export function useDevelopSettingsSync({
             !hasLocalChanges &&
             sidecar.lastModified > metadataRef.current.updatedAt
           ) {
+            const resolvedSettings = resolveDevelopSettings(
+              sidecar,
+              metadataRef.current,
+            );
             const nextMetadata: Partial<EntryMetadata> = {
-              develop: sidecar.settings,
+              develop: resolvedSettings,
               ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
               ...(sidecar.colorLabel === undefined
                 ? {}
                 : { colorLabel: sidecar.colorLabel }),
             };
-            setActiveEntry(entry.id, sidecar.settings);
+            setActiveEntry(entry.id, resolvedSettings);
             applyMetadata(nextMetadata);
-            persisted = snapshot(sidecar.settings, {
+            persisted = snapshot(resolvedSettings, {
               rating: sidecar.rating ?? metadataRef.current.rating,
               colorLabel: sidecar.colorLabel ?? metadataRef.current.colorLabel,
             });

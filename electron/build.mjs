@@ -11,7 +11,7 @@ const shared = {
   platform: "node",
   target: "node20",
   sourcemap: true,
-  external: ["electron"],
+  external: ["electron", "sharp"],
 };
 
 await esbuild.build({
