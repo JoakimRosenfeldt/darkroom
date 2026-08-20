@@ -1,9 +1,11 @@
 "use client";
 
+import type { ReactNode } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { CropPanel } from "@/components/develop/CropPanel";
 import { EditPanel } from "@/components/develop/EditPanel";
+import { MaskingPanel } from "@/components/develop/MaskingPanel";
 import {
   DevelopPanelRail,
   type DevelopPanelId,
@@ -22,6 +24,7 @@ interface DevelopSidePanelsProps {
   onCropReset: () => void;
   onCropApply: () => void;
   onCropCancel: () => void;
+  maskingAiActions?: ReactNode;
 }
 
 export function DevelopSidePanels({
@@ -35,6 +38,7 @@ export function DevelopSidePanels({
   onCropReset,
   onCropApply,
   onCropCancel,
+  maskingAiActions,
 }: DevelopSidePanelsProps) {
   return (
     <>
@@ -59,6 +63,8 @@ export function DevelopSidePanels({
           fileName={entry.name}
           profileId={entry.profileId}
         />
+      ) : activePanel === "masking" ? (
+        <MaskingPanel aiActions={maskingAiActions} />
       ) : (
         <EditPanel onResetAll={onResetAll} />
       )}

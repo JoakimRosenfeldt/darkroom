@@ -2,53 +2,166 @@
 
 import { useEffect, useRef } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
+import type { DevelopDocument } from "@/lib/develop/types";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { createDevelopSettings, developSettingsHash } from "@/lib/develop/registry";
-import type { DevelopSettings } from "@/lib/develop/types";
-import { resolveDevelopSettings } from "@/lib/export/settings";
+import { resolveDevelopDocument } from "@/lib/export/settings";
 import { readDevelopSidecar, writeDevelopSidecar } from "@/lib/develop/sidecar";
 import { useDevelopStore } from "@/stores/develop-store";
 
 const PERSIST_DEBOUNCE_MS = 500;
+type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
   rootPath: string | null;
   metadata: EntryMetadata;
-  applyMetadata: (patch: Partial<EntryMetadata>) => void;
+  mirrorDocument: (
+    document: DevelopDocument,
+    sourceUpdatedAt?: number,
+    metadataPatch?: SidecarMetadataPatch,
+  ) => void;
+  hydrateMetadata: (patch: SidecarMetadataPatch, sourceUpdatedAt: number) => void;
 }
 
-function snapshot(
-  settings: DevelopSettings,
-  metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
-): string {
-  return JSON.stringify({
-    settings,
-    rating: metadata.rating,
-    colorLabel: metadata.colorLabel,
+interface PendingWrite {
+  entryId: string;
+  rootPath: string | null;
+  relativePath: string;
+  documentRevision: number;
+  metadataRevision: number;
+  document: DevelopDocument;
+  metadata: Pick<EntryMetadata, "rating" | "colorLabel">;
+  mirrorDocument: (
+    document: DevelopDocument,
+    sourceUpdatedAt?: number,
+    metadataPatch?: SidecarMetadataPatch,
+  ) => void;
+  ready: Promise<void>;
+}
+
+interface EntryPersistence {
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: PendingWrite | null;
+  queue: Promise<void>;
+  sidecarContents: string | null;
+  sidecarContentsKnown: boolean;
+  failedWrite: Pick<PendingWrite, "documentRevision" | "metadataRevision"> | null;
+  hydration: Promise<void>;
+}
+
+const persistenceByEntry = new Map<string, EntryPersistence>();
+
+function persistenceFor(entryId: string): EntryPersistence {
+  const current = persistenceByEntry.get(entryId);
+  if (current) return current;
+  const created: EntryPersistence = {
+    timer: null,
+    pending: null,
+    queue: Promise.resolve(),
+    sidecarContents: null,
+    sidecarContentsKnown: false,
+    failedWrite: null,
+    hydration: Promise.resolve(),
+  };
+  persistenceByEntry.set(entryId, created);
+  return created;
+}
+
+function setStatusForEntry(
+  entryId: string,
+  status: "saving" | "saved" | "error",
+  error?: string,
+): void {
+  if (useDevelopStore.getState().activeEntryId === entryId) {
+    useDevelopStore.getState().setSidecarStatus(status, error ?? null);
+  }
+}
+
+async function writeCaptured(captured: PendingWrite): Promise<void> {
+  await captured.ready;
+  const persistence = persistenceFor(captured.entryId);
+  const current = useDevelopStore.getState().sessions[captured.entryId];
+  if (
+    !current ||
+    current.documentRevision !== captured.documentRevision ||
+    current.metadataRevision !== captured.metadataRevision
+  ) return;
+  if (current.documentRevision !== current.persistedDocumentRevision) {
+    captured.mirrorDocument(captured.document);
+  }
+  if (captured.rootPath) {
+    if (!persistence.sidecarContentsKnown) return;
+    persistence.sidecarContents = await writeDevelopSidecar(
+      captured.rootPath,
+      captured.relativePath,
+      captured.document,
+      captured.metadata,
+      persistence.sidecarContents,
+    );
+  }
+  persistence.failedWrite = null;
+  useDevelopStore.getState().markPersisted(
+    captured.entryId,
+    captured.documentRevision,
+    captured.metadataRevision,
+  );
+  setStatusForEntry(captured.entryId, "saved");
+}
+
+function flushEntry(entryId: string): Promise<void> {
+  const persistence = persistenceByEntry.get(entryId);
+  if (!persistence) return Promise.resolve();
+  if (persistence.timer) {
+    clearTimeout(persistence.timer);
+    persistence.timer = null;
+  }
+  const captured = persistence.pending;
+  persistence.pending = null;
+  if (!captured) return persistence.queue;
+  const write = () => writeCaptured(captured);
+  persistence.queue = persistence.queue.then(write, write).catch((error: unknown) => {
+    persistence.failedWrite = {
+      documentRevision: captured.documentRevision,
+      metadataRevision: captured.metadataRevision,
+    };
+    setStatusForEntry(
+      entryId,
+      "error",
+      error instanceof Error ? error.message : "Could not write XMP sidecar.",
+    );
   });
+  return persistence.queue;
+}
+
+function scheduleWrite(captured: PendingWrite): void {
+  const persistence = persistenceFor(captured.entryId);
+  persistence.pending = captured;
+  if (persistence.timer) clearTimeout(persistence.timer);
+  persistence.timer = setTimeout(() => {
+    persistence.timer = null;
+    void flushEntry(captured.entryId);
+  }, PERSIST_DEBOUNCE_MS);
 }
 
 export function useDevelopSettingsSync({
   entry,
   rootPath,
   metadata,
-  applyMetadata,
+  mirrorDocument,
+  hydrateMetadata,
 }: UseDevelopSettingsSyncOptions): void {
-  const settings = useDevelopStore((state) => state.settings);
-  const activeEntryId = useDevelopStore((state) => state.activeEntryId);
-  const setActiveEntry = useDevelopStore((state) => state.setActiveEntry);
+  const session = useDevelopStore((state) => state.sessions[entry.id]);
+  const documentRevision = session?.documentRevision;
+  const persistedDocumentRevision = session?.persistedDocumentRevision;
+  const metadataRevision = session?.metadataRevision;
+  const persistedMetadataRevision = session?.persistedMetadataRevision;
+  const document = session?.document;
+  const sidecarStatus = session?.ui.sidecarStatus;
+  const activateEntry = useDevelopStore((state) => state.activateEntry);
+  const hydrateEntry = useDevelopStore((state) => state.hydrateEntry);
+  const markMetadataHydrated = useDevelopStore((state) => state.markMetadataHydrated);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
-  const sidecarStatus = useDevelopStore((state) => state.sidecarStatus);
   const metadataRef = useRef(metadata);
-  const persistedSnapshotRef = useRef<string | null>(null);
-  const sidecarContentsRef = useRef<{ entryId: string; contents: string | null }>({
-    entryId: "",
-    contents: null,
-  });
-  const pendingWriteRef = useRef<Promise<void>>(Promise.resolve());
-  const hydratedEntryIdRef = useRef<string | null>(null);
-  const canWriteSidecarRef = useRef(true);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -56,171 +169,122 @@ export function useDevelopSettingsSync({
 
   useEffect(() => {
     let active = true;
-    hydratedEntryIdRef.current = null;
-    setActiveEntry(entry.id, resolveDevelopSettings(null, metadataRef.current));
+    const catalogDocument = resolveDevelopDocument(null, metadataRef.current);
+    activateEntry(entry.id, catalogDocument);
     setSidecarStatus("loading");
-    const initialSettings = useDevelopStore.getState().settings;
-    const initialSnapshot = snapshot(initialSettings, metadataRef.current);
-    sidecarContentsRef.current = { entryId: entry.id, contents: null };
-    canWriteSidecarRef.current = true;
+    const persistence = persistenceFor(entry.id);
 
     async function hydrate(): Promise<void> {
-      let sidecarContents: string | null = null;
-      let persisted = initialSnapshot;
-
+      await persistence.queue;
       try {
-        if (rootPath) {
-          const sidecar = await readDevelopSidecar(rootPath, entry.relativePath);
-          if (!active) {
-            return;
-          }
-          sidecarContents = sidecar?.contents ?? null;
-
-          const hasLocalChanges =
-            developSettingsHash(useDevelopStore.getState().settings) !==
-            developSettingsHash(initialSettings);
-          if (
-            sidecar &&
-            !hasLocalChanges &&
-            sidecar.lastModified > metadataRef.current.updatedAt
-          ) {
-            const resolvedSettings = resolveDevelopSettings(
-              sidecar,
-              metadataRef.current,
+        const sidecar = rootPath
+          ? await readDevelopSidecar(rootPath, entry.relativePath)
+          : null;
+        if (!active) return;
+        persistence.sidecarContents = sidecar?.contents ?? null;
+        persistence.sidecarContentsKnown = true;
+        persistence.failedWrite = null;
+        if (sidecar) {
+          const metadataSnapshot = metadataRef.current;
+          const documentIsNewer = sidecar.lastModified > metadataSnapshot.developUpdatedAt;
+          const metadataIsNewer = sidecar.lastModified > metadataSnapshot.updatedAt;
+          const metadataPatch: SidecarMetadataPatch = metadataIsNewer
+            ? {
+                ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+                ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
+              }
+            : {};
+          const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
+          const current = useDevelopStore.getState().sessions[entry.id];
+          const canHydrateDocument = documentIsNewer && current &&
+            current.documentRevision === current.persistedDocumentRevision;
+          if (canHydrateDocument) {
+            hydrateEntry(entry.id, sidecar.document);
+            mirrorDocument(
+              sidecar.document,
+              sidecar.lastModified,
+              metadataPatch,
             );
-            const nextMetadata: Partial<EntryMetadata> = {
-              develop: resolvedSettings,
-              ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
-              ...(sidecar.colorLabel === undefined
-                ? {}
-                : { colorLabel: sidecar.colorLabel }),
-            };
-            setActiveEntry(entry.id, resolvedSettings);
-            applyMetadata(nextMetadata);
-            persisted = snapshot(resolvedSettings, {
-              rating: sidecar.rating ?? metadataRef.current.rating,
-              colorLabel: sidecar.colorLabel ?? metadataRef.current.colorLabel,
-            });
-          } else {
-            const currentSnapshot = snapshot(
-              useDevelopStore.getState().settings,
-              metadataRef.current,
-            );
-            persisted = currentSnapshot === initialSnapshot
-              ? currentSnapshot
-              : initialSnapshot;
+          } else if (hasMetadataPatch) {
+            hydrateMetadata(metadataPatch, sidecar.lastModified);
           }
+          if (hasMetadataPatch) markMetadataHydrated(entry.id);
         }
-
-        if (active) {
-          sidecarContentsRef.current = { entryId: entry.id, contents: sidecarContents };
-          persistedSnapshotRef.current = persisted;
-          setSidecarStatus("saved");
-        }
+        setSidecarStatus("saved");
       } catch (error) {
-        if (active) {
-          canWriteSidecarRef.current = false;
-          setSidecarStatus(
-            "error",
-            error instanceof Error ? error.message : "Could not read XMP sidecar.",
-          );
-          persistedSnapshotRef.current = null;
-        }
-      } finally {
-        if (active) {
-          hydratedEntryIdRef.current = entry.id;
-        }
+        if (!active) return;
+        persistence.sidecarContentsKnown = false;
+        setSidecarStatus(
+          "error",
+          error instanceof Error ? error.message : "Could not read XMP sidecar.",
+        );
       }
     }
 
-    void hydrate();
+    persistence.hydration = hydrate();
     return () => {
       active = false;
+      void flushEntry(entry.id);
     };
   }, [
+    activateEntry,
     entry.id,
     entry.relativePath,
+    hydrateEntry,
+    hydrateMetadata,
+    markMetadataHydrated,
+    mirrorDocument,
     rootPath,
-    applyMetadata,
-    setActiveEntry,
     setSidecarStatus,
   ]);
 
   useEffect(() => {
+    const persistence = persistenceFor(entry.id);
+    const failedWrite = persistence.failedWrite;
     if (
-      activeEntryId !== entry.id ||
-      hydratedEntryIdRef.current !== entry.id
-    ) {
-      return;
-    }
-
-    const nextSnapshot = snapshot(settings, metadata);
-    if (nextSnapshot === persistedSnapshotRef.current) {
-      return;
-    }
-    if (rootPath && !canWriteSidecarRef.current) {
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      const develop = createDevelopSettings(settings);
-      applyMetadata({ develop });
-
-      if (!rootPath) {
-        persistedSnapshotRef.current = nextSnapshot;
-        return;
+      !document ||
+      documentRevision === undefined ||
+      metadataRevision === undefined ||
+      (sidecarStatus !== "saved" && sidecarStatus !== "error") ||
+      (
+        documentRevision === persistedDocumentRevision &&
+        metadataRevision === persistedMetadataRevision
+      )
+    ) return;
+    if (rootPath !== null && !persistence.sidecarContentsKnown) {
+      if (documentRevision !== persistedDocumentRevision) {
+        mirrorDocument(structuredClone(document));
       }
-
-      setSidecarStatus("saving");
-      const write = async (): Promise<void> => {
-        if (cancelled) {
-          return;
-        }
-        const sidecar = sidecarContentsRef.current;
-        const contents = await writeDevelopSidecar(
-          rootPath,
-          entry.relativePath,
-          develop,
-          metadata,
-          sidecar.entryId === entry.id ? sidecar.contents : null,
-        );
-        sidecarContentsRef.current = { entryId: entry.id, contents };
-        if (
-          useDevelopStore.getState().activeEntryId === entry.id &&
-          snapshot(useDevelopStore.getState().settings, metadataRef.current) ===
-            nextSnapshot
-        ) {
-          persistedSnapshotRef.current = nextSnapshot;
-          setSidecarStatus("saved");
-        }
-      };
-
-      const queued = pendingWriteRef.current.then(write, write);
-      pendingWriteRef.current = queued.catch(() => undefined);
-      void queued.catch((error) => {
-        if (!cancelled) {
-          setSidecarStatus(
-            "error",
-            error instanceof Error ? error.message : "Could not write XMP sidecar.",
-          );
-        }
-      });
-    }, PERSIST_DEBOUNCE_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+      return;
+    }
+    if (
+      failedWrite?.documentRevision === documentRevision &&
+      failedWrite.metadataRevision === metadataRevision
+    ) return;
+    setStatusForEntry(entry.id, "saving");
+    scheduleWrite({
+      entryId: entry.id,
+      rootPath,
+      relativePath: entry.relativePath,
+      documentRevision,
+      metadataRevision,
+      document: structuredClone(document),
+      metadata: { rating: metadata.rating, colorLabel: metadata.colorLabel },
+      mirrorDocument,
+      ready: persistence.hydration,
+    });
   }, [
-    activeEntryId,
     entry.id,
     entry.relativePath,
-    metadata,
+    metadata.colorLabel,
+    metadata.rating,
+    mirrorDocument,
     rootPath,
+    document,
+    documentRevision,
+    metadataRevision,
+    persistedDocumentRevision,
+    persistedMetadataRevision,
     sidecarStatus,
-    settings,
-    applyMetadata,
-    setSidecarStatus,
   ]);
 }

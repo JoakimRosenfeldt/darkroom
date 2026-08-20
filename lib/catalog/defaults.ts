@@ -4,6 +4,7 @@ export const DEFAULT_ENTRY_METADATA: EntryMetadata = {
   pick: "none",
   rating: 0,
   colorLabel: null,
+  developUpdatedAt: 0,
   updatedAt: 0,
 };
 

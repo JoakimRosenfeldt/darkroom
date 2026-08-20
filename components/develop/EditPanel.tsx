@@ -7,6 +7,7 @@ import { useDevelopStore } from "@/stores/develop-store";
 import { SliderRow } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
 import { useState } from "react";
+import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 
 const EDIT_PLUGINS = DEVELOP_PLUGINS.filter((plugin) => plugin.id !== "crop");
 
@@ -57,7 +58,10 @@ interface EditPanelProps {
 }
 
 export function EditPanel({ onResetAll }: EditPanelProps) {
-  const sidecarError = useDevelopStore((state) => state.sidecarError);
+  const sidecarError = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.ui.sidecarError ?? null;
+  });
 
   return (
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
@@ -131,7 +135,10 @@ function PluginSection({
 }
 
 function BasicControls() {
-  const basic = useDevelopStore((state) => state.settings.basic);
+  const basic = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.document.settings.basic ?? DEFAULT_DEVELOP_SETTINGS.basic;
+  });
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
   return (
@@ -151,7 +158,10 @@ function BasicControls() {
 }
 
 function CurveControls() {
-  const curve = useDevelopStore((state) => state.settings.curve);
+  const curve = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.document.settings.curve ?? DEFAULT_DEVELOP_SETTINGS.curve;
+  });
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
   return <ToneCurveEditor settings={curve} onChange={(settings) => updatePlugin("curve", settings)} />;
@@ -159,7 +169,10 @@ function CurveControls() {
 
 function MixerControls() {
   const [mode, setMode] = useState<MixerMode>("hue");
-  const mixer = useDevelopStore((state) => state.settings.mixer);
+  const mixer = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.document.settings.mixer ?? DEFAULT_DEVELOP_SETTINGS.mixer;
+  });
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
   const rows = (property: Exclude<MixerMode, "all">) => (
@@ -228,7 +241,10 @@ function MixerControls() {
 }
 
 function EffectsControls() {
-  const effects = useDevelopStore((state) => state.settings.effects);
+  const effects = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.document.settings.effects ?? DEFAULT_DEVELOP_SETTINGS.effects;
+  });
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
 
   return (

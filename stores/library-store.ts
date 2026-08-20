@@ -31,6 +31,8 @@ import {
 } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { resolveProfile } from "@/lib/raw/decode";
+import { createDefaultDevelopDocument } from "@/lib/develop/document";
+import { setDevelopMetadataWriter, useDevelopStore } from "@/stores/develop-store";
 
 const fsDebug = (...args: unknown[]) => console.log("[darkroom:fs]", ...args);
 const fsDebugWarn = (...args: unknown[]) => console.warn("[darkroom:fs]", ...args);
@@ -43,6 +45,8 @@ export interface SelectEntryModifiers {
   shift?: boolean;
   toggle?: boolean;
 }
+
+type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
 function restoreSelection(
   entries: LibraryEntry[],
@@ -107,6 +111,18 @@ interface LibraryStore {
     entryIds: string[],
     patch: Partial<EntryMetadata>,
   ) => void;
+  mirrorDevelopDocument: (
+    entryId: string,
+    develop: EntryMetadata["develop"],
+    sourceUpdatedAt?: number,
+    metadataPatch?: SidecarMetadataPatch,
+  ) => void;
+  hydrateEntryMetadata: (
+    entryId: string,
+    patch: SidecarMetadataPatch,
+    sourceUpdatedAt: number,
+  ) => void;
+  restoreEntryMetadata: (entryId: string, patch: Pick<EntryMetadata, "pick" | "rating" | "colorLabel">) => void;
   setCatalogView: (view: CatalogView) => void;
   createAlbum: (name: string) => string;
   renameAlbum: (albumId: string, name: string) => void;
@@ -278,6 +294,9 @@ async function completeDirectoryImport(
     });
 
     const activeEntries = filterArchivedEntries(scanned, archivedEntryIds);
+    if (get().rootPath !== rootPath) {
+      useDevelopStore.getState().clearLibrarySessions();
+    }
     const selection = restoreSelection(
       activeEntries,
       get().selectedEntryIds,
@@ -398,21 +417,86 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
     const updated = { ...entryMetadata };
     const updatedAt = Date.now();
+    const history: Array<{ entryId: string; before: EntryMetadata; after: EntryMetadata }> = [];
 
     for (const entryId of entryIds) {
       const current = getEntryMetadata(updated, entryId);
-      updated[entryId] = createEntryMetadata({
+      const after = createEntryMetadata({
         ...current,
         ...patch,
         updatedAt,
       });
+      updated[entryId] = after;
+      history.push({ entryId, before: current, after });
     }
 
     set({ entryMetadata: updated });
 
+    for (const item of history) {
+      useDevelopStore.getState().recordMetadataEdit(
+        item.entryId,
+        item.before,
+        item.after,
+        item.before.develop ?? createDefaultDevelopDocument(),
+      );
+    }
+
     if (rootPath) {
       persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
     }
+  },
+
+  mirrorDevelopDocument: (
+    entryId,
+    develop,
+    sourceUpdatedAt = Date.now(),
+    metadataPatch = {},
+  ) => {
+    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const developUpdatedAt = Math.max(sourceUpdatedAt, current.developUpdatedAt + 1);
+    const metadataChanged = Object.keys(metadataPatch).length > 0;
+    const updatedAt = metadataChanged
+      ? Math.max(sourceUpdatedAt, current.updatedAt + 1)
+      : current.updatedAt;
+    const updated = {
+      ...entryMetadata,
+      [entryId]: createEntryMetadata({
+        ...current,
+        ...metadataPatch,
+        develop,
+        developUpdatedAt,
+        updatedAt,
+      }),
+    };
+    set({ entryMetadata: updated });
+    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
+  },
+
+  hydrateEntryMetadata: (entryId, patch, sourceUpdatedAt) => {
+    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const updated = {
+      ...entryMetadata,
+      [entryId]: createEntryMetadata({
+        ...current,
+        ...patch,
+        updatedAt: Math.max(sourceUpdatedAt, current.updatedAt + 1),
+      }),
+    };
+    set({ entryMetadata: updated });
+    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
+  },
+
+  restoreEntryMetadata: (entryId, patch) => {
+    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const updated = {
+      ...entryMetadata,
+      [entryId]: createEntryMetadata({ ...current, ...patch, updatedAt: Date.now() }),
+    };
+    set({ entryMetadata: updated });
+    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
   },
 
   setCatalogView: (view) => set({ catalogView: view }),
@@ -734,6 +818,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           restoredEntries,
           archivedEntryIds,
         );
+        if (get().rootPath !== rootPath) {
+          useDevelopStore.getState().clearLibrarySessions();
+        }
         set({
           folderName,
           rootPath,
@@ -831,6 +918,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     if (rootPath) {
       await deleteCatalog(rootPath);
     }
+    useDevelopStore.getState().clearLibrarySessions();
     set({
       folderName: null,
       rootPath: null,
@@ -849,6 +937,10 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     });
   },
 }));
+
+setDevelopMetadataWriter((entryId, values) => {
+  useLibraryStore.getState().restoreEntryMetadata(entryId, values);
+});
 
 export function getEntryById(
   entries: LibraryEntry[],

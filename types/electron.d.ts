@@ -1,4 +1,11 @@
 import type { PhotoCatalog } from "../lib/catalog/types";
+import type {
+  AiModelId,
+  AiModelDisclosureLink,
+  AiModelProgress,
+  AiModelState,
+  Unsubscribe,
+} from "../lib/ai/types";
 import type { NefDecodeRequest, NefDecodeResult } from "../electron/nef-decoder-service";
 import type {
   ExportDestinationRequest,
@@ -60,6 +67,12 @@ export interface DarkroomAPI {
   getExportOptions(): Promise<ExportOptionsSettings>;
   setExportOptions(options: ExportOptionsSettingsInput): Promise<void>;
   showInFolder(revealToken: string): Promise<void>;
+  getAiModelState(modelId: AiModelId): Promise<AiModelState>;
+  downloadAiModel(modelId: AiModelId): Promise<void>;
+  cancelAiModelDownload(modelId: AiModelId): Promise<void>;
+  removeAiModel(modelId: AiModelId): Promise<void>;
+  openAiModelLink(modelId: AiModelId, link: AiModelDisclosureLink): Promise<void>;
+  onAiModelProgress(listener: (progress: AiModelProgress) => void): Unsubscribe;
 }
 
 declare global {

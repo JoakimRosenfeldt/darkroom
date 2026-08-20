@@ -33,6 +33,19 @@ import {
 } from "./export-service";
 import { createSettingsStore } from "./settings";
 import { getAppRoot, getOutDir, startStaticServer } from "./static-server";
+import {
+  parseAiModelId,
+  type AiModelDisclosureLink,
+  type AiModelProgress,
+} from "../lib/ai/types";
+import { createAiModelService } from "./ai-model-service";
+import { getAiModelDisclosureUrl } from "./ai-model-manifest";
+import {
+  registerAiModelProtocol,
+  registerAiModelScheme,
+} from "./ai-model-protocol";
+
+registerAiModelScheme();
 
 const isDev = process.env.ELECTRON_DEV === "1" || !app.isPackaged;
 const DEV_SERVER_URL = process.env.DARKROOM_DEV_URL ?? "http://localhost:3000";
@@ -43,7 +56,26 @@ let activeLibraryRoot: string | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
-const MAX_SIDECAR_BYTES = 4 * 1024 * 1024;
+const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
+
+function sendAiModelProgress(progress: AiModelProgress): void {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+    return;
+  }
+  mainWindow.webContents.send("darkroom:ai-model-progress", progress);
+}
+
+function parseAiModelDisclosureLink(value: unknown): AiModelDisclosureLink {
+  if (value !== "source" && value !== "license") {
+    throw new Error("Unknown AI model disclosure link.");
+  }
+  return value;
+}
+
+const aiModelService = createAiModelService({
+  userDataPath: app.getPath("userData"),
+  onProgress: sendAiModelProgress,
+});
 
 function getNefDecoderCommand(): NefDecoderCommand | null {
   const privateHelper = process.env.DARKROOM_NEF_HELPER_PATH;
@@ -405,6 +437,10 @@ function registerIpcHandlers(): void {
         return;
       }
 
+      if (Buffer.byteLength(contents, "utf8") > MAX_SIDECAR_BYTES) {
+        throw new Error("XMP sidecar is not a supported file size.");
+      }
+
       await writeFileAtomically(sidecarPath, contents);
     },
   );
@@ -473,9 +509,40 @@ function registerIpcHandlers(): void {
       exportService.showInFolder(revealToken);
     },
   );
+
+  ipcMain.handle("darkroom:get-ai-model-state", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return aiModelService.getAiModelState(parseAiModelId(value));
+  });
+
+  ipcMain.handle("darkroom:download-ai-model", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await aiModelService.downloadAiModel(parseAiModelId(value));
+  });
+
+  ipcMain.handle("darkroom:cancel-ai-model-download", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await aiModelService.cancelAiModelDownload(parseAiModelId(value));
+  });
+
+  ipcMain.handle("darkroom:remove-ai-model", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await aiModelService.removeAiModel(parseAiModelId(value));
+  });
+
+  ipcMain.handle(
+    "darkroom:open-ai-model-link",
+    async (event, modelValue: unknown, linkValue: unknown) => {
+      assertTrustedRenderer(event);
+      const modelId = parseAiModelId(modelValue);
+      const link = parseAiModelDisclosureLink(linkValue);
+      await shell.openExternal(getAiModelDisclosureUrl(modelId, link));
+    },
+  );
 }
 
 app.whenReady().then(async () => {
+  registerAiModelProtocol(aiModelService);
   registerIpcHandlers();
   await createWindow();
 

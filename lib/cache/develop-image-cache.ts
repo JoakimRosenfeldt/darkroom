@@ -112,6 +112,28 @@ export async function loadDevelopExportImage(
   return toDevelopImage(decoded);
 }
 
+/**
+ * Load a fresh source decode for local AI inference. This skips the editor
+ * cache and requests source pixels without changing thumbnail semantics.
+ */
+export async function loadDevelopInferenceImage(
+  entry: LibraryEntry,
+  signal?: AbortSignal,
+): Promise<DevelopImage> {
+  if (signal?.aborted) {
+    throw new Error("AI source loading was cancelled.");
+  }
+  const decoded = await decodeEntry(entry, {
+    fullResolution: true,
+    sourcePixels: true,
+    signal,
+  });
+  if (signal?.aborted) {
+    throw new Error("AI source loading was cancelled.");
+  }
+  return toDevelopImage(decoded);
+}
+
 export function disposeDevelopImage(image: DevelopImage): void {
   if (image.objectUrl) {
     URL.revokeObjectURL(image.objectUrl);

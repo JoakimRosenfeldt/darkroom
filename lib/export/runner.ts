@@ -9,10 +9,12 @@ import {
   renderDevelopExport,
 } from "@/lib/develop/renderer";
 import { readDevelopSidecar } from "@/lib/develop/sidecar";
+import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
+import type { DevelopDocument } from "@/lib/develop/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
-import { resolveDevelopSettings } from "./settings";
+import { resolveDevelopDocument } from "./settings";
 import { DEFAULT_EXPORT_SUFFIX } from "./types";
 import type {
   ExportConflictBehavior,
@@ -105,25 +107,27 @@ function getMetadata(
       pick: "none",
       rating: 0,
       colorLabel: null,
+      developUpdatedAt: 0,
       updatedAt: entry.lastModified,
     }
   );
 }
 
-async function resolveSettings(
+async function resolveDocument(
   entry: LibraryEntry,
   metadata: EntryMetadata,
   rootPath: string | null,
-): Promise<ReturnType<typeof resolveDevelopSettings>> {
+): Promise<DevelopDocument> {
   const current = useDevelopStore.getState();
   if (current.activeEntryId === entry.id) {
-    return structuredClone(current.settings);
+    const session = current.sessions[entry.id];
+    if (session) return structuredClone(session.document);
   }
 
   const sidecar = rootPath
     ? await readDevelopSidecar(rootPath, entry.relativePath)
     : null;
-  return resolveDevelopSettings(sidecar, metadata);
+  return resolveDevelopDocument(sidecar, metadata);
 }
 
 function asErrorMessage(error: unknown): string {
@@ -179,12 +183,18 @@ export async function runExportBatch(
       let pixels: RawExportRenderResult | null = null;
       try {
         const entryMetadata = getMetadata(metadata, entry);
-        const settings = await resolveSettings(entry, entryMetadata, rootPath);
+        const developDocument = await resolveDocument(entry, entryMetadata, rootPath);
         exportImage = await loadDevelopExportImage(entry);
 
         progress("rendering");
         renderer ??= new DevelopRenderer(document.createElement("canvas"), true);
-        pixels = await renderDevelopExport(exportImage, settings, renderer);
+        pixels = await renderDevelopExport(
+          exportImage,
+          developDocument,
+          sourceSignatureForEntry(entry),
+          toEncodeSize(options.size),
+          renderer,
+        );
 
         progress("encoding");
         const encoded = await api.encodeAndSaveExport(
@@ -195,7 +205,7 @@ export async function runExportBatch(
             width: pixels.width,
             height: pixels.height,
           },
-          toEncodeOptions(options),
+          { ...toEncodeOptions(options), size: { mode: "original" } },
         );
         if (encoded.status === "exported") {
           lastOutputPath = encoded.path ?? lastOutputPath;

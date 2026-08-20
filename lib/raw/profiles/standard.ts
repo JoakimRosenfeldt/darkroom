@@ -5,11 +5,11 @@ const STANDARD_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
 async function blobToDecodedImage(
   blob: Blob,
   metadata: Record<string, unknown>,
-  includePixels: boolean,
+  mode: "metadata" | "thumbnail" | "source",
 ): Promise<DecodedImage> {
   const bitmap = await createImageBitmap(blob);
 
-  if (!includePixels) {
+  if (mode === "metadata") {
     const width = bitmap.width;
     const height = bitmap.height;
     bitmap.close();
@@ -38,6 +38,18 @@ async function blobToDecodedImage(
   bitmap.close();
 
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (mode === "source") {
+    return {
+      width: canvas.width,
+      height: canvas.height,
+      rgb: imageData.data,
+      bits: 8,
+      colors: 4,
+      metadata,
+    };
+  }
+
   const outputBlob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((result) => {
       if (!result) {
@@ -104,14 +116,15 @@ export const standardImageProfile: ImageProfile = {
       blob = await resizeBlob(blob, options.maxEdge);
     }
 
-    return blobToDecodedImage(
-      blob,
-      {
-        format: mimeType,
-        source: "standard",
-      },
-      Boolean(options?.thumbnail),
-    );
+    const mode = options?.sourcePixels
+      ? "source"
+      : options?.thumbnail
+        ? "thumbnail"
+        : "metadata";
+    return blobToDecodedImage(blob, {
+      format: mimeType,
+      source: "standard",
+    }, mode);
   },
 };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import { useDevelopStore } from "@/stores/develop-store";
 
 interface SliderRowProps {
   label: string;
@@ -29,6 +30,8 @@ export function SliderRow({
 }: SliderRowProps) {
   const decimalPlaces = step.toString().split(".")[1]?.length ?? 0;
   const displayValue = value.toFixed(decimalPlaces);
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
 
   return (
     <div className={`grid grid-cols-[96px_1fr_52px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
@@ -54,6 +57,10 @@ export function SliderRow({
         step={step}
         value={value}
         disabled={disabled}
+        onPointerDown={() => beginEditGroup(`Adjust ${label}`)}
+        onPointerUp={endEditGroup}
+        onPointerCancel={endEditGroup}
+        onBlur={endEditGroup}
         onChange={(event) => onChange(Number(event.target.value))}
         onDoubleClick={() => onChange(resetValue)}
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}

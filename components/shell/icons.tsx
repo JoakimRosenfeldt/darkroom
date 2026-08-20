@@ -115,3 +115,66 @@ export function IconInfo({ className }: { className?: string }) {
     </svg>
   );
 }
+
+export function IconMask({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+      <path d="M8 1.5 13.5 4v4.5c0 3-2.35 5.15-5.5 6-3.15-.85-5.5-3-5.5-6V4L8 1.5Z" />
+      <path d="M5.25 8.75c.9-1.35 1.75-2.05 2.75-2.05s1.85.7 2.75 2.05" />
+      <path d="M5.3 10.65h5.4" />
+    </svg>
+  );
+}
+
+export function IconEye({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+      <path d="M1.5 8s2.15-3.25 6.5-3.25S14.5 8 14.5 8 12.35 11.25 8 11.25 1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="1.55" />
+    </svg>
+  );
+}
+
+export function IconEyeOff({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+      <path d="M2 2.2 14 13.8" />
+      <path d="M6.1 4.9A7.6 7.6 0 0 1 8 4.75c4.35 0 6.5 3.25 6.5 3.25a10.3 10.3 0 0 1-2.25 2.25M4.25 5.75C2.45 6.55 1.5 8 1.5 8s2.15 3.25 6.5 3.25c.7 0 1.34-.1 1.9-.25" />
+      <path d="M6.75 6.75a1.8 1.8 0 0 0 2.5 2.5" />
+    </svg>
+  );
+}
+
+export function IconCopy({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+      <rect x="5" y="2.5" width="8.5" height="10" rx="1.2" />
+      <path d="M3 5.25V13a1.5 1.5 0 0 0 1.5 1.5h5.25" />
+    </svg>
+  );
+}
+
+export function IconChevronUp({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m3.5 10 4.5-4.5 4.5 4.5" />
+    </svg>
+  );
+}
+
+export function IconChevronDown({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m3.5 6 4.5 4.5L12.5 6" />
+    </svg>
+  );
+}
+
+export function IconRotate({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3.25 6.2A5 5 0 1 1 4.5 11.5" />
+      <path d="M3.25 2.9v3.3h3.3" />
+    </svg>
+  );
+}

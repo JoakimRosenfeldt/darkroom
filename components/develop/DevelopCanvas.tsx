@@ -1,13 +1,19 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
-import { DevelopRenderer } from "@/lib/develop/renderer";
+import {
+  DevelopRenderer,
+  type RenderDiagnostic,
+} from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
 import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOverlay";
+import { MaskingOverlay } from "@/components/develop/MaskingOverlay";
+import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { computeContainedImageRect } from "@/lib/develop/crop-geometry";
-import type { CropSettings } from "@/lib/develop/types";
+import { createDefaultDevelopDocument } from "@/lib/develop/document";
+import type { CropSettings, SourceSignature } from "@/lib/develop/types";
 
 export interface CropPreviewTransform {
   scale: number;
@@ -18,6 +24,7 @@ export interface CropPreviewTransform {
 interface DevelopCanvasProps {
   image: DevelopImage;
   alt: string;
+  sourceSignature: SourceSignature;
   cropActive: boolean;
   cropDraft: CropSettings | null;
   cropImageOffset: { x: number; y: number };
@@ -26,12 +33,16 @@ interface DevelopCanvasProps {
   onPreviewTransformChange: (
     update: (current: CropPreviewTransform) => CropPreviewTransform,
   ) => void;
+  overlayMaskId?: string | null;
+  onRenderDiagnostics?: (diagnostics: readonly RenderDiagnostic[]) => void;
+  maskingActive?: boolean;
 }
 
 const MIN_PREVIEW_ZOOM = 0.25;
 const MAX_PREVIEW_ZOOM = 8;
 const DETAIL_ZOOM = 2;
 const FIT_TRANSFORM: CropPreviewTransform = { scale: 1, x: 0, y: 0 };
+const EMPTY_DOCUMENT = createDefaultDevelopDocument();
 
 function clampZoomOffset(
   viewportSize: number,
@@ -48,12 +59,16 @@ function clampZoomOffset(
 export function DevelopCanvas({
   image,
   alt,
+  sourceSignature,
   cropActive,
   cropDraft,
   cropImageOffset,
   previewTransform,
   onCropChange,
   onPreviewTransformChange,
+  overlayMaskId = null,
+  onRenderDiagnostics,
+  maskingActive = false,
 }: DevelopCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -68,17 +83,47 @@ export function DevelopCanvas({
     moved: boolean;
   } | null>(null);
   const suppressClickRef = useRef(false);
-  const settings = useDevelopStore((state) => state.settings);
+  const renderRequestRef = useRef(0);
+  const document = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.document ?? EMPTY_DOCUMENT;
+  });
+  const settings = document.settings;
   const showOriginal = useDevelopStore((state) => state.showOriginal);
   const setShowOriginal = useDevelopStore((state) => state.setShowOriginal);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
   const [viewTransform, setViewTransform] = useState(FIT_TRANSFORM);
   const [panning, setPanning] = useState(false);
   const [imageRect, setImageRect] = useState(() =>
     computeContainedImageRect(1, 1, image.width, image.height),
   );
+  const [displayImageRect, setDisplayImageRect] = useState(() =>
+    computeContainedImageRect(1, 1, image.width, image.height),
+  );
   const usesEmbeddedRawPreview = image.metadata.developSource === "embedded";
+  const maskTool = useDevelopStore((state): MaskTool => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    return session?.ui.tool ?? "none";
+  });
+  const selectedMask = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    const selectedMaskId = session?.ui.selectedMaskId;
+    return session?.document.settings.masking.masks.find((mask) => mask.id === selectedMaskId) ?? null;
+  });
+  const selectedComponent = useDevelopStore((state) => {
+    const session = state.activeEntryId ? state.sessions[state.activeEntryId] : undefined;
+    const selectedMaskId = session?.ui.selectedMaskId;
+    const selectedComponentId = session?.ui.selectedComponentId;
+    const mask = session?.document.settings.masking.masks.find((item) => item.id === selectedMaskId);
+    return mask?.components.find((component) => component.id === selectedComponentId) ?? null;
+  });
+  const { entryId, relativePath, size, lastModified } = sourceSignature;
+  const stableSourceSignature = useMemo(
+    () => ({ entryId, relativePath, size, lastModified }),
+    [entryId, relativePath, size, lastModified],
+  );
 
   useEffect(() => {
     cropDraftRef.current = cropDraft;
@@ -102,10 +147,17 @@ export function DevelopCanvas({
         const renderer = new DevelopRenderer(currentCanvas);
         rendererRef.current = renderer;
         await renderer.setImage(image);
+        const activeState = useDevelopStore.getState();
+        const activeDocument = activeState.activeEntryId
+          ? activeState.sessions[activeState.activeEntryId]?.document ?? EMPTY_DOCUMENT
+          : EMPTY_DOCUMENT;
+        const preparation = await renderer.prepare(activeDocument, stableSourceSignature, "preview");
         if (!active) {
           renderer.dispose();
           return;
         }
+        setRenderDiagnostics(preparation.diagnostics);
+        onRenderDiagnostics?.(preparation.diagnostics);
         setReady(true);
       } catch (rendererError) {
         if (active) {
@@ -125,7 +177,7 @@ export function DevelopCanvas({
       rendererRef.current?.dispose();
       rendererRef.current = null;
     };
-  }, [image]);
+  }, [image, onRenderDiagnostics, stableSourceSignature]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -136,6 +188,7 @@ export function DevelopCanvas({
     }
     const currentContainer = container;
     const currentRenderer = renderer;
+    let active = true;
 
     function resize() {
       const renderScale = cropActive ? 1 : viewTransform.scale;
@@ -151,33 +204,97 @@ export function DevelopCanvas({
           image.height,
         ),
       );
-      const state = useDevelopStore.getState();
-      const draft = cropDraftRef.current;
-      currentRenderer.render(
-        draft ? { ...state.settings, crop: draft } : state.settings,
-        state.showOriginal,
-        draft ? "source" : state.settings.crop.enabled ? "crop-preview" : "source",
+      setDisplayImageRect(
+        computeContainedImageRect(
+          currentContainer.clientWidth,
+          currentContainer.clientHeight,
+          settings.crop.enabled ? image.width * settings.crop.width : image.width,
+          settings.crop.enabled ? image.height * settings.crop.height : image.height,
+        ),
       );
+      const state = useDevelopStore.getState();
+      const activeDocument = state.activeEntryId
+        ? state.sessions[state.activeEntryId]?.document ?? EMPTY_DOCUMENT
+        : EMPTY_DOCUMENT;
+      const draft = cropDraftRef.current;
+      const renderDocument = draft
+        ? { ...activeDocument, settings: { ...activeDocument.settings, crop: draft } }
+        : activeDocument;
+      const request = ++renderRequestRef.current;
+      void currentRenderer.render(
+        renderDocument,
+        stableSourceSignature,
+        state.showOriginal,
+        draft ? "source" : activeDocument.settings.crop.enabled ? "crop-preview" : "source",
+        { overlayMaskId },
+      ).then((preparation) => {
+        if (active && request === renderRequestRef.current) {
+          setRenderDiagnostics(preparation.diagnostics);
+          onRenderDiagnostics?.(preparation.diagnostics);
+        }
+      }).catch((renderError: unknown) => {
+        if (active && request === renderRequestRef.current) {
+          setError(renderError instanceof Error ? renderError.message : "Could not render editor preview.");
+        }
+      });
     }
 
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(currentContainer);
-    return () => observer.disconnect();
-  }, [ready, image.height, image.width, cropActive, viewTransform.scale]);
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }, [
+    ready,
+    image.height,
+    image.width,
+    cropActive,
+    settings.crop,
+    viewTransform.scale,
+    onRenderDiagnostics,
+    overlayMaskId,
+    stableSourceSignature,
+  ]);
 
   useEffect(() => {
     if (ready) {
       const previewSettings = cropDraft
-        ? { ...settings, crop: cropDraft }
-        : settings;
-      rendererRef.current?.render(
+        ? { ...document, settings: { ...document.settings, crop: cropDraft } }
+        : document;
+      const renderer = rendererRef.current;
+      if (!renderer) {
+        return;
+      }
+      const request = ++renderRequestRef.current;
+      void renderer.render(
         previewSettings,
+        stableSourceSignature,
         showOriginal,
         cropDraft ? "source" : settings.crop.enabled ? "crop-preview" : "source",
-      );
+        { overlayMaskId },
+      ).then((preparation) => {
+        if (request === renderRequestRef.current) {
+          setRenderDiagnostics(preparation.diagnostics);
+          onRenderDiagnostics?.(preparation.diagnostics);
+        }
+      }).catch((renderError: unknown) => {
+        if (request === renderRequestRef.current) {
+          setError(renderError instanceof Error ? renderError.message : "Could not render editor preview.");
+        }
+      });
     }
-  }, [settings, showOriginal, ready, cropDraft]);
+  }, [
+    document,
+    settings,
+    showOriginal,
+    ready,
+    cropDraft,
+    onRenderDiagnostics,
+    overlayMaskId,
+    stableSourceSignature,
+  ]);
 
   function onWheel(event: React.WheelEvent) {
     const container = containerRef.current;
@@ -225,7 +342,7 @@ export function DevelopCanvas({
   }
 
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-    if (cropActive || viewTransform.scale <= 1) {
+    if (cropActive || (maskingActive && maskTool !== "none") || viewTransform.scale <= 1) {
       return;
     }
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -301,7 +418,7 @@ export function DevelopCanvas({
       return;
     }
     const container = containerRef.current;
-    if (cropActive || !ready || !container) {
+    if (cropActive || (maskingActive && maskTool !== "none") || !ready || !container) {
       return;
     }
     const bounds = container.getBoundingClientRect();
@@ -380,14 +497,14 @@ export function DevelopCanvas({
     <div
       ref={containerRef}
       className={`relative h-full w-full overflow-hidden ${
-        cropActive || !ready
+        cropActive || !ready || (maskingActive && maskTool !== "none")
           ? ""
           : viewTransform.scale > 1
             ? panning
               ? "cursor-grabbing"
               : "cursor-grab"
-            : "cursor-zoom-in"
-      }`}
+              : "cursor-zoom-in"
+      } ${maskingActive && maskTool !== "none" ? "cursor-crosshair" : ""}`}
       onWheel={onWheel}
       onClick={onClick}
       onPointerDown={onPointerDown}
@@ -423,6 +540,18 @@ export function DevelopCanvas({
             imageHeight={image.height}
             previewScale={previewTransform.scale}
             onChange={onCropChange}
+          />
+        ) : null}
+        {!cropActive && maskingActive ? (
+          <MaskingOverlay
+            imageRect={displayImageRect}
+            displayWidth={image.width}
+            displayHeight={image.height}
+            orientation={image.orientation}
+            crop={settings.crop}
+            mask={selectedMask}
+            component={selectedComponent}
+            tool={maskTool}
           />
         ) : null}
       </div>

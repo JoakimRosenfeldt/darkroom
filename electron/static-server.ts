@@ -5,6 +5,7 @@ import path from "node:path";
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".png": "image/png",
@@ -19,7 +20,7 @@ const MIME_TYPES: Record<string, string> = {
 
 function resolveRequestPath(outDir: string, requestUrl: string): string | null {
   const url = new URL(requestUrl, "http://localhost");
-  let pathname = decodeURIComponent(url.pathname);
+  const pathname = decodeURIComponent(url.pathname);
 
   if (pathname === "/") {
     return path.join(outDir, "index.html");

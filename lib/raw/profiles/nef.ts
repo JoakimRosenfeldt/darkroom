@@ -3,6 +3,39 @@ import { decodeEmbeddedThumbnail, decodeWithLibRaw } from "../libraw-client";
 
 const PREVIEW_MAX_EDGE = 2_560;
 
+async function decodeEmbeddedSourcePixels(
+  embedded: DecodedImage,
+): Promise<DecodedImage> {
+  if (!embedded.blob) {
+    throw new Error("The embedded RAW preview is unavailable for AI masking.");
+  }
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(embedded.blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Could not decode the embedded RAW preview.");
+    }
+    context.drawImage(bitmap, 0, 0);
+    return {
+      width: bitmap.width,
+      height: bitmap.height,
+      rgb: context.getImageData(0, 0, bitmap.width, bitmap.height).data,
+      bits: 8,
+      colors: 4,
+      metadata: embedded.metadata,
+    };
+  } finally {
+    bitmap?.close();
+    if (embedded.objectUrl) {
+      URL.revokeObjectURL(embedded.objectUrl);
+    }
+  }
+}
+
 async function decodeDevelopedNef(
   input: Uint8Array,
   options: DecodeOptions,
@@ -66,7 +99,9 @@ async function decodeDevelopedNef(
   embedded.metadata.developSource = "embedded";
   embedded.metadata.fallbackCode = fallbackCode;
   embedded.metadata.fallbackMessage = fallbackMessage;
-  return embedded;
+  return options.sourcePixels
+    ? decodeEmbeddedSourcePixels(embedded)
+    : embedded;
 }
 
 export const nefProfile: ImageProfile = {

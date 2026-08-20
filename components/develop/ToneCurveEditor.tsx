@@ -13,6 +13,7 @@ import type {
   CurvePoint,
   CurveSettings,
 } from "@/lib/develop/types";
+import { useDevelopStore } from "@/stores/develop-store";
 
 const SIZE = 256;
 const INSET = 8;
@@ -58,6 +59,8 @@ export function ToneCurveEditor({
   } | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const points = settings[channel];
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
   const channelInfo = CHANNELS.find((item) => item.id === channel)!;
 
   const eventPoint = (
@@ -99,6 +102,7 @@ export function ToneCurveEditor({
     if (event.target !== event.currentTarget) {
       return;
     }
+    beginEditGroup("Adjust tone curve");
     const point = eventPoint(event.clientX, event.clientY);
     const existingIndex = points.findIndex(
       (current) => Math.abs(current.x - point.x) < MIN_GAP,
@@ -216,9 +220,11 @@ export function ToneCurveEditor({
         }}
         onPointerUp={() => {
           drag.current = null;
+          endEditGroup();
         }}
         onPointerCancel={() => {
           drag.current = null;
+          endEditGroup();
         }}
         className="block w-full touch-none cursor-crosshair rounded-md border border-lr-border bg-[#131110]"
       >
@@ -253,6 +259,7 @@ export function ToneCurveEditor({
               }}
               onPointerDown={(event) => {
                 event.stopPropagation();
+                beginEditGroup("Adjust tone curve");
                 setSelected(index);
                 drag.current = {
                   index,

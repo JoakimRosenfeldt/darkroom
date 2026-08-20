@@ -7,6 +7,10 @@ export const EXPORT_FORMAT_IDS = [
   "tiff",
 ] as const;
 
+/** Raw RGBA dimensions accepted by the native export boundary. */
+export const MAX_EXPORT_PIXELS = 50_000_000;
+export const MAX_EXPORT_EDGE = 100_000;
+
 export type ExportFormatId = (typeof EXPORT_FORMAT_IDS)[number];
 
 export interface ExportFormatDescriptor {

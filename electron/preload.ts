@@ -1,4 +1,13 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import {
+  isAiModelProgress,
+  parseAiModelId,
+  type AiModelDisclosureLink,
+  type AiModelId,
+  type AiModelProgress,
+  type AiModelState,
+  type Unsubscribe,
+} from "../lib/ai/types";
 import type { PhotoCatalog } from "../lib/catalog/types";
 import type { NefDecodeRequest, NefDecodeResult } from "./nef-decoder-service";
 import type {
@@ -135,6 +144,50 @@ const darkroom = {
 
   showInFolder(revealToken: string): Promise<void> {
     return ipcRenderer.invoke("darkroom:show-in-folder", revealToken);
+  },
+
+  getAiModelState(modelId: AiModelId): Promise<AiModelState> {
+    return ipcRenderer.invoke("darkroom:get-ai-model-state", parseAiModelId(modelId));
+  },
+
+  downloadAiModel(modelId: AiModelId): Promise<void> {
+    return ipcRenderer.invoke("darkroom:download-ai-model", parseAiModelId(modelId));
+  },
+
+  cancelAiModelDownload(modelId: AiModelId): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:cancel-ai-model-download",
+      parseAiModelId(modelId),
+    );
+  },
+
+  removeAiModel(modelId: AiModelId): Promise<void> {
+    return ipcRenderer.invoke("darkroom:remove-ai-model", parseAiModelId(modelId));
+  },
+
+  openAiModelLink(modelId: AiModelId, link: AiModelDisclosureLink): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:open-ai-model-link",
+      parseAiModelId(modelId),
+      link,
+    );
+  },
+
+  onAiModelProgress(
+    listener: (progress: AiModelProgress) => void,
+  ): Unsubscribe {
+    if (typeof listener !== "function") {
+      throw new Error("AI model progress listener must be a function.");
+    }
+    const wrapped = (_event: IpcRendererEvent, value: unknown) => {
+      if (isAiModelProgress(value)) {
+        listener(value);
+      }
+    };
+    ipcRenderer.on("darkroom:ai-model-progress", wrapped);
+    return () => {
+      ipcRenderer.removeListener("darkroom:ai-model-progress", wrapped);
+    };
   },
 };
 
