@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   IconChevronDown,
   IconChevronUp,
@@ -67,6 +67,7 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
   const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
   const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
   const setTool = useDevelopStore((state) => state.setMaskTool);
+  const hiddenOverlayEntryRef = useRef<string | null>(null);
 
   const document = session?.document;
   const masks = document?.settings.masking.masks ?? [];
@@ -119,6 +120,23 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
   function updateSelectedComponent(component: MaskComponent) {
     if (!selectedMask) return;
     dispatch({ kind: "replace-mask-component", maskId: selectedMask.id, component }, `Adjust ${componentLabel(component)}`);
+  }
+
+  function beginLocalAdjustment(): void {
+    if (hiddenOverlayEntryRef.current !== null) return;
+    const state = useDevelopStore.getState();
+    const entryId = state.activeEntryId;
+    if (!entryId || !state.sessions[entryId]?.ui.overlayVisible) return;
+    hiddenOverlayEntryRef.current = entryId;
+    setOverlayVisible(false);
+  }
+
+  function endLocalAdjustment(): void {
+    const entryId = hiddenOverlayEntryRef.current;
+    hiddenOverlayEntryRef.current = null;
+    if (entryId && useDevelopStore.getState().activeEntryId === entryId) {
+      setOverlayVisible(true);
+    }
   }
 
   return (
@@ -299,7 +317,12 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
               <RadialControls component={selectedComponent} onChange={updateSelectedComponent} />
             ) : null}
 
-            <LocalBasicControls mask={selectedMask} onChange={(adjustments) => dispatch({ kind: "set-mask-adjustments", maskId: selectedMask.id, adjustments }, "Adjust local Basic")} />
+            <LocalBasicControls
+              mask={selectedMask}
+              onChange={(adjustments) => dispatch({ kind: "set-mask-adjustments", maskId: selectedMask.id, adjustments }, "Adjust local Basic")}
+              onInteractionStart={beginLocalAdjustment}
+              onInteractionEnd={endLocalAdjustment}
+            />
           </>
         ) : null}
 
@@ -463,8 +486,19 @@ function RadialControls({ component, onChange }: { component: RadialGradientMask
   );
 }
 
-function LocalBasicControls({ mask, onChange }: { mask: LocalMask; onChange: (adjustments: BasicSettings) => void }) {
+function LocalBasicControls({
+  mask,
+  onChange,
+  onInteractionStart,
+  onInteractionEnd,
+}: {
+  mask: LocalMask;
+  onChange: (adjustments: BasicSettings) => void;
+  onInteractionStart: () => void;
+  onInteractionEnd: () => void;
+}) {
   const basic = mask.adjustments;
+  const interaction = { onInteractionStart, onInteractionEnd };
   function update(patch: Partial<BasicSettings>) {
     onChange({ ...basic, ...patch });
   }
@@ -472,16 +506,16 @@ function LocalBasicControls({ mask, onChange }: { mask: LocalMask; onChange: (ad
   return (
     <section className="border-b border-lr-border-subtle px-4 py-3">
       <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Local Basic</h3>
-      <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => update({ exposure })} />
-      <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => update({ contrast })} />
-      <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => update({ highlights })} />
-      <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => update({ shadows })} />
-      <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => update({ whites })} />
-      <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => update({ blacks })} />
-      <SliderRow label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" onChange={(temperature) => update({ temperature })} />
-      <SliderRow label="Tint" value={basic.tint} min={-150} max={150} onChange={(tint) => update({ tint })} />
-      <SliderRow label="Vibrance" value={basic.vibrance} min={-100} max={100} onChange={(vibrance) => update({ vibrance })} />
-      <SliderRow label="Saturation" value={basic.saturation} min={-100} max={100} onChange={(saturation) => update({ saturation })} />
+      <SliderRow {...interaction} label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => update({ exposure })} />
+      <SliderRow {...interaction} label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => update({ contrast })} />
+      <SliderRow {...interaction} label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => update({ highlights })} />
+      <SliderRow {...interaction} label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => update({ shadows })} />
+      <SliderRow {...interaction} label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => update({ whites })} />
+      <SliderRow {...interaction} label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => update({ blacks })} />
+      <SliderRow {...interaction} label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" onChange={(temperature) => update({ temperature })} />
+      <SliderRow {...interaction} label="Tint" value={basic.tint} min={-150} max={150} onChange={(tint) => update({ tint })} />
+      <SliderRow {...interaction} label="Vibrance" value={basic.vibrance} min={-100} max={100} onChange={(vibrance) => update({ vibrance })} />
+      <SliderRow {...interaction} label="Saturation" value={basic.saturation} min={-100} max={100} onChange={(saturation) => update({ saturation })} />
     </section>
   );
 }

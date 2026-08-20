@@ -14,7 +14,20 @@ interface SliderRowProps {
   resetValue?: number;
   track?: string;
   onChange: (value: number) => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
+
+const RANGE_ADJUSTMENT_KEYS = new Set([
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "End",
+  "Home",
+  "PageDown",
+  "PageUp",
+]);
 
 export function SliderRow({
   label,
@@ -27,11 +40,23 @@ export function SliderRow({
   resetValue = 0,
   track,
   onChange,
+  onInteractionStart,
+  onInteractionEnd,
 }: SliderRowProps) {
   const decimalPlaces = step.toString().split(".")[1]?.length ?? 0;
   const displayValue = value.toFixed(decimalPlaces);
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+
+  function beginInteraction(): void {
+    beginEditGroup(`Adjust ${label}`);
+    onInteractionStart?.();
+  }
+
+  function endInteraction(): void {
+    endEditGroup();
+    onInteractionEnd?.();
+  }
 
   return (
     <div className={`grid grid-cols-[96px_1fr_52px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
@@ -57,10 +82,16 @@ export function SliderRow({
         step={step}
         value={value}
         disabled={disabled}
-        onPointerDown={() => beginEditGroup(`Adjust ${label}`)}
-        onPointerUp={endEditGroup}
-        onPointerCancel={endEditGroup}
-        onBlur={endEditGroup}
+        onPointerDown={beginInteraction}
+        onPointerUp={endInteraction}
+        onPointerCancel={endInteraction}
+        onBlur={endInteraction}
+        onKeyDown={(event) => {
+          if (RANGE_ADJUSTMENT_KEYS.has(event.key)) beginInteraction();
+        }}
+        onKeyUp={(event) => {
+          if (RANGE_ADJUSTMENT_KEYS.has(event.key)) endInteraction();
+        }}
         onChange={(event) => onChange(Number(event.target.value))}
         onDoubleClick={() => onChange(resetValue)}
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}
