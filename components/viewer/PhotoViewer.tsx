@@ -19,10 +19,14 @@ import {
   DevelopCanvas,
   type CropPreviewTransform,
 } from "@/components/develop/DevelopCanvas";
+import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
+import { AiMaskActions } from "@/components/develop/AiMaskActions";
+import type { RenderDiagnostic } from "@/lib/develop/renderer";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
+import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 import type { CropSettings } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { ExportDialog } from "@/components/export/ExportDialog";
@@ -54,6 +58,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     useState<CropPreviewTransform>({ scale: 1, x: 0, y: 0 });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
   const activeIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
@@ -66,23 +71,54 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         : [entry.id],
     [entry.id, selectedEntryIds],
   );
-  const applyDevelopMetadata = useCallback(
-    (patch: Parameters<typeof applyMetadataToEntries>[1]) => {
-      applyMetadataToEntries([entry.id], patch);
-    },
-    [applyMetadataToEntries, entry.id],
+  const mirrorDevelopDocument = useLibraryStore((state) => state.mirrorDevelopDocument);
+  const hydrateEntryMetadata = useLibraryStore((state) => state.hydrateEntryMetadata);
+  const mirrorDocument = useCallback(
+    (
+      document: Parameters<typeof mirrorDevelopDocument>[1],
+      sourceUpdatedAt?: Parameters<typeof mirrorDevelopDocument>[2],
+      metadataPatch?: Parameters<typeof mirrorDevelopDocument>[3],
+    ) => mirrorDevelopDocument(entry.id, document, sourceUpdatedAt, metadataPatch),
+    [entry.id, mirrorDevelopDocument],
+  );
+  const hydrateMetadata = useCallback(
+    (
+      patch: Parameters<typeof hydrateEntryMetadata>[1],
+      sourceUpdatedAt: Parameters<typeof hydrateEntryMetadata>[2],
+    ) => hydrateEntryMetadata(entry.id, patch, sourceUpdatedAt),
+    [entry.id, hydrateEntryMetadata],
   );
 
   useDevelopSettingsSync({
     entry,
     rootPath,
     metadata,
-    applyMetadata: applyDevelopMetadata,
+    mirrorDocument,
+    hydrateMetadata,
   });
-  const developSettings = useDevelopStore((state) => state.settings);
+  const developSettings = useDevelopStore(
+    (state) => state.sessions[entry.id]?.document.settings ?? DEFAULT_DEVELOP_SETTINGS,
+  );
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const resetAll = useDevelopStore((state) => state.resetAll);
+  const undo = useDevelopStore((state) => state.undo);
+  const redo = useDevelopStore((state) => state.redo);
+  const canUndo = useDevelopStore((state) => (state.sessions[entry.id]?.undo.length ?? 0) > 0);
+  const canRedo = useDevelopStore((state) => (state.sessions[entry.id]?.redo.length ?? 0) > 0);
+  const maskUi = useDevelopStore((state) => {
+    const session = state.sessions[entry.id];
+    return session?.ui ?? null;
+  });
+  const setMaskOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
+  const setMaskTool = useDevelopStore((state) => state.setMaskTool);
   const [exportOpen, setExportOpen] = useState(false);
+  const sourceSignature = useMemo(
+    () => sourceSignatureForEntry(entry),
+    [entry],
+  );
+  const onRenderDiagnostics = useCallback((next: readonly RenderDiagnostic[]) => {
+    setRenderDiagnostics(next);
+  }, []);
 
   useEffect(() => {
     if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
@@ -97,6 +133,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setLoading(true);
       setError(null);
       setDecoded(null);
+      setRenderDiagnostics([]);
 
       try {
         const result = await loadDevelopImage(entry);
@@ -171,6 +208,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       return;
     }
     if (panel === "crop") {
+      setMaskTool("none");
       const draft = { ...developSettings.crop, enabled: true };
       cropDraftRef.current = draft;
       setCropDraft(draft);
@@ -180,9 +218,20 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       return;
     }
     if (panel === "info") {
+      setMaskTool("none");
       setActivePanel((current) => (current === "info" ? "edit" : "info"));
       return;
     }
+    if (panel === "masking") {
+      if (activePanel === "masking") {
+        setMaskTool("none");
+        setActivePanel("edit");
+      } else {
+        setActivePanel("masking");
+      }
+      return;
+    }
+    setMaskTool("none");
     setActivePanel("edit");
   }
 
@@ -247,6 +296,42 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       if (isEditableTarget(event.target)) {
         return;
       }
+      const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+      if (plainKey && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false));
+        return;
+      }
+      if (activePanel === "masking" && plainKey) {
+        const key = event.key.toLowerCase();
+        if (key === "k" || key === "m") {
+          event.preventDefault();
+          setMaskOverlayVisible(true);
+          setMaskTool(key === "k" ? "brush" : event.shiftKey ? "radial-gradient" : "linear-gradient");
+          return;
+        }
+        if ((event.key === "Delete" || event.key === "Backspace") && !event.repeat) {
+          const state = useDevelopStore.getState();
+          const session = state.sessions[entry.id];
+          const masks = session?.document.settings.masking.masks ?? [];
+          const index = masks.findIndex((mask) => mask.id === session?.ui.selectedMaskId);
+          const selectedMask = masks[index];
+          if (!selectedMask) return;
+          event.preventDefault();
+          const next = masks[index + 1] ?? masks[index - 1] ?? null;
+          state.dispatch({ kind: "remove-mask", maskId: selectedMask.id }, "Delete mask");
+          state.setSelectedMask(next?.id ?? null);
+          state.setSelectedComponent(next?.components[0]?.id ?? null);
+          state.setMaskTool("none");
+          return;
+        }
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
       if (event.key === "ArrowLeft" && activeIndex > 0) {
         event.preventDefault();
         selectPhoto(entries[activeIndex - 1].id, {
@@ -264,6 +349,11 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         });
       }
       if (event.key === "Escape") {
+        if (maskUi?.tool !== "none") {
+          event.preventDefault();
+          setMaskTool("none");
+          return;
+        }
         router.push("/");
       }
     }
@@ -272,6 +362,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     entries,
+    entry.id,
     activeIndex,
     router,
     activePanel,
@@ -279,6 +370,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     discardCrop,
     exportOpen,
     selectPhoto,
+    redo,
+    undo,
+    maskUi?.overlayVisible,
+    setMaskOverlayVisible,
+    maskUi?.tool,
+    setMaskTool,
   ]);
 
   return (
@@ -301,6 +398,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
+            <button type="button" disabled={!canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted disabled:opacity-40">
+              Undo
+            </button>
+            <button type="button" disabled={!canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted disabled:opacity-40">
+              Redo
+            </button>
             <button
               type="button"
               onClick={() => setExportOpen(true)}
@@ -327,12 +430,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               <DevelopCanvas
                 image={decoded}
                 alt={entry.name}
+                sourceSignature={sourceSignature}
                 cropActive={activePanel === "crop"}
                 cropDraft={cropDraft}
                 cropImageOffset={cropImageOffset}
                 previewTransform={cropPreviewTransform}
                 onCropChange={changeCrop}
                 onPreviewTransformChange={setCropPreviewTransform}
+                overlayMaskId={activePanel === "masking" && maskUi?.overlayVisible ? maskUi.selectedMaskId : null}
+                onRenderDiagnostics={onRenderDiagnostics}
+                maskingActive={activePanel === "masking"}
               />
             ) : null}
           </div>
@@ -368,6 +475,13 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               onCropReset={resetCrop}
               onCropApply={applyCrop}
               onCropCancel={() => discardCrop("edit")}
+              maskingAiActions={
+                <AiMaskActions
+                  entry={entry}
+                  sourceSignature={sourceSignature}
+                  diagnostics={renderDiagnostics}
+                />
+              }
             />
           ) : null}
         </div>

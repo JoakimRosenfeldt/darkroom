@@ -1,8 +1,8 @@
 "use client";
 
-import { IconCrop, IconInfo, IconSliders } from "@/components/shell/icons";
+import { IconCrop, IconInfo, IconMask, IconSliders } from "@/components/shell/icons";
 
-export type DevelopPanelId = "crop" | "edit" | "info";
+export type DevelopPanelId = "crop" | "edit" | "masking" | "info";
 
 interface DevelopPanelRailProps {
   activePanel: DevelopPanelId | null;
@@ -12,6 +12,7 @@ interface DevelopPanelRailProps {
 const PANELS: Array<{ id: DevelopPanelId; label: string; icon: typeof IconSliders }> = [
   { id: "crop", label: "Crop", icon: IconCrop },
   { id: "edit", label: "Edit", icon: IconSliders },
+  { id: "masking", label: "Masking", icon: IconMask },
   { id: "info", label: "Info", icon: IconInfo },
 ];
 

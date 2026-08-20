@@ -12,6 +12,7 @@ export interface BasicSettings {
 }
 
 import type { AspectRatioPresetId } from "@/lib/develop/crop-geometry";
+import type { AiModelId } from "@/lib/ai/types";
 
 export interface CropSettings {
   enabled: boolean;
@@ -68,9 +69,11 @@ export interface DevelopSettings {
   curve: CurveSettings;
   mixer: MixerSettings;
   effects: EffectsSettings;
+  masking: MaskingSettings;
 }
 
-export type DevelopPluginId = keyof DevelopSettings;
+export type GlobalDevelopPluginId = Exclude<keyof DevelopSettings, "masking">;
+export type DevelopPluginId = GlobalDevelopPluginId;
 
 export type DevelopPluginSettings<T extends DevelopPluginId> =
   DevelopSettings[T];
@@ -89,4 +92,114 @@ export interface DevelopPlugin<T extends DevelopPluginId> {
   defaults: DevelopSettings[T];
   isDefault(settings: DevelopSettings[T]): boolean;
   xmp: XmpPluginAdapter<T>;
+}
+
+export type NonEmpty<T> = readonly [T, ...T[]];
+export type MaskId = string;
+export type MaskComponentId = string;
+export type MaskAssetId = string;
+export type AiSelector = "subject" | "sky";
+export type MaskOperation = "add" | "subtract";
+
+export interface NormalizedPoint {
+  x: number;
+  y: number;
+}
+
+export interface BrushStroke {
+  points: NonEmpty<NormalizedPoint>;
+  size: number;
+  feather: number;
+  flow: number;
+  density: number;
+}
+
+export interface BrushMaskComponent {
+  kind: "brush";
+  id: MaskComponentId;
+  operation: MaskOperation;
+  strokes: NonEmpty<BrushStroke>;
+  size: number;
+  feather: number;
+  flow: number;
+  density: number;
+}
+
+export interface LinearGradientMaskComponent {
+  kind: "linear-gradient";
+  id: MaskComponentId;
+  operation: MaskOperation;
+  start: NormalizedPoint;
+  end: NormalizedPoint;
+}
+
+export interface RadialGradientMaskComponent {
+  kind: "radial-gradient";
+  id: MaskComponentId;
+  operation: MaskOperation;
+  center: NormalizedPoint;
+  radiusX: number;
+  radiusY: number;
+  rotation: number;
+  feather: number;
+}
+
+export interface SourceSignature {
+  entryId: string;
+  relativePath: string;
+  size: number;
+  lastModified: number;
+}
+
+export interface AiMaskComponent {
+  kind: "ai";
+  id: MaskComponentId;
+  operation: MaskOperation;
+  selector: AiSelector;
+  assetId: MaskAssetId;
+  model: {
+    id: AiModelId;
+    revision: string;
+  };
+  source: SourceSignature;
+  inference: {
+    width: number;
+    height: number;
+    threshold: number;
+  };
+}
+
+export type MaskComponent =
+  | BrushMaskComponent
+  | LinearGradientMaskComponent
+  | RadialGradientMaskComponent
+  | AiMaskComponent;
+
+export interface LocalMask {
+  id: MaskId;
+  name: string;
+  enabled: boolean;
+  inverted: boolean;
+  components: NonEmpty<MaskComponent>;
+  adjustments: BasicSettings;
+}
+
+export interface MaskingSettings {
+  masks: LocalMask[];
+}
+
+export interface MaskRasterAsset {
+  id: MaskAssetId;
+  sha256: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+  byteLength: number;
+  pngBase64: string;
+}
+
+export interface DevelopDocument {
+  version: 2;
+  settings: DevelopSettings;
+  maskAssets: Record<string, MaskRasterAsset>;
 }

@@ -1,0 +1,521 @@
+"use client";
+
+import { useRef, useState, type ReactNode } from "react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconCopy,
+  IconEye,
+  IconEyeOff,
+  IconPlus,
+  IconTrash,
+} from "@/components/shell/icons";
+import { SliderRow } from "@/components/develop/SliderRow";
+import { captureBrushStrokeSettings, MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
+import type {
+  BasicSettings,
+  BrushMaskComponent,
+  LocalMask,
+  MaskComponent,
+  MaskOperation,
+  RadialGradientMaskComponent,
+} from "@/lib/develop/types";
+import { useDevelopStore } from "@/stores/develop-store";
+
+export type MaskTool = "none" | "brush" | "linear-gradient" | "radial-gradient";
+
+interface MaskingPanelProps {
+  aiActions?: ReactNode;
+}
+
+const TOOL_LABELS: Record<Exclude<MaskTool, "none">, string> = {
+  brush: "Brush",
+  "linear-gradient": "Linear",
+  "radial-gradient": "Radial",
+};
+
+const TOOL_SHORTCUTS: Record<Exclude<MaskTool, "none">, string> = {
+  brush: "K",
+  "linear-gradient": "M",
+  "radial-gradient": "Shift+M",
+};
+
+function componentLabel(component: MaskComponent): string {
+  switch (component.kind) {
+    case "brush":
+      return "Brush";
+    case "linear-gradient":
+      return "Linear gradient";
+    case "radial-gradient":
+      return "Radial gradient";
+    case "ai":
+      return `${component.selector === "subject" ? "Subject" : "Sky"} mask`;
+    default: {
+      const exhaustive: never = component;
+      return exhaustive;
+    }
+  }
+}
+
+export function MaskingPanel({ aiActions }: MaskingPanelProps) {
+  const session = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId] ?? null : null;
+  });
+  const dispatch = useDevelopStore((state) => state.dispatch);
+  const setSelectedMask = useDevelopStore((state) => state.setSelectedMask);
+  const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
+  const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
+  const setTool = useDevelopStore((state) => state.setMaskTool);
+  const hiddenOverlayEntryRef = useRef<string | null>(null);
+
+  const document = session?.document;
+  const masks = document?.settings.masking.masks ?? [];
+  const selectedMaskId = session?.ui.selectedMaskId ?? null;
+  const selectedComponentId = session?.ui.selectedComponentId ?? null;
+  const selectedMask = masks.find((mask) => mask.id === selectedMaskId) ?? null;
+  const selectedComponent = selectedMask?.components.find((component) => component.id === selectedComponentId) ?? null;
+  const activeTool = session?.ui.tool ?? "none";
+  const overlayVisible = session?.ui.overlayVisible ?? false;
+
+  function selectMask(mask: LocalMask) {
+    setSelectedMask(mask.id);
+    setSelectedComponent(mask.components[0]?.id ?? null);
+    setTool("none");
+  }
+
+  function addMask() {
+    if (masks.length >= MAX_MASKS) return;
+    setSelectedMask(null);
+    setSelectedComponent(null);
+    setTool("brush");
+    setOverlayVisible(true);
+  }
+
+  function activateTool(kind: Exclude<MaskTool, "none">, addComponent = false) {
+    const currentState = useDevelopStore.getState();
+    const activeEntryId = currentState.activeEntryId;
+    const mask = activeEntryId
+      ? currentState.sessions[activeEntryId]?.document.settings.masking.masks.find((item) => item.id === selectedMaskId)
+      : undefined;
+    if (!mask) {
+      if (masks.length >= MAX_MASKS) return;
+      setSelectedMask(null);
+      setSelectedComponent(null);
+      setOverlayVisible(true);
+      setTool(kind);
+      return;
+    }
+
+    const currentComponent = mask.components.find((component) => component.id === selectedComponentId);
+    if (addComponent || !currentComponent || currentComponent.kind !== kind) {
+      if (mask.components.length >= MAX_COMPONENTS_PER_MASK) return;
+      setSelectedComponent(null);
+    }
+    setSelectedMask(mask.id);
+    setOverlayVisible(true);
+    setTool(kind);
+  }
+
+  function updateSelectedComponent(component: MaskComponent) {
+    if (!selectedMask) return;
+    dispatch({ kind: "replace-mask-component", maskId: selectedMask.id, component }, `Adjust ${componentLabel(component)}`);
+  }
+
+  function beginLocalAdjustment(): void {
+    if (hiddenOverlayEntryRef.current !== null) return;
+    const state = useDevelopStore.getState();
+    const entryId = state.activeEntryId;
+    if (!entryId || !state.sessions[entryId]?.ui.overlayVisible) return;
+    hiddenOverlayEntryRef.current = entryId;
+    setOverlayVisible(false);
+  }
+
+  function endLocalAdjustment(): void {
+    const entryId = hiddenOverlayEntryRef.current;
+    hiddenOverlayEntryRef.current = null;
+    if (entryId && useDevelopStore.getState().activeEntryId === entryId) {
+      setOverlayVisible(true);
+    }
+  }
+
+  return (
+    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
+        <div>
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+            Masking
+          </h2>
+          <p className="mt-0.5 text-[10px] text-lr-text-faint">Local adjustments by area</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            title={`${overlayVisible ? "Hide" : "Show"} mask overlay (O)`}
+            aria-label={`${overlayVisible ? "Hide" : "Show"} mask overlay`}
+            aria-pressed={overlayVisible}
+            onClick={() => setOverlayVisible(!overlayVisible)}
+            className={`flex h-7 w-7 items-center justify-center rounded-md border ${overlayVisible ? "border-red-400/70 bg-red-950/60 text-red-200" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
+          >
+            {overlayVisible ? <IconEye className="h-3.5 w-3.5" /> : <IconEyeOff className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            title="Add mask"
+            aria-label="Add mask"
+            disabled={masks.length >= MAX_MASKS}
+            onClick={addMask}
+            className="flex h-7 w-7 items-center justify-center rounded-md bg-lr-accent text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <IconPlus className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {masks.length >= MAX_MASKS ? (
+        <p className="border-b border-lr-border-subtle bg-amber-950/25 px-4 py-2 text-[11px] text-amber-200">
+          16-mask limit reached.
+        </p>
+      ) : null}
+
+      <div className="border-b border-lr-border-subtle px-3 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Tools</span>
+          <button
+            type="button"
+            onClick={() => setTool("none")}
+            aria-pressed={activeTool === "none"}
+            className={`rounded px-2 py-1 text-[10px] ${activeTool === "none" ? "bg-lr-panel-raised text-lr-text" : "text-lr-text-faint hover:text-lr-text"}`}
+          >
+            Select
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(Object.keys(TOOL_LABELS) as Array<Exclude<MaskTool, "none">>).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              title={`${TOOL_LABELS[kind]} (${TOOL_SHORTCUTS[kind]})`}
+              aria-pressed={activeTool === kind}
+              onClick={() => activateTool(kind)}
+              className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === kind ? "border-lr-accent bg-lr-selection text-lr-text" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
+            >
+              {TOOL_LABELS[kind]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-[10px] leading-relaxed text-lr-text-faint">
+          K Brush · M Linear · Shift+M Radial · O Overlay · Delete Mask
+        </p>
+        <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">
+          Brush: Wheel or [ ] size · Shift+wheel or Shift+[ ] feather
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        <section className="border-b border-lr-border-subtle">
+          <div className="flex items-center justify-between px-4 py-3">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Masks</h3>
+            <span className="font-mono text-[10px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
+          </div>
+          {masks.length === 0 ? (
+            <button type="button" onClick={addMask} className="mx-4 mb-4 block rounded-md border border-dashed border-lr-border-subtle px-3 py-3 text-left text-[11px] text-lr-text-muted hover:border-lr-text-dim hover:text-lr-text">
+              Choose a tool and paint to add a mask.
+            </button>
+          ) : (
+            <div className="space-y-1 px-3 pb-3">
+              {masks.map((mask, index) => (
+                <MaskRow
+                  key={mask.id}
+                  mask={mask}
+                  index={index}
+                  count={masks.length}
+                  selected={mask.id === selectedMaskId}
+                  onSelect={() => selectMask(mask)}
+                  onRename={(name) => dispatch({ kind: "rename-mask", maskId: mask.id, name }, "Rename mask")}
+                  onEnabled={(enabled) => dispatch({ kind: "set-mask-enabled", maskId: mask.id, enabled }, enabled ? "Enable mask" : "Disable mask")}
+                  onInverted={(inverted) => dispatch({ kind: "set-mask-inverted", maskId: mask.id, inverted }, inverted ? "Invert mask" : "Restore mask")}
+                  onDuplicate={() => {
+                    if (masks.length >= MAX_MASKS) return;
+                    const newMaskId = crypto.randomUUID();
+                    const newComponentIds = mask.components.map(() => crypto.randomUUID());
+                    dispatch({ kind: "duplicate-mask", maskId: mask.id, newMaskId, newComponentIds, index: index + 1 }, "Duplicate mask");
+                    setSelectedMask(newMaskId);
+                    setSelectedComponent(newComponentIds[0] ?? null);
+                  }}
+                  onMove={(toIndex) => dispatch({ kind: "move-mask", maskId: mask.id, toIndex }, "Reorder mask")}
+                  onDelete={() => {
+                    dispatch({ kind: "remove-mask", maskId: mask.id }, "Delete mask");
+                    if (mask.id === selectedMaskId) {
+                      const next = masks[index + 1] ?? masks[index - 1] ?? null;
+                      setSelectedMask(next?.id ?? null);
+                      setSelectedComponent(next?.components[0]?.id ?? null);
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {selectedMask ? (
+          <>
+            <section className="border-b border-lr-border-subtle">
+              <div className="flex items-center justify-between px-4 py-3">
+                <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Components</h3>
+                <span className="text-[10px] text-lr-text-faint">{selectedMask.name}</span>
+              </div>
+              <div className="space-y-1 px-3 pb-3">
+                {selectedMask.components.map((component) => (
+                  <ComponentRow
+                    key={component.id}
+                    component={component}
+                    first={component.id === selectedMask.components[0]?.id}
+                    selected={component.id === selectedComponentId}
+                    canDelete={selectedMask.components.length > 1}
+                    onSelect={() => {
+                      setSelectedMask(selectedMask.id);
+                      setSelectedComponent(component.id);
+                      setTool("none");
+                    }}
+                    onOperation={(operation) => dispatch({ kind: "set-mask-component-operation", maskId: selectedMask.id, componentId: component.id, operation }, operation === "add" ? "Add component" : "Subtract component")}
+                    onDelete={() => {
+                      dispatch({ kind: "remove-mask-component", maskId: selectedMask.id, componentId: component.id }, "Delete component");
+                      if (component.id === selectedComponentId) {
+                        const next = selectedMask.components.find((item) => item.id !== component.id);
+                        setSelectedComponent(next?.id ?? null);
+                        setTool("none");
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+
+            <section className="border-b border-lr-border-subtle px-4 py-3">
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Add component</h3>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(Object.keys(TOOL_LABELS) as Array<Exclude<MaskTool, "none">>).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    title={`Add ${TOOL_LABELS[kind]} component (${TOOL_SHORTCUTS[kind]})`}
+                    disabled={selectedMask.components.length >= MAX_COMPONENTS_PER_MASK}
+                    onClick={() => activateTool(kind, true)}
+                    className="rounded-md border border-lr-border-subtle px-1.5 py-2 text-[10px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    + {TOOL_LABELS[kind]}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            {selectedComponent?.kind === "brush" ? (
+              <BrushControls component={selectedComponent} onChange={updateSelectedComponent} />
+            ) : null}
+            {selectedComponent?.kind === "radial-gradient" ? (
+              <RadialControls component={selectedComponent} onChange={updateSelectedComponent} />
+            ) : null}
+
+            <LocalBasicControls
+              mask={selectedMask}
+              onChange={(adjustments) => dispatch({ kind: "set-mask-adjustments", maskId: selectedMask.id, adjustments }, "Adjust local Basic")}
+              onInteractionStart={beginLocalAdjustment}
+              onInteractionEnd={endLocalAdjustment}
+            />
+          </>
+        ) : null}
+
+        {aiActions ? <section className="border-b border-lr-border-subtle px-4 py-3">{aiActions}</section> : null}
+      </div>
+    </aside>
+  );
+}
+
+function MaskRow({
+  mask,
+  index,
+  count,
+  selected,
+  onSelect,
+  onRename,
+  onEnabled,
+  onInverted,
+  onDuplicate,
+  onMove,
+  onDelete,
+}: {
+  mask: LocalMask;
+  index: number;
+  count: number;
+  selected: boolean;
+  onSelect: () => void;
+  onRename: (name: string) => void;
+  onEnabled: (enabled: boolean) => void;
+  onInverted: (inverted: boolean) => void;
+  onDuplicate: () => void;
+  onMove: (index: number) => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState(mask.name);
+
+  function commitName() {
+    const next = name.trim();
+    if (next && next !== mask.name) onRename(next);
+    else setName(mask.name);
+  }
+
+  return (
+    <div className={`group rounded-md border ${selected ? "border-lr-accent/70 bg-lr-selection/50" : "border-transparent hover:border-lr-border-subtle hover:bg-lr-panel-raised/70"}`}>
+      <div className="flex items-center gap-2 px-2 py-2">
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-label={`Select ${mask.name}`}
+          aria-pressed={selected}
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-lr-panel-raised"
+        >
+          <span className={`h-2 w-2 rounded-full ${mask.enabled ? "bg-lr-accent" : "bg-lr-text-faint"}`} aria-hidden />
+        </button>
+        <input
+          aria-label={`Rename ${mask.name}`}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          onFocus={onSelect}
+          onBlur={commitName}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+          className="min-w-0 flex-1 bg-transparent text-[11px] text-lr-text outline-none"
+        />
+        <span className="text-[10px] text-lr-text-faint">{mask.components.length}</span>
+      </div>
+      <div className="flex items-center justify-end gap-0.5 px-2 pb-1.5">
+        <SmallButton label={mask.enabled ? "Disable mask" : "Enable mask"} onClick={() => onEnabled(!mask.enabled)}>
+          {mask.enabled ? <IconEye className="h-3 w-3" /> : <IconEyeOff className="h-3 w-3" />}
+        </SmallButton>
+        <SmallButton label={mask.inverted ? "Restore mask" : "Invert mask"} active={mask.inverted} onClick={() => onInverted(!mask.inverted)}>Inv</SmallButton>
+        <SmallButton label="Move mask up" disabled={index === 0} onClick={() => onMove(index - 1)}><IconChevronUp className="h-3 w-3" /></SmallButton>
+        <SmallButton label="Move mask down" disabled={index === count - 1} onClick={() => onMove(index + 1)}><IconChevronDown className="h-3 w-3" /></SmallButton>
+        <SmallButton label="Duplicate mask" disabled={count >= MAX_MASKS} onClick={onDuplicate}><IconCopy className="h-3 w-3" /></SmallButton>
+        <SmallButton label="Delete mask" onClick={onDelete}><IconTrash className="h-3 w-3" /></SmallButton>
+      </div>
+    </div>
+  );
+}
+
+function SmallButton({
+  label,
+  children,
+  onClick,
+  disabled = false,
+  active = false,
+}: {
+  label: string;
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+}) {
+  return (
+    <button type="button" title={label} aria-label={label} disabled={disabled} onClick={(event) => { event.stopPropagation(); onClick(); }} className={`flex h-5 min-w-5 items-center justify-center rounded px-1 text-[9px] ${active ? "bg-lr-accent/20 text-lr-accent" : "text-lr-text-faint hover:bg-lr-panel-raised hover:text-lr-text"} disabled:pointer-events-none disabled:opacity-30`}>
+      {children}
+    </button>
+  );
+}
+
+function ComponentRow({
+  component,
+  first,
+  selected,
+  canDelete,
+  onSelect,
+  onOperation,
+  onDelete,
+}: {
+  component: MaskComponent;
+  first: boolean;
+  selected: boolean;
+  canDelete: boolean;
+  onSelect: () => void;
+  onOperation: (operation: MaskOperation) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className={`flex items-center gap-1 rounded-md border px-2 py-1.5 ${selected ? "border-lr-accent/70 bg-lr-selection/50" : "border-transparent hover:border-lr-border-subtle"}`}>
+      <button type="button" onClick={onSelect} className="min-w-0 flex-1 truncate text-left text-[11px] text-lr-text-muted hover:text-lr-text">{componentLabel(component)}</button>
+      <button type="button" title={first ? "The first component must add" : `Change ${componentLabel(component)} operation`} aria-label={first ? "The first component must add" : `Change ${componentLabel(component)} operation`} disabled={first} onClick={() => onOperation(component.operation === "add" ? "subtract" : "add")} className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${component.operation === "add" ? "bg-lr-accent/15 text-lr-accent" : "bg-red-950/50 text-red-200"} disabled:cursor-not-allowed disabled:opacity-70`}>
+        {component.operation === "add" ? "Add" : "Subtract"}
+      </button>
+      <SmallButton label="Delete component" disabled={!canDelete} onClick={onDelete}><IconTrash className="h-3 w-3" /></SmallButton>
+    </div>
+  );
+}
+
+function BrushControls({ component, onChange }: { component: BrushMaskComponent; onChange: (component: BrushMaskComponent) => void }) {
+  function update(patch: Partial<Pick<BrushMaskComponent, "size" | "feather" | "flow" | "density">>) {
+    onChange({ ...captureBrushStrokeSettings(component), ...patch });
+  }
+
+  return (
+    <section className="border-b border-lr-border-subtle px-4 py-3">
+      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Brush</h3>
+      <SliderRow label="Size" value={component.size} min={0} max={1} step={0.01} suffix="" onChange={(size) => update({ size })} />
+      <SliderRow label="Feather" value={component.feather} min={0} max={1} step={0.01} onChange={(feather) => update({ feather })} />
+      <SliderRow label="Flow" value={component.flow} min={0} max={1} step={0.01} onChange={(flow) => update({ flow })} />
+      <SliderRow label="Density" value={component.density} min={0} max={1} step={0.01} onChange={(density) => update({ density })} />
+      <p className="mt-2 text-[10px] leading-relaxed text-lr-text-faint">
+        Wheel or [ ] changes size. Shift+wheel or Shift+[ ] changes feather.
+      </p>
+    </section>
+  );
+}
+
+function RadialControls({ component, onChange }: { component: RadialGradientMaskComponent; onChange: (component: RadialGradientMaskComponent) => void }) {
+  return (
+    <section className="border-b border-lr-border-subtle px-4 py-3">
+      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Radial geometry</h3>
+      <SliderRow label="Radius X" value={component.radiusX} min={0.01} max={1} step={0.01} onChange={(radiusX) => onChange({ ...component, radiusX })} />
+      <SliderRow label="Radius Y" value={component.radiusY} min={0.01} max={1} step={0.01} onChange={(radiusY) => onChange({ ...component, radiusY })} />
+      <SliderRow label="Rotation" value={component.rotation} min={-180} max={180} step={1} suffix="°" onChange={(rotation) => onChange({ ...component, rotation })} />
+      <SliderRow label="Feather" value={component.feather} min={0} max={1} step={0.01} onChange={(feather) => onChange({ ...component, feather })} />
+    </section>
+  );
+}
+
+function LocalBasicControls({
+  mask,
+  onChange,
+  onInteractionStart,
+  onInteractionEnd,
+}: {
+  mask: LocalMask;
+  onChange: (adjustments: BasicSettings) => void;
+  onInteractionStart: () => void;
+  onInteractionEnd: () => void;
+}) {
+  const basic = mask.adjustments;
+  const interaction = { onInteractionStart, onInteractionEnd };
+  function update(patch: Partial<BasicSettings>) {
+    onChange({ ...basic, ...patch });
+  }
+
+  return (
+    <section className="border-b border-lr-border-subtle px-4 py-3">
+      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Local Basic</h3>
+      <SliderRow {...interaction} label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => update({ exposure })} />
+      <SliderRow {...interaction} label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => update({ contrast })} />
+      <SliderRow {...interaction} label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => update({ highlights })} />
+      <SliderRow {...interaction} label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => update({ shadows })} />
+      <SliderRow {...interaction} label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => update({ whites })} />
+      <SliderRow {...interaction} label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => update({ blacks })} />
+      <SliderRow {...interaction} label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" onChange={(temperature) => update({ temperature })} />
+      <SliderRow {...interaction} label="Tint" value={basic.tint} min={-150} max={150} onChange={(tint) => update({ tint })} />
+      <SliderRow {...interaction} label="Vibrance" value={basic.vibrance} min={-100} max={100} onChange={(vibrance) => update({ vibrance })} />
+      <SliderRow {...interaction} label="Saturation" value={basic.saturation} min={-100} max={100} onChange={(saturation) => update({ saturation })} />
+    </section>
+  );
+}

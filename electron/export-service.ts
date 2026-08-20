@@ -4,6 +4,8 @@ import path from "node:path";
 
 import {
   DEFAULT_EXPORT_SUFFIX,
+  MAX_EXPORT_EDGE,
+  MAX_EXPORT_PIXELS,
   type ExportEncodeOptions,
   type ExportEncodeResult,
   type ExportFormatDescriptor,
@@ -61,8 +63,6 @@ export interface ApprovedExportSource {
   inode?: number;
 }
 
-const MAX_EXPORT_PIXELS = 50_000_000;
-const MAX_EXPORT_EDGE = 100_000;
 const MAX_FILENAME_LENGTH = 240;
 const MAX_RENAME_ATTEMPTS = 999;
 const MAX_DESTINATIONS = 64;

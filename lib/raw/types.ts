@@ -3,6 +3,8 @@ export interface DecodeOptions {
   thumbnail?: boolean;
   rawSource?: "embedded" | "developed";
   fullResolution?: boolean;
+  /** Decode the original image into pixels without changing thumbnail output. */
+  sourcePixels?: boolean;
   maxEdge?: number;
   priority?: number;
   signal?: AbortSignal;
