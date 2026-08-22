@@ -90,6 +90,10 @@ export function DynamicPhotoGrid({
     () => entries.map((entry) => entry.id),
     [entries],
   );
+  const selectedEntrySet = useMemo(
+    () => new Set(selectedEntryIds),
+    [selectedEntryIds],
+  );
 
   const handleSelect = useCallback(
     (entryId: string, modifiers: { shift?: boolean; toggle?: boolean }) => {
@@ -127,6 +131,19 @@ export function DynamicPhotoGrid({
     [rows],
   );
 
+  const dateGroupCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    let groupStart = 0;
+
+    for (const [index, row] of rows.entries()) {
+      if (rowStartsDateGroup[index]) {
+        groupStart = index;
+      }
+      counts.set(groupStart, (counts.get(groupStart) ?? 0) + row.tiles.length);
+    }
+    return counts;
+  }, [rowStartsDateGroup, rows]);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -151,15 +168,16 @@ export function DynamicPhotoGrid({
     );
   }, [rows, layoutReady, onGridRowsChange]);
 
-  const selectedRowIndex = useMemo(() => {
-    if (!selectedEntryId) {
-      return -1;
-    }
-
-    return rows.findIndex((row) =>
-      row.tiles.some((tile) => tile.entry.id === selectedEntryId),
-    );
-  }, [rows, selectedEntryId]);
+  const rowIndexByEntryId = useMemo(() => {
+    const index = new Map<string, number>();
+    rows.forEach((row, rowIndex) => {
+      row.tiles.forEach((tile) => index.set(tile.entry.id, rowIndex));
+    });
+    return index;
+  }, [rows]);
+  const selectedRowIndex = selectedEntryId
+    ? (rowIndexByEntryId.get(selectedEntryId) ?? -1)
+    : -1;
 
   useScrollToSelectedRow({
     layoutReady,
@@ -226,7 +244,15 @@ export function DynamicPhotoGrid({
       visibleRows,
       selectedEntryId,
     );
-    setVisibleEntryIds(next);
+    setVisibleEntryIds((current) => {
+      if (
+        current.length === next.length &&
+        current.every((id, index) => id === next[index])
+      ) {
+        return current;
+      }
+      return next;
+    });
   }, [layoutReady, visibleRows, selectedEntryId, virtualizer]);
 
   if (entries.length === 0) {
@@ -254,6 +280,9 @@ export function DynamicPhotoGrid({
               return null;
             }
             const showHeader = rowStartsDateGroup[virtualRow.index] ?? false;
+            const leadEntry = row.tiles[0]?.entry;
+            const folderName = getParentFolderName(leadEntry?.relativePath ?? "");
+            const dateGroupCount = dateGroupCounts.get(virtualRow.index);
 
             return (
               <div
@@ -269,12 +298,14 @@ export function DynamicPhotoGrid({
                 {showHeader ? (
                   <div className="flex h-4 min-w-0 items-center gap-2">
                     <span className="shrink-0 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-lr-text-faint">
-                      {formatRowDate(row.tiles[0]?.entry.lastModified)}
-                      {getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")
-                        ? ` · ${getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")}`
-                        : ""}
+                      {formatRowDate(leadEntry?.lastModified)}
+                      {folderName ? ` · ${folderName}` : ""}
                     </span>
                     <div className="h-px flex-1 bg-lr-panel-raised" />
+                    <span className="shrink-0 font-mono text-[11px] leading-4 text-lr-text-faint">
+                      {dateGroupCount ?? row.tiles.length} frame
+                      {(dateGroupCount ?? row.tiles.length) === 1 ? "" : "s"}
+                    </span>
                   </div>
                 ) : null}
                 <div
@@ -292,7 +323,7 @@ export function DynamicPhotoGrid({
                       width={tile.width}
                       height={tile.height}
                       fit="cover"
-                      selected={selectedEntryIds.includes(tile.entry.id)}
+                      selected={selectedEntrySet.has(tile.entry.id)}
                       metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
                       onSelect={handleSelect}
                       onContextMenu={onPhotoContextMenu}

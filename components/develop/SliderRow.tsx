@@ -18,6 +18,13 @@ interface SliderRowProps {
   onInteractionEnd?: () => void;
 }
 
+export const COLOR_SLIDER_TRACKS = {
+  temperature: "linear-gradient(90deg,#4f8fc0,#d9d3cb,#8fb8e0)",
+  tint: "linear-gradient(90deg,#5cb073,#d9d3cb,#8e6ec4)",
+  vibrance: "linear-gradient(90deg,#6e6863,#93887f,#b5806f,#a89a6e,#7fa085,#7290ab,#9082ab)",
+  saturation: "linear-gradient(90deg,#6e6863,#8f8880,#d9564a,#d9b64a,#5cb073,#4f8fc0,#8e6ec4)",
+} as const;
+
 const RANGE_ADJUSTMENT_KEYS = new Set([
   "ArrowDown",
   "ArrowLeft",
@@ -59,7 +66,7 @@ export function SliderRow({
   }
 
   return (
-    <div className={`grid grid-cols-[96px_1fr_52px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
+    <div className={`grid grid-cols-[92px_1fr_64px] items-center gap-2.5 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
       <button
         type="button"
         disabled={disabled}

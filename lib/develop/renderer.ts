@@ -91,11 +91,26 @@ uniform highp sampler2D u_overlay_mask;
 uniform int u_mask_count;
 uniform float u_local_basic[160];
 uniform float u_overlay_enabled;
+uniform int u_overlay_mode;
 uniform float u_mixer[24];
 uniform float u_vignette;
+uniform float u_vignette_midpoint;
+uniform float u_vignette_roundness;
+uniform float u_vignette_feather;
+uniform float u_vignette_highlights;
 uniform float u_grain;
+uniform float u_grain_size;
+uniform float u_grain_roughness;
 uniform float u_sharpening;
+uniform float u_sharpen_radius;
+uniform float u_sharpen_detail;
+uniform float u_sharpen_masking;
 uniform float u_noise_reduction;
+uniform float u_noise_detail;
+uniform float u_noise_contrast;
+uniform float u_color_noise_reduction;
+uniform float u_color_noise_detail;
+uniform float u_color_noise_smoothness;
 
 float luma(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -204,10 +219,12 @@ vec3 adjust_basic(vec3 color, vec2 oriented_uv) {
   color += smoothstep(0.25, 0.0, lum) * blacks * 0.0012;
   color = (color - 0.5) * (1.0 + contrast * 0.0035) + 0.5;
 
-  float average = (color.r + color.g + color.b) / 3.0;
+  float gray = luma(color);
+  float saturation_scale = max(0.0, 1.0 + saturation_adjustment * 0.01);
+  color = mix(vec3(gray), color, saturation_scale);
   float saturation = max(max(color.r, color.g), color.b) - min(min(color.r, color.g), color.b);
-  float vibrance_adjustment = vibrance * 0.0035 * (1.0 - saturation);
-  color = mix(vec3(average), color, 1.0 + saturation_adjustment * 0.0035 + vibrance_adjustment);
+  float vibrance_scale = max(0.0, 1.0 + vibrance * 0.01 * (1.0 - clamp(saturation, 0.0, 1.0)));
+  color = mix(vec3(luma(color)), color, vibrance_scale);
   return color;
 }
 
@@ -311,11 +328,24 @@ float random(vec2 co) {
 }
 
 vec3 adjust_effects(vec3 color, vec2 output_uv) {
-  vec2 centered = output_uv - 0.5;
-  float vignette = smoothstep(0.85, 0.15, length(centered));
-  color *= mix(1.0, vignette, max(0.0, -u_vignette) * 0.012);
-  color += (1.0 - vignette) * max(0.0, u_vignette) * 0.006;
-  color += (random(u_tile_origin + gl_FragCoord.xy) - 0.5) * u_grain * 0.004;
+  vec2 centered = abs((output_uv - 0.5) * 2.0);
+  float box_distance = max(centered.x, centered.y);
+  float round_distance = length(centered) * 0.70710678;
+  float shape = mix(box_distance, round_distance, u_vignette_roundness * 0.005 + 0.5);
+  float midpoint = mix(0.15, 0.8, u_vignette_midpoint * 0.01);
+  float feather = max(0.01, mix(0.03, 0.75, u_vignette_feather * 0.01));
+  float edge = smoothstep(midpoint, midpoint + feather, shape);
+  float protected_highlight = smoothstep(0.45, 1.0, luma(color)) * u_vignette_highlights * 0.01;
+  float vignette_mask = edge * (1.0 - protected_highlight);
+  color *= 1.0 - vignette_mask * max(0.0, -u_vignette) * 0.008;
+  color += vignette_mask * max(0.0, u_vignette) * 0.006;
+
+  float grain_scale = mix(0.75, 4.0, u_grain_size * 0.01);
+  vec2 grain_position = (u_tile_origin + gl_FragCoord.xy) / grain_scale;
+  float fine_grain = random(grain_position);
+  float coarse_grain = random(floor(grain_position * 0.5));
+  float grain_noise = mix(fine_grain, coarse_grain, u_grain_roughness * 0.01);
+  color += (grain_noise - 0.5) * u_grain * 0.004;
   return color;
 }
 
@@ -339,6 +369,14 @@ void main() {
   vec2 max_uv = 1.0 - min_uv;
   vec2 output_uv = (u_tile_origin + v_uv * u_tile_size) / u_output_size;
   vec2 oriented_uv = transform_oriented_uv(output_uv);
+  if (
+    u_crop_enabled > 0.5 &&
+    u_crop_output < 0.5 &&
+    (any(lessThan(oriented_uv, vec2(0.0))) || any(greaterThan(oriented_uv, vec2(1.0))))
+  ) {
+    out_color = vec4(0.0);
+    return;
+  }
   vec2 uv = clamp(orient_uv(oriented_uv), min_uv, max_uv);
 
   vec3 center = sample_image(uv);
@@ -348,23 +386,66 @@ void main() {
   }
 
   vec3 color = apply_tone(center, oriented_uv);
-  if (u_noise_reduction > 0.0 || u_sharpening > 0.0) {
-    vec2 output_texel = 1.0 / u_output_size;
+  if (u_noise_reduction > 0.0 || u_color_noise_reduction > 0.0 || u_sharpening > 0.0) {
+    float sharpening_radius = u_sharpening > 0.0 ? max(0.5, u_sharpen_radius) : 0.0;
+    float luminance_radius = u_noise_reduction > 0.0 ? 1.0 : 0.0;
+    float color_radius = u_color_noise_reduction > 0.0
+      ? 0.5 + u_color_noise_smoothness * 0.025
+      : 0.0;
+    float sample_radius = max(
+      max(sharpening_radius, luminance_radius),
+      color_radius
+    );
+    vec2 output_texel = sample_radius / u_output_size;
     vec3 neighbors =
       sample_toned_output(output_uv + vec2(output_texel.x, 0.0)) +
       sample_toned_output(output_uv - vec2(output_texel.x, 0.0)) +
       sample_toned_output(output_uv + vec2(0.0, output_texel.y)) +
       sample_toned_output(output_uv - vec2(0.0, output_texel.y));
     vec3 average = neighbors * 0.25;
-    color = mix(color, average, u_noise_reduction * 0.003);
-    color += (color - average) * u_sharpening * 0.015;
+    float luminance_blend = clamp(
+      u_noise_reduction * 0.003 * (1.5 - u_noise_detail * 0.01),
+      0.0,
+      0.9
+    );
+    float source_luminance = luma(color);
+    float average_luminance = luma(average);
+    color += vec3((average_luminance - source_luminance) * luminance_blend);
+    color += (color - average) * luminance_blend * u_noise_contrast * 0.01;
+
+    float color_blend = clamp(
+      u_color_noise_reduction * 0.003 *
+      (1.5 - u_color_noise_detail * 0.01) *
+      (0.5 + u_color_noise_smoothness * 0.01),
+      0.0,
+      0.9
+    );
+    vec3 source_chroma = color - vec3(luma(color));
+    vec3 average_chroma = average - vec3(average_luminance);
+    color = vec3(luma(color)) + mix(source_chroma, average_chroma, color_blend);
+
+    float edge_strength = length(color - average);
+    float edge_mask = mix(
+      1.0,
+      smoothstep(u_sharpen_masking * 0.0015, u_sharpen_masking * 0.0015 + 0.04, edge_strength),
+      u_sharpen_masking * 0.01
+    );
+    float detail_amount = 0.5 + u_sharpen_detail * 0.02;
+    color += (color - average) * u_sharpening * 0.015 * detail_amount * edge_mask;
   }
 
   color = adjust_effects(color, output_uv);
   if (u_overlay_enabled > 0.5) {
     vec2 overlay_uv = clamp(oriented_uv, vec2(0.0), vec2(1.0));
     float overlay = texture(u_overlay_mask, vec2(overlay_uv.x, 1.0 - overlay_uv.y)).r;
-    color = mix(color, vec3(1.0, 0.0, 0.0), overlay * 0.35);
+    if (u_overlay_mode == 2) {
+      color = mix(color, vec3(overlay), 0.82);
+    } else {
+      vec3 overlay_color = u_overlay_mode == 1
+        ? vec3(1.0)
+        : vec3(0.56, 0.72, 0.88);
+      color = mix(color, overlay_color, overlay * 0.42);
+    }
   }
   out_color = vec4(clamp(color, 0.0, 1.0), 1.0);
 }`;
@@ -452,7 +533,10 @@ export interface RenderPreparation {
 
 export interface RenderOptions {
   overlayMaskId?: string | null;
+  overlayMode?: MaskOverlayMode;
 }
+
+export type MaskOverlayMode = "color" | "white" | "image";
 
 class MaskAssetError extends Error {
   readonly kind: "missing-asset" | "corrupt-asset";
@@ -1863,6 +1947,10 @@ export class DevelopRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.overlayTexture);
     this.uniform1i("u_overlay_mask", 3);
     this.uniform1f("u_overlay_enabled", overlay ? 1 : 0);
+    this.uniform1i(
+      "u_overlay_mode",
+      options.overlayMode === "white" ? 1 : options.overlayMode === "image" ? 2 : 0,
+    );
 
     this.uniform1f("u_crop_enabled", settings.crop.enabled ? 1 : 0);
     this.uniform1f("u_crop_output", mode === "source" ? 0 : 1);
@@ -1892,9 +1980,23 @@ export class DevelopRenderer {
     this.uniformCurve(settings);
     this.uniformMixer(settings);
     this.uniform1f("u_vignette", settings.effects.vignette);
+    this.uniform1f("u_vignette_midpoint", settings.effects.vignetteMidpoint);
+    this.uniform1f("u_vignette_roundness", settings.effects.vignetteRoundness);
+    this.uniform1f("u_vignette_feather", settings.effects.vignetteFeather);
+    this.uniform1f("u_vignette_highlights", settings.effects.vignetteHighlights);
     this.uniform1f("u_grain", settings.effects.grain);
+    this.uniform1f("u_grain_size", settings.effects.grainSize);
+    this.uniform1f("u_grain_roughness", settings.effects.grainRoughness);
     this.uniform1f("u_sharpening", settings.effects.sharpening);
+    this.uniform1f("u_sharpen_radius", settings.effects.sharpenRadius);
+    this.uniform1f("u_sharpen_detail", settings.effects.sharpenDetail);
+    this.uniform1f("u_sharpen_masking", settings.effects.sharpenMasking);
     this.uniform1f("u_noise_reduction", settings.effects.noiseReduction);
+    this.uniform1f("u_noise_detail", settings.effects.noiseDetail);
+    this.uniform1f("u_noise_contrast", settings.effects.noiseContrast);
+    this.uniform1f("u_color_noise_reduction", settings.effects.colorNoiseReduction);
+    this.uniform1f("u_color_noise_detail", settings.effects.colorNoiseDetail);
+    this.uniform1f("u_color_noise_smoothness", settings.effects.colorNoiseSmoothness);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

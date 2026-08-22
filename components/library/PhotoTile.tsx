@@ -17,6 +17,7 @@ interface PhotoTileProps {
   height: number;
   selected?: boolean;
   compact?: boolean;
+  caption?: boolean;
   fit?: "contain" | "cover";
   metadata?: EntryMetadata;
   onSelect?: (entryId: string, modifiers: SelectEntryModifiers) => void;
@@ -32,6 +33,7 @@ export const PhotoTile = memo(function PhotoTile({
   height,
   selected = false,
   compact = false,
+  caption = false,
   fit = "contain",
   metadata,
   onSelect,
@@ -166,10 +168,12 @@ export const PhotoTile = memo(function PhotoTile({
       )}
 
       {!compact ? (
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0f0d0c]/95 via-[#0f0d0c]/65 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100">
-          <p className="truncate font-mono text-[10px] text-lr-text">{entry.name}</p>
+        <div className="absolute inset-x-0 bottom-0 flex items-end gap-2 bg-gradient-to-t from-[#0f0d0c]/95 via-[#0f0d0c]/65 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text">
+            {entry.name}
+          </p>
           {entry.profileId && entry.profileId !== "standard" ? (
-            <p className="font-mono text-[9px] uppercase tracking-wide text-lr-accent">
+            <p className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-lr-accent">
               {entry.profileId}
             </p>
           ) : null}
@@ -180,7 +184,9 @@ export const PhotoTile = memo(function PhotoTile({
         <div className="pointer-events-none absolute inset-0 bg-[#0f0d0c]/55" />
       ) : null}
 
-      {metadata ? <EntryMetadataBadges metadata={metadata} /> : null}
+      {metadata ? (
+        <EntryMetadataBadges metadata={metadata} compact={caption} />
+      ) : null}
 
       {selected ? (
         <div
@@ -202,6 +208,7 @@ export const PhotoTile = memo(function PhotoTile({
         type="button"
         aria-pressed={selected}
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
+        style={caption ? { width } : undefined}
         onClick={(event) =>
           onSelect(entry.id, {
             shift: event.shiftKey,
@@ -214,6 +221,23 @@ export const PhotoTile = memo(function PhotoTile({
         onContextMenu={(event) => onContextMenu?.(entry.id, event)}
       >
         {content}
+        {caption ? (
+          <div className="flex h-[18px] items-end gap-1.5 px-0.5">
+            <span
+              className={[
+                "min-w-0 flex-1 truncate font-mono text-[10px]",
+                selected ? "text-lr-text" : "text-lr-text-faint",
+              ].join(" ")}
+            >
+              {entry.name}
+            </span>
+            {metadata && metadata.rating > 0 ? (
+              <span className="shrink-0 text-[9px] text-lr-accent">
+                {"★".repeat(metadata.rating)}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </button>
     );
   }

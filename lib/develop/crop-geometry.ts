@@ -58,6 +58,61 @@ export function clampCropRect(rect: CropRect): CropRect {
   return { x, y, width, height };
 }
 
+export function fitCropWithinRotation(
+  rect: CropRect,
+  angleDegrees: number,
+  imageWidth: number,
+  imageHeight: number,
+): CropRect {
+  const current = clampCropRect(rect);
+  if (
+    !Number.isFinite(angleDegrees) ||
+    angleDegrees === 0 ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return current;
+  }
+
+  const angle = Math.abs(angleDegrees) * Math.PI / 180;
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  const cropWidth = current.width * imageWidth;
+  const cropHeight = current.height * imageHeight;
+  const rotatedHalfWidth = (cos * cropWidth + sin * cropHeight) / 2;
+  const rotatedHalfHeight = (sin * cropWidth + cos * cropHeight) / 2;
+  const scale = Math.min(
+    1,
+    imageWidth / (rotatedHalfWidth * 2),
+    imageHeight / (rotatedHalfHeight * 2),
+  );
+  const width = current.width * scale;
+  const height = current.height * scale;
+  const boundedHalfWidth = rotatedHalfWidth * scale;
+  const boundedHalfHeight = rotatedHalfHeight * scale;
+  const centerX = Math.max(
+    boundedHalfWidth,
+    Math.min(
+      imageWidth - boundedHalfWidth,
+      (current.x + current.width / 2) * imageWidth,
+    ),
+  );
+  const centerY = Math.max(
+    boundedHalfHeight,
+    Math.min(
+      imageHeight - boundedHalfHeight,
+      (current.y + current.height / 2) * imageHeight,
+    ),
+  );
+
+  return {
+    x: centerX / imageWidth - width / 2,
+    y: centerY / imageHeight - height / 2,
+    width,
+    height,
+  };
+}
+
 export function fitCropToAspectRatio(
   rect: CropRect,
   aspectRatio: number,

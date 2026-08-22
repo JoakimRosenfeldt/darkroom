@@ -13,13 +13,10 @@ import { SliderRow } from "@/components/develop/SliderRow";
 
 interface CropPanelProps {
   crop: CropSettings | null;
-  active?: boolean;
   imageWidth: number;
   imageHeight: number;
   onChange: (crop: CropSettings, preserveFrame?: boolean) => void;
   onReset: () => void;
-  onApply: () => void;
-  onCancel: () => void;
   onActivate?: () => void;
 }
 
@@ -29,9 +26,6 @@ export function CropPanel({
   imageHeight,
   onChange,
   onReset,
-  onApply,
-  onCancel,
-  active = false,
   onActivate,
 }: CropPanelProps) {
   function updateCrop(patch: Partial<CropSettings>) {
@@ -99,10 +93,7 @@ export function CropPanel({
       id="develop-crop-section"
       tabIndex={-1}
       aria-label="Crop and geometry"
-      className={[
-        "border-b border-lr-border-subtle outline-none",
-        active ? "bg-lr-panel-raised/30" : "",
-      ].join(" ")}
+      className="outline-none"
     >
       <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
         <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
@@ -121,23 +112,36 @@ export function CropPanel({
 
       {crop ? (
         <>
-          <div className="px-4 py-4">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-              Aspect ratio
-            </p>
-            <div className="mb-4 grid grid-cols-3 gap-1.5">
+          <section className="border-b border-lr-border-subtle px-4 pb-[18px] pt-3.5">
+            <div className="mb-2.5 flex items-center gap-2">
+              <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+                Aspect ratio
+              </h3>
+              <div className="flex-1" />
+              <span className="text-[10px] text-lr-text-faint">
+                {crop.aspectPreset === "free" ? "Unlocked" : "Locked"}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
               {ASPECT_RATIO_PRESETS.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
                   aria-pressed={crop.aspectPreset === preset.id}
                   onClick={() => selectAspectPreset(preset.id)}
-                  className={`rounded border px-2 py-1.5 text-left text-[11px] ${
+                  className={`flex min-h-[54px] flex-col items-center justify-center gap-1 rounded-lg border px-1 py-2 text-[10px] ${
                     crop.aspectPreset === preset.id
                       ? "border-lr-accent bg-lr-selection text-lr-text"
                       : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
                   }`}
                 >
+                  <AspectGlyph
+                    presetId={preset.id}
+                    imageWidth={imageWidth}
+                    imageHeight={imageHeight}
+                    customWidth={crop.customAspectWidth}
+                    customHeight={crop.customAspectHeight}
+                  />
                   {preset.label}
                 </button>
               ))}
@@ -152,20 +156,16 @@ export function CropPanel({
               />
             ) : null}
 
-            <p className="mb-2 mt-3 text-[11px] leading-relaxed text-lr-text-muted">
-              Drag the image to position it. Pull an edge or corner to resize.
-              Scroll over the image to inspect it more closely.
-            </p>
+          </section>
 
-            <SliderRow
-              label="Straighten"
-              value={crop.angle}
-              min={-45}
-              max={45}
-              step={0.1}
-              suffix="°"
-              onChange={(angle) => onChange({ ...crop, angle })}
-            />
+          <section className="border-b border-lr-border-subtle px-4 pb-[18px] pt-3.5">
+            <div className="mb-1.5 flex items-center gap-2">
+              <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+                Frame &amp; geometry
+              </h3>
+              <div className="flex-1" />
+              <span className="text-[10px] text-lr-text-faint">Drag on canvas</span>
+            </div>
             <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} onChange={(x) => updateCrop({ x })} />
             <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} onChange={(y) => updateCrop({ y })} />
             <SliderRow label="Width" value={crop.width} min={0.05} max={1} step={0.01} resetValue={1} onChange={(width) => updateCrop({ width })} />
@@ -173,29 +173,10 @@ export function CropPanel({
             <SliderRow label="Perspective X" value={crop.perspectiveX} min={-100} max={100} onChange={(perspectiveX) => onChange({ ...crop, perspectiveX })} />
             <SliderRow label="Perspective Y" value={crop.perspectiveY} min={-100} max={100} onChange={(perspectiveY) => onChange({ ...crop, perspectiveY })} />
             <SliderRow label="Distortion" value={crop.distortion} min={-100} max={100} onChange={(distortion) => onChange({ ...crop, distortion })} />
-          </div>
-
-          <div className="border-t border-lr-border-subtle px-4 py-4">
-            <p className="mb-2 text-[10px] uppercase tracking-[0.12em] text-lr-text-muted">
-              Enter apply · Esc cancel
+            <p className="mt-2 text-[10px] leading-relaxed text-lr-text-faint">
+              Drag the image to reposition it. Pull an edge or corner to resize.
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-md border border-lr-border-subtle px-3 py-2 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={onApply}
-                className="rounded-md bg-lr-accent px-3 py-2 text-xs font-medium text-[#14202a] hover:bg-lr-accent-hover"
-              >
-                Apply
-              </button>
-            </div>
-          </div>
+          </section>
         </>
       ) : (
         <div className="space-y-3 px-4 py-4">
@@ -212,6 +193,38 @@ export function CropPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function AspectGlyph({
+  presetId,
+  imageWidth,
+  imageHeight,
+  customWidth,
+  customHeight,
+}: {
+  presetId: AspectRatioPresetId;
+  imageWidth: number;
+  imageHeight: number;
+  customWidth: number;
+  customHeight: number;
+}) {
+  const ratio = resolveAspectRatio(
+    presetId,
+    imageWidth,
+    imageHeight,
+    customWidth,
+    customHeight,
+  ) ?? imageWidth / imageHeight;
+  const width = ratio >= 1 ? 22 : Math.max(9, Math.round(18 * ratio));
+  const height = ratio >= 1 ? Math.max(9, Math.round(22 / ratio)) : 18;
+
+  return (
+    <span
+      aria-hidden="true"
+      className="block rounded-[2px] border border-current opacity-80"
+      style={{ width, height }}
+    />
   );
 }
 

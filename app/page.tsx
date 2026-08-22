@@ -335,21 +335,39 @@ function LibraryCurationBar({
             <button
               type="button"
               onClick={() => onApply(selectedEntryIds, { pick: "pick" })}
-              className="rounded-md bg-[#2f3a2f] px-2.5 py-1.5 text-[11px] text-[#8fd0a0] transition hover:bg-[#354535]"
+              aria-pressed={selectedMetadata.pick === "pick"}
+              className={[
+                "rounded-md px-2.5 py-1.5 text-[11px] transition-colors",
+                selectedMetadata.pick === "pick"
+                  ? "bg-[#2f3a2f] text-[#8fd0a0]"
+                  : "text-lr-text-muted hover:bg-lr-panel-hover hover:text-lr-text",
+              ].join(" ")}
             >
               Pick <span className="text-[#6a7a6a]">P</span>
             </button>
             <button
               type="button"
               onClick={() => onApply(selectedEntryIds, { pick: "reject" })}
-              className="rounded-md px-2.5 py-1.5 text-[11px] text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text"
+              aria-pressed={selectedMetadata.pick === "reject"}
+              className={[
+                "rounded-md px-2.5 py-1.5 text-[11px] transition-colors",
+                selectedMetadata.pick === "reject"
+                  ? "bg-[#3c2925] text-lr-danger"
+                  : "text-lr-text-muted hover:bg-lr-panel-hover hover:text-lr-text",
+              ].join(" ")}
             >
               Reject <span className="text-lr-text-muted">X</span>
             </button>
             <button
               type="button"
               onClick={() => onApply(selectedEntryIds, { pick: "none" })}
-              className="rounded-md px-2.5 py-1.5 text-[11px] text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text"
+              aria-pressed={selectedMetadata.pick === "none"}
+              className={[
+                "rounded-md px-2.5 py-1.5 text-[11px] transition-colors",
+                selectedMetadata.pick === "none"
+                  ? "bg-lr-selection text-lr-accent"
+                  : "text-lr-text-muted hover:bg-lr-panel-hover hover:text-lr-text",
+              ].join(" ")}
             >
               Unflag <span className="text-lr-text-muted">U</span>
             </button>

@@ -3,6 +3,7 @@ import {
   createDevelopSettings,
 } from "@/lib/develop/registry";
 import { normalizeCurveSettings } from "@/lib/develop/plugins/curve";
+import { DEFAULT_EFFECTS_SETTINGS } from "@/lib/develop/plugins/effects";
 import type {
   AiMaskComponent,
   BasicSettings,
@@ -129,6 +130,7 @@ function parseGlobalSettings(value: unknown): Omit<DevelopSettings, "masking"> {
   const curve = record(input.curve, "settings.curve");
   const mixer = record(input.mixer, "settings.mixer");
   const effects = record(input.effects, "settings.effects");
+  const effectsDefaults = DEFAULT_EFFECTS_SETTINGS;
   const aspectPreset = stringValue(crop.aspectPreset, "settings.crop.aspectPreset");
   const knownAspect = ASPECT_RATIO_PRESETS.find((preset) => preset.id === aspectPreset);
   if (!knownAspect) {
@@ -168,9 +170,23 @@ function parseGlobalSettings(value: unknown): Omit<DevelopSettings, "masking"> {
     },
     effects: {
       vignette: finiteNumber(effects.vignette, "settings.effects.vignette"),
+      vignetteMidpoint: finiteNumber(effects.vignetteMidpoint ?? effectsDefaults.vignetteMidpoint, "settings.effects.vignetteMidpoint"),
+      vignetteRoundness: finiteNumber(effects.vignetteRoundness ?? effectsDefaults.vignetteRoundness, "settings.effects.vignetteRoundness"),
+      vignetteFeather: finiteNumber(effects.vignetteFeather ?? effectsDefaults.vignetteFeather, "settings.effects.vignetteFeather"),
+      vignetteHighlights: finiteNumber(effects.vignetteHighlights ?? effectsDefaults.vignetteHighlights, "settings.effects.vignetteHighlights"),
       grain: finiteNumber(effects.grain, "settings.effects.grain"),
+      grainSize: finiteNumber(effects.grainSize ?? effectsDefaults.grainSize, "settings.effects.grainSize"),
+      grainRoughness: finiteNumber(effects.grainRoughness ?? effectsDefaults.grainRoughness, "settings.effects.grainRoughness"),
       sharpening: finiteNumber(effects.sharpening, "settings.effects.sharpening"),
+      sharpenRadius: finiteNumber(effects.sharpenRadius ?? effectsDefaults.sharpenRadius, "settings.effects.sharpenRadius"),
+      sharpenDetail: finiteNumber(effects.sharpenDetail ?? effectsDefaults.sharpenDetail, "settings.effects.sharpenDetail"),
+      sharpenMasking: finiteNumber(effects.sharpenMasking ?? effectsDefaults.sharpenMasking, "settings.effects.sharpenMasking"),
       noiseReduction: finiteNumber(effects.noiseReduction, "settings.effects.noiseReduction"),
+      noiseDetail: finiteNumber(effects.noiseDetail ?? effectsDefaults.noiseDetail, "settings.effects.noiseDetail"),
+      noiseContrast: finiteNumber(effects.noiseContrast ?? effectsDefaults.noiseContrast, "settings.effects.noiseContrast"),
+      colorNoiseReduction: finiteNumber(effects.colorNoiseReduction ?? effectsDefaults.colorNoiseReduction, "settings.effects.colorNoiseReduction"),
+      colorNoiseDetail: finiteNumber(effects.colorNoiseDetail ?? effectsDefaults.colorNoiseDetail, "settings.effects.colorNoiseDetail"),
+      colorNoiseSmoothness: finiteNumber(effects.colorNoiseSmoothness ?? effectsDefaults.colorNoiseSmoothness, "settings.effects.colorNoiseSmoothness"),
     },
   };
 }

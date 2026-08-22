@@ -154,6 +154,10 @@ export function InteractiveCropOverlay({
           ))}
         </div>
 
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-lg bg-lr-toolbar/90 px-3 py-1.5 font-mono text-[10px] text-lr-text shadow-lg">
+          {crop.aspectPreset} · {Math.max(1, Math.round(imageWidth * cropRect.width))} × {Math.max(1, Math.round(imageHeight * cropRect.height))}
+        </div>
+
         {EDGE_HIT_AREAS.map(({ handle, className }) => (
           <div
             key={handle}

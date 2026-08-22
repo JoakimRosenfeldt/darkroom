@@ -11,6 +11,14 @@ import { isEditableTarget } from "@/hooks/is-editable-target";
 import { navigateGridRows } from "@/lib/library/grid-navigation";
 import { useLibraryStore } from "@/stores/library-store";
 
+function isInteractiveShortcutTarget(target: EventTarget | null): boolean {
+  return (
+    isEditableTarget(target) ||
+    (target instanceof HTMLElement &&
+      Boolean(target.closest("button, a[href], [role='button']")))
+  );
+}
+
 export function useEntryMetadataShortcuts(
   activeEntryIds: string[],
   disabled = false,
@@ -28,7 +36,11 @@ export function useEntryMetadataShortcuts(
     const targets = activeEntryIds;
 
     function onKeyDown(event: KeyboardEvent) {
-      if (isEditableTarget(event.target)) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (isInteractiveShortcutTarget(event.target)) {
         return;
       }
 
@@ -118,7 +130,11 @@ export function useLibraryGridShortcuts({
     }
 
     function onKeyDown(event: KeyboardEvent) {
-      if (isEditableTarget(event.target)) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (isInteractiveShortcutTarget(event.target)) {
         return;
       }
 

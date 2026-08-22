@@ -22,8 +22,6 @@ interface DevelopSidePanelsProps {
   onResetAll: () => void;
   onCropChange: (crop: CropSettings, preserveFrame?: boolean) => void;
   onCropReset: () => void;
-  onCropApply: () => void;
-  onCropCancel: () => void;
   maskingAiActions?: ReactNode;
 }
 
@@ -36,8 +34,6 @@ export function DevelopSidePanels({
   onResetAll,
   onCropChange,
   onCropReset,
-  onCropApply,
-  onCropCancel,
   maskingAiActions,
 }: DevelopSidePanelsProps) {
   return (
@@ -47,13 +43,10 @@ export function DevelopSidePanels({
           <div className="flex-1 overflow-auto">
             <CropPanel
               crop={cropDraft}
-              active
               imageWidth={decoded.width}
               imageHeight={decoded.height}
               onChange={onCropChange}
               onReset={onCropReset}
-              onApply={onCropApply}
-              onCancel={onCropCancel}
             />
           </div>
         </aside>
@@ -64,7 +57,10 @@ export function DevelopSidePanels({
           profileId={entry.profileId}
         />
       ) : activePanel === "masking" ? (
-        <MaskingPanel aiActions={maskingAiActions} />
+        <MaskingPanel
+          aiActions={maskingAiActions}
+          onDone={() => onSelect("edit")}
+        />
       ) : (
         <EditPanel onResetAll={onResetAll} />
       )}

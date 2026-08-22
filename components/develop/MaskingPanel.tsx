@@ -10,11 +10,13 @@ import {
   IconPlus,
   IconTrash,
 } from "@/components/shell/icons";
-import { SliderRow } from "@/components/develop/SliderRow";
-import { captureBrushStrokeSettings, MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
+import {
+  COLOR_SLIDER_TRACKS,
+  SliderRow,
+} from "@/components/develop/SliderRow";
+import { MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
 import type {
   BasicSettings,
-  BrushMaskComponent,
   LocalMask,
   MaskComponent,
   MaskOperation,
@@ -26,6 +28,7 @@ export type MaskTool = "none" | "brush" | "linear-gradient" | "radial-gradient";
 
 interface MaskingPanelProps {
   aiActions?: ReactNode;
+  onDone: () => void;
 }
 
 const TOOL_LABELS: Record<Exclude<MaskTool, "none">, string> = {
@@ -57,7 +60,22 @@ function componentLabel(component: MaskComponent): string {
   }
 }
 
-export function MaskingPanel({ aiActions }: MaskingPanelProps) {
+function maskSummary(mask: LocalMask): string {
+  const primary = mask.components[0];
+  const kind = primary ? componentLabel(primary) : "Empty mask";
+  const extra = mask.components.length > 1 ? ` · ${mask.components.length} parts` : "";
+  return `${kind}${extra}`;
+}
+
+function adjustmentSummary(mask: LocalMask): string {
+  const exposure = mask.adjustments.exposure;
+  if (exposure !== 0) return `${exposure > 0 ? "+" : ""}${exposure.toFixed(2)} EV`;
+  const saturation = mask.adjustments.saturation;
+  if (saturation !== 0) return `${saturation > 0 ? "+" : ""}${saturation} sat`;
+  return "0";
+}
+
+export function MaskingPanel({ aiActions, onDone }: MaskingPanelProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] ?? null : null;
@@ -76,8 +94,6 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
   const selectedMask = masks.find((mask) => mask.id === selectedMaskId) ?? null;
   const selectedComponent = selectedMask?.components.find((component) => component.id === selectedComponentId) ?? null;
   const activeTool = session?.ui.tool ?? "none";
-  const overlayVisible = session?.ui.overlayVisible ?? false;
-
   function selectMask(mask: LocalMask) {
     setSelectedMask(mask.id);
     setSelectedComponent(mask.components[0]?.id ?? null);
@@ -122,6 +138,19 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
     dispatch({ kind: "replace-mask-component", maskId: selectedMask.id, component }, `Adjust ${componentLabel(component)}`);
   }
 
+  function deleteSelectedMask() {
+    if (!selectedMask) return;
+    const index = masks.findIndex((mask) => mask.id === selectedMask.id);
+    const next = masks[index + 1] ?? masks[index - 1] ?? null;
+    dispatch(
+      { kind: "remove-mask", maskId: selectedMask.id },
+      "Delete mask",
+    );
+    setSelectedMask(next?.id ?? null);
+    setSelectedComponent(next?.components[0]?.id ?? null);
+    setTool("none");
+  }
+
   function beginLocalAdjustment(): void {
     if (hiddenOverlayEntryRef.current !== null) return;
     const state = useDevelopStore.getState();
@@ -141,33 +170,25 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
 
   return (
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-      <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
-        <div>
+      <div className="flex min-h-[49px] items-center justify-between border-b border-lr-border-subtle px-4 py-3">
+        <div className="flex items-baseline gap-2">
           <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-            Masking
+            Masks
           </h2>
-          <p className="mt-0.5 text-[10px] text-lr-text-faint">Local adjustments by area</p>
+          <span className="font-mono text-[10px] text-lr-text-faint">
+            {masks.length}/{MAX_MASKS}
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            title={`${overlayVisible ? "Hide" : "Show"} mask overlay (O)`}
-            aria-label={`${overlayVisible ? "Hide" : "Show"} mask overlay`}
-            aria-pressed={overlayVisible}
-            onClick={() => setOverlayVisible(!overlayVisible)}
-            className={`flex h-7 w-7 items-center justify-center rounded-md border ${overlayVisible ? "border-red-400/70 bg-red-950/60 text-red-200" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
-          >
-            {overlayVisible ? <IconEye className="h-3.5 w-3.5" /> : <IconEyeOff className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            title="Add mask"
-            aria-label="Add mask"
+            title="Create mask"
             disabled={masks.length >= MAX_MASKS}
             onClick={addMask}
-            className="flex h-7 w-7 items-center justify-center rounded-md bg-lr-accent text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-7 items-center gap-1.5 rounded-[7px] bg-lr-accent px-2.5 text-[11px] font-medium text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <IconPlus className="h-4 w-4" />
+            <IconPlus className="h-3.5 w-3.5" />
+            Create mask
           </button>
         </div>
       </div>
@@ -178,9 +199,15 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
         </p>
       ) : null}
 
-      <div className="border-b border-lr-border-subtle px-3 py-3">
+      {aiActions ? (
+        <section className="border-b border-lr-border-subtle px-3 py-3">
+          {aiActions}
+        </section>
+      ) : null}
+
+      <div className="border-b border-lr-border-subtle p-3">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Tools</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Classic tools</span>
           <button
             type="button"
             onClick={() => setTool("none")}
@@ -198,32 +225,25 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
               title={`${TOOL_LABELS[kind]} (${TOOL_SHORTCUTS[kind]})`}
               aria-pressed={activeTool === kind}
               onClick={() => activateTool(kind)}
-              className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === kind ? "border-lr-accent bg-lr-selection text-lr-text" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
+              className={`flex min-h-[54px] flex-col items-center justify-center gap-1 rounded-lg border px-2 py-2 text-[10px] ${activeTool === kind ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
             >
-              {TOOL_LABELS[kind]}
+              <span className="font-mono text-[9px] font-semibold tracking-[0.08em]">
+                {kind === "brush" ? "BRS" : kind === "linear-gradient" ? "LIN" : "RAD"}
+              </span>
+              <span>{TOOL_LABELS[kind]}</span>
             </button>
           ))}
         </div>
-        <p className="mt-2 text-[10px] leading-relaxed text-lr-text-faint">
-          K Brush · M Linear · Shift+M Radial · O Overlay · Delete Mask
-        </p>
-        <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">
-          Brush: Wheel or [ ] size · Shift+wheel or Shift+[ ] feather
-        </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <section className="border-b border-lr-border-subtle">
-          <div className="flex items-center justify-between px-4 py-3">
-            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Masks</h3>
-            <span className="font-mono text-[10px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
-          </div>
+        <section className="max-h-[212px] overflow-auto border-b border-lr-border-subtle">
           {masks.length === 0 ? (
-            <button type="button" onClick={addMask} className="mx-4 mb-4 block rounded-md border border-dashed border-lr-border-subtle px-3 py-3 text-left text-[11px] text-lr-text-muted hover:border-lr-text-dim hover:text-lr-text">
+            <button type="button" onClick={addMask} className="m-3 block rounded-md border border-dashed border-lr-border-subtle px-3 py-3 text-left text-[11px] text-lr-text-muted hover:border-lr-text-dim hover:text-lr-text">
               Choose a tool and paint to add a mask.
             </button>
           ) : (
-            <div className="space-y-1 px-3 pb-3">
+            <div className="space-y-1 p-2">
               {masks.map((mask, index) => (
                 <MaskRow
                   key={mask.id}
@@ -310,9 +330,6 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
               </div>
             </section>
 
-            {selectedComponent?.kind === "brush" ? (
-              <BrushControls component={selectedComponent} onChange={updateSelectedComponent} />
-            ) : null}
             {selectedComponent?.kind === "radial-gradient" ? (
               <RadialControls component={selectedComponent} onChange={updateSelectedComponent} />
             ) : null}
@@ -326,7 +343,27 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
           </>
         ) : null}
 
-        {aiActions ? <section className="border-b border-lr-border-subtle px-4 py-3">{aiActions}</section> : null}
+      </div>
+
+      <div className="flex gap-2 border-t border-lr-border-subtle p-3">
+        <button
+          type="button"
+          disabled={!selectedMask}
+          onClick={deleteSelectedMask}
+          className="flex-1 rounded-lg border border-lr-border-subtle px-3 py-2 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          Delete mask
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setTool("none");
+            onDone();
+          }}
+          className="flex-1 rounded-lg bg-lr-accent px-3 py-2 text-xs font-medium text-[#14202a] hover:bg-lr-accent-hover"
+        >
+          Done · ↵
+        </button>
       </div>
     </aside>
   );
@@ -366,37 +403,57 @@ function MaskRow({
   }
 
   return (
-    <div className={`group rounded-md border ${selected ? "border-lr-accent/70 bg-lr-selection/50" : "border-transparent hover:border-lr-border-subtle hover:bg-lr-panel-raised/70"}`}>
-      <div className="flex items-center gap-2 px-2 py-2">
+    <div className={`group rounded-lg border ${selected ? "border-lr-accent/70 bg-lr-selection/50" : "border-lr-border-subtle bg-transparent hover:border-lr-text-dim hover:bg-lr-panel-raised/70"}`}>
+      <div className="flex items-center gap-2.5 px-2 py-2">
         <button
           type="button"
           onClick={onSelect}
           aria-label={`Select ${mask.name}`}
           aria-pressed={selected}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-lr-panel-raised"
+          className="relative h-8 w-8 shrink-0 overflow-hidden rounded-[5px] bg-[#0f0d0c]"
         >
-          <span className={`h-2 w-2 rounded-full ${mask.enabled ? "bg-lr-accent" : "bg-lr-text-faint"}`} aria-hidden />
+          <span
+            aria-hidden
+            className={[
+              "absolute bg-lr-accent/55",
+              mask.components[0]?.kind === "linear-gradient"
+                ? "inset-x-0 bottom-0 h-2/3"
+                : mask.components[0]?.kind === "radial-gradient"
+                  ? "left-1/4 top-1/4 h-1/2 w-1/2 rounded-full"
+                  : mask.components[0]?.kind === "ai" && mask.components[0].selector === "sky"
+                    ? "inset-x-0 top-0 h-1/2"
+                    : "inset-x-1 bottom-1 h-3/5 rounded-full",
+              mask.enabled ? "" : "opacity-30",
+            ].join(" ")}
+          />
         </button>
-        <input
-          aria-label={`Rename ${mask.name}`}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          onFocus={onSelect}
-          onBlur={commitName}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.currentTarget.blur();
-            }
-          }}
-          className="min-w-0 flex-1 bg-transparent text-[11px] text-lr-text outline-none"
-        />
-        <span className="text-[10px] text-lr-text-faint">{mask.components.length}</span>
-      </div>
-      <div className="flex items-center justify-end gap-0.5 px-2 pb-1.5">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <input
+            aria-label={`Rename ${mask.name}`}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onFocus={onSelect}
+            onBlur={commitName}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            className="min-w-0 bg-transparent text-[11px] text-lr-text outline-none"
+          />
+          <span className="truncate text-[9px] tracking-[0.04em] text-lr-text-faint">
+            {maskSummary(mask)}
+          </span>
+        </span>
+        <span className={`font-mono text-[9px] ${selected ? "text-lr-accent" : "text-lr-text-faint"}`}>
+          {adjustmentSummary(mask)}
+        </span>
         <SmallButton label={mask.enabled ? "Disable mask" : "Enable mask"} onClick={() => onEnabled(!mask.enabled)}>
           {mask.enabled ? <IconEye className="h-3 w-3" /> : <IconEyeOff className="h-3 w-3" />}
         </SmallButton>
+      </div>
+      <div className={`items-center justify-end gap-0.5 px-2 pb-1.5 ${selected ? "flex" : "hidden group-hover:flex"}`}>
         <SmallButton label={mask.inverted ? "Restore mask" : "Invert mask"} active={mask.inverted} onClick={() => onInverted(!mask.inverted)}>Inv</SmallButton>
         <SmallButton label="Move mask up" disabled={index === 0} onClick={() => onMove(index - 1)}><IconChevronUp className="h-3 w-3" /></SmallButton>
         <SmallButton label="Move mask down" disabled={index === count - 1} onClick={() => onMove(index + 1)}><IconChevronDown className="h-3 w-3" /></SmallButton>
@@ -455,29 +512,14 @@ function ComponentRow({
   );
 }
 
-function BrushControls({ component, onChange }: { component: BrushMaskComponent; onChange: (component: BrushMaskComponent) => void }) {
-  function update(patch: Partial<Pick<BrushMaskComponent, "size" | "feather" | "flow" | "density">>) {
-    onChange({ ...captureBrushStrokeSettings(component), ...patch });
-  }
-
-  return (
-    <section className="border-b border-lr-border-subtle px-4 py-3">
-      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Brush</h3>
-      <SliderRow label="Size" value={component.size} min={0} max={1} step={0.01} suffix="" onChange={(size) => update({ size })} />
-      <SliderRow label="Feather" value={component.feather} min={0} max={1} step={0.01} onChange={(feather) => update({ feather })} />
-      <SliderRow label="Flow" value={component.flow} min={0} max={1} step={0.01} onChange={(flow) => update({ flow })} />
-      <SliderRow label="Density" value={component.density} min={0} max={1} step={0.01} onChange={(density) => update({ density })} />
-      <p className="mt-2 text-[10px] leading-relaxed text-lr-text-faint">
-        Wheel or [ ] changes size. Shift+wheel or Shift+[ ] changes feather.
-      </p>
-    </section>
-  );
-}
-
 function RadialControls({ component, onChange }: { component: RadialGradientMaskComponent; onChange: (component: RadialGradientMaskComponent) => void }) {
   return (
     <section className="border-b border-lr-border-subtle px-4 py-3">
-      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Radial geometry</h3>
+      <div className="mb-1 flex items-center gap-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Radial gradient</h3>
+        <span className="rounded bg-lr-selection px-1.5 py-0.5 font-mono text-[9px] text-lr-accent">R</span>
+      </div>
+      <p className="mb-2 text-[10px] leading-relaxed text-lr-text-faint">Drag the ellipse on the photo. Use the handles to resize or rotate it.</p>
       <SliderRow label="Radius X" value={component.radiusX} min={0.01} max={1} step={0.01} onChange={(radiusX) => onChange({ ...component, radiusX })} />
       <SliderRow label="Radius Y" value={component.radiusY} min={0.01} max={1} step={0.01} onChange={(radiusY) => onChange({ ...component, radiusY })} />
       <SliderRow label="Rotation" value={component.rotation} min={-180} max={180} step={1} suffix="°" onChange={(rotation) => onChange({ ...component, rotation })} />
@@ -504,18 +546,29 @@ function LocalBasicControls({
   }
 
   return (
-    <section className="border-b border-lr-border-subtle px-4 py-3">
-      <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Local Basic</h3>
-      <SliderRow {...interaction} label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => update({ exposure })} />
-      <SliderRow {...interaction} label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => update({ contrast })} />
-      <SliderRow {...interaction} label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => update({ highlights })} />
-      <SliderRow {...interaction} label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => update({ shadows })} />
-      <SliderRow {...interaction} label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => update({ whites })} />
-      <SliderRow {...interaction} label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => update({ blacks })} />
-      <SliderRow {...interaction} label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" onChange={(temperature) => update({ temperature })} />
-      <SliderRow {...interaction} label="Tint" value={basic.tint} min={-150} max={150} onChange={(tint) => update({ tint })} />
-      <SliderRow {...interaction} label="Vibrance" value={basic.vibrance} min={-100} max={100} onChange={(vibrance) => update({ vibrance })} />
-      <SliderRow {...interaction} label="Saturation" value={basic.saturation} min={-100} max={100} onChange={(saturation) => update({ saturation })} />
-    </section>
+    <>
+      <section className="border-b border-lr-border-subtle px-4 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Light</h3>
+          <span className="text-[9px] text-lr-text-faint">Mask only</span>
+        </div>
+        <SliderRow {...interaction} label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => update({ exposure })} />
+        <SliderRow {...interaction} label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => update({ contrast })} />
+        <SliderRow {...interaction} label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => update({ highlights })} />
+        <SliderRow {...interaction} label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => update({ shadows })} />
+        <SliderRow {...interaction} label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => update({ whites })} />
+        <SliderRow {...interaction} label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => update({ blacks })} />
+      </section>
+      <section className="border-b border-lr-border-subtle px-4 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Color</h3>
+          <span className="text-[9px] text-lr-text-faint">Mask only</span>
+        </div>
+        <SliderRow {...interaction} label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(temperature) => update({ temperature })} />
+        <SliderRow {...interaction} label="Tint" value={basic.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(tint) => update({ tint })} />
+        <SliderRow {...interaction} label="Vibrance" value={basic.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => update({ vibrance })} />
+        <SliderRow {...interaction} label="Saturation" value={basic.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => update({ saturation })} />
+      </section>
+    </>
   );
 }

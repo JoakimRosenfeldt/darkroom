@@ -29,7 +29,7 @@ export function StarRatingControl({
             "px-0.5 transition",
             starClassName,
             value >= starValue && starValue > 0
-              ? "text-amber-400"
+              ? "text-lr-accent"
               : "text-lr-text-dim hover:text-lr-text-muted",
           ].join(" ")}
         >

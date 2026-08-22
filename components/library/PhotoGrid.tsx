@@ -19,6 +19,7 @@ interface PhotoGridProps {
 
 const ROW_GAP = 12;
 const TILE_GAP = 12;
+const CAPTION_HEIGHT = 18;
 
 export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContextMenu }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -32,6 +33,10 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
   const visibleOrder = useMemo(
     () => entries.map((entry) => entry.id),
     [entries],
+  );
+  const selectedEntrySet = useMemo(
+    () => new Set(selectedEntryIds),
+    [selectedEntryIds],
   );
 
   const handleSelect = useCallback(
@@ -49,7 +54,8 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => (rows[index]?.cellSize ?? thumbSize) + ROW_GAP,
+    estimateSize: (index) =>
+      (rows[index]?.cellSize ?? thumbSize) + CAPTION_HEIGHT + ROW_GAP,
     overscan: 6,
   });
 
@@ -65,15 +71,16 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
     onGridRowsChange(rows.map((row) => row.entries.map((entry) => entry.id)));
   }, [rows, layoutReady, onGridRowsChange]);
 
-  const selectedRowIndex = useMemo(() => {
-    if (!selectedEntryId) {
-      return -1;
-    }
-
-    return rows.findIndex((row) =>
-      row.entries.some((entry) => entry.id === selectedEntryId),
-    );
-  }, [rows, selectedEntryId]);
+  const rowIndexByEntryId = useMemo(() => {
+    const index = new Map<string, number>();
+    rows.forEach((row, rowIndex) => {
+      row.entries.forEach((entry) => index.set(entry.id, rowIndex));
+    });
+    return index;
+  }, [rows]);
+  const selectedRowIndex = selectedEntryId
+    ? (rowIndexByEntryId.get(selectedEntryId) ?? -1)
+    : -1;
 
   useScrollToSelectedRow({
     layoutReady,
@@ -113,7 +120,7 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   width: `${containerWidth}px`,
-                  height: `${row.cellSize}px`,
+                  height: `${row.cellSize + CAPTION_HEIGHT}px`,
                   gap: `${TILE_GAP}px`,
                 }}
               >
@@ -123,8 +130,9 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                     entry={entry}
                     width={row.cellSize}
                     height={row.cellSize}
-                    fit="contain"
-                    selected={selectedEntryIds.includes(entry.id)}
+                    fit="cover"
+                    caption
+                    selected={selectedEntrySet.has(entry.id)}
                     metadata={getEntryMetadata(entryMetadata, entry.id)}
                     onSelect={handleSelect}
                     onContextMenu={onPhotoContextMenu}

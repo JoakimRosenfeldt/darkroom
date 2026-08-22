@@ -32,6 +32,16 @@ export function Filmstrip({
     () => entries.findIndex((entry) => entry.id === activeId),
     [entries, activeId],
   );
+  const pickedCount = useMemo(
+    () => entries.reduce(
+      (count, entry) =>
+        getEntryMetadata(entryMetadata, entry.id).pick === "pick"
+          ? count + 1
+          : count,
+      0,
+    ),
+    [entries, entryMetadata],
+  );
   const virtualizer = useVirtualizer({
     horizontal: true,
     count: entries.length,
@@ -127,7 +137,12 @@ export function Filmstrip({
                     toggle: event.metaKey || event.ctrlKey,
                   })
                 }
-                className="absolute top-0 shrink-0"
+                className={[
+                  "absolute top-0 shrink-0 overflow-hidden rounded-md",
+                  entry.id === activeId
+                    ? "ring-2 ring-inset ring-lr-accent"
+                    : "",
+                ].join(" ")}
                 style={{
                   width: `${THUMB_SIZE}px`,
                   height: `${THUMB_SIZE}px`,
@@ -143,9 +158,6 @@ export function Filmstrip({
                   compact
                   getScrollRoot={getScrollRoot}
                 />
-                {entry.id === activeId ? (
-                  <span className="pointer-events-none absolute inset-x-7 bottom-1 z-30 h-0.5 rounded-full bg-lr-text" />
-                ) : null}
               </button>
             );
           })}
@@ -169,7 +181,7 @@ export function Filmstrip({
           {selectedIds.length > 1
             ? `${selectedIds.length} selected`
             : activeIndex >= 0
-              ? "Current"
+              ? `${pickedCount} picked`
               : "Photos"}
         </span>
       </div>

@@ -90,27 +90,28 @@ export function useEntryAspectRatios(
       }
     }
 
-    async function hydratePersistedRatio(entryId: string) {
+    async function hydratePersistedRatio(entryId: string): Promise<boolean> {
       const entry = entriesById.get(entryId);
       if (!entry || loadedRef.current.has(entryId)) {
-        return;
+        return true;
       }
 
       const cached = getCachedEntryAspectRatio(entry);
       if (cached) {
         loadedRef.current.add(entryId);
         scheduleUpdate(entryId, cached);
-        return;
+        return true;
       }
 
       const persisted = await getPersistedAspectRatio(entry);
       if (cancelled || !persisted || loadedRef.current.has(entryId)) {
-        return;
+        return loadedRef.current.has(entryId);
       }
 
       loadedRef.current.add(entryId);
       rememberEntryAspectRatio(entry, persisted);
       scheduleUpdate(entryId, persisted);
+      return true;
     }
 
     async function loadAspectRatio(entryId: string, priority: number) {
@@ -149,12 +150,12 @@ export function useEntryAspectRatios(
       (entryId) => entriesById.has(entryId) && !loadedRef.current.has(entryId),
     );
 
-    for (const entryId of uniquePriorityIds) {
-      void hydratePersistedRatio(entryId);
-    }
-
     for (const [index, entryId] of uniquePriorityIds.entries()) {
-      void loadAspectRatio(entryId, priorityForIndex(index));
+      void hydratePersistedRatio(entryId).then((hydrated) => {
+        if (!hydrated && !cancelled) {
+          return loadAspectRatio(entryId, priorityForIndex(index));
+        }
+      });
     }
 
     return () => {
