@@ -9,11 +9,11 @@ interface DevelopPanelRailProps {
   onSelect: (panel: DevelopPanelId) => void;
 }
 
-const PANELS: Array<{ id: DevelopPanelId; label: string; icon: typeof IconSliders }> = [
-  { id: "crop", label: "Crop", icon: IconCrop },
-  { id: "edit", label: "Edit", icon: IconSliders },
-  { id: "masking", label: "Masking", icon: IconMask },
-  { id: "info", label: "Info", icon: IconInfo },
+const PANELS: Array<{ id: DevelopPanelId; label: string; short: string; icon: typeof IconSliders }> = [
+  { id: "crop", label: "Crop", short: "CRP", icon: IconCrop },
+  { id: "edit", label: "Edit", short: "EDT", icon: IconSliders },
+  { id: "masking", label: "Masking", short: "MSK", icon: IconMask },
+  { id: "info", label: "Info", short: "NFO", icon: IconInfo },
 ];
 
 export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProps) {
@@ -22,7 +22,7 @@ export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProp
       className="flex w-14 shrink-0 flex-col items-center gap-1.5 border-l border-lr-border-subtle bg-lr-panel py-3"
       aria-label="Develop panels"
     >
-      {PANELS.map(({ id, label, icon: Icon }) => {
+      {PANELS.map(({ id, label, short, icon: Icon }) => {
         const isActive = activePanel === id;
         return (
           <button
@@ -33,13 +33,14 @@ export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProp
             aria-pressed={isActive}
             onClick={() => onSelect(id)}
             className={[
-              "flex h-10 w-10 items-center justify-center rounded-[9px] transition",
+              "flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-[9px] text-[8px] tracking-[0.06em] transition",
               isActive
                 ? "bg-lr-panel-raised text-lr-text"
                 : "text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text-muted",
             ].join(" ")}
           >
-            <Icon className="h-4 w-4" />
+            <Icon className="h-[15px] w-[15px]" />
+            <span aria-hidden="true">{short}</span>
           </button>
         );
       })}

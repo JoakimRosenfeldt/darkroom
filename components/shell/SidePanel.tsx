@@ -26,6 +26,7 @@ export function SidePanel() {
   const entries = useLibraryStore((state) => state.entries);
   const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
+  const rootPath = useLibraryStore((state) => state.rootPath);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const albums = useLibraryStore((state) => state.albums);
   const catalogView = useLibraryStore((state) => state.catalogView);
@@ -86,8 +87,8 @@ export function SidePanel() {
   return (
     <>
       <aside className="flex w-[248px] shrink-0 flex-col border-r border-lr-border-subtle bg-lr-panel">
-        <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+        <div className="flex items-center justify-between px-4 pb-2.5 pt-4">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-faint">
             Catalog
           </h2>
           <FolderPickerButton
@@ -99,38 +100,12 @@ export function SidePanel() {
           </FolderPickerButton>
         </div>
 
-      <div className="flex-1 overflow-auto py-2">
-        <section className="px-2">
-          <div className="flex items-center justify-between px-2 py-1">
-            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-              Folders
-            </h3>
-            <div className="flex items-center gap-0.5">
-              {needsFolderAccess ? (
-                <FolderPickerButton
-                  mode="restore"
-                  className="flex h-6 w-6 items-center justify-center rounded-md border border-lr-border-subtle text-lr-accent transition hover:bg-lr-panel-hover"
-                >
-                  <IconFolder className="h-3 w-3" />
-                </FolderPickerButton>
-              ) : null}
-            </div>
-          </div>
-
-          {folderName ? (
-            <div className="mb-2 truncate px-2 text-[11px] text-lr-text-muted">
-              {folderName}
-            </div>
-          ) : (
-            <div className="mb-2 px-2 text-[11px] text-lr-text-muted">
-              No folder linked
-            </div>
-          )}
-
+        <div className="flex-1 overflow-auto px-2 pb-3">
+          <section>
           {hasImportedFolder ? (
-            <ul className="space-y-0.5">
+            <ul className="space-y-px">
               <CatalogItem
-                label="All Photos"
+                label="All photos"
                 count={libraryEntries.length}
                 icon={<IconFolder className="h-3 w-3 text-lr-accent" />}
                 isActive={catalogView.type === "all"}
@@ -171,15 +146,17 @@ export function SidePanel() {
               ) : null}
             </ul>
           ) : (
-            <p className="px-2 py-2 text-xs text-lr-text-muted">
-              Import a folder to browse subfolders.
+            <p className="px-2 py-2 text-xs leading-5 text-lr-text-muted">
+              {needsFolderAccess
+                ? "Re-link the folder to browse your catalog."
+                : "Import a folder to browse your photos."}
             </p>
           )}
         </section>
 
         <section className="mt-4 px-2">
-          <div className="flex items-center justify-between px-2 py-1">
-            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+          <div className="flex items-center justify-between px-2 pb-2">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-faint">
               Albums
             </h3>
             <button
@@ -226,7 +203,7 @@ export function SidePanel() {
           ) : null}
 
           {albums.length > 0 ? (
-            <ul className="space-y-0.5">
+            <ul className="space-y-px">
               {albums.map((album) => (
                 <li key={album.id} className="group flex items-center gap-0.5">
                   {renamingAlbumId === album.id ? (
@@ -271,7 +248,7 @@ export function SidePanel() {
                       <button
                         type="button"
                         onClick={() => handleDeleteAlbum(album)}
-                        className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-lr-text-faint opacity-0 transition hover:bg-lr-panel-hover hover:text-lr-danger group-hover:opacity-100"
+                        className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-lr-text-faint opacity-0 transition hover:bg-lr-panel-hover hover:text-lr-danger group-hover:opacity-100 group-focus-within:opacity-100"
                         title="Delete album"
                       >
                         <IconTrash className="h-3 w-3" />
@@ -289,27 +266,34 @@ export function SidePanel() {
         </section>
       </div>
 
-      <div className="flex items-center gap-2 border-t border-lr-border-subtle px-4 py-3">
-        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text-muted">
-          {folderName ?? "No folder linked"}
-        </span>
-        {folderName ? (
-          <FolderPickerButton
-            mode="restore"
-            className="shrink-0 text-[11px] text-lr-text-muted transition hover:text-lr-text"
-          >
-            Re-link
-          </FolderPickerButton>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => void clearLibrary()}
-            className="shrink-0 text-[11px] text-lr-text-dim transition hover:text-lr-danger"
-          title="Clear saved library and reset folder access"
-        >
-          Reset
-        </button>
-      </div>
+        <div className="group border-t border-lr-border-subtle px-4 py-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="truncate text-[11px] text-lr-text-muted">
+              {folderName ?? "No folder linked"}
+            </span>
+            <span className="truncate font-mono text-[10px] text-lr-text-faint">
+              {rootPath ?? "Import a folder to begin"}
+            </span>
+          </div>
+          <div className="mt-2 flex items-center gap-3 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            {folderName ? (
+              <FolderPickerButton
+                mode="restore"
+                className="text-[11px] text-lr-text-muted transition-colors hover:text-lr-text"
+              >
+                Re-link
+              </FolderPickerButton>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void clearLibrary()}
+              className="text-[11px] text-lr-text-faint transition-colors hover:text-lr-danger"
+              title="Clear saved library and reset folder access"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
       </aside>
 
       {albumPendingDelete ? (
@@ -349,7 +333,7 @@ function FolderTreeNode({
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
-            className="flex h-5 w-4 shrink-0 items-center justify-center text-lr-text-dim transition hover:text-lr-text"
+            className="flex h-6 w-4 shrink-0 items-center justify-center text-lr-text-faint transition-colors hover:text-lr-text"
             aria-label={expanded ? "Collapse folder" : "Expand folder"}
           >
             <IconChevronRight
@@ -411,18 +395,20 @@ function CatalogItem({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       className={[
-        "flex w-full items-center justify-between rounded-[7px] px-2.5 py-2 text-left text-[13px] transition",
+        "flex w-full items-center justify-between rounded-[7px] px-2.5 py-2 text-left text-[13px] transition-colors",
         isActive
           ? "bg-lr-selection text-lr-text"
           : "text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text",
         className,
       ].join(" ")}
     >
-      <span className="flex min-w-0 items-center gap-1.5">
+      <span className="flex min-w-0 items-center gap-2.5">
         {icon}
         <span className="truncate">{label}</span>
       </span>
-      <span className="ml-2 shrink-0 text-lr-text-muted">{count}</span>
+      <span className="ml-2 shrink-0 font-mono text-[11px] text-lr-text-faint">
+        {count}
+      </span>
     </button>
   );
 }

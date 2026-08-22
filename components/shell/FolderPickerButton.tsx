@@ -17,6 +17,7 @@ interface FolderPickerButtonProps {
   mode: "import" | "restore";
   className?: string;
   disabled?: boolean;
+  title?: string;
   children: ReactNode;
 }
 
@@ -67,6 +68,7 @@ export function FolderPickerButton({
   mode,
   className,
   disabled = false,
+  title,
   children,
 }: FolderPickerButtonProps) {
   const desktopApp = useSyncExternalStore(
@@ -89,6 +91,7 @@ export function FolderPickerButton({
   return (
     <button
       type="button"
+      title={title}
       onClick={handleClick}
       className={[
         className,

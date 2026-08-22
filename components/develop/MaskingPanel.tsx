@@ -26,6 +26,7 @@ export type MaskTool = "none" | "brush" | "linear-gradient" | "radial-gradient";
 
 interface MaskingPanelProps {
   aiActions?: ReactNode;
+  onDone: () => void;
 }
 
 const TOOL_LABELS: Record<Exclude<MaskTool, "none">, string> = {
@@ -57,7 +58,7 @@ function componentLabel(component: MaskComponent): string {
   }
 }
 
-export function MaskingPanel({ aiActions }: MaskingPanelProps) {
+export function MaskingPanel({ aiActions, onDone }: MaskingPanelProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] ?? null : null;
@@ -76,8 +77,6 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
   const selectedMask = masks.find((mask) => mask.id === selectedMaskId) ?? null;
   const selectedComponent = selectedMask?.components.find((component) => component.id === selectedComponentId) ?? null;
   const activeTool = session?.ui.tool ?? "none";
-  const overlayVisible = session?.ui.overlayVisible ?? false;
-
   function selectMask(mask: LocalMask) {
     setSelectedMask(mask.id);
     setSelectedComponent(mask.components[0]?.id ?? null);
@@ -122,6 +121,19 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
     dispatch({ kind: "replace-mask-component", maskId: selectedMask.id, component }, `Adjust ${componentLabel(component)}`);
   }
 
+  function deleteSelectedMask() {
+    if (!selectedMask) return;
+    const index = masks.findIndex((mask) => mask.id === selectedMask.id);
+    const next = masks[index + 1] ?? masks[index - 1] ?? null;
+    dispatch(
+      { kind: "remove-mask", maskId: selectedMask.id },
+      "Delete mask",
+    );
+    setSelectedMask(next?.id ?? null);
+    setSelectedComponent(next?.components[0]?.id ?? null);
+    setTool("none");
+  }
+
   function beginLocalAdjustment(): void {
     if (hiddenOverlayEntryRef.current !== null) return;
     const state = useDevelopStore.getState();
@@ -141,33 +153,25 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
 
   return (
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-      <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
-        <div>
+      <div className="flex min-h-[49px] items-center justify-between border-b border-lr-border-subtle px-4 py-3">
+        <div className="flex items-baseline gap-2">
           <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-            Masking
+            Masks
           </h2>
-          <p className="mt-0.5 text-[10px] text-lr-text-faint">Local adjustments by area</p>
+          <span className="font-mono text-[10px] text-lr-text-faint">
+            {masks.length}/{MAX_MASKS}
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            title={`${overlayVisible ? "Hide" : "Show"} mask overlay (O)`}
-            aria-label={`${overlayVisible ? "Hide" : "Show"} mask overlay`}
-            aria-pressed={overlayVisible}
-            onClick={() => setOverlayVisible(!overlayVisible)}
-            className={`flex h-7 w-7 items-center justify-center rounded-md border ${overlayVisible ? "border-red-400/70 bg-red-950/60 text-red-200" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
-          >
-            {overlayVisible ? <IconEye className="h-3.5 w-3.5" /> : <IconEyeOff className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            title="Add mask"
-            aria-label="Add mask"
+            title="Create mask"
             disabled={masks.length >= MAX_MASKS}
             onClick={addMask}
-            className="flex h-7 w-7 items-center justify-center rounded-md bg-lr-accent text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-7 items-center gap-1.5 rounded-[7px] bg-lr-accent px-2.5 text-[11px] font-medium text-[#14202a] transition hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <IconPlus className="h-4 w-4" />
+            <IconPlus className="h-3.5 w-3.5" />
+            Create mask
           </button>
         </div>
       </div>
@@ -178,7 +182,7 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
         </p>
       ) : null}
 
-      <div className="border-b border-lr-border-subtle px-3 py-3">
+      <div className="border-b border-lr-border-subtle p-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Tools</span>
           <button
@@ -198,9 +202,12 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
               title={`${TOOL_LABELS[kind]} (${TOOL_SHORTCUTS[kind]})`}
               aria-pressed={activeTool === kind}
               onClick={() => activateTool(kind)}
-              className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === kind ? "border-lr-accent bg-lr-selection text-lr-text" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
+              className={`flex min-h-[48px] flex-col items-center justify-center gap-0.5 rounded-lg border px-2 py-2 text-[10px] ${activeTool === kind ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"}`}
             >
-              {TOOL_LABELS[kind]}
+              <span>{TOOL_LABELS[kind]}</span>
+              <span className="font-mono text-[9px] text-lr-text-faint">
+                {TOOL_SHORTCUTS[kind]}
+              </span>
             </button>
           ))}
         </div>
@@ -213,7 +220,7 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <section className="border-b border-lr-border-subtle">
+        <section className="max-h-[212px] overflow-auto border-b border-lr-border-subtle">
           <div className="flex items-center justify-between px-4 py-3">
             <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Masks</h3>
             <span className="font-mono text-[10px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
@@ -327,6 +334,27 @@ export function MaskingPanel({ aiActions }: MaskingPanelProps) {
         ) : null}
 
         {aiActions ? <section className="border-b border-lr-border-subtle px-4 py-3">{aiActions}</section> : null}
+      </div>
+
+      <div className="flex gap-2 border-t border-lr-border-subtle p-3">
+        <button
+          type="button"
+          disabled={!selectedMask}
+          onClick={deleteSelectedMask}
+          className="flex-1 rounded-lg border border-lr-border-subtle px-3 py-2 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          Delete mask
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setTool("none");
+            onDone();
+          }}
+          className="flex-1 rounded-lg bg-lr-accent px-3 py-2 text-xs font-medium text-[#14202a] hover:bg-lr-accent-hover"
+        >
+          Done · ↵
+        </button>
       </div>
     </aside>
   );

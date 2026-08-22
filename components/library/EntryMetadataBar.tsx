@@ -11,31 +11,45 @@ import { useLibraryStore } from "@/stores/library-store";
 
 interface EntryMetadataBadgesProps {
   metadata: EntryMetadata;
+  compact?: boolean;
 }
 
 export function EntryMetadataBadges({
   metadata,
+  compact = false,
 }: EntryMetadataBadgesProps) {
   const { pick, colorLabel } = metadata;
   const showPick = pick === "pick";
 
   return (
     <>
-      {colorLabel ? (
-        <span
-          className="pointer-events-none absolute left-2 top-2 h-2 w-2 rounded-[2px] shadow-[0_0_0_1.5px_rgba(15,13,12,.7)]"
-          style={{ backgroundColor: COLOR_LABEL_HEX[colorLabel] }}
-        />
-      ) : null}
-
-      {showPick || metadata.pick === "reject" ? (
-        <span
-          className={[
-            "pointer-events-none absolute left-5 top-1.5 rounded-[4px] bg-[#0f0d0c]/80 px-1.5 py-0.5 font-mono text-[9px]",
-            showPick ? "text-[#8fd0a0]" : "text-lr-danger",
-          ].join(" ")}
-        >
-          {showPick ? "PICK" : "REJ"}
+      {colorLabel || showPick || metadata.pick === "reject" ? (
+        <span className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5">
+          {colorLabel ? (
+            <span
+              className="h-2 w-2 rounded-[2px] shadow-[0_0_0_1.5px_rgba(15,13,12,.7)]"
+              style={{ backgroundColor: COLOR_LABEL_HEX[colorLabel] }}
+            />
+          ) : null}
+          {showPick || metadata.pick === "reject" ? (
+            compact ? (
+              <span
+                className="h-2 w-2 rounded-[2px] shadow-[0_0_0_1.5px_rgba(15,13,12,.7)]"
+                style={{
+                  backgroundColor: showPick ? "#8fd0a0" : "#e08a5f",
+                }}
+              />
+            ) : (
+              <span
+                className={[
+                  "rounded-[4px] bg-[#0f0d0c]/80 px-1.5 py-0.5 font-mono text-[9px]",
+                  showPick ? "text-[#8fd0a0]" : "text-lr-danger",
+                ].join(" ")}
+              >
+                {showPick ? "PICK" : "REJ"}
+              </span>
+            )
+          ) : null}
         </span>
       ) : null}
 

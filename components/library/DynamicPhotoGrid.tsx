@@ -127,6 +127,19 @@ export function DynamicPhotoGrid({
     [rows],
   );
 
+  const dateGroupCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    let groupStart = 0;
+
+    for (const [index, row] of rows.entries()) {
+      if (rowStartsDateGroup[index]) {
+        groupStart = index;
+      }
+      counts.set(groupStart, (counts.get(groupStart) ?? 0) + row.tiles.length);
+    }
+    return counts;
+  }, [rowStartsDateGroup, rows]);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -254,6 +267,9 @@ export function DynamicPhotoGrid({
               return null;
             }
             const showHeader = rowStartsDateGroup[virtualRow.index] ?? false;
+            const leadEntry = row.tiles[0]?.entry;
+            const folderName = getParentFolderName(leadEntry?.relativePath ?? "");
+            const dateGroupCount = dateGroupCounts.get(virtualRow.index);
 
             return (
               <div
@@ -269,12 +285,14 @@ export function DynamicPhotoGrid({
                 {showHeader ? (
                   <div className="flex h-4 min-w-0 items-center gap-2">
                     <span className="shrink-0 font-mono text-[11px] uppercase leading-4 tracking-[0.06em] text-lr-text-faint">
-                      {formatRowDate(row.tiles[0]?.entry.lastModified)}
-                      {getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")
-                        ? ` · ${getParentFolderName(row.tiles[0]?.entry.relativePath ?? "")}`
-                        : ""}
+                      {formatRowDate(leadEntry?.lastModified)}
+                      {folderName ? ` · ${folderName}` : ""}
                     </span>
                     <div className="h-px flex-1 bg-lr-panel-raised" />
+                    <span className="shrink-0 font-mono text-[11px] leading-4 text-lr-text-faint">
+                      {dateGroupCount ?? row.tiles.length} frame
+                      {(dateGroupCount ?? row.tiles.length) === 1 ? "" : "s"}
+                    </span>
                   </div>
                 ) : null}
                 <div

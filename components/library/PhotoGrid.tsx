@@ -19,6 +19,7 @@ interface PhotoGridProps {
 
 const ROW_GAP = 12;
 const TILE_GAP = 12;
+const CAPTION_HEIGHT = 18;
 
 export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContextMenu }: PhotoGridProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -49,7 +50,8 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) => (rows[index]?.cellSize ?? thumbSize) + ROW_GAP,
+    estimateSize: (index) =>
+      (rows[index]?.cellSize ?? thumbSize) + CAPTION_HEIGHT + ROW_GAP,
     overscan: 6,
   });
 
@@ -113,7 +115,7 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                   width: `${containerWidth}px`,
-                  height: `${row.cellSize}px`,
+                  height: `${row.cellSize + CAPTION_HEIGHT}px`,
                   gap: `${TILE_GAP}px`,
                 }}
               >
@@ -123,7 +125,8 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                     entry={entry}
                     width={row.cellSize}
                     height={row.cellSize}
-                    fit="contain"
+                    fit="cover"
+                    caption
                     selected={selectedEntryIds.includes(entry.id)}
                     metadata={getEntryMetadata(entryMetadata, entry.id)}
                     onSelect={handleSelect}

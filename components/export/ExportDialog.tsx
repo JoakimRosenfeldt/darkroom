@@ -388,6 +388,20 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       .catch((showError: unknown) => setError(errorMessage(showError)));
   }, [summary]);
 
+  const progressFraction = useMemo(() => {
+    const phaseFraction = phase === "decoding"
+      ? 0.15
+      : phase === "rendering"
+        ? 0.55
+        : phase === "encoding"
+          ? 0.9
+          : 0;
+    return Math.min(
+      1,
+      (currentIndex + phaseFraction) / Math.max(1, entries.length),
+    );
+  }, [currentIndex, entries.length, phase]);
+
   const content = (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0a0908]/62 p-4" role="presentation">
       <div
@@ -396,9 +410,9 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         aria-modal="true"
         aria-labelledby="export-dialog-title"
       >
-        <div className="flex items-center justify-between border-b border-lr-border-subtle px-4 py-3">
+        <div className="flex items-center justify-between border-b border-lr-border-subtle px-[18px] py-4">
           <div>
-            <h2 id="export-dialog-title" className="text-sm font-semibold text-lr-text">
+            <h2 id="export-dialog-title" className="text-[15px] font-semibold tracking-[-0.01em] text-lr-text">
               Export {entries.length} photo{entries.length === 1 ? "" : "s"}
             </h2>
             <p className="mt-0.5 text-[11px] text-lr-text-dim">
@@ -417,143 +431,147 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         </div>
 
         {dialogState === "idle" ? (
-          <div className="space-y-3 p-4">
-            {!isElectronApp() ? (
-              <p className="rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-                Export is available in the Darkroom desktop app only.
-              </p>
-            ) : null}
-            <Field label="Format">
-              <select
-                value={format}
-                disabled={formatsLoading || formats.length === 0}
-                onChange={(event) => {
-                  const next = event.target.value as ExportFormatId;
-                  const descriptor = formats.find((item) => item.id === next);
-                  setFormat(next);
-                  setLossless(false);
-                  if (descriptor?.defaultQuality) {
-                    setQuality(descriptor.defaultQuality);
-                  }
-                }}
-                className="control"
-              >
-                {formats.length === 0 ? <option>Loading formats…</option> : null}
-                {formats.map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </select>
-            </Field>
-            {selectedFormat?.supportsQuality ? (
-              <Field label={`Quality · ${quality}`}>
-                <input
-                  type="range"
-                  min={1}
-                  max={100}
-                  value={quality}
-                  onChange={(event) => setQuality(Number(event.target.value))}
-                  className="h-1 w-full cursor-pointer accent-lr-accent"
-                />
-              </Field>
-            ) : null}
-            {selectedFormat?.supportsLossless ? (
-              <label className="flex items-center gap-2 text-xs text-lr-text-muted">
-                <input
-                  type="checkbox"
-                  checked={lossless}
-                  onChange={(event) => setLossless(event.target.checked)}
-                  className="accent-lr-accent"
-                />
-                WebP lossless
-              </label>
-            ) : null}
-            <Field label="Size">
-              <select
-                value={size.mode}
-                onChange={(event) => {
-                  const mode = event.target.value as ExportSizeOptions["mode"];
-                  setSize(mode === "long-edge"
-                    ? { mode, longEdge: 2048, neverUpscale: true }
-                    : mode === "fit"
-                      ? { mode, width: 2048, height: 2048, neverUpscale: true }
-                      : defaultSize());
-                }}
-                className="control"
-              >
-                <option value="original">Original</option>
-                <option value="long-edge">Long edge</option>
-                <option value="fit">Fit within</option>
-              </select>
-            </Field>
-            {size.mode === "long-edge" ? (
-              <Field label="Long edge (px)">
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={size.longEdge ?? ""}
-                  onChange={(event) => setSize({ ...size, longEdge: Number(event.target.value) })}
+          <div>
+            <div className="grid grid-cols-2 gap-x-3.5 gap-y-3 p-[18px]">
+              {!isElectronApp() ? (
+                <p className="col-span-2 rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+                  Export is available in the Darkroom desktop app only.
+                </p>
+              ) : null}
+              <Field label="Format">
+                <select
+                  value={format}
+                  disabled={formatsLoading || formats.length === 0}
+                  onChange={(event) => {
+                    const next = event.target.value as ExportFormatId;
+                    const descriptor = formats.find((item) => item.id === next);
+                    setFormat(next);
+                    setLossless(false);
+                    if (descriptor?.defaultQuality) {
+                      setQuality(descriptor.defaultQuality);
+                    }
+                  }}
                   className="control"
+                >
+                  {formats.length === 0 ? <option>Loading formats…</option> : null}
+                  {formats.map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Size">
+                <select
+                  value={size.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as ExportSizeOptions["mode"];
+                    setSize(mode === "long-edge"
+                      ? { mode, longEdge: 2048, neverUpscale: true }
+                      : mode === "fit"
+                        ? { mode, width: 2048, height: 2048, neverUpscale: true }
+                        : defaultSize());
+                  }}
+                  className="control"
+                >
+                  <option value="original">Original</option>
+                  <option value="long-edge">Long edge</option>
+                  <option value="fit">Fit within</option>
+                </select>
+              </Field>
+              {selectedFormat?.supportsQuality ? (
+                <Field label={`Quality · ${quality}`}>
+                  <div className="flex h-[34px] items-center">
+                    <input
+                      type="range"
+                      min={1}
+                      max={100}
+                      value={quality}
+                      onChange={(event) => setQuality(Number(event.target.value))}
+                      className="h-1 w-full cursor-pointer accent-lr-accent"
+                    />
+                  </div>
+                </Field>
+              ) : <div />}
+              {size.mode === "long-edge" ? (
+                <Field label="Long edge (px)">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={size.longEdge ?? ""}
+                    onChange={(event) => setSize({ ...size, longEdge: Number(event.target.value) })}
+                    className="control font-mono"
+                  />
+                </Field>
+              ) : null}
+              {size.mode === "fit" ? (
+                <>
+                  <Field label="Width (px)">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={size.width ?? ""}
+                      onChange={(event) => setSize({ ...size, width: Number(event.target.value) })}
+                      className="control font-mono"
+                    />
+                  </Field>
+                  <Field label="Height (px)">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={size.height ?? ""}
+                      onChange={(event) => setSize({ ...size, height: Number(event.target.value) })}
+                      className="control font-mono"
+                    />
+                  </Field>
+                </>
+              ) : null}
+              {selectedFormat?.supportsLossless ? (
+                <label className="col-span-2 flex items-center gap-2 text-xs text-lr-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={lossless}
+                    onChange={(event) => setLossless(event.target.checked)}
+                    className="accent-lr-accent"
+                  />
+                  WebP lossless
+                </label>
+              ) : null}
+              <Field label="Filename suffix">
+                <input
+                  type="text"
+                  value={suffix}
+                  onChange={(event) => setSuffix(event.target.value)}
+                  className="control font-mono"
+                  spellCheck={false}
                 />
               </Field>
-            ) : null}
-            {size.mode === "fit" ? (
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Width (px)">
+              <Field label="Existing files">
+                <select
+                  value={conflict}
+                  onChange={(event) => setConflict(event.target.value as ExportConflictBehavior)}
+                  className="control"
+                >
+                  <option value="rename">Rename with -2, -3…</option>
+                  <option value="skip">Skip</option>
+                  <option value="replace">Replace</option>
+                </select>
+              </Field>
+              {size.mode !== "original" ? (
+                <label className="col-span-2 flex items-center gap-2 border-t border-lr-border-subtle pt-3.5 text-xs text-lr-text-muted">
                   <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={size.width ?? ""}
-                    onChange={(event) => setSize({ ...size, width: Number(event.target.value) })}
-                    className="control"
+                    type="checkbox"
+                    checked={size.neverUpscale !== false}
+                    onChange={(event) => setSize({ ...size, neverUpscale: event.target.checked })}
+                    className="accent-lr-accent"
                   />
-                </Field>
-                <Field label="Height (px)">
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={size.height ?? ""}
-                    onChange={(event) => setSize({ ...size, height: Number(event.target.value) })}
-                    className="control"
-                  />
-                </Field>
-              </div>
-            ) : null}
-            {size.mode !== "original" ? (
-              <label className="flex items-center gap-2 text-xs text-lr-text-muted">
-                <input
-                  type="checkbox"
-                  checked={size.neverUpscale !== false}
-                  onChange={(event) => setSize({ ...size, neverUpscale: event.target.checked })}
-                  className="accent-lr-accent"
-                />
-                Never upscale
-              </label>
-            ) : null}
-            <Field label="Filename suffix">
-              <input
-                type="text"
-                value={suffix}
-                onChange={(event) => setSuffix(event.target.value)}
-                className="control"
-                spellCheck={false}
-              />
-            </Field>
-            <Field label="Existing files">
-              <select
-                value={conflict}
-                onChange={(event) => setConflict(event.target.value as ExportConflictBehavior)}
-                className="control"
-              >
-                <option value="rename">Rename with -2, -3…</option>
-                <option value="skip">Skip</option>
-                <option value="replace">Replace</option>
-              </select>
-            </Field>
-            {error ? <p className="text-xs text-red-400">{error}</p> : null}
-            <div className="flex items-center justify-end gap-2 pt-1">
+                  Never upscale
+                </label>
+              ) : null}
+              {error ? <p className="col-span-2 text-xs text-red-400">{error}</p> : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-lr-border-subtle px-[18px] py-3.5">
               <button type="button" onClick={onClose} className="button-secondary">Cancel</button>
               <button
                 type="button"
@@ -568,17 +586,17 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         ) : null}
 
         {dialogState === "running" ? (
-          <div className="space-y-4 p-4">
+          <div className="space-y-3.5 px-[18px] py-3.5">
             <div className="flex items-center justify-between text-xs">
               <span className="text-lr-accent">{phaseLabel(phase)}</span>
               <span className="text-lr-text-muted">{currentIndex + 1} of {entries.length}</span>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-lr-panel-raised">
-              <div className="h-full bg-lr-accent transition-all" style={{ width: `${Math.min(100, (currentIndex / Math.max(1, entries.length)) * 100)}%` }} />
+            <div className="h-[5px] overflow-hidden rounded-full bg-lr-panel">
+              <div className="h-full bg-lr-accent transition-all" style={{ width: `${progressFraction * 100}%` }} />
             </div>
-            <p className="truncate text-xs text-lr-text-muted">{currentEntry?.name ?? "Preparing export…"}</p>
-            <div className="flex justify-end">
-              <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Cancel after this file</button>
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-lr-text-muted">{currentEntry?.name ?? "Preparing export…"}</p>
+              <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Stop after this file</button>
             </div>
           </div>
         ) : null}

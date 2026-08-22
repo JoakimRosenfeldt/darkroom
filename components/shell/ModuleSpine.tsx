@@ -63,7 +63,7 @@ export function ModuleSpine({
         const Icon = module.icon;
         const isActive = module.id === activeModule;
         const className = [
-          "flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-[10px] text-[9px] font-medium tracking-[0.06em] transition-colors",
+          "flex h-11 w-11 flex-col items-center justify-center gap-[3px] rounded-[10px] text-[9px] font-medium tracking-[0.04em] transition-colors",
           isActive
             ? "bg-lr-selection text-lr-accent"
             : module.enabled
@@ -100,10 +100,6 @@ export function ModuleSpine({
         );
       })}
 
-      <div className="mt-auto flex flex-col items-center gap-0.5 font-mono text-[9px] uppercase text-lr-text-faint">
-        <span>{entries.length}</span>
-        <span>{needsFolderAccess ? "link" : "local"}</span>
-      </div>
     </nav>
   );
 }

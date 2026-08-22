@@ -24,6 +24,7 @@ import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import { AiMaskActions } from "@/components/develop/AiMaskActions";
 import type { RenderDiagnostic } from "@/lib/develop/renderer";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
+import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
@@ -37,6 +38,42 @@ import { isEditableTarget } from "@/hooks/is-editable-target";
 interface PhotoViewerProps {
   entry: LibraryEntry;
   entries: LibraryEntry[];
+}
+
+const MASK_CANVAS_TOOLS: Array<{
+  id: MaskTool;
+  label: string;
+  shortcut: string;
+}> = [
+  { id: "none", label: "Select", shortcut: "Esc" },
+  { id: "brush", label: "Brush", shortcut: "K" },
+  { id: "linear-gradient", label: "Linear", shortcut: "M" },
+  { id: "radial-gradient", label: "Radial", shortcut: "⇧M" },
+];
+
+function fileType(name: string): string {
+  return name.split(".").at(-1)?.toUpperCase() ?? "PHOTO";
+}
+
+function captureSummary(metadata: Record<string, unknown>): string[] {
+  const summary: string[] = [];
+  const iso = metadata.iso_speed;
+  const aperture = metadata.aperture;
+  const shutter = metadata.shutter;
+  if (typeof iso === "number" || typeof iso === "string") {
+    summary.push(`ISO ${iso}`);
+  }
+  if (typeof aperture === "number") {
+    summary.push(`f/${aperture.toFixed(1)}`);
+  } else if (typeof aperture === "string") {
+    summary.push(aperture);
+  }
+  if (typeof shutter === "number" && shutter > 0) {
+    summary.push(shutter >= 1 ? `${shutter}s` : `1/${Math.round(1 / shutter)}`);
+  } else if (typeof shutter === "string") {
+    summary.push(shutter);
+  }
+  return summary;
 }
 
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
@@ -119,6 +156,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const onRenderDiagnostics = useCallback((next: readonly RenderDiagnostic[]) => {
     setRenderDiagnostics(next);
   }, []);
+  const selectedMask = developSettings.masking.masks.find(
+    (mask) => mask.id === maskUi?.selectedMaskId,
+  );
+  const cropWidth = decoded && cropDraft
+    ? Math.max(1, Math.round(decoded.width * cropDraft.width))
+    : null;
+  const cropHeight = decoded && cropDraft
+    ? Math.max(1, Math.round(decoded.height * cropDraft.height))
+    : null;
+  const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
 
   useEffect(() => {
     if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
@@ -281,19 +328,22 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       if (event.defaultPrevented) {
         return;
       }
+      const interactiveTarget =
+        event.target instanceof HTMLElement &&
+        Boolean(event.target.closest("button, a[href], [role='button']"));
       if (activePanel === "crop" && cropDraftRef.current) {
         if (event.key === "Escape") {
           event.preventDefault();
           discardCrop("edit");
           return;
         }
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && !interactiveTarget) {
           event.preventDefault();
           applyCrop();
           return;
         }
       }
-      if (isEditableTarget(event.target)) {
+      if (isEditableTarget(event.target) || interactiveTarget) {
         return;
       }
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
@@ -303,6 +353,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         return;
       }
       if (activePanel === "masking" && plainKey) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          setMaskTool("none");
+          setActivePanel("edit");
+          return;
+        }
         const key = event.key.toLowerCase();
         if (key === "k" || key === "m") {
           event.preventDefault();
@@ -384,36 +440,79 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1">
-          <div className="relative flex min-w-0 flex-1 flex-col bg-lr-canvas">
+          <div className="relative flex min-w-0 flex-1 flex-col bg-[#131110]">
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-toolbar px-4">
             <span className="font-mono text-xs text-lr-text">{entry.name}</span>
-            <span className="rounded-md border border-lr-border-subtle px-1.5 py-0.5 font-mono text-[10px] text-lr-accent">
-              {entry.profileId?.toUpperCase() ?? "PHOTO"}
+            <span className={[
+              "rounded-md px-1.5 py-0.5 font-mono text-[10px] text-lr-accent",
+              activePanel === "crop" || activePanel === "masking"
+                ? "bg-lr-selection"
+                : "border border-lr-border-subtle",
+            ].join(" ")}>
+              {activePanel === "crop"
+                ? "CROP"
+                : activePanel === "masking"
+                  ? "MASKING"
+                  : fileType(entry.name)}
             </span>
             <span className="truncate font-mono text-[11px] text-lr-text-muted">
-              {decoded
-                ? `${decoded.width} × ${decoded.height}`
+              {activePanel === "crop" && cropWidth && cropHeight && decoded
+                ? `${cropWidth} × ${cropHeight} · from ${decoded.width} × ${decoded.height}`
+                : activePanel === "masking"
+                  ? `${developSettings.masking.masks.length} ${developSettings.masking.masks.length === 1 ? "mask" : "masks"}${selectedMask ? ` · ${selectedMask.name}` : ""}`
+                  : decoded
+                    ? [`${decoded.width} × ${decoded.height}`, ...captureDetails].join(" · ")
                 : loading
                   ? "Preparing preview…"
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
-            <button type="button" disabled={!canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted disabled:opacity-40">
-              Undo
-            </button>
-            <button type="button" disabled={!canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted disabled:opacity-40">
-              Redo
-            </button>
-            <button
-              type="button"
-              onClick={() => setExportOpen(true)}
-              className="h-8 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover"
-            >
-              Export{selectionTargets.length > 1 ? ` ${selectionTargets.length}` : ""}…
-            </button>
+            {activePanel === "masking" ? (
+              <>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
+                  Overlay
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false))}
+                  aria-pressed={maskUi?.overlayVisible ?? false}
+                  className={[
+                    "h-8 rounded-lg border px-3 text-xs transition",
+                    maskUi?.overlayVisible
+                      ? "border-lr-accent/60 bg-lr-selection text-lr-accent"
+                      : "border-lr-border-subtle bg-lr-panel-raised text-lr-text-muted hover:text-lr-text",
+                  ].join(" ")}
+                >
+                  {maskUi?.overlayVisible ? "Hide" : "Show"} · O
+                </button>
+              </>
+            ) : activePanel !== "crop" ? (
+              <>
+                <button type="button" disabled={!canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                  Undo
+                </button>
+                <button type="button" disabled={!canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                  Redo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExportOpen(true)}
+                  className="h-8 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover"
+                >
+                  Export{selectionTargets.length > 1 ? ` ${selectionTargets.length}` : ""}…
+                </button>
+              </>
+            ) : null}
           </div>
 
-          <div className="relative min-h-0 flex-1">
+          <div className={[
+            "relative min-h-0 flex-1",
+            activePanel === "crop"
+              ? "p-[34px]"
+              : activePanel === "masking"
+                ? "p-7"
+                : "p-8",
+          ].join(" ")}>
             {loading ? (
               <div className="flex h-full items-center justify-center text-xs uppercase tracking-wider text-lr-text-faint">
                 Decoding...
@@ -444,7 +543,76 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
             ) : null}
           </div>
 
-          <EntryMetadataBar
+          {activePanel === "crop" && cropDraft ? (
+            <div className="flex h-[76px] shrink-0 items-center gap-4 border-t border-lr-border-subtle bg-lr-toolbar px-4">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
+                    Straighten
+                  </span>
+                  <span className="font-mono text-xs text-lr-accent">
+                    {cropDraft.angle > 0 ? "+" : ""}{cropDraft.angle.toFixed(1)}°
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => changeCrop({ ...cropDraft, angle: 0 })}
+                    className="text-[10px] text-lr-text-faint hover:text-lr-text"
+                  >
+                    Reset
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Straighten"
+                  min={-45}
+                  max={45}
+                  step={0.1}
+                  value={cropDraft.angle}
+                  onChange={(event) => changeCrop({ ...cropDraft, angle: Number(event.target.value) })}
+                  className="develop-slider"
+                />
+              </div>
+              <button type="button" onClick={resetCrop} className="h-9 rounded-lg border border-lr-border-subtle px-3.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
+                Reset crop
+              </button>
+              <button type="button" onClick={() => discardCrop("edit")} className="h-9 rounded-lg border border-lr-border-subtle px-3.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
+                Cancel
+              </button>
+              <button type="button" onClick={applyCrop} className="h-9 rounded-lg bg-lr-accent px-4 text-xs font-medium text-[#14202a] hover:bg-lr-accent-hover">
+                Done · ↵
+              </button>
+            </div>
+          ) : activePanel === "masking" ? (
+            <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-t border-lr-border-subtle bg-lr-toolbar px-4">
+              <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+                {MASK_CANVAS_TOOLS.map((tool) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    onClick={() => {
+                      setMaskTool(tool.id);
+                      if (tool.id !== "none") setMaskOverlayVisible(true);
+                    }}
+                    aria-pressed={(maskUi?.tool ?? "none") === tool.id}
+                    className={[
+                      "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px]",
+                      (maskUi?.tool ?? "none") === tool.id
+                        ? "bg-lr-selection text-lr-accent"
+                        : "text-lr-text-muted hover:text-lr-text",
+                    ].join(" ")}
+                  >
+                    {tool.label}
+                    <span className="font-mono text-[9px] text-lr-text-faint">{tool.shortcut}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="flex-1" />
+              <span className="font-mono text-[10px] text-lr-text-faint">
+                O overlay · Delete mask
+              </span>
+            </div>
+          ) : (
+            <EntryMetadataBar
             entryId={entry.id}
             metadata={metadata}
             onPick={() => applyMetadataToEntries(selectionTargets, { pick: "pick" })}
@@ -460,7 +628,8 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                     : label,
               });
             }}
-          />
+            />
+          )}
           </div>
 
           {decoded ? (
@@ -473,8 +642,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               onResetAll={resetAllDevelopSettings}
               onCropChange={changeCrop}
               onCropReset={resetCrop}
-              onCropApply={applyCrop}
-              onCropCancel={() => discardCrop("edit")}
               maskingAiActions={
                 <AiMaskActions
                   entry={entry}

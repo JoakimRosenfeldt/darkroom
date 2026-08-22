@@ -59,7 +59,7 @@ export function SliderRow({
   }
 
   return (
-    <div className={`grid grid-cols-[96px_1fr_52px] items-center gap-2 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
+    <div className={`grid grid-cols-[92px_1fr_64px] items-center gap-2.5 py-1 text-xs ${disabled ? "opacity-40" : ""}`}>
       <button
         type="button"
         disabled={disabled}
