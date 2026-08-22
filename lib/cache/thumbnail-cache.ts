@@ -17,7 +17,51 @@ interface LoadThumbnailOptions {
 }
 
 const memoryCache = new Map<string, Blob>();
-const inFlightLoads = new Map<string, Promise<Blob>>();
+interface InFlightThumbnailLoad {
+  promise: Promise<Blob>;
+  controller: AbortController;
+  consumers: number;
+  settled: boolean;
+}
+
+const inFlightLoads = new Map<string, InFlightThumbnailLoad>();
+
+function waitForCaller(
+  load: InFlightThumbnailLoad,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Thumbnail request was cancelled.", "AbortError"));
+  }
+  load.consumers += 1;
+  return new Promise<Blob>((resolve, reject) => {
+    let finished = false;
+    function release(aborted: boolean) {
+      if (finished) return;
+      finished = true;
+      load.consumers -= 1;
+      signal?.removeEventListener("abort", onAbort);
+      if (aborted && load.consumers === 0 && !load.settled) {
+        load.controller.abort();
+      }
+    }
+    const onAbort = () => {
+      release(true);
+      reject(new DOMException("Thumbnail request was cancelled.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    load.promise.then(
+      (blob) => {
+        release(false);
+        resolve(blob);
+      },
+      (error: unknown) => {
+        release(false);
+        reject(error);
+      },
+    );
+  });
+}
 
 function buildCacheKey(key: ThumbnailCacheKey): string {
   return `${CACHE_PREFIX}${key.relativePath}:${key.lastModified}:${key.thumbnail ? "thumb" : "full"}`;
@@ -77,15 +121,14 @@ export async function loadThumbnailBlob(
     thumbnail: true,
   };
   const cacheKey = buildCacheKey(key);
-  const shouldShareInFlightLoad =
-    !options.signal && (options.priority ?? 0) <= 0;
-  const activeLoad = shouldShareInFlightLoad ? inFlightLoads.get(cacheKey) : null;
+  const activeLoad = inFlightLoads.get(cacheKey);
 
   if (activeLoad) {
-    return activeLoad;
+    return waitForCaller(activeLoad, options.signal);
   }
 
-  const load = (async () => {
+  const controller = new AbortController();
+  const promise = (async () => {
     const cached = await getCachedThumbnail(key);
     if (cached) {
       return cached;
@@ -95,22 +138,27 @@ export async function loadThumbnailBlob(
       thumbnail: true,
       maxEdge,
       priority: options.priority,
-      signal: options.signal,
+      signal: controller.signal,
     });
     URL.revokeObjectURL(decoded.objectUrl);
     await setCachedThumbnail(key, decoded.blob);
     return decoded.blob;
   })();
+  const load: InFlightThumbnailLoad = {
+    promise,
+    controller,
+    consumers: 0,
+    settled: false,
+  };
 
-  if (shouldShareInFlightLoad) {
-    inFlightLoads.set(cacheKey, load);
-  }
-
-  try {
-    return await load;
-  } finally {
-    if (shouldShareInFlightLoad) {
+  function clearCompletedLoad() {
+    load.settled = true;
+    if (inFlightLoads.get(cacheKey) === load) {
       inFlightLoads.delete(cacheKey);
     }
   }
+
+  inFlightLoads.set(cacheKey, load);
+  promise.then(clearCompletedLoad, clearCompletedLoad);
+  return waitForCaller(load, options.signal);
 }

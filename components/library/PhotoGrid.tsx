@@ -34,6 +34,10 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
     () => entries.map((entry) => entry.id),
     [entries],
   );
+  const selectedEntrySet = useMemo(
+    () => new Set(selectedEntryIds),
+    [selectedEntryIds],
+  );
 
   const handleSelect = useCallback(
     (entryId: string, modifiers: { shift?: boolean; toggle?: boolean }) => {
@@ -67,15 +71,16 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
     onGridRowsChange(rows.map((row) => row.entries.map((entry) => entry.id)));
   }, [rows, layoutReady, onGridRowsChange]);
 
-  const selectedRowIndex = useMemo(() => {
-    if (!selectedEntryId) {
-      return -1;
-    }
-
-    return rows.findIndex((row) =>
-      row.entries.some((entry) => entry.id === selectedEntryId),
-    );
-  }, [rows, selectedEntryId]);
+  const rowIndexByEntryId = useMemo(() => {
+    const index = new Map<string, number>();
+    rows.forEach((row, rowIndex) => {
+      row.entries.forEach((entry) => index.set(entry.id, rowIndex));
+    });
+    return index;
+  }, [rows]);
+  const selectedRowIndex = selectedEntryId
+    ? (rowIndexByEntryId.get(selectedEntryId) ?? -1)
+    : -1;
 
   useScrollToSelectedRow({
     layoutReady,
@@ -127,7 +132,7 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                     height={row.cellSize}
                     fit="cover"
                     caption
-                    selected={selectedEntryIds.includes(entry.id)}
+                    selected={selectedEntrySet.has(entry.id)}
                     metadata={getEntryMetadata(entryMetadata, entry.id)}
                     onSelect={handleSelect}
                     onContextMenu={onPhotoContextMenu}

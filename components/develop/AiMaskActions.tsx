@@ -496,7 +496,7 @@ export function AiMaskActions({
     return (
       <div className="space-y-2">
         <div>
-          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI masks</h3>
+          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>
           <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">Subject and Sky masking run locally in the Darkroom desktop app.</p>
         </div>
       </div>
@@ -516,7 +516,7 @@ export function AiMaskActions({
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI masks</h3>
+          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>
           <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">Local inference. Models stay in Darkroom&apos;s offline cache.</p>
         </div>
         {busy ? <span className="rounded bg-lr-selection px-1.5 py-1 text-[9px] text-lr-accent">Working</span> : null}
@@ -532,10 +532,15 @@ export function AiMaskActions({
               type="button"
               disabled={disabled}
               onClick={() => void startRequest({ modelId, maskId: selectedMaskId, target: null, forceWasm: false })}
-              className="rounded-md border border-lr-border-subtle px-2 py-2 text-left text-[10px] text-lr-text-muted hover:border-lr-accent/60 hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex min-h-[52px] items-center gap-2 rounded-lg border border-lr-border-subtle px-2.5 py-2 text-left text-[10px] text-lr-text-muted hover:border-lr-accent/60 hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <span className="block font-medium">{MODEL_LABELS[modelId]}</span>
-              <span className="mt-0.5 block text-[9px] text-lr-text-faint">{modelStateLabel(state)}</span>
+              <span className="font-mono text-[9px] font-semibold tracking-[0.08em] text-lr-accent">
+                {modelId === "subject" ? "SUB" : "SKY"}
+              </span>
+              <span className="min-w-0">
+                <span className="block font-medium">{MODEL_LABELS[modelId]}</span>
+                <span className="mt-0.5 block truncate text-[9px] text-lr-text-faint">{modelStateLabel(state)}</span>
+              </span>
             </button>
           );
         })}
@@ -601,8 +606,9 @@ export function AiMaskActions({
       {success ? <p className="text-[10px] text-lr-accent">{success}</p> : null}
       {error ? <p role="alert" className="text-[10px] leading-relaxed text-lr-danger">{error}</p> : null}
 
-      <div className="space-y-1.5 border-t border-lr-border-subtle pt-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Model cache</p>
+      <details className="border-t border-lr-border-subtle pt-2">
+        <summary className="cursor-pointer text-[10px] text-lr-text-faint hover:text-lr-text-muted">Model cache</summary>
+        <div className="mt-2 space-y-1.5">
         {MODEL_IDS.map((modelId) => {
           const state = modelStates[modelId];
           const ready = state?.status === "ready";
@@ -614,7 +620,8 @@ export function AiMaskActions({
             </div>
           );
         })}
-      </div>
+        </div>
+      </details>
 
       {consentRequest ? (
         <div role="dialog" aria-modal="true" aria-labelledby="ai-consent-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

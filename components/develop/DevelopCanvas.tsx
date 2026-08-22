@@ -5,11 +5,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   DevelopRenderer,
+  type MaskOverlayMode,
   type RenderDiagnostic,
 } from "@/lib/develop/renderer";
 import { useDevelopStore } from "@/stores/develop-store";
 import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOverlay";
 import { MaskingOverlay } from "@/components/develop/MaskingOverlay";
+import type { BrushSettings } from "@/components/develop/MaskingOverlay";
 import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { computeContainedImageRect } from "@/lib/develop/crop-geometry";
 import { createDefaultDevelopDocument } from "@/lib/develop/document";
@@ -34,8 +36,11 @@ interface DevelopCanvasProps {
     update: (current: CropPreviewTransform) => CropPreviewTransform,
   ) => void;
   overlayMaskId?: string | null;
+  overlayMode?: MaskOverlayMode;
   onRenderDiagnostics?: (diagnostics: readonly RenderDiagnostic[]) => void;
   maskingActive?: boolean;
+  brushSettings: BrushSettings;
+  onBrushSettingsChange: (settings: BrushSettings) => void;
 }
 
 const MIN_PREVIEW_ZOOM = 0.25;
@@ -67,8 +72,11 @@ export function DevelopCanvas({
   onCropChange,
   onPreviewTransformChange,
   overlayMaskId = null,
+  overlayMode = "color",
   onRenderDiagnostics,
   maskingActive = false,
+  brushSettings,
+  onBrushSettingsChange,
 }: DevelopCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -226,7 +234,7 @@ export function DevelopCanvas({
         stableSourceSignature,
         state.showOriginal,
         draft ? "source" : activeDocument.settings.crop.enabled ? "crop-preview" : "source",
-        { overlayMaskId },
+        { overlayMaskId, overlayMode },
       ).then((preparation) => {
         if (active && request === renderRequestRef.current) {
           setRenderDiagnostics(preparation.diagnostics);
@@ -255,6 +263,7 @@ export function DevelopCanvas({
     viewTransform.scale,
     onRenderDiagnostics,
     overlayMaskId,
+    overlayMode,
     stableSourceSignature,
   ]);
 
@@ -273,7 +282,7 @@ export function DevelopCanvas({
         stableSourceSignature,
         showOriginal,
         cropDraft ? "source" : settings.crop.enabled ? "crop-preview" : "source",
-        { overlayMaskId },
+        { overlayMaskId, overlayMode },
       ).then((preparation) => {
         if (request === renderRequestRef.current) {
           setRenderDiagnostics(preparation.diagnostics);
@@ -293,6 +302,7 @@ export function DevelopCanvas({
     cropDraft,
     onRenderDiagnostics,
     overlayMaskId,
+    overlayMode,
     stableSourceSignature,
   ]);
 
@@ -552,6 +562,8 @@ export function DevelopCanvas({
             mask={selectedMask}
             component={selectedComponent}
             tool={maskTool}
+            brushSettings={brushSettings}
+            onBrushSettingsChange={onBrushSettingsChange}
           />
         ) : null}
       </div>

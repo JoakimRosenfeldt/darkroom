@@ -19,16 +19,23 @@ import {
   DevelopCanvas,
   type CropPreviewTransform,
 } from "@/components/develop/DevelopCanvas";
+import type { BrushSettings } from "@/components/develop/MaskingOverlay";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import { AiMaskActions } from "@/components/develop/AiMaskActions";
-import type { RenderDiagnostic } from "@/lib/develop/renderer";
+import type {
+  MaskOverlayMode,
+  RenderDiagnostic,
+} from "@/lib/develop/renderer";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import { captureBrushStrokeSettings } from "@/lib/develop/document";
 import type { CropSettings } from "@/lib/develop/types";
+import { fitCropWithinRotation } from "@/lib/develop/crop-geometry";
+import { estimateStraightenAngle } from "@/lib/develop/auto-straighten";
 import { useDevelopStore } from "@/stores/develop-store";
 import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
@@ -50,6 +57,71 @@ const MASK_CANVAS_TOOLS: Array<{
   { id: "linear-gradient", label: "Linear", shortcut: "M" },
   { id: "radial-gradient", label: "Radial", shortcut: "⇧M" },
 ];
+
+const MASK_BRUSH_SETTINGS: Array<{
+  key: keyof BrushSettings;
+  label: string;
+}> = [
+  { key: "size", label: "Size" },
+  { key: "feather", label: "Feather" },
+  { key: "flow", label: "Flow" },
+  { key: "density", label: "Density" },
+];
+
+const RANGE_ADJUSTMENT_KEYS = new Set([
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "End",
+  "Home",
+  "PageDown",
+  "PageUp",
+]);
+
+function MaskBrushSlider({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+
+  return (
+    <label className="flex shrink-0 items-center gap-1.5 text-[10px] text-lr-text-muted">
+      <span>{label}</span>
+      <input
+        type="range"
+        aria-label={`Brush ${label}`}
+        min={0}
+        max={1}
+        step={0.01}
+        value={value}
+        onPointerDown={() => beginEditGroup(`Adjust brush ${label.toLowerCase()}`)}
+        onPointerUp={endEditGroup}
+        onPointerCancel={endEditGroup}
+        onBlur={endEditGroup}
+        onKeyDown={(event) => {
+          if (RANGE_ADJUSTMENT_KEYS.has(event.key)) {
+            beginEditGroup(`Adjust brush ${label.toLowerCase()}`);
+          }
+        }}
+        onKeyUp={(event) => {
+          if (RANGE_ADJUSTMENT_KEYS.has(event.key)) endEditGroup();
+        }}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="develop-slider w-16"
+      />
+      <span className="w-6 text-right font-mono text-[9px] text-lr-text-faint">
+        {Math.round(value * 100)}
+      </span>
+    </label>
+  );
+}
 
 function fileType(name: string): string {
   return name.split(".").at(-1)?.toUpperCase() ?? "PHOTO";
@@ -95,6 +167,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     useState<CropPreviewTransform>({ scale: 1, x: 0, y: 0 });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [autoStraightening, setAutoStraightening] = useState(false);
+  const [maskOverlayMode, setMaskOverlayMode] = useState<MaskOverlayMode>("color");
+  const [maskBrushSettings, setMaskBrushSettings] = useState<BrushSettings>({
+    size: 0.08,
+    feather: 0.5,
+    flow: 1,
+    density: 1,
+  });
   const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
   const activeIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
@@ -148,6 +228,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   });
   const setMaskOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
   const setMaskTool = useDevelopStore((state) => state.setMaskTool);
+  const dispatchDevelop = useDevelopStore((state) => state.dispatch);
   const [exportOpen, setExportOpen] = useState(false);
   const sourceSignature = useMemo(
     () => sourceSignatureForEntry(entry),
@@ -159,6 +240,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const selectedMask = developSettings.masking.masks.find(
     (mask) => mask.id === maskUi?.selectedMaskId,
   );
+  const selectedMaskComponent = selectedMask?.components.find(
+    (component) => component.id === maskUi?.selectedComponentId,
+  );
+  const selectedBrush = selectedMaskComponent?.kind === "brush"
+    ? selectedMaskComponent
+    : null;
+  const footerBrushSettings = selectedBrush ?? maskBrushSettings;
+  const showBrushSettings = maskUi?.tool === "brush" || selectedBrush !== null;
   const cropWidth = decoded && cropDraft
     ? Math.max(1, Math.round(decoded.width * cropDraft.width))
     : null;
@@ -231,14 +320,47 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
   function changeCrop(next: CropSettings, preserveFrame = false) {
     const current = cropDraftRef.current;
+    const boundedRect = decoded
+      ? fitCropWithinRotation(next, next.angle, decoded.width, decoded.height)
+      : next;
+    const bounded = { ...next, ...boundedRect };
     if (preserveFrame && current) {
       setCropImageOffset((offset) => ({
-        x: offset.x + current.x - next.x,
-        y: offset.y + current.y - next.y,
+        x: offset.x + current.x - bounded.x,
+        y: offset.y + current.y - bounded.y,
       }));
     }
-    cropDraftRef.current = next;
-    setCropDraft(next);
+    cropDraftRef.current = bounded;
+    setCropDraft(bounded);
+  }
+
+  function autoStraighten() {
+    if (!decoded || autoStraightening) return;
+    setAutoStraightening(true);
+    window.requestAnimationFrame(() => {
+      const draft = cropDraftRef.current;
+      if (draft) {
+        changeCrop({ ...draft, angle: estimateStraightenAngle(decoded) });
+      }
+      setAutoStraightening(false);
+    });
+  }
+
+  function updateBrushSetting(
+    key: keyof BrushSettings,
+    value: number,
+  ) {
+    const nextSettings = { ...footerBrushSettings, [key]: value };
+    setMaskBrushSettings(nextSettings);
+    if (!selectedMask || !selectedBrush) return;
+    dispatchDevelop({
+      kind: "replace-mask-component",
+      maskId: selectedMask.id,
+      component: {
+        ...captureBrushStrokeSettings(selectedBrush),
+        ...nextSettings,
+      },
+    }, `Adjust brush ${key}`);
   }
 
   function resetCrop() {
@@ -472,6 +594,27 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
                   Overlay
                 </span>
+                <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+                  {(["color", "white", "image"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        setMaskOverlayMode(mode);
+                        setMaskOverlayVisible(true);
+                      }}
+                      aria-pressed={maskOverlayMode === mode}
+                      className={[
+                        "rounded-md px-2.5 py-1.5 text-[11px] capitalize",
+                        maskOverlayMode === mode
+                          ? "bg-lr-selection text-lr-accent"
+                          : "text-lr-text-muted hover:text-lr-text",
+                      ].join(" ")}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
                   onClick={() => setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false))}
@@ -537,8 +680,11 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                 onCropChange={changeCrop}
                 onPreviewTransformChange={setCropPreviewTransform}
                 overlayMaskId={activePanel === "masking" && maskUi?.overlayVisible ? maskUi.selectedMaskId : null}
+                overlayMode={maskOverlayMode}
                 onRenderDiagnostics={onRenderDiagnostics}
                 maskingActive={activePanel === "masking"}
+                brushSettings={maskBrushSettings}
+                onBrushSettingsChange={setMaskBrushSettings}
               />
             ) : null}
           </div>
@@ -559,6 +705,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                     className="text-[10px] text-lr-text-faint hover:text-lr-text"
                   >
                     Reset
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!decoded || autoStraightening}
+                    onClick={autoStraighten}
+                    className="rounded border border-lr-border-subtle px-2 py-1 text-[10px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
+                  >
+                    {autoStraightening ? "Analyzing…" : "Auto"}
                   </button>
                 </div>
                 <input
@@ -583,7 +737,43 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               </button>
             </div>
           ) : activePanel === "masking" ? (
-            <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-t border-lr-border-subtle bg-lr-toolbar px-4">
+            <div className={[
+              "shrink-0 border-t border-lr-border-subtle bg-lr-toolbar px-4",
+              showBrushSettings
+                ? "flex h-[78px] flex-wrap items-center gap-x-2.5 gap-y-1 overflow-hidden py-1.5"
+                : "flex h-[52px] items-center gap-2.5",
+            ].join(" ")}>
+              <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+                {(["add", "subtract"] as const).map((operation) => {
+                  const first = selectedMask?.components[0]?.id === selectedMaskComponent?.id;
+                  return (
+                    <button
+                      key={operation}
+                      type="button"
+                      disabled={!selectedMask || !selectedMaskComponent || (first && operation === "subtract")}
+                      onClick={() => {
+                        if (!selectedMask || !selectedMaskComponent) return;
+                        dispatchDevelop({
+                          kind: "set-mask-component-operation",
+                          maskId: selectedMask.id,
+                          componentId: selectedMaskComponent.id,
+                          operation,
+                        }, operation === "add" ? "Add component" : "Subtract component");
+                      }}
+                      aria-pressed={selectedMaskComponent?.operation === operation}
+                      className={[
+                        "rounded-md px-3 py-1.5 text-[11px] capitalize disabled:opacity-35",
+                        selectedMaskComponent?.operation === operation
+                          ? "bg-lr-selection text-lr-accent"
+                          : "text-lr-text-muted hover:text-lr-text",
+                      ].join(" ")}
+                    >
+                      {operation}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="h-5 w-px bg-lr-border-subtle" />
               <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
                 {MASK_CANVAS_TOOLS.map((tool) => (
                   <button
@@ -606,10 +796,28 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                   </button>
                 ))}
               </div>
-              <div className="flex-1" />
-              <span className="font-mono text-[10px] text-lr-text-faint">
-                O overlay · Delete mask
-              </span>
+              {showBrushSettings ? (
+                <div className="order-last flex h-7 w-full min-w-0 items-center gap-4 overflow-x-auto border-t border-lr-border-subtle pt-1">
+                  <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
+                    Brush
+                  </span>
+                  {MASK_BRUSH_SETTINGS.map((setting) => (
+                    <MaskBrushSlider
+                      key={setting.key}
+                      label={setting.label}
+                      value={footerBrushSettings[setting.key]}
+                      onChange={(value) => updateBrushSetting(setting.key, value)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div className="flex-1" />
+                  <span className="font-mono text-[10px] text-lr-text-faint">
+                    O overlay · Delete mask
+                  </span>
+                </>
+              )}
             </div>
           ) : (
             <EntryMetadataBar

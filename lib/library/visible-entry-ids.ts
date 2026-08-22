@@ -31,13 +31,16 @@ export function collectVisibleEntryIds(
   ranked.sort((a, b) => a.distance - b.distance);
 
   const ids: string[] = [];
+  const seen = new Set<string>();
   if (selectedEntryId) {
     ids.push(selectedEntryId);
+    seen.add(selectedEntryId);
   }
 
   for (const item of ranked) {
-    if (!ids.includes(item.id)) {
+    if (!seen.has(item.id)) {
       ids.push(item.id);
+      seen.add(item.id);
     }
   }
 

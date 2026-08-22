@@ -5,7 +5,10 @@ import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { MixerColor } from "@/lib/develop/types";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 import { useDevelopStore } from "@/stores/develop-store";
-import { SliderRow } from "@/components/develop/SliderRow";
+import {
+  COLOR_SLIDER_TRACKS,
+  SliderRow,
+} from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
 
 const MIXER_LABELS: Record<MixerColor, string> = {
@@ -222,10 +225,10 @@ function BasicColorSection() {
 
   return (
     <PanelSection title="White balance & color" onReset={resetColor}>
-      <SliderRow label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" onChange={(temperature) => updatePlugin("basic", { temperature })} />
-      <SliderRow label="Tint" value={basic.tint} min={-150} max={150} onChange={(tint) => updatePlugin("basic", { tint })} />
-      <SliderRow label="Vibrance" value={basic.vibrance} min={-100} max={100} onChange={(vibrance) => updatePlugin("basic", { vibrance })} />
-      <SliderRow label="Saturation" value={basic.saturation} min={-100} max={100} onChange={(saturation) => updatePlugin("basic", { saturation })} />
+      <SliderRow label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(temperature) => updatePlugin("basic", { temperature })} />
+      <SliderRow label="Tint" value={basic.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(tint) => updatePlugin("basic", { tint })} />
+      <SliderRow label="Vibrance" value={basic.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => updatePlugin("basic", { vibrance })} />
+      <SliderRow label="Saturation" value={basic.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => updatePlugin("basic", { saturation })} />
     </PanelSection>
   );
 }
@@ -339,14 +342,58 @@ function EffectsSection() {
     return session?.document.settings.effects ?? DEFAULT_DEVELOP_SETTINGS.effects;
   });
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const resetPlugin = useDevelopStore((state) => state.resetPlugin);
+  const defaults = DEFAULT_DEVELOP_SETTINGS.effects;
 
   return (
-    <PanelSection title="Detail & effects" onReset={() => resetPlugin("effects")}>
-      <SliderRow label="Vignette" value={effects.vignette} min={-100} max={100} onChange={(vignette) => updatePlugin("effects", { vignette })} />
-      <SliderRow label="Grain" value={effects.grain} min={0} max={100} onChange={(grain) => updatePlugin("effects", { grain })} />
-      <SliderRow label="Sharpen" value={effects.sharpening} min={0} max={100} onChange={(sharpening) => updatePlugin("effects", { sharpening })} />
-      <SliderRow label="Noise NR" value={effects.noiseReduction} min={0} max={100} onChange={(noiseReduction) => updatePlugin("effects", { noiseReduction })} />
-    </PanelSection>
+    <>
+      <PanelSection title="Sharpening" onReset={() => updatePlugin("effects", {
+        sharpening: defaults.sharpening,
+        sharpenRadius: defaults.sharpenRadius,
+        sharpenDetail: defaults.sharpenDetail,
+        sharpenMasking: defaults.sharpenMasking,
+      })}>
+        <SliderRow label="Amount" value={effects.sharpening} min={0} max={100} resetValue={defaults.sharpening} onChange={(sharpening) => updatePlugin("effects", { sharpening })} />
+        <SliderRow label="Radius" value={effects.sharpenRadius} min={0.5} max={3} step={0.1} resetValue={defaults.sharpenRadius} onChange={(sharpenRadius) => updatePlugin("effects", { sharpenRadius })} />
+        <SliderRow label="Detail" value={effects.sharpenDetail} min={0} max={100} resetValue={defaults.sharpenDetail} onChange={(sharpenDetail) => updatePlugin("effects", { sharpenDetail })} />
+        <SliderRow label="Masking" value={effects.sharpenMasking} min={0} max={100} resetValue={defaults.sharpenMasking} onChange={(sharpenMasking) => updatePlugin("effects", { sharpenMasking })} />
+      </PanelSection>
+      <PanelSection title="Noise reduction" onReset={() => updatePlugin("effects", {
+        noiseReduction: defaults.noiseReduction,
+        noiseDetail: defaults.noiseDetail,
+        noiseContrast: defaults.noiseContrast,
+        colorNoiseReduction: defaults.colorNoiseReduction,
+        colorNoiseDetail: defaults.colorNoiseDetail,
+        colorNoiseSmoothness: defaults.colorNoiseSmoothness,
+      })}>
+        <SliderRow label="Luminance" value={effects.noiseReduction} min={0} max={100} resetValue={defaults.noiseReduction} onChange={(noiseReduction) => updatePlugin("effects", { noiseReduction })} />
+        <SliderRow label="Detail" value={effects.noiseDetail} min={0} max={100} resetValue={defaults.noiseDetail} onChange={(noiseDetail) => updatePlugin("effects", { noiseDetail })} />
+        <SliderRow label="Contrast" value={effects.noiseContrast} min={0} max={100} resetValue={defaults.noiseContrast} onChange={(noiseContrast) => updatePlugin("effects", { noiseContrast })} />
+        <SliderRow label="Color" value={effects.colorNoiseReduction} min={0} max={100} resetValue={defaults.colorNoiseReduction} onChange={(colorNoiseReduction) => updatePlugin("effects", { colorNoiseReduction })} />
+        <SliderRow label="Color detail" value={effects.colorNoiseDetail} min={0} max={100} resetValue={defaults.colorNoiseDetail} onChange={(colorNoiseDetail) => updatePlugin("effects", { colorNoiseDetail })} />
+        <SliderRow label="Smoothness" value={effects.colorNoiseSmoothness} min={0} max={100} resetValue={defaults.colorNoiseSmoothness} onChange={(colorNoiseSmoothness) => updatePlugin("effects", { colorNoiseSmoothness })} />
+      </PanelSection>
+      <PanelSection title="Post-crop vignette" onReset={() => updatePlugin("effects", {
+        vignette: defaults.vignette,
+        vignetteMidpoint: defaults.vignetteMidpoint,
+        vignetteRoundness: defaults.vignetteRoundness,
+        vignetteFeather: defaults.vignetteFeather,
+        vignetteHighlights: defaults.vignetteHighlights,
+      })}>
+        <SliderRow label="Amount" value={effects.vignette} min={-100} max={100} resetValue={defaults.vignette} onChange={(vignette) => updatePlugin("effects", { vignette })} />
+        <SliderRow label="Midpoint" value={effects.vignetteMidpoint} min={0} max={100} resetValue={defaults.vignetteMidpoint} onChange={(vignetteMidpoint) => updatePlugin("effects", { vignetteMidpoint })} />
+        <SliderRow label="Roundness" value={effects.vignetteRoundness} min={-100} max={100} resetValue={defaults.vignetteRoundness} onChange={(vignetteRoundness) => updatePlugin("effects", { vignetteRoundness })} />
+        <SliderRow label="Feather" value={effects.vignetteFeather} min={0} max={100} resetValue={defaults.vignetteFeather} onChange={(vignetteFeather) => updatePlugin("effects", { vignetteFeather })} />
+        <SliderRow label="Highlights" value={effects.vignetteHighlights} min={0} max={100} resetValue={defaults.vignetteHighlights} onChange={(vignetteHighlights) => updatePlugin("effects", { vignetteHighlights })} />
+      </PanelSection>
+      <PanelSection title="Grain" onReset={() => updatePlugin("effects", {
+        grain: defaults.grain,
+        grainSize: defaults.grainSize,
+        grainRoughness: defaults.grainRoughness,
+      })}>
+        <SliderRow label="Amount" value={effects.grain} min={0} max={100} resetValue={defaults.grain} onChange={(grain) => updatePlugin("effects", { grain })} />
+        <SliderRow label="Size" value={effects.grainSize} min={0} max={100} resetValue={defaults.grainSize} onChange={(grainSize) => updatePlugin("effects", { grainSize })} />
+        <SliderRow label="Roughness" value={effects.grainRoughness} min={0} max={100} resetValue={defaults.grainRoughness} onChange={(grainRoughness) => updatePlugin("effects", { grainRoughness })} />
+      </PanelSection>
+    </>
   );
 }

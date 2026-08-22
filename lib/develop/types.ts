@@ -58,9 +58,23 @@ export type MixerSettings = Record<MixerColor, MixerBandSettings>;
 
 export interface EffectsSettings {
   vignette: number;
+  vignetteMidpoint: number;
+  vignetteRoundness: number;
+  vignetteFeather: number;
+  vignetteHighlights: number;
   grain: number;
+  grainSize: number;
+  grainRoughness: number;
   sharpening: number;
+  sharpenRadius: number;
+  sharpenDetail: number;
+  sharpenMasking: number;
   noiseReduction: number;
+  noiseDetail: number;
+  noiseContrast: number;
+  colorNoiseReduction: number;
+  colorNoiseDetail: number;
+  colorNoiseSmoothness: number;
 }
 
 export interface DevelopSettings {

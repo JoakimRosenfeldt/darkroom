@@ -90,6 +90,10 @@ export function DynamicPhotoGrid({
     () => entries.map((entry) => entry.id),
     [entries],
   );
+  const selectedEntrySet = useMemo(
+    () => new Set(selectedEntryIds),
+    [selectedEntryIds],
+  );
 
   const handleSelect = useCallback(
     (entryId: string, modifiers: { shift?: boolean; toggle?: boolean }) => {
@@ -164,15 +168,16 @@ export function DynamicPhotoGrid({
     );
   }, [rows, layoutReady, onGridRowsChange]);
 
-  const selectedRowIndex = useMemo(() => {
-    if (!selectedEntryId) {
-      return -1;
-    }
-
-    return rows.findIndex((row) =>
-      row.tiles.some((tile) => tile.entry.id === selectedEntryId),
-    );
-  }, [rows, selectedEntryId]);
+  const rowIndexByEntryId = useMemo(() => {
+    const index = new Map<string, number>();
+    rows.forEach((row, rowIndex) => {
+      row.tiles.forEach((tile) => index.set(tile.entry.id, rowIndex));
+    });
+    return index;
+  }, [rows]);
+  const selectedRowIndex = selectedEntryId
+    ? (rowIndexByEntryId.get(selectedEntryId) ?? -1)
+    : -1;
 
   useScrollToSelectedRow({
     layoutReady,
@@ -239,7 +244,15 @@ export function DynamicPhotoGrid({
       visibleRows,
       selectedEntryId,
     );
-    setVisibleEntryIds(next);
+    setVisibleEntryIds((current) => {
+      if (
+        current.length === next.length &&
+        current.every((id, index) => id === next[index])
+      ) {
+        return current;
+      }
+      return next;
+    });
   }, [layoutReady, visibleRows, selectedEntryId, virtualizer]);
 
   if (entries.length === 0) {
@@ -310,7 +323,7 @@ export function DynamicPhotoGrid({
                       width={tile.width}
                       height={tile.height}
                       fit="cover"
-                      selected={selectedEntryIds.includes(tile.entry.id)}
+                      selected={selectedEntrySet.has(tile.entry.id)}
                       metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
                       onSelect={handleSelect}
                       onContextMenu={onPhotoContextMenu}

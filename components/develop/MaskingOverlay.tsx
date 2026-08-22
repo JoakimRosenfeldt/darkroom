@@ -30,6 +30,8 @@ interface MaskingOverlayProps {
   mask: LocalMask | null;
   component: MaskComponent | null;
   tool: MaskTool;
+  brushSettings: BrushSettings;
+  onBrushSettingsChange: (settings: BrushSettings) => void;
 }
 
 type ManualMaskTool = Exclude<MaskTool, "none">;
@@ -73,10 +75,10 @@ type RadialGesture = GestureBase & {
 
 type Gesture = BrushGesture | LinearGesture | RadialGesture;
 type CursorPoint = { output: NormalizedPoint; source: NormalizedPoint };
-type BrushSettings = Pick<BrushMaskComponent, "size" | "feather">;
+export type BrushSettings = Pick<BrushMaskComponent, "size" | "feather" | "flow" | "density">;
+type AdjustableBrushSetting = "size" | "feather";
 
 const EMPTY_MASKS: readonly LocalMask[] = [];
-const DEFAULT_BRUSH_SETTINGS: BrushSettings = { size: 0.08, feather: 0.5 };
 const BRUSH_SIZE_STEP = 0.02;
 const BRUSH_FEATHER_STEP = 0.05;
 const WHEEL_STEP = 40;
@@ -298,8 +300,7 @@ function nextMaskName(masks: readonly LocalMask[]): string {
 function createComponent(tool: ManualMaskTool, id: string, point: NormalizedPoint, brushSettings: BrushSettings): MaskComponent {
   switch (tool) {
     case "brush": {
-      const settings = { ...brushSettings, flow: 1, density: 1 };
-      return { kind: tool, id, operation: "add", strokes: [{ points: [point], ...settings }], ...settings };
+      return { kind: tool, id, operation: "add", strokes: [{ points: [point], ...brushSettings }], ...brushSettings };
     }
     case "linear-gradient":
       return { kind: tool, id, operation: "add", start: point, end: point };
@@ -354,7 +355,18 @@ function brushCursorDiameter(size: number, imageRect: ImageRect, sourceInput: So
   return Math.max(4, sourceDiameter * (scaleX + scaleY) * 0.5);
 }
 
-export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orientation, crop, mask, component, tool }: MaskingOverlayProps) {
+export function MaskingOverlay({
+  imageRect,
+  displayWidth,
+  displayHeight,
+  orientation,
+  crop,
+  mask,
+  component,
+  tool,
+  brushSettings,
+  onBrushSettingsChange,
+}: MaskingOverlayProps) {
   const dispatch = useDevelopStore((state) => state.dispatch);
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
@@ -376,9 +388,8 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
   const cursorElementRef = useRef<HTMLDivElement | null>(null);
   const brushAdjustmentRef = useRef<BrushMaskComponent | null>(null);
   const brushAdjustmentTimerRef = useRef<number | null>(null);
-  const wheelAccumulatorRef = useRef<{ setting: keyof BrushSettings; delta: number }>({ setting: "size", delta: 0 });
-  const draftBrushSettingsRef = useRef<BrushSettings>(DEFAULT_BRUSH_SETTINGS);
-  const [draftBrushSettings, setDraftBrushSettings] = useState<BrushSettings>(DEFAULT_BRUSH_SETTINGS);
+  const wheelAccumulatorRef = useRef<{ setting: AdjustableBrushSetting; delta: number }>({ setting: "size", delta: 0 });
+  const brushSettingsRef = useRef(brushSettings);
   const [preview, setPreview] = useState<MaskComponent | null>(null);
   const sourceInput: SourceTransformInput = {
     displayWidth,
@@ -398,7 +409,11 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
     endEditGroup();
   }, [endEditGroup]);
 
-  const adjustBrush = useCallback((setting: keyof BrushSettings, steps: number) => {
+  useEffect(() => {
+    brushSettingsRef.current = brushSettings;
+  }, [brushSettings]);
+
+  const adjustBrush = useCallback((setting: AdjustableBrushSetting, steps: number) => {
     if (steps === 0 || gestureRef.current) return;
     const step = setting === "size" ? BRUSH_SIZE_STEP : BRUSH_FEATHER_STEP;
     if (component?.kind === "brush" && mask) {
@@ -411,9 +426,14 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
       };
       if (next[setting] === current[setting]) return;
       brushAdjustmentRef.current = next;
-      const nextSettings = { size: next.size, feather: next.feather };
-      draftBrushSettingsRef.current = nextSettings;
-      setDraftBrushSettings(nextSettings);
+      const nextSettings = {
+        size: next.size,
+        feather: next.feather,
+        flow: next.flow,
+        density: next.density,
+      };
+      brushSettingsRef.current = nextSettings;
+      onBrushSettingsChange(nextSettings);
       if (brushAdjustmentTimerRef.current === null) beginEditGroup(setting === "size" ? "Resize brush" : "Adjust brush feather");
       else window.clearTimeout(brushAdjustmentTimerRef.current);
       dispatch({ kind: "replace-mask-component", maskId: mask.id, component: next }, setting === "size" ? "Resize brush" : "Adjust brush feather");
@@ -421,15 +441,15 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
       return;
     }
 
-    const current = draftBrushSettingsRef.current;
+    const current = brushSettingsRef.current;
     const next = {
       ...current,
       [setting]: clampUnit(Math.max(setting === "size" ? 0.01 : 0, current[setting] + steps * step)),
     };
     if (next[setting] === current[setting]) return;
-    draftBrushSettingsRef.current = next;
-    setDraftBrushSettings(next);
-  }, [beginEditGroup, component, dispatch, finishBrushAdjustment, mask]);
+    brushSettingsRef.current = next;
+    onBrushSettingsChange(next);
+  }, [beginEditGroup, component, dispatch, finishBrushAdjustment, mask, onBrushSettingsChange]);
 
   const handleWheel = useCallback((event: WheelEvent) => {
     if (tool !== "brush" || gestureRef.current) return;
@@ -590,7 +610,7 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
     const editable = component?.kind === tool && mask ? component : null;
     const target = editable ? { kind: "replace", maskId: mask!.id } as const : targetForNewComponent();
     if (!target) return;
-    const next = editable ?? createComponent(tool, crypto.randomUUID(), coordinates.source, draftBrushSettingsRef.current);
+    const next = editable ?? createComponent(tool, crypto.randomUUID(), coordinates.source, brushSettingsRef.current);
     const base = {
       pointerId: event.pointerId,
       target,
@@ -714,7 +734,7 @@ export function MaskingOverlay({ imageRect, displayWidth, displayHeight, orienta
   const guide = preview ?? (component && (tool === "none" || component.kind === tool) ? component : null);
   const brush = guide?.kind === "brush" ? guide : component?.kind === "brush" && tool === "brush" ? component : null;
   const cursorBrush = brush ?? {
-    kind: "brush", id: "cursor", operation: "add", strokes: [{ points: [{ x: 0.5, y: 0.5 }], ...draftBrushSettings, flow: 1, density: 1 }], ...draftBrushSettings, flow: 1, density: 1,
+    kind: "brush", id: "cursor", operation: "add", strokes: [{ points: [{ x: 0.5, y: 0.5 }], ...brushSettings }], ...brushSettings,
   } satisfies BrushMaskComponent;
   const cursorDiameter = brushCursorDiameter(cursorBrush.size, imageRect, sourceInput);
 
@@ -784,11 +804,11 @@ function PreviewCoverage({
             const first = points[0]!;
             return points.length === 1 ? (
               layers.map((layer, layerIndex) => (
-                <circle key={`${index}-${layerIndex}`} cx={first.x} cy={first.y} r={layer.diameter / 2} fill="red" fillOpacity={layer.opacity} />
+                <circle key={`${index}-${layerIndex}`} cx={first.x} cy={first.y} r={layer.diameter / 2} fill="#8fb8e0" fillOpacity={layer.opacity} />
               ))
             ) : (
               layers.map((layer, layerIndex) => (
-                <polyline key={`${index}-${layerIndex}`} points={pointList} fill="none" stroke="red" strokeOpacity={layer.opacity} strokeWidth={layer.diameter} strokeLinecap="round" strokeLinejoin="round" />
+                <polyline key={`${index}-${layerIndex}`} points={pointList} fill="none" stroke="#8fb8e0" strokeOpacity={layer.opacity} strokeWidth={layer.diameter} strokeLinecap="round" strokeLinejoin="round" />
               ))
             );
           })}
@@ -803,11 +823,11 @@ function PreviewCoverage({
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-hidden" viewBox={viewBox} preserveAspectRatio="none" aria-hidden>
           <defs>
             <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={start.x} y1={start.y} x2={end.x} y2={end.y}>
-              <stop offset="0" stopColor="red" stopOpacity="0.35" />
-              <stop offset="0.25" stopColor="red" stopOpacity="0.295" />
-              <stop offset="0.5" stopColor="red" stopOpacity="0.175" />
-              <stop offset="0.75" stopColor="red" stopOpacity="0.055" />
-              <stop offset="1" stopColor="red" stopOpacity="0" />
+              <stop offset="0" stopColor="#8fb8e0" stopOpacity="0.42" />
+              <stop offset="0.25" stopColor="#8fb8e0" stopOpacity="0.35" />
+              <stop offset="0.5" stopColor="#8fb8e0" stopOpacity="0.21" />
+              <stop offset="0.75" stopColor="#8fb8e0" stopOpacity="0.07" />
+              <stop offset="1" stopColor="#8fb8e0" stopOpacity="0" />
             </linearGradient>
           </defs>
           <rect width={width} height={height} fill={`url(#${gradientId})`} />
@@ -826,9 +846,9 @@ function PreviewCoverage({
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-hidden" viewBox={viewBox} preserveAspectRatio="none" aria-hidden>
           <defs>
             <radialGradient id={gradientId}>
-              <stop offset="0" stopColor="red" stopOpacity="0.35" />
-              <stop offset={inner} stopColor="red" stopOpacity="0.35" />
-              <stop offset="1" stopColor="red" stopOpacity="0" />
+              <stop offset="0" stopColor="#8fb8e0" stopOpacity="0.42" />
+              <stop offset={inner} stopColor="#8fb8e0" stopOpacity="0.42" />
+              <stop offset="1" stopColor="#8fb8e0" stopOpacity="0" />
             </radialGradient>
           </defs>
           <ellipse
@@ -968,7 +988,7 @@ function Guide({ component, sourceInput }: { component: MaskComponent; sourceInp
       return (
         <Fragment>
           <svg className="pointer-events-none h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-            <line x1={start.x * 100} y1={start.y * 100} x2={end.x * 100} y2={end.y * 100} stroke="rgba(255,210,80,.9)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />
+            <line x1={start.x * 100} y1={start.y * 100} x2={end.x * 100} y2={end.y * 100} stroke="rgba(236,231,227,.9)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />
           </svg>
           <HandleButton kind="linear-start" point={start} label="Move linear gradient start" value={component.start.x} />
           <HandleButton kind="linear-end" point={end} label="Move linear gradient end" value={component.end.x} />
@@ -1002,11 +1022,11 @@ function RadialGuide({ component, sourceInput }: { component: RadialGradientMask
   return (
     <Fragment>
       <svg className="pointer-events-none h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-        <polygon points={ellipsePoints(1)} fill="rgba(255,210,80,.08)" stroke="rgba(255,210,80,.9)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />
+        <polygon points={ellipsePoints(1)} fill="rgba(143,184,224,.08)" stroke="rgba(236,231,227,.9)" strokeWidth=".7" vectorEffect="non-scaling-stroke" />
         <polygon points={ellipsePoints(1 - FEATHER_HANDLE_SPAN * component.feather)} fill="none" stroke="rgba(255,255,255,.8)" strokeDasharray="3 3" strokeWidth=".55" vectorEffect="non-scaling-stroke" />
-        <line x1={center.x * 100} y1={center.y * 100} x2={xHandle.x * 100} y2={xHandle.y * 100} stroke="rgba(255,210,80,.45)" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
-        <line x1={center.x * 100} y1={center.y * 100} x2={yHandle.x * 100} y2={yHandle.y * 100} stroke="rgba(255,210,80,.45)" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
-        <line x1={xHandle.x * 100} y1={xHandle.y * 100} x2={rotationHandle.x * 100} y2={rotationHandle.y * 100} stroke="rgba(255,210,80,.45)" strokeDasharray="2 2" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
+        <line x1={center.x * 100} y1={center.y * 100} x2={xHandle.x * 100} y2={xHandle.y * 100} stroke="rgba(236,231,227,.45)" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
+        <line x1={center.x * 100} y1={center.y * 100} x2={yHandle.x * 100} y2={yHandle.y * 100} stroke="rgba(236,231,227,.45)" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
+        <line x1={xHandle.x * 100} y1={xHandle.y * 100} x2={rotationHandle.x * 100} y2={rotationHandle.y * 100} stroke="rgba(236,231,227,.45)" strokeDasharray="2 2" strokeWidth=".45" vectorEffect="non-scaling-stroke" />
       </svg>
       <HandleButton kind="radial-center" point={centerHandle} label="Move radial gradient center" value={component.center.x} />
       <HandleButton kind="radial-radius-x" point={xHandle} label="Adjust radial gradient width" value={component.radiusX} />
