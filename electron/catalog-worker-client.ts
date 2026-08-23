@@ -2,7 +2,26 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import type { CatalogFaultPoint } from "./catalog-fault-injection.ts";
-import type { AssetId, OperationId } from "../lib/catalog/ids.ts";
+import type { AssetId, CatalogId, OperationId } from "../lib/catalog/ids.ts";
+import type {
+  CatalogV3ActivationResult,
+  CatalogV3AlbumAssetPage,
+  CatalogV3AlbumAssetPageInput,
+  CatalogV3AlbumPageInput,
+  CatalogV3AlbumSnapshotResult,
+  CatalogV3AssetBatchInput,
+  CatalogV3AssetBatchResult,
+  CatalogV3AssetPage,
+  CatalogV3AssetPageInput,
+  CatalogV3FinishCopyResult,
+  CatalogV3InstallInput,
+  CatalogV3InstallResult,
+  CatalogV3RelationsBatchInput,
+  CatalogV3RelationsBatchResult,
+  CatalogV3SealForInstallResult,
+  CatalogV3Summary,
+  CatalogV3ValidationResult,
+} from "../lib/catalog/v3.ts";
 import {
   parseCatalogWorkerResponse,
   type CatalogWorkerBackupResponse,
@@ -103,6 +122,60 @@ function requireKind<K extends CatalogWorkerResponse["kind"]>(
     throw new Error(`Catalog worker returned ${response.kind} for ${kind}.`);
   }
   return response as Extract<CatalogWorkerResponse, { kind: K }>;
+}
+
+function requireCatalogIdentity<T extends { readonly catalogId: CatalogId }>(
+  result: T,
+  catalogId: CatalogId,
+  operation: string,
+): T {
+  if (result.catalogId !== catalogId) {
+    throw new Error(`Catalog worker ${operation} returned a mismatched catalogId.`);
+  }
+  return result;
+}
+
+function requireMigrationIdentity<T extends { readonly catalogId: CatalogId; readonly migrationId: string }>(
+  result: T,
+  catalogId: CatalogId,
+  migrationId: string,
+  operation: string,
+): T {
+  requireCatalogIdentity(result, catalogId, operation);
+  if (result.migrationId !== migrationId) {
+    throw new Error(`Catalog worker ${operation} returned a mismatched migrationId.`);
+  }
+  return result;
+}
+
+function requireSnapshotRevision<T extends { readonly revision: number }>(
+  result: T,
+  expectedRevision: number | null,
+  operation: string,
+): T {
+  if (expectedRevision !== null && result.revision !== expectedRevision) {
+    throw new Error(`Catalog worker ${operation} returned a mismatched revision.`);
+  }
+  return result;
+}
+
+function requirePositionPage(
+  items: readonly { readonly position: number }[],
+  cursor: number | null,
+  limit: number,
+  nextCursor: number | null,
+  operation: string,
+): void {
+  if (items.length > limit) {
+    throw new Error(`Catalog worker ${operation} returned too many items.`);
+  }
+  const first = items[0];
+  if (first !== undefined && first.position !== (cursor ?? -1) + 1) {
+    throw new Error(`Catalog worker ${operation} returned a mismatched cursor.`);
+  }
+  if (nextCursor !== null && items.length !== limit) {
+    throw new Error(`Catalog worker ${operation} returned an inconsistent nextCursor.`);
+  }
 }
 
 export class CatalogWorkerClient {
@@ -305,6 +378,140 @@ export class CatalogWorkerClient {
       itemId: input.itemId,
     });
     return requireKind(response, "test-tracer-inspect");
+  }
+
+  async installV3(input: CatalogV3InstallInput): Promise<CatalogV3InstallResult> {
+    const response = await this.send({ kind: "v3-install", requestId: requestId(), input });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-install").result,
+      input.catalogId,
+      input.migration.migrationId,
+      "v3-install",
+    );
+  }
+
+  async writeV3AssetBatch(input: CatalogV3AssetBatchInput): Promise<CatalogV3AssetBatchResult> {
+    const response = await this.send({ kind: "v3-assets", requestId: requestId(), input });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-assets").result,
+      input.catalogId,
+      input.migrationId,
+      "v3-assets",
+    );
+  }
+
+  async writeV3RelationsBatch(input: CatalogV3RelationsBatchInput): Promise<CatalogV3RelationsBatchResult> {
+    const response = await this.send({ kind: "v3-relations", requestId: requestId(), input });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-relations").result,
+      input.catalogId,
+      input.migrationId,
+      "v3-relations",
+    );
+  }
+
+  async finishV3Copy(catalogId: CatalogV3InstallInput["catalogId"], migrationId: string): Promise<CatalogV3FinishCopyResult> {
+    const response = await this.send({
+      kind: "v3-finish-copy",
+      requestId: requestId(),
+      catalogId,
+      migrationId,
+    });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-finish-copy").result,
+      catalogId,
+      migrationId,
+      "v3-finish-copy",
+    );
+  }
+
+  async validateV3(catalogId: CatalogV3InstallInput["catalogId"], migrationId: string): Promise<CatalogV3ValidationResult> {
+    const response = await this.send({
+      kind: "v3-validate",
+      requestId: requestId(),
+      catalogId,
+      migrationId,
+    });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-validate").result,
+      catalogId,
+      migrationId,
+      "v3-validate",
+    );
+  }
+
+  async prepareV3Activation(catalogId: CatalogV3InstallInput["catalogId"], migrationId: string): Promise<CatalogV3ActivationResult> {
+    const response = await this.send({
+      kind: "v3-prepare-activation",
+      requestId: requestId(),
+      catalogId,
+      migrationId,
+    });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-prepare-activation").result,
+      catalogId,
+      migrationId,
+      "v3-prepare-activation",
+    );
+  }
+
+  async sealV3ForInstall(catalogId: CatalogV3InstallInput["catalogId"], migrationId: string): Promise<CatalogV3SealForInstallResult> {
+    const response = await this.send({
+      kind: "v3-seal-for-install",
+      requestId: requestId(),
+      catalogId,
+      migrationId,
+    });
+    return requireMigrationIdentity(
+      requireKind(response, "v3-seal-for-install").result,
+      catalogId,
+      migrationId,
+      "v3-seal-for-install",
+    );
+  }
+
+  async v3Summary(catalogId: CatalogV3InstallInput["catalogId"]): Promise<CatalogV3Summary> {
+    const response = await this.send({ kind: "v3-summary", requestId: requestId(), catalogId });
+    return requireCatalogIdentity(requireKind(response, "v3-summary").result, catalogId, "v3-summary");
+  }
+
+  async v3AssetsPage(input: CatalogV3AssetPageInput): Promise<CatalogV3AssetPage> {
+    const response = await this.send({ kind: "v3-assets-page", requestId: requestId(), input });
+    const result = requireSnapshotRevision(
+      requireCatalogIdentity(requireKind(response, "v3-assets-page").result, input.catalogId, "v3-assets-page"),
+      input.expectedRevision,
+      "v3-assets-page",
+    );
+    if (result.assets.length > input.limit || (result.nextCursor !== null && result.assets.length !== input.limit)) {
+      throw new Error("Catalog worker v3-assets-page returned inconsistent page bounds.");
+    }
+    return result;
+  }
+
+  async v3Albums(input: CatalogV3AlbumPageInput): Promise<CatalogV3AlbumSnapshotResult> {
+    const response = await this.send({ kind: "v3-albums", requestId: requestId(), input });
+    const result = requireSnapshotRevision(
+      requireCatalogIdentity(requireKind(response, "v3-albums").result, input.catalogId, "v3-albums"),
+      input.expectedRevision,
+      "v3-albums",
+    );
+    requirePositionPage(result.albums, input.cursor, input.limit, result.nextCursor, "v3-albums");
+    return result;
+  }
+
+  async v3AlbumAssetsPage(input: CatalogV3AlbumAssetPageInput): Promise<CatalogV3AlbumAssetPage> {
+    const response = await this.send({ kind: "v3-album-assets-page", requestId: requestId(), input });
+    const result = requireCatalogIdentity(
+      requireKind(response, "v3-album-assets-page").result,
+      input.catalogId,
+      "v3-album-assets-page",
+    );
+    if (result.albumId !== input.albumId) {
+      throw new Error("Catalog worker v3-album-assets-page returned a mismatched albumId.");
+    }
+    requireSnapshotRevision(result, input.expectedRevision, "v3-album-assets-page");
+    requirePositionPage(result.assets, input.cursor, input.limit, result.nextCursor, "v3-album-assets-page");
+    return result;
   }
 
   async shutdown(timeoutMs = this.defaultTimeoutMs): Promise<void> {
