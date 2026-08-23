@@ -44,6 +44,10 @@ import {
   registerAiModelProtocol,
   registerAiModelScheme,
 } from "./ai-model-protocol";
+import {
+  createCatalogWorkerClient,
+  type CatalogWorkerClient,
+} from "./catalog-worker-client";
 
 registerAiModelScheme();
 
@@ -53,10 +57,143 @@ const DEV_SERVER_URL = process.env.DARKROOM_DEV_URL ?? "http://localhost:3000";
 let mainWindow: BrowserWindow | null = null;
 let staticServerPort: number | null = null;
 let activeLibraryRoot: string | null = null;
+let catalogWorkerClient: CatalogWorkerClient | null = null;
+let isQuitting = false;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
 const catalogStore = createCatalogStore(app.getPath("userData"));
 const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
+const CATALOG_WORKER_SHUTDOWN_TIMEOUT_MS = 2_000;
+const CATALOG_WORKER_SMOKE_ENV = "DARKROOM_CATALOG_WORKER_SMOKE";
+const CATALOG_WORKER_SMOKE_REPORT_ENV = "DARKROOM_CATALOG_WORKER_SMOKE_REPORT";
+
+function catalogWorkerPath(): string {
+  return path.join(__dirname, "catalog-worker.js");
+}
+
+async function startCatalogWorker(): Promise<void> {
+  const client = createCatalogWorkerClient({
+    workerPath: catalogWorkerPath(),
+  });
+  try {
+    const runtime = await client.runtimeInfo();
+    const majorVersion = Number.parseInt(runtime.nodeVersion.split(".")[0] ?? "", 10);
+    if (majorVersion !== 24) {
+      throw new Error(`Catalog worker requires Node 24, got ${runtime.nodeVersion}.`);
+    }
+    catalogWorkerClient = client;
+  } catch (error) {
+    await client.forceTerminate().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function stopCatalogWorker(): Promise<void> {
+  const client = catalogWorkerClient;
+  catalogWorkerClient = null;
+  if (!client) {
+    return;
+  }
+  await client.shutdown(CATALOG_WORKER_SHUTDOWN_TIMEOUT_MS);
+}
+
+interface CatalogWorkerAppSmokeReport {
+  readonly ok: boolean;
+  readonly packaged: boolean;
+  readonly workerPath: string;
+  readonly appPath: string;
+  readonly nodeVersion?: string;
+  readonly sqliteVersion?: string;
+  readonly reopenedWithoutLock?: boolean;
+  readonly error?: string;
+}
+
+async function runCatalogWorkerAppSmoke(): Promise<void> {
+  const reportPathValue = process.env[CATALOG_WORKER_SMOKE_REPORT_ENV];
+  const reportPath = reportPathValue && path.isAbsolute(reportPathValue)
+    ? path.normalize(reportPathValue)
+    : path.join(app.getPath("temp"), `darkroom-catalog-worker-app-smoke-${randomUUID()}.json`);
+  const root = await fs.mkdtemp(path.join(app.getPath("temp"), "darkroom-catalog-worker-app-smoke-"));
+  const databasePath = path.join(root, "catalog.db");
+  const backupPath = path.join(root, "backup", "catalog.db");
+  let reopened: CatalogWorkerClient | null = null;
+  let report: CatalogWorkerAppSmokeReport | null = null;
+
+  try {
+    const client = catalogWorkerClient;
+    if (!client) {
+      throw new Error("Catalog worker smoke started without a worker client.");
+    }
+    const runtime = await client.runtimeInfo();
+    if (!/^24\./.test(runtime.nodeVersion)) {
+      throw new Error(`Catalog worker smoke requires Node 24, got ${runtime.nodeVersion}.`);
+    }
+    if (runtime.sqliteVersion === "unknown") {
+      throw new Error("Catalog worker smoke could not read the SQLite runtime version.");
+    }
+    await client.open(databasePath);
+    await client.transactionProbe();
+    await client.backup(backupPath);
+    const integrity = await client.integrityCheck();
+    if (integrity.integrityCheck.length !== 1 || integrity.integrityCheck[0] !== "ok") {
+      throw new Error("Catalog worker smoke integrity check failed.");
+    }
+    await stopCatalogWorker();
+
+    reopened = createCatalogWorkerClient({
+      workerPath: catalogWorkerPath(),
+      requestTimeoutMs: CATALOG_WORKER_SHUTDOWN_TIMEOUT_MS,
+    });
+    await reopened.open(databasePath);
+    const reopenedIntegrity = await reopened.integrityCheck();
+    if (
+      reopenedIntegrity.integrityCheck.length !== 1 ||
+      reopenedIntegrity.integrityCheck[0] !== "ok"
+    ) {
+      throw new Error("Catalog worker smoke reopen integrity check failed.");
+    }
+    await reopened.shutdown(CATALOG_WORKER_SHUTDOWN_TIMEOUT_MS);
+    reopened = null;
+    report = {
+      ok: true,
+      packaged: app.isPackaged,
+      workerPath: catalogWorkerPath(),
+      appPath: app.getAppPath(),
+      nodeVersion: runtime.nodeVersion,
+      sqliteVersion: runtime.sqliteVersion,
+      reopenedWithoutLock: true,
+    };
+  } catch (error) {
+    report = {
+      ok: false,
+      packaged: app.isPackaged,
+      workerPath: catalogWorkerPath(),
+      appPath: app.getAppPath(),
+      error: error instanceof Error ? error.message : "Catalog worker smoke failed.",
+    };
+  } finally {
+    await reopened?.forceTerminate().catch(() => undefined);
+    try {
+      await stopCatalogWorker();
+    } catch (error) {
+      report = {
+        ok: false,
+        packaged: app.isPackaged,
+        workerPath: catalogWorkerPath(),
+        appPath: app.getAppPath(),
+        error: error instanceof Error ? error.message : "Catalog worker smoke shutdown failed.",
+      };
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+
+  if (!report) {
+    throw new Error("Catalog worker smoke produced no report.");
+  }
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(reportPath, `${JSON.stringify(report)}\n`, "utf8");
+  app.exit(report.ok ? 0 : 1);
+}
 
 function sendAiModelProgress(progress: AiModelProgress): void {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
@@ -542,6 +679,11 @@ function registerIpcHandlers(): void {
 }
 
 app.whenReady().then(async () => {
+  await startCatalogWorker();
+  if (process.env[CATALOG_WORKER_SMOKE_ENV] === "1") {
+    await runCatalogWorkerAppSmoke();
+    return;
+  }
   registerAiModelProtocol(aiModelService);
   registerIpcHandlers();
   await createWindow();
@@ -551,6 +693,24 @@ app.whenReady().then(async () => {
       await createWindow();
     }
   });
+}).catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : "Catalog worker startup failed.";
+  process.stderr.write(`${message}\n`);
+  app.quit();
+});
+
+app.on("before-quit", (event) => {
+  if (isQuitting) {
+    return;
+  }
+  isQuitting = true;
+  event.preventDefault();
+  void stopCatalogWorker()
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Catalog worker shutdown failed.";
+      process.stderr.write(`${message}\n`);
+    })
+    .finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {

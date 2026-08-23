@@ -9,7 +9,7 @@ const outDir = path.join(rootDir, "electron-dist");
 const shared = {
   bundle: true,
   platform: "node",
-  target: "node20",
+  target: "node24",
   sourcemap: true,
   external: ["electron", "sharp"],
 };
@@ -28,4 +28,11 @@ await esbuild.build({
   format: "cjs",
 });
 
-console.log("Built Electron main and preload to electron-dist/");
+await esbuild.build({
+  ...shared,
+  entryPoints: [path.join(rootDir, "electron/catalog-worker.ts")],
+  outfile: path.join(outDir, "catalog-worker.js"),
+  format: "cjs",
+});
+
+console.log("Built Electron main, preload, and catalog worker to electron-dist/");
