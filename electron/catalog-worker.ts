@@ -29,6 +29,7 @@ import {
   type CatalogWorkerTestTracerRecoverRequest,
   type CatalogWorkerTestTracerRunRequest,
 } from "./catalog-worker-protocol.ts";
+import { CatalogV3Repository } from "./catalog-v3-repository.ts";
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -89,6 +90,10 @@ function requireDatabase(): DatabaseSync {
     throw new Error("Catalog database is not open.");
   }
   return database;
+}
+
+function catalogV3Repository(): CatalogV3Repository {
+  return new CatalogV3Repository(requireDatabase());
 }
 
 function rowValue(row: Record<string, unknown>, key: string): unknown {
@@ -585,6 +590,83 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
       workerPort.close();
       return;
     }
+    case "v3-install":
+      post({
+        kind: "v3-install",
+        requestId: request.requestId,
+        result: catalogV3Repository().install(request.input),
+      });
+      return;
+    case "v3-assets":
+      post({
+        kind: "v3-assets",
+        requestId: request.requestId,
+        result: catalogV3Repository().writeAssetBatch(request.input),
+      });
+      return;
+    case "v3-relations":
+      post({
+        kind: "v3-relations",
+        requestId: request.requestId,
+        result: catalogV3Repository().writeRelationsBatch(request.input),
+      });
+      return;
+    case "v3-finish-copy":
+      post({
+        kind: "v3-finish-copy",
+        requestId: request.requestId,
+        result: catalogV3Repository().finishCopy(request.catalogId, request.migrationId),
+      });
+      return;
+    case "v3-validate":
+      post({
+        kind: "v3-validate",
+        requestId: request.requestId,
+        result: catalogV3Repository().validate(request.catalogId, request.migrationId),
+      });
+      return;
+    case "v3-prepare-activation":
+      post({
+        kind: "v3-prepare-activation",
+        requestId: request.requestId,
+        result: catalogV3Repository().prepareActivation(request.catalogId, request.migrationId),
+      });
+      return;
+    case "v3-seal-for-install":
+      post({
+        kind: "v3-seal-for-install",
+        requestId: request.requestId,
+        result: catalogV3Repository().sealForInstall(request.catalogId, request.migrationId),
+      });
+      return;
+    case "v3-summary":
+      post({
+        kind: "v3-summary",
+        requestId: request.requestId,
+        result: catalogV3Repository().summary(request.catalogId),
+      });
+      return;
+    case "v3-assets-page":
+      post({
+        kind: "v3-assets-page",
+        requestId: request.requestId,
+        result: catalogV3Repository().assetPage(request.input),
+      });
+      return;
+    case "v3-albums":
+      post({
+        kind: "v3-albums",
+        requestId: request.requestId,
+        result: catalogV3Repository().albumSnapshots(request.input),
+      });
+      return;
+    case "v3-album-assets-page":
+      post({
+        kind: "v3-album-assets-page",
+        requestId: request.requestId,
+        result: catalogV3Repository().albumAssetPage(request.input),
+      });
+      return;
     case "test-tracer-run": {
       const result = await runTestTracer(request);
       post({ kind: "test-tracer-run", requestId: request.requestId, ...result });

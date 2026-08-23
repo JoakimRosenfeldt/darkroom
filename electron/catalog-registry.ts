@@ -207,6 +207,16 @@ function serialize<T>(queue: { current: Promise<void> }, operation: () => Promis
   return next;
 }
 
+const registryQueues = new Map<string, { current: Promise<void> }>();
+
+function registryQueue(filePath: string): { current: Promise<void> } {
+  const existing = registryQueues.get(filePath);
+  if (existing) return existing;
+  const created = { current: Promise.resolve() };
+  registryQueues.set(filePath, created);
+  return created;
+}
+
 export interface CatalogRegistryStore {
   readonly filePath: string;
   read(): Promise<CatalogRegistryDocument>;
@@ -217,7 +227,7 @@ export interface CatalogRegistryStore {
 
 export function createCatalogRegistryStore(userDataPath: string): CatalogRegistryStore {
   const filePath = path.join(path.resolve(userDataPath), CATALOG_REGISTRY_FILENAME);
-  const queue = { current: Promise.resolve() };
+  const queue = registryQueue(filePath);
   return {
     filePath,
     read: () => serialize(queue, () => readFile(filePath)),
