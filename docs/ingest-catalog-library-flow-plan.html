@@ -1,0 +1,1591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agent runbook for Darkroom's ingest and catalog library flow rework.">
+  <title>Darkroom ingest and catalog rework - implementation agent runbook</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f0e8;
+      --panel: #fffdf8;
+      --ink: #1c1b19;
+      --muted: #666159;
+      --line: #d6cec1;
+      --line-strong: #a99f90;
+      --red: #9d3924;
+      --red-dark: #722a1a;
+      --red-soft: #f1d8cf;
+      --green: #255d49;
+      --green-soft: #dceae3;
+      --amber: #805400;
+      --amber-soft: #f3e4bf;
+      --blue: #315b76;
+      --blue-soft: #dae7ee;
+      --dark: #24231f;
+      --radius: 14px;
+      --measure: 80rem;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 1rem; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(52, 45, 37, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(52, 45, 37, 0.028) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--red-dark);
+      text-decoration-color: rgba(114, 42, 26, 0.42);
+      text-underline-offset: 0.17em;
+    }
+    a:hover { text-decoration-color: currentColor; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+    code {
+      padding: 0.08rem 0.28rem;
+      border-radius: 4px;
+      background: rgba(79, 65, 48, 0.09);
+      font-size: 0.91em;
+    }
+    pre {
+      margin: 0.85rem 0 0;
+      padding: 1rem;
+      overflow: auto;
+      border-radius: 11px;
+      background: var(--dark);
+      color: #f8f2e9;
+      font-size: 0.8rem;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; background: transparent; color: inherit; font-size: inherit; }
+
+    .hero {
+      border-bottom: 6px solid var(--red);
+      background: #1f1e1b;
+      color: #f8f4ed;
+    }
+    .hero-inner, .shell, .footer-inner {
+      width: min(calc(100% - 2rem), var(--measure));
+      margin: 0 auto;
+    }
+    .hero-inner { padding: clamp(2.8rem, 7vw, 5.6rem) 0 clamp(2.4rem, 6vw, 4.2rem); }
+    .eyebrow {
+      margin: 0 0 0.7rem;
+      color: #ddb1a5;
+      font-size: 0.73rem;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, h4 { margin-top: 0; line-height: 1.14; letter-spacing: -0.02em; }
+    h1 {
+      max-width: 14ch;
+      margin-bottom: 1rem;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2.7rem, 8vw, 6.1rem);
+      font-weight: 500;
+    }
+    .lede {
+      max-width: 55rem;
+      margin: 0;
+      color: #d8d2c8;
+      font-size: clamp(1.04rem, 2vw, 1.26rem);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-top: 1.8rem;
+    }
+    .meta span {
+      padding: 0.4rem 0.64rem;
+      border: 1px solid #4c4942;
+      border-radius: 999px;
+      color: #eee8df;
+      font-size: 0.76rem;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 16rem minmax(0, 1fr);
+      gap: clamp(2rem, 5vw, 4.2rem);
+      align-items: start;
+      padding: 2.4rem 0 5rem;
+    }
+    nav {
+      position: sticky;
+      top: 1rem;
+      padding: 0.9rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 253, 248, 0.94);
+      box-shadow: 0 10px 26px rgba(50, 40, 30, 0.06);
+    }
+    nav strong {
+      display: block;
+      margin-bottom: 0.45rem;
+      font-size: 0.71rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    nav a {
+      display: block;
+      padding: 0.25rem 0;
+      color: var(--muted);
+      font-size: 0.81rem;
+      text-decoration: none;
+    }
+    nav a:hover { color: var(--red-dark); }
+    main { min-width: 0; }
+    section { margin-bottom: clamp(3.5rem, 7vw, 5.8rem); }
+    section > h2 {
+      padding-bottom: 0.72rem;
+      border-bottom: 2px solid var(--ink);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(1.9rem, 4vw, 3rem);
+      font-weight: 500;
+    }
+    h2 .n {
+      display: inline-block;
+      min-width: 2.15rem;
+      color: var(--red);
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      font-size: 0.4em;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      vertical-align: 0.35em;
+    }
+    h3 { margin-top: 1.8rem; margin-bottom: 0.56rem; font-size: 1.22rem; }
+    h4 { margin-bottom: 0.38rem; font-size: 0.96rem; }
+    p { margin: 0.62rem 0; }
+    ul, ol { margin: 0.66rem 0 0; padding-left: 1.25rem; }
+    li + li { margin-top: 0.36rem; }
+
+    .decision {
+      margin: 1.15rem 0 1.5rem;
+      padding: clamp(1.15rem, 3vw, 1.8rem);
+      border-left: 6px solid var(--red);
+      border-radius: 0 var(--radius) var(--radius) 0;
+      background: var(--panel);
+      box-shadow: 0 16px 38px rgba(48, 37, 27, 0.08);
+    }
+    .decision p { max-width: 61rem; margin-bottom: 0; font-size: 1.07rem; }
+    .label {
+      display: inline-block;
+      padding: 0.26rem 0.5rem;
+      border-radius: 999px;
+      background: var(--red-soft);
+      color: var(--red-dark);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .label.green { background: var(--green-soft); color: var(--green); }
+    .label.amber { background: var(--amber-soft); color: var(--amber); }
+    .label.blue { background: var(--blue-soft); color: var(--blue); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.9rem;
+      margin-top: 0.95rem;
+    }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card, .step-card, .reference {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 253, 248, 0.93);
+    }
+    .card { padding: 1.05rem; }
+    .card > :first-child, .reference > :first-child { margin-top: 0; }
+    .card > :last-child, .reference > :last-child { margin-bottom: 0; }
+
+    .table {
+      margin-top: 0.95rem;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    th, td {
+      padding: 0.75rem 0.8rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #e8e1d6;
+      color: #47423c;
+      font-size: 0.69rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+    tr.chosen td { background: #edf4f0; }
+    .center { text-align: center; white-space: nowrap; }
+
+    .steps { display: grid; gap: 1rem; margin-top: 1rem; }
+    .step-card { overflow: hidden; }
+    .step-head {
+      display: grid;
+      grid-template-columns: 4rem minmax(0, 1fr) auto;
+      gap: 0.8rem;
+      align-items: center;
+      padding: 0.9rem 1rem;
+      border-bottom: 1px solid var(--line);
+      background: #ece5da;
+    }
+    .step-number {
+      color: var(--red);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.8rem;
+      line-height: 1;
+    }
+    .step-head h3 { margin: 0; font-size: 1.08rem; }
+    .step-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.9rem 1.2rem;
+      padding: 1rem;
+    }
+    .step-body h4 {
+      color: var(--muted);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .step-body p, .step-body li { font-size: 0.85rem; }
+    .step-body ul, .step-body ol { margin-top: 0; }
+    .proof {
+      grid-column: 1 / -1;
+      padding: 0.78rem 0.88rem;
+      border: 1px solid #b6cdbf;
+      border-radius: 9px;
+      background: var(--green-soft);
+      color: #1e4739;
+      font-size: 0.86rem;
+    }
+    .pr {
+      grid-column: 1 / -1;
+      padding-top: 0.72rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.83rem;
+    }
+
+    .pointer {
+      margin: 0.9rem 0;
+      padding: 0.82rem 0.92rem;
+      border-left: 4px solid var(--blue);
+      border-radius: 0 9px 9px 0;
+      background: var(--blue-soft);
+      color: #24465c;
+      font-size: 0.87rem;
+    }
+    .warning {
+      margin: 0.9rem 0;
+      padding: 0.82rem 0.92rem;
+      border: 1px solid #d7bd80;
+      border-radius: 9px;
+      background: var(--amber-soft);
+      color: #593b00;
+      font-size: 0.87rem;
+    }
+    .reference { margin-top: 0.9rem; padding: 1.05rem; }
+
+    .diagram {
+      margin-top: 0.95rem;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #e9e2d7;
+    }
+    .diagram-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.7rem;
+    }
+    .box {
+      display: flex;
+      min-height: 6.8rem;
+      flex-direction: column;
+      justify-content: center;
+      padding: 0.92rem;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .box strong { font-size: 0.89rem; }
+    .box span { margin-top: 0.28rem; color: var(--muted); font-size: 0.77rem; }
+    .box.dark { border-color: #34312d; background: #292825; color: #fbf6ed; }
+    .box.dark span { color: #d2cabf; }
+    .arrow {
+      padding: 0.34rem;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .stages {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 2px;
+      margin-top: 0.9rem;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+    .stages div {
+      min-height: 4.7rem;
+      padding: 0.72rem 0.48rem;
+      background: #292825;
+      color: #faf4eb;
+      font-size: 0.69rem;
+      text-align: center;
+    }
+    .stages small { display: block; margin-top: 0.24rem; color: #bfb6aa; line-height: 1.32; }
+
+    footer { border-top: 1px solid #3a3732; background: #1f1e1b; color: #d7d1c7; }
+    .footer-inner { padding: 2.25rem 0; font-size: 0.8rem; }
+    footer a { color: #ecb5a7; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.8rem; }
+
+    @media (max-width: 1000px) {
+      .shell { grid-template-columns: 1fr; }
+      nav {
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.1rem 0.8rem;
+      }
+      nav strong { grid-column: 1 / -1; }
+      .grid.three { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 700px) {
+      .hero-inner, .shell, .footer-inner { width: min(calc(100% - 1.2rem), var(--measure)); }
+      .grid, .grid.three, .diagram-row, .step-body { grid-template-columns: 1fr; }
+      .step-head { grid-template-columns: 2.6rem minmax(0, 1fr); }
+      .step-head .label { grid-column: 2; justify-self: start; }
+      .proof, .pr { grid-column: auto; }
+      nav { grid-template-columns: 1fr 1fr; }
+      .stages { grid-template-columns: 1fr; gap: 1px; }
+      .stages div { min-height: auto; text-align: left; }
+      th, td { padding: 0.64rem; }
+    }
+    @media print {
+      body { background: #fff; }
+      .hero { border-bottom-color: #000; background: #fff; color: #000; }
+      .hero .lede, .hero .eyebrow, .meta span { color: #333; }
+      .meta span { border-color: #777; }
+      .shell { display: block; width: 100%; padding: 1rem 0; }
+      nav { display: none; }
+      .step-card, .reference, .card { break-inside: avoid; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Darkroom / agent runbook</p>
+      <h1>Ingest and catalog rework</h1>
+      <p class="lede">Execute the library replacement as a sequence of small pull requests. Every step ends in proof. Every PR names its issues. Paths stop being identity, filesystem mutations recover after restart, and capability claims match the packaged app.</p>
+      <div class="meta" aria-label="Runbook metadata">
+        <span>Rewritten for implementation agents</span>
+        <span>14 tracked issues</span>
+        <span>Baseline f92f2d4</span>
+        <span>One PR per implementation step</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav aria-label="Table of contents">
+      <strong>Execute</strong>
+      <a href="#goal">Goal and finish line</a>
+      <a href="#rules">Rules</a>
+      <a href="#pr-protocol">PR protocol</a>
+      <a href="#sequence">Implementation steps</a>
+      <strong>Read by branch</strong>
+      <a href="#ref-architecture">Catalog architecture</a>
+      <a href="#ref-operations">File operation safety</a>
+      <a href="#ref-scan">Scan, watch, relink</a>
+      <a href="#ref-import">Import behavior</a>
+      <a href="#ref-formats">Formats and RAW</a>
+      <a href="#ref-admin">Catalog admin</a>
+      <a href="#ref-migration">Migration</a>
+      <a href="#ref-verification">Verification</a>
+      <a href="#issue-map">Issue map</a>
+    </nav>
+
+    <main>
+      <section id="goal">
+        <h2><span class="n">01</span>Goal and finish line</h2>
+        <div class="decision">
+          <span class="label">Goal</span>
+          <p>Replace Darkroom's folder-as-catalog flow with one SQLite database per catalog, several roots per catalog, stable asset IDs, an Electron-owned filesystem boundary, durable operations, and one capability registry for import, view, Develop, and export.</p>
+        </div>
+
+        <h3>Finish line</h3>
+        <p>The program is complete only when all of these statements are true:</p>
+        <ul>
+          <li>Every tracked issue in the <a href="#issue-map">issue map</a> has a merged PR whose body closes that issue.</li>
+          <li>Every asset uses a stable ID that survives rename, move, relink, root change, and catalog path change.</li>
+          <li>The renderer sends catalog IDs, asset IDs, root IDs, or picker grants. Electron resolves authoritative paths.</li>
+          <li>Every mutating item recovers from its last safe stage after process or app restart. The test harness can inject a fault at each safe stage.</li>
+          <li>Cancellation stops native work at a documented boundary and stale events cannot replace a newer catalog session.</li>
+          <li>Migration preserves every recoverable v1/v2 relation and leaves the legacy source untouched until v3 passes validation.</li>
+          <li>The packaged format and camera report agrees with the code path used by scan, preview, Develop, and export.</li>
+          <li>Copy as DNG is either proved by #89 or shown as unavailable. Simulated Nikon output never ships as native support.</li>
+          <li>Catalog backup, validation, optimize, import/export, and restore cannot silently replace or damage the active catalog. Restore preserves filesystem facts that occurred after the selected backup.</li>
+        </ul>
+
+        <h3>Selected design</h3>
+        <div class="table">
+          <table>
+            <thead><tr><th>Option</th><th>Shape</th><th class="center">Cross-judge</th><th>Decision</th></tr></thead>
+            <tbody>
+              <tr class="chosen">
+                <td><strong>A. Per-catalog SQLite</strong></td>
+                <td>One database per catalog. A dedicated worker owns schema, transactions, jobs, backup, and validation.</td>
+                <td class="center"><strong>28 / 30</strong></td>
+                <td><span class="label green">Use</span></td>
+              </tr>
+              <tr>
+                <td><strong>B. Atomic JSON bundle</strong></td>
+                <td>Full snapshots, in-memory indexes, and separate job files.</td>
+                <td class="center">24 / 30</td>
+                <td>Reject. It rebuilds transactions, indexes, recovery, and compaction in application code.</td>
+              </tr>
+              <tr>
+                <td><strong>C. Global SQLite</strong></td>
+                <td>All catalogs share one file.</td>
+                <td class="center">Not advanced</td>
+                <td>Reject. Backup and corruption boundaries would not match one user-facing catalog.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pointer"><strong>Runtime premise checked.</strong> In the reviewed checkout, Electron 43.1.0 runs Node 24.18.0. <code>node:sqlite</code>, worker-thread access, and the <code>backup</code> API all executed successfully. Step 0 repeats that probe against the current install; step 1 turns it into a permanent harness.</div>
+      </section>
+
+      <section id="rules">
+        <h2><span class="n">02</span>Rules every step must preserve</h2>
+        <div class="grid">
+          <article class="card">
+            <span class="label green">Identity</span>
+            <h3>Stable</h3>
+            <p>CatalogId, RootId, AssetId, OperationId, and PresetId are random stable IDs. A path is a location, never identity.</p>
+          </article>
+          <article class="card">
+            <span class="label green">Authority</span>
+            <h3>Electron-owned</h3>
+            <p>Electron owns canonical paths, grants, containment, no-follow checks, native work, and catalog files. Renderer code owns display and user intent.</p>
+          </article>
+          <article class="card">
+            <span class="label green">Recovery</span>
+            <h3>Journaled</h3>
+            <p>A frozen plan is immutable. Each file advances through named safe stages and an idempotent database item.</p>
+          </article>
+          <article class="card">
+            <span class="label green">Truth</span>
+            <h3>Observed</h3>
+            <p>Watcher events are hints. Reconciliation proves filesystem state. Package probes and fixtures prove format/camera capability.</p>
+          </article>
+        </div>
+
+        <h3>Working rules</h3>
+        <ul>
+          <li>Read the repository instructions and the relevant Next.js 16 guide before editing code in that branch.</li>
+          <li>Inspect the current issue body before starting its step. Treat the issue body and this runbook as one contract. Record any conflict in the PR.</li>
+          <li>Use current project files as the source for scripts, dependencies, and layout. The baseline links in this document explain the old seam; they do not override current code.</li>
+          <li>Make the smallest coherent change for the current step. Keep future-step UI and abstractions out.</li>
+          <li>Preserve unrelated work. Stop if a concurrent edit overlaps the same file and intent cannot be reconciled safely.</li>
+          <li>Add only verification code required by an issue body or needed to prove a new invariant. Use the existing checks and Electron scenarios for the rest.</li>
+          <li>Finish the current step and its PR before starting a dependent step. Parallel work is limited to branches named as parallel in the sequence.</li>
+        </ul>
+
+        <h3>Stop conditions</h3>
+        <ul>
+          <li>Stop before DNG implementation when #89 has no qualified backend or packaging decision. Keep #20 open and expose the unavailable state.</li>
+          <li>Stop before claiming Nikon native support when runtime licensing, package contents, or architecture support is unresolved. Ship an accurate unavailable state.</li>
+          <li>Stop before enabling Auto Import Move on network ingress until the disconnect and source-cleanup proof passes. Copy remains the default.</li>
+          <li>Stop before destructive catalog replace or restore when the safety backup or staged validation cannot complete.</li>
+          <li>Keep the current catalog active when a nonterminal file item cannot reconcile or the external restore envelope cannot be written and synced.</li>
+        </ul>
+      </section>
+
+      <section id="pr-protocol">
+        <h2><span class="n">03</span>PR protocol</h2>
+        <div class="decision">
+          <span class="label">Required handoff</span>
+          <p>Every implementation step ends with a pull request. Invoke the repository's <code>file-pr</code> workflow after the proof passes. Connect the PR to every issue named by that step.</p>
+        </div>
+
+        <h3>Issue connection rule</h3>
+        <ul>
+          <li>Use <code>Refs #N</code> when the PR advances an issue but does not satisfy its full close gate.</li>
+          <li>Use <code>Closes #N</code> only when that PR and its dependencies satisfy every completion criterion in the current issue body and the <a href="#issue-map">issue map</a>.</li>
+          <li>When several PRs advance one issue, every earlier PR uses <code>Refs</code>. The last proven PR uses <code>Closes</code>.</li>
+          <li>Connect dependency issues too. Example: the DNG PR uses <code>Closes #20</code> and <code>Refs #89</code> only after #89 has already supplied the qualified backend.</li>
+          <li>Leave the issue open when one platform, restart path, cancellation path, or packaged capability remains unproved.</li>
+        </ul>
+
+        <h3>PR body</h3>
+        <pre><code>## Problem
+Name the user-visible gap this step fixes.
+
+## Change
+List the behavior and the hard invariant added by this PR.
+
+## Proof
+List commands and Electron scenarios run, with observed results.
+Call out skipped checks and why.
+
+## Recovery and rollback
+State the failure boundary, persisted state, and rollback path.
+
+## Issues
+Refs #N
+Closes #N  &lt;!-- only when the full issue gate passes --&gt;</code></pre>
+
+        <h3>PR proof</h3>
+        <p>A PR is ready when its step proof passes, the diff stays inside scope, all named issue connections appear in the body, and the branch has no unexplained new check failure. Attach the operation summary, migration report, support matrix, or screenshots when that artifact is the proof.</p>
+      </section>
+
+      <section id="sequence">
+        <h2><span class="n">04</span>Implementation steps</h2>
+        <p>Execute in order unless a step explicitly names a parallel branch. Each step owns one PR. A larger PR hides failure boundaries and makes issue closure harder to judge.</p>
+
+        <div class="steps">
+          <article class="step-card" id="step-0">
+            <div class="step-head">
+              <span class="step-number">00</span>
+              <h3>Freeze the current contract</h3>
+              <span class="label blue">Preflight</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Confirm that the plan still matches the issue bodies, runtime, and current code before changing the architecture.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Read-only inspection plus a short decision note. No production behavior change.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Read all 14 linked issue bodies, including #129, and the #89-#98 dependency states.</li>
+                  <li>Inspect package runtime, Electron build target, catalog schema, preload calls, scan flow, caches, XMP, export, and Nikon service.</li>
+                  <li>Record any drift from baseline commit <code>f92f2d4</code>.</li>
+                  <li>Confirm the unresolved product choices in <a href="#risks">Decisions</a>. Record that #129's local-first goal is implemented with per-catalog SQLite rather than its original JSON implementation note.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#baseline">Baseline evidence</a> only to locate old seams. Trust the checked-out code when it differs.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Every requested issue and dependency has a current state, every affected module has an owner, and each drift item is either folded into the next step or raised to the user.</div>
+              <div class="pr"><strong>PR.</strong> Skip a PR if this step changes no repository file. If it records an ADR or plan correction, open a docs-only PR with one <code>Refs #N</code> entry for each affected issue.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-1">
+            <div class="step-head">
+              <span class="step-number">01</span>
+              <h3>Boot the catalog worker</h3>
+              <span class="label blue">Foundation</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Prove the runtime and ownership boundary before modeling catalog data.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Electron build target and Node types, worker request protocol, branded IDs, input parsing, atomic recent-catalog registry, a minimal SQLite lifecycle, and the fault-injection harness used by later recovery work.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Align the Electron build target and Node types with Electron 43's embedded Node 24 runtime.</li>
+                  <li>Add typed worker requests/responses and main-process timeout/shutdown handling.</li>
+                  <li>Open one database, run a transaction, back it up, run integrity checks, and close it from the worker.</li>
+                  <li>Keep synchronous SQLite work off Electron main.</li>
+                  <li>Add a test-only fault injector keyed by operation, item, and safe stage. The five stage names are <code>planned</code>, <code>destination-prepared</code>, <code>destination-published</code>, <code>catalog-applied</code>, and <code>source-cleaned</code>.</li>
+                  <li>Add a reusable temporary-root harness that injects one fault, restarts the worker/runtime, runs recovery, and asserts files plus catalog state. Production receives a no-op injector that the renderer cannot enable.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#ref-architecture">Catalog architecture</a>. Defer all user-facing library behavior.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Dev and packaged Electron can start, query, back up, integrity-check, and stop the worker without blocking window interaction or leaving the catalog locked. A tracer operation injects a fault at each of the five safe stages, restarts the runtime, and produces a deterministic recovery assertion.</div>
+              <div class="pr"><strong>PR 1.</strong> Use <code>Refs #20</code>, <code>Refs #26</code>, <code>Refs #27</code>, <code>Refs #28</code>, and <code>Refs #129</code>. Attach the worker lifecycle output, packaged runtime version, and five-stage harness report.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-2">
+            <div class="step-head">
+              <span class="step-number">02</span>
+              <h3>Install catalog v3 and migrate stable assets</h3>
+              <span class="label blue">Foundation</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Create the durable asset graph that every later feature uses.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Schema, catalog repository, v1/v2 staged migration, stable IDs, missing assets, cache namespace, and snapshot queries. No watcher or file mutation.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Implement the tables and constraints in <a href="#ref-architecture">Catalog architecture</a>.</li>
+                  <li>Map every recoverable legacy path ID to a stable AssetId.</li>
+                  <li>Preserve metadata, albums, archive, Develop, and valid XMP state.</li>
+                  <li>Keep old settings/catalog JSON untouched until new database validation passes.</li>
+                  <li>Move cache identity to catalog, asset, revision, and variant.</li>
+                  <li>Mark every migrated asset without a proved digest as <code>fingerprint-missing</code>. Persist catalog fingerprint coverage; migration does not claim duplicate readiness.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#ref-migration">Migration</a>. Use the missing-root branch when the old root is offline.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Online, offline, malformed, v1, v2, and interrupted migrations produce the expected report. Every recoverable relation survives. Foreign-key and integrity checks pass before activation. The legacy source remains byte-identical.</div>
+              <div class="pr"><strong>PR 2.</strong> Use <code>Refs #21</code>, <code>Refs #26</code>, <code>Refs #27</code>, <code>Refs #129</code>, and <code>Refs #131</code>. Attach before/after counts, fingerprint coverage, and the missing-root limitation.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-3">
+            <div class="step-head">
+              <span class="step-number">03</span>
+              <h3>Replace path IPC with catalog capabilities</h3>
+              <span class="label blue">Foundation</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Make Electron the only authority for catalog asset paths.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Catalog sessions, picker grants, asset/root lookup, event envelope, and asset-scoped read/stat/decode/trash/sidecar calls.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Parse every unknown IPC input in Electron.</li>
+                  <li>Resolve session, catalog, root, and asset ownership before native I/O.</li>
+                  <li>Repeat canonical containment and no-follow checks at the I/O boundary.</li>
+                  <li>Tag events with catalog, session, operation, and monotonic sequence.</li>
+                  <li>Remove renderer catalog writes and authoritative asset paths from the new API.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read the renderer contract and ownership rules in <a href="#ref-architecture">Catalog architecture</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> A renderer request cannot access an asset from another catalog, escape a registered root, reuse an expired grant, or apply an event from an old session.</div>
+              <div class="pr"><strong>PR 3.</strong> Use <code>Refs #26</code>, <code>Refs #28</code>, <code>Refs #129</code>, <code>Refs #131</code>, and <code>Refs #136</code>. List every removed or replaced path-based preload call.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-4">
+            <div class="step-head">
+              <span class="step-number">04</span>
+              <h3>Ship the catalog model and several roots</h3>
+              <span class="label green">Close candidates #26 #129</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Let users create, open, switch, close, rename, relink, export, import, and repair local or portable catalogs with several roots and isolated state.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Recent registry, visible catalog scope, catalog chooser, root management, basic portable export/import/repair, active session swap, writer drain, Develop/cache reset, and malformed/missing states.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Load persisted assets immediately, then check root health as an operation.</li>
+                  <li>Stop old watchers and cancel/pause work before installing a new session.</li>
+                  <li>Drain catalog and XMP writes before closing the old worker.</li>
+                  <li>Keep delete-catalog separate from remove-from-recents and require exact target confirmation.</li>
+                  <li>Show active catalog name, source roots, migration/repair state, and switch action before edits begin.</li>
+                  <li>Export a validated portable catalog copy through the worker backup path. Import opens that copy as a new catalog. Repair is read-only validation plus migration retry at this step; step 13 adds merge, replace, retention, and restore.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Use the lifecycle state and registry rules in <a href="#ref-architecture">Catalog architecture</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Two catalogs containing identical relative paths and one catalog containing several roots survive rapid switch and restart without metadata, album, archive, Develop, event, or cache leakage. An old catalog, portable export/import, missing root, and invalid catalog each produce a specific recoverable result. The active scope is visible and all work stays local and account-free.</div>
+              <div class="pr"><strong>PR 4.</strong> Use separate <code>Closes #26</code> and <code>Closes #129</code> entries only when both full gates pass. Otherwise close the proven issue and use <code>Refs #N</code> for the other. State that the approved catalog contract remains local-first but uses SQLite instead of #129's original JSON implementation note.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-5">
+            <div class="step-head">
+              <span class="step-number">05</span>
+              <h3>Make scan progress and cancellation real</h3>
+              <span class="label green">Close candidate #136</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Report native filesystem work while it happens and stop it when the user cancels.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Main-owned scan operation, progress events, AbortSignal, staged observations, terminal states, timeout cleanup, and UI phases.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Emit directories visited, files considered, accepted count, current path, and phase before completion.</li>
+                  <li>Check abort before each directory and between stat batches.</li>
+                  <li>Publish scan observations only after operation and session checks.</li>
+                  <li>Classify completed, cancelled, timed out, and failed.</li>
+                  <li>Remove progress listeners in every terminal path.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read scan rules and cancellation rows in <a href="#ref-scan">Scan, watch, and relink</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> A deep scan emits native progress before it ends. Cancel stops further traversal at the next safe boundary, keeps the previous catalog/cache, removes listeners, and rejects late events after an immediate second-folder or catalog selection.</div>
+              <div class="pr"><strong>PR 5.</strong> Use <code>Closes #136</code> only after every terminal state and stale-result case passes.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-6">
+            <div class="step-head">
+              <span class="step-number">06</span>
+              <h3>Publish one format and camera truth</h3>
+              <span class="label blue">Parallel after step 3</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Make scan, view, Develop, export, and support messaging read the same proven capability state.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Format registry, format reasons/badges, camera-neutral metadata, camera matrix, Nikon protocol/runtime probe, provenance, and release report.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Seed NEF/JPEG/PNG/WebP behavior without regression.</li>
+                  <li>Map #89-#98 to registry rows and independent recognition, preview, Develop, metadata, and export states.</li>
+                  <li>Generate camera rows from checksummed samples and packaged backends.</li>
+                  <li>Validate Nikon helper protocol at both ends and reject simulated output in production.</li>
+                  <li>Show backend and fallback provenance in asset metadata/support UI.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#ref-formats">Formats, camera coverage, Nikon, and DNG</a>. It owns every capability claim and dependency gate.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Representative and malformed files produce the registry state shown in UI and support report. Every packaged architecture reports its actual backend. The test Nikon helper cannot receive a production-native label.</div>
+              <div class="pr"><strong>PR 6.</strong> Add one <code>Refs #N</code> entry for each affected dependency from #89 through #98. Use separate <code>Closes #133</code>, <code>Closes #134</code>, and <code>Closes #135</code> entries only for the issues whose packaged matrix and full criteria pass. Keep each incomplete issue as <code>Refs #N</code>.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-7">
+            <div class="step-head">
+              <span class="step-number">07</span>
+              <h3>Prove duplicates before import writes</h3>
+              <span class="label green">Close candidate #21</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Detect catalog and session duplicates across rename, then require an explicit resolution.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Catalog fingerprint coverage, a durable backfill operation, bounded streamed SHA-256, on-demand candidate hashing, persistence/invalidation, match groups, review state, and summary. No destination writes yet.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Create a catalog-scoped <code>fingerprint-backfill</code> operation for present assets whose fingerprint is missing, stale, or failed. Persist indexed, remaining, failed, and unchecked counts.</li>
+                  <li>Run backfill with bounded concurrency when the catalog is idle. Make it cancellable and resumable after restart.</li>
+                  <li>Hash the incoming file, then find existing assets with the same byte length whose digest is missing or stale. Hash those candidates before declaring the incoming file unique. Do not hash unrelated sizes inline.</li>
+                  <li>Report <code>not-fully-checked</code> instead of unique when a same-size candidate cannot be read, hashing is cancelled, or the source changes.</li>
+                  <li>Use size/time/camera data only to narrow candidates. Use a valid cached or freshly streamed SHA-256 as proof.</li>
+                  <li>Compare incoming files with catalog assets and each other. Model Skip incoming, Keep both, and Use new location separately from name conflicts.</li>
+                  <li>Discard a digest when source stat changes during hashing and return the asset to backfill.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read duplicate semantics in <a href="#ref-import">Import behavior</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Start from a migrated catalog with zero digests. Backfill reports exact coverage, resumes after cancel/restart, and does not block normal browsing. Import finds a renamed duplicate by hashing only unindexed same-size candidates before any unique result. Same-name different bytes do not group; changed files rehash; unreadable or cancelled candidates produce <code>not-fully-checked</code>; completed hashes survive restart without false reuse.</div>
+              <div class="pr"><strong>PR 7.</strong> Use <code>Closes #21</code> only after all duplicate actions and cancel/restart criteria pass.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-8">
+            <div class="step-head">
+              <span class="step-number">08</span>
+              <h3>Reconcile watchers and relink missing assets</h3>
+              <span class="label green">Close candidates #18 #131</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Keep active roots current and reconnect moved roots/files without discarding catalog state.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Root watchers, dirty scopes, debounce/backoff, root health, missing state, relink draft, confidence reasons, one-to-one review, retry/resume.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Treat watcher events as hints and reconcile affected paths/subtrees.</li>
+                  <li>Mark disappeared assets missing after a completed reconciliation. Preserve organization.</li>
+                  <li>Rank relink candidates by exact hash, valid local identity, relative path plus compatible observation, then filename/size suggestion.</li>
+                  <li>Preselect only exact fingerprints. Require review for ambiguity.</li>
+                  <li>Use one operation for root and per-file relink.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read all of <a href="#ref-scan">Scan, watch, and relink</a>. The watcher and relink branches share missing-state rules.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> External add/change/move/delete updates only the right root; burst copies stay responsive; watcher errors degrade visibly; renamed root, moved subfolder, duplicate names, one missing file, and cancelled review preserve all user state and report exact unresolved counts.</div>
+              <div class="pr"><strong>PR 8.</strong> Use separate <code>Closes #18</code> and <code>Closes #131</code> entries only when both gates pass. If one remains incomplete, close the proven issue and use <code>Refs #N</code> for the other.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-9">
+            <div class="step-head">
+              <span class="step-number">09</span>
+              <h3>Land the file transaction engine</h3>
+              <span class="label green">Close candidate #28</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Rename, move, and copy library sources without a partial file or broken catalog link.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Prepare/freeze/execute, plan hash, five safe stages, same/cross-volume behavior, replacement recovery, XMP bundle, batch progress/cancel, restart recovery, and integration with the step-1 fault harness.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Implement the commit protocol in <a href="#ref-operations">File operation safety</a>.</li>
+                  <li>Retain AssetId for Rename and Move. Create a new AssetId for Copy.</li>
+                  <li>Keep known XMP with its image and report mismatch as a retryable decision.</li>
+                  <li>Reconcile every journal stage at startup.</li>
+                  <li>Register each stage transition with the test-only fault injector from step 1.</li>
+                  <li>Show per-item conflict, cancel, source-retained, XMP, and failure results.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#ref-operations">File operation safety</a> before touching native files.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Same-volume and cross-volume Rename/Move/Copy, conflict policies, permission errors, XMP mismatch, and cancel yield one catalog-consistent result. The harness injects faults at all five stages for each operation kind and verifies recovery. One packaged kill-and-reopen smoke case at <code>destination-published</code> confirms that real process restart follows the harness model.</div>
+              <div class="pr"><strong>PR 9.</strong> Use <code>Closes #28</code> when its full gate passes. Use <code>Refs #20</code> because this engine is the placement base for import.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-10">
+            <div class="step-head">
+              <span class="step-number">10</span>
+              <h3>Ship manual import and presets</h3>
+              <span class="label green">Close candidate #22</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Give users a deterministic Source, Placement, Review, Run, and Summary flow for Add, Copy, and Move.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Import UI/state, destination and filename templates, conflicts, metadata, keywords, Develop defaults, preset CRUD/migration, frozen snapshots, Add/Copy/Move execution.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Keep Prepare and Review non-mutating. Freeze only after validation and all required choices.</li>
+                  <li>Render constrained date/camera/original/sequence tokens and collision outcomes before Execute.</li>
+                  <li>Apply title, caption, copyright, keywords, and parsed Develop defaults.</li>
+                  <li>Register a source root for Add when needed. Reuse the transaction engine for Copy/Move.</li>
+                  <li>Keep Copy as DNG visible but unavailable until step 11.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read <a href="#ref-import">Import behavior</a> and the import cancellation rows in <a href="#ref-operations">File operation safety</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Preset create/edit/rename/delete/default survives restart; preview resolves tokens and conflicts; invalid templates fail before writes; Prepare/Review cancel changes nothing; Add/Copy/Move and metadata/Develop results match the frozen plan after restart.</div>
+              <div class="pr"><strong>PR 10.</strong> Use <code>Closes #22</code> when its gate passes. Use <code>Refs #20</code> until verified DNG also passes.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-11">
+            <div class="step-head">
+              <span class="step-number">11</span>
+              <h3>Qualify Copy as DNG</h3>
+              <span class="label amber">Gate #89</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Complete #20 with a real converter path whose output and packaged availability are proved.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Typed converter adapter, capability probe, private input/output staging, signature/output validation, provenance, cancel, and restart recovery.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Confirm #89 has supplied a qualified backend for the current target.</li>
+                  <li>Probe backend version and packaged/runtime availability.</li>
+                  <li>Convert from a private source snapshot to private DNG staging.</li>
+                  <li>Validate DNG signature, dimensions/metadata needed by #89, and output digest before publish.</li>
+                  <li>Return explicit unavailable, rejected, invalid, cancelled, and failed states without a catalog row.</li>
+                  <li>Run DNG through the same five-stage fault injector and recovery assertions as Copy.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read DNG gates in <a href="#ref-formats">Formats, camera coverage, Nikon, and DNG</a> plus the commit protocol in <a href="#ref-operations">File operation safety</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> A supported RAW produces a valid published DNG and correct catalog row. Missing backend, unsupported camera/compression, bad output, and cancel produce no false destination or success. Fault injection at each safe stage recovers correctly. Add, Copy, Move, and conflict behavior from step 10 still pass.</div>
+              <div class="pr"><strong>PR 11.</strong> Use <code>Closes #20</code> and <code>Refs #89</code> only when all #20 placement modes and DNG criteria pass. Otherwise use separate <code>Refs #20</code> and <code>Refs #89</code> entries.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-12">
+            <div class="step-head">
+              <span class="step-number">12</span>
+              <h3>Run Auto Import through the same executor</h3>
+              <span class="label green">Close candidate #23</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Import stable files from one active-catalog ingress folder without hidden or duplicate work.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Rule persistence, path overlap validation, stable-file gate, durable queue, event collapse, bounded concurrency, backoff, monitor controls, restart recovery.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Persist ingress, destination, frozen preset reference, duplicate/conflict policy, and enabled state.</li>
+                  <li>Require two unchanged no-follow observations and a readable handle.</li>
+                  <li>Collapse duplicate events by path and observed identity.</li>
+                  <li>Feed ready items into the normal import executor.</li>
+                  <li>Implement pause, resume, cancel, disable, retry failed, clear failed, and open ingress.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read the Auto Import branch in <a href="#ref-import">Import behavior</a> and watcher truth in <a href="#ref-scan">Scan, watch, and relink</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Stable arrivals import once; growing files wait; bursts, duplicate events, and restart cannot duplicate output; pause/resume/cancel/disable match visible state; read-only ingress and failed destination remain retryable.</div>
+              <div class="pr"><strong>PR 12.</strong> Use <code>Closes #23</code> only after every background, restart, and control criterion passes.</div>
+            </div>
+          </article>
+
+          <article class="step-card" id="step-13">
+            <div class="step-head">
+              <span class="step-number">13</span>
+              <h3>Ship catalog administration</h3>
+              <span class="label green">Close candidate #27</span>
+            </div>
+            <div class="step-body">
+              <div>
+                <h4>Goal</h4>
+                <p>Back up, inspect, compact, export, import, and restore the final v3 catalog without risking the active library or orphaning files that changed after the selected backup.</p>
+              </div>
+              <div>
+                <h4>Scope</h4>
+                <p>Backup packages, checksums, retention, read-only validate, optimize preview/compact swap, export/import, merge/replace preview, maintenance mode, external restore envelope, forward filesystem reconciliation, safety backup, restore, and corrupt-catalog recovery.</p>
+              </div>
+              <div>
+                <h4>Actions</h4>
+                <ol>
+                  <li>Use SQLite online backup from the worker and publish a versioned checksummed package.</li>
+                  <li>Run validation without mutation.</li>
+                  <li>Preview proven orphan removal and validate compact output before swap.</li>
+                  <li>Default import/restore to Open as new. Require dry run and explicit confirmation for Merge or Replace.</li>
+                  <li>Before Replace, enter maintenance mode. Stop new mutations and reconcile every nonterminal file item to a safe terminal state while the current database still owns its journal.</li>
+                  <li>Create and validate a safety backup. Write an atomic restore envelope outside the database being replaced. Store target/safety checksums, restore stage, and a forward manifest of current asset locations, fingerprints, new assets, and published filesystem mutations.</li>
+                  <li>Restore the target into a temporary database. Replay filesystem facts from the forward manifest: update moved locations by stable ID/fingerprint, add current-only files as <code>recovered-after-backup</code>, and retain unresolved facts in a visible recovery queue. Historical ratings, albums, archive, and Develop state come from the selected backup.</li>
+                  <li>Validate the reconciled temporary database, swap it, reopen it, and run a bounded root reconciliation. Remove the external envelope only after every forward fact is linked or recorded for review.</li>
+                  <li>On crash, resume or roll back from the external envelope and safety backup. The restore process cannot depend on a journal inside the database it has already replaced.</li>
+                </ol>
+              </div>
+              <div>
+                <h4>Branch pointer</h4>
+                <p>Read all of <a href="#ref-admin">Catalog administration</a>.</p>
+              </div>
+              <div class="proof"><strong>Proof.</strong> Inject a fault after a Move publishes its destination, then start Replace restore. Maintenance recovery completes or records the Move before the current database closes. The staged restored catalog links the published destination or places it in explicit recovery review. Fault injection after each restore-envelope stage resumes or rolls back without a silent orphan. Manual and scheduled backup, failed backup, checksum corruption, read-only validation, optimize, export/import, merge conflict, safety backup, and restart keep the last known-good catalog recoverable.</div>
+              <div class="pr"><strong>PR 13.</strong> Use <code>Closes #27</code> only after the final v3 schema and all administration gates pass. Use <code>Refs #28</code> for the cross-check between restore and file-operation recovery.</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="ref-architecture">
+        <h2><span class="n">R1</span>Catalog architecture reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing steps 1-4, changing catalog schema or IPC, touching cache identity, or reviewing a catalog/session boundary.</div>
+
+        <div class="diagram" role="img" aria-label="Renderer sends catalog-scoped commands and grants to Electron library runtime. Electron coordinates native services. Dedicated catalog worker owns one SQLite file per catalog.">
+          <div class="diagram-row">
+            <div class="box"><strong>Renderer</strong><span>Active read model, drafts, review, progress, summaries. IDs and grants only.</span></div>
+            <div class="box dark"><strong>Electron library runtime</strong><span>Sessions, grants, validation, scan/watch, file transactions, decoder routing, event sequence.</span></div>
+            <div class="box"><strong>Catalog worker</strong><span>node:sqlite, migration, transactions, journal, queries, backup, validate, optimize.</span></div>
+          </div>
+          <div class="arrow">main-owned canonical paths connect roots and files / session-scoped events return to renderer</div>
+        </div>
+
+        <h3>Renderer contract</h3>
+        <pre><code>interface DarkroomLibrary {
+  catalogs: {
+    list(): Promise&lt;CatalogSummary[]&gt;;
+    create(input: unknown): Promise&lt;CatalogSession&gt;;
+    open(input: unknown): Promise&lt;CatalogSession&gt;;
+    switch(input: unknown): Promise&lt;CatalogSession&gt;;
+    close(input: unknown): Promise&lt;void&gt;;
+  };
+  paths: {
+    choose(input: unknown): Promise&lt;PathGrant | null&gt;;
+  };
+  operations: {
+    prepare(command: unknown): Promise&lt;OperationSnapshot&gt;;
+    respond(response: unknown): Promise&lt;OperationSnapshot&gt;;
+    freeze(input: unknown): Promise&lt;OperationSnapshot&gt;;
+    execute(input: unknown): Promise&lt;OperationSnapshot&gt;;
+    cancel(input: unknown): Promise&lt;OperationSnapshot&gt;;
+    get(input: unknown): Promise&lt;OperationSnapshot&gt;;
+    subscribe(listener: (event: LibraryEvent) =&gt; void): () =&gt; void;
+  };
+}</code></pre>
+
+        <h3>Stable records</h3>
+        <pre><code>type CatalogId = Brand&lt;string, "CatalogId"&gt;;
+type RootId = Brand&lt;string, "RootId"&gt;;
+type AssetId = Brand&lt;string, "AssetId"&gt;;
+type OperationId = Brand&lt;string, "OperationId"&gt;;
+type PresetId = Brand&lt;string, "PresetId"&gt;;
+
+interface AssetRecord {
+  id: AssetId;
+  catalogId: CatalogId;
+  rootId: RootId;
+  relativePath: string;
+  byteLength: number | null;
+  modifiedAt: number | null;
+  revision: number;
+  health: "present" | "missing" | "ambiguous" | "unreadable";
+  formatId: string;
+  fingerprintId: string | null;
+}</code></pre>
+
+        <h3>Tables</h3>
+        <div class="table">
+          <table>
+            <thead><tr><th>Table</th><th>Owns</th><th>Constraint</th></tr></thead>
+            <tbody>
+              <tr><td><code>catalog_meta</code></td><td>Catalog identity, name, schema/app version, timestamps.</td><td>One row; relink never changes ID.</td></tr>
+              <tr><td><code>roots</code></td><td>Canonical path, label, health, scan/watch state.</td><td>Validated realpath and catalog ownership.</td></tr>
+              <tr><td><code>assets</code></td><td>Stable ID, root-relative location, observation, health, format/camera, revision.</td><td>Unique <code>(root_id, relative_path)</code>.</td></tr>
+              <tr><td><code>asset_metadata</code></td><td>Pick, rating, label, title, caption, copyright, keywords, Develop, XMP state.</td><td>One-to-one by AssetId.</td></tr>
+              <tr><td><code>albums</code>, <code>album_assets</code></td><td>Album identity/order/membership.</td><td>Foreign keys reject orphan and cross-catalog rows.</td></tr>
+              <tr><td><code>fingerprints</code></td><td>Missing/hashing/valid/stale/failed state, SHA-256, size, and stat that proves reuse.</td><td>Catalog+digest index; changed stat invalidates and returns the asset to backfill.</td></tr>
+              <tr><td><code>import_presets</code></td><td>Versioned templates, metadata, keywords, Develop default.</td><td>Catalog-scoped; job stores applied snapshot.</td></tr>
+              <tr><td><code>auto_import_rules</code></td><td>Ingress, destination, policy, stability, enabled.</td><td>One enabled active-catalog rule in release one.</td></tr>
+              <tr><td><code>operations</code>, <code>operation_items</code></td><td>Intent, plan hash, lifecycle, safe stage, result, retry.</td><td>Frozen plan immutable; item idempotent.</td></tr>
+              <tr><td><code>migration_aliases</code>, <code>audit_log</code></td><td>Legacy ID mapping and material recovery/admin choices.</td><td>Every migration and replace decision remains explainable.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Physical boundary</h3>
+        <ul>
+          <li><code>catalog-registry.json</code> uses atomic write and stores catalog ID, display name, canonical database path, health, and last-opened time.</li>
+          <li>Each catalog has one SQLite file with WAL, foreign keys, one worker connection, and short transactions.</li>
+          <li>Registry/settings use temporary file, file sync, rename, and parent-directory sync where supported.</li>
+          <li>Cache key is <code>catalogId:assetId:revision:variant</code>.</li>
+          <li>The worker owns backup, integrity, foreign-key check, and compact operations. Main stays responsive.</li>
+          <li>An in-place restore writes one atomic envelope at <code>userData/restore-recovery/&lt;CatalogId&gt;.json</code>, outside the replaceable database. It contains checksums, restore stage, and forward filesystem facts. It is removed after the restored catalog links or records every fact.</li>
+        </ul>
+      </section>
+
+      <section id="ref-operations">
+        <h2><span class="n">R2</span>File operation safety reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing step 9-11, changing Copy/Move/Rename/DNG/XMP behavior, or reviewing cancellation and crash recovery.</div>
+
+        <h3>Plan lifecycle</h3>
+        <ol>
+          <li><strong>Prepare.</strong> Observe sources and classify work. Mutate nothing.</li>
+          <li><strong>Review.</strong> Resolve destination, preset, duplicates, and name conflicts. Mutate nothing.</li>
+          <li><strong>Freeze.</strong> Validate current observations and backend availability. Store immutable plan and hash.</li>
+          <li><strong>Execute.</strong> Advance each item through safe stages. Retain completed items on batch cancel.</li>
+        </ol>
+
+        <h3>Safe stages</h3>
+        <div class="stages" aria-label="Per-file recovery stages">
+          <div>planned<small>Intent and expected source observation stored.</small></div>
+          <div>destination-prepared<small>Private staged output exists.</small></div>
+          <div>destination-published<small>Verified final destination exists.</small></div>
+          <div>catalog-applied<small>Asset/location transaction committed.</small></div>
+          <div>source-cleaned<small>Move source removed or warning stored.</small></div>
+        </div>
+
+        <h3>Commit protocol</h3>
+        <ol>
+          <li>Resolve source/destination from current catalog IDs or an unexpired grant. Canonicalize and reject traversal, symlink escape, unsafe overlap, and non-regular source.</li>
+          <li>Open without following a swapped symlink. Record size, time, and local file identity where available.</li>
+          <li>Write a private same-directory destination with exclusive create. Stream, hash when required, flush, and verify.</li>
+          <li>Publish with atomic rename. Explicit Replace uses backup/restore placement.</li>
+          <li>Apply the catalog transaction after publish and verification.</li>
+          <li>For Move, remove source after catalog apply. Cleanup failure leaves the destination active and reports source retained.</li>
+        </ol>
+        <p>Same-volume Move/Rename may use native rename. Cross-volume Move uses Copy, verify, publish, catalog apply, then cleanup. Rename/Move retain AssetId. Copy creates a new AssetId.</p>
+
+        <h3>Cancellation</h3>
+        <div class="table">
+          <table>
+            <thead><tr><th>Boundary</th><th>Action</th><th>Persisted result</th></tr></thead>
+            <tbody>
+              <tr><td>Prepare/Review</td><td>Drop draft and transient grants.</td><td>No mutation.</td></tr>
+              <tr><td>Scan/Hash</td><td>Abort at next safe I/O boundary and detach listeners.</td><td>Previous snapshot; incomplete hash discarded.</td></tr>
+              <tr><td>Private stage</td><td>Abort stream, close handle, remove stage.</td><td>No destination or asset row.</td></tr>
+              <tr><td>Published destination</td><td>Finish idempotent catalog apply, then stop queue.</td><td>One completed asset.</td></tr>
+              <tr><td>Source cleanup</td><td>Keep safe destination.</td><td>Source-retained retry warning.</td></tr>
+              <tr><td>Catalog switch</td><td>Cancel transient work, pause resumable jobs, drain writes, advance session.</td><td>Committed old-catalog work stays; old events rejected.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>XMP</h3>
+        <ul>
+          <li>Discover the image and known XMP as one bundle before mutation.</li>
+          <li>Move/copy known XMP with the image. A changed, missing, malformed, or unmatched sidecar becomes a per-item review state.</li>
+          <li>The catalog is authoritative. Failed sidecar mirroring becomes <code>pending-sync</code> with retry.</li>
+        </ul>
+      </section>
+
+      <section id="ref-scan">
+        <h2><span class="n">R3</span>Scan, watch, and relink reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing steps 5 or 8, changing filesystem observation, root health, missing state, watcher recovery, or relink matching.</div>
+
+        <h3>Scan</h3>
+        <ul>
+          <li>Electron owns the breadth-first walk and emits progress after each directory read and stat batch.</li>
+          <li>Abort before the next directory and between stat batches. An OS call already in flight may finish, but its late result cannot publish.</li>
+          <li>Stage observations. A cancelled, timed-out, failed, superseded, or old-session scan cannot mark assets missing.</li>
+          <li>Commit the completed diff in short transactions and preserve all metadata/relations.</li>
+        </ul>
+
+        <h3>Watch</h3>
+        <ul>
+          <li>Start root watchers only for the active catalog.</li>
+          <li>Use events to mark paths/subtrees dirty. Debounce burst work and reconcile.</li>
+          <li>Ignore hidden/unsupported paths according to the shared format registry.</li>
+          <li>Persist Watching, Reconciling, Degraded, Missing, and Permission denied states.</li>
+          <li>On overflow/error/network ambiguity, use bounded backoff and a visible Retry scan.</li>
+        </ul>
+        <div class="warning"><strong>Missing keeps identity.</strong> Remove a missing asset from the normal present-files view, but keep its row, metadata, albums, archive, Develop, fingerprint, and last observation until explicit catalog deletion.</div>
+
+        <h3>Relink match order</h3>
+        <ol>
+          <li>Exact SHA-256 is portable proof and may be preselected.</li>
+          <li>Local file identity is useful on the same filesystem when the platform provides it.</li>
+          <li>Exact relative path plus compatible size/time is a strong suggestion, not portable proof.</li>
+          <li>Filename and size are a low-confidence suggestion.</li>
+        </ol>
+        <ul>
+          <li>One candidate may satisfy one asset only.</li>
+          <li>Review all ambiguous candidates before link changes.</li>
+          <li>Apply accepted links in short transactions and retain unresolved items in the draft.</li>
+          <li>Root and per-file relink use the same operation and summary.</li>
+        </ul>
+      </section>
+
+      <section id="ref-import">
+        <h2><span class="n">R4</span>Import behavior reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing steps 7, 10, or 12, changing duplicates, templates, metadata defaults, placement modes, or Auto Import.</div>
+
+        <h3>Placement modes</h3>
+        <div class="table">
+          <table>
+            <thead><tr><th>Mode</th><th>File behavior</th><th>Catalog behavior</th><th>Failure result</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Add</strong></td><td>No copy. Source is inside an existing root or its folder becomes a root after confirmation.</td><td>Adopt observed file.</td><td>Unreadable/unsupported remains in review.</td></tr>
+              <tr><td><strong>Copy</strong></td><td>Stage, verify, publish. Keep source.</td><td>Create new AssetId after publish.</td><td>Clean private stage; no partial row.</td></tr>
+              <tr><td><strong>Move</strong></td><td>Same-volume rename or cross-volume verified copy, then cleanup.</td><td>Retain known AssetId; external source gets a new ID.</td><td>Cleanup failure reports source retained.</td></tr>
+              <tr><td><strong>Copy as DNG</strong></td><td>Qualified converter writes private DNG; validate before publish.</td><td>Adopt valid DNG with source provenance.</td><td>Unavailable/rejected/invalid creates no row.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Duplicate and name conflict are different</h3>
+        <div class="grid">
+          <article class="card">
+            <h4>Duplicate resolution</h4>
+            <ul>
+              <li>Skip incoming.</li>
+              <li>Keep both as two assets.</li>
+              <li>Use new location for the existing AssetId. Leave the prior file on disk.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h4>Name conflict</h4>
+            <ul>
+              <li>Skip occupied destination.</li>
+              <li>Rename deterministically and preview it.</li>
+              <li>Replace after per-file acknowledgement and backup/restore placement.</li>
+            </ul>
+          </article>
+        </div>
+        <p>Size, time, camera, and capture metadata narrow candidates. SHA-256 proves equality. Filename alone proves nothing.</p>
+
+        <h3>Fingerprint coverage</h3>
+        <ul>
+          <li>Migration records missing fingerprints and a coverage count. It does not silently treat unindexed assets as unique.</li>
+          <li>A durable <code>fingerprint-backfill</code> operation hashes missing/stale present assets with bounded concurrency while the catalog is idle. It pauses, cancels, retries, and resumes across restart.</li>
+          <li>An import hashes its incoming file first. Before reporting Unique, it hashes every existing same-size asset whose fingerprint is missing or stale.</li>
+          <li>An unreadable, cancelled, or changing candidate produces <code>not-fully-checked</code>. The user may retry or continue with that limitation shown in the frozen plan and summary.</li>
+          <li>Backfill coverage is visible as indexed, remaining, failed, and unchecked counts.</li>
+        </ul>
+
+        <h3>Preset</h3>
+        <ul>
+          <li>Catalog-scoped, versioned, parsed, and migratable.</li>
+          <li>Constrained date, camera, original-name, and sequence tokens.</li>
+          <li>Preview resolved destination, filename, and collision result before Freeze.</li>
+          <li>Store title, caption, copyright, keywords, and a parsed Develop default.</li>
+          <li>Freeze the applied preset snapshot so later edits do not change an active job.</li>
+        </ul>
+
+        <h3>Auto Import</h3>
+        <ul>
+          <li>One enabled rule for the active catalog in release one.</li>
+          <li>Persist main-owned ingress, destination root, frozen preset reference, duplicate/conflict policy, and enabled state.</li>
+          <li>Reject unsafe ingress/destination overlap.</li>
+          <li>Require two unchanged no-follow size/time observations separated by the rule interval and a readable handle.</li>
+          <li>Deduplicate watcher events into one durable queue item.</li>
+          <li>Reuse manual import execution and preserve visible state across restart.</li>
+        </ul>
+      </section>
+
+      <section id="ref-formats">
+        <h2><span class="n">R5</span>Formats, camera coverage, Nikon, and DNG reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing steps 6 or 11, changing accepted formats, adding a decoder/exporter, changing camera claims, packaging Nikon, or qualifying DNG conversion.</div>
+
+        <h3>Capability record</h3>
+        <pre><code>interface FormatCapability {
+  id: string;
+  extensions: readonly string[];
+  signatures: readonly SignatureRule[];
+  recognition: "supported" | "recognized-unsupported";
+  preview: BackendRoute | "unavailable";
+  develop: BackendRoute | "unavailable";
+  metadata: BackendRoute | "unavailable";
+  export: readonly string[];
+  dependencyIssue: number | null;
+}
+
+interface CameraSupportRow {
+  vendor: string;
+  model: string;
+  extension: string;
+  compression: string;
+  bitDepth: number | null;
+  backend: "libraw" | "nikon-native" | "embedded-preview";
+  status: "supported" | "fallback" | "unsupported" | "unverified";
+  colorStatus: string;
+  sampleChecksum: string | null;
+}</code></pre>
+
+        <h3>Dependency ownership</h3>
+        <div class="table">
+          <table>
+            <thead><tr><th>Issue</th><th>Owns</th><th>Promotion rule</th></tr></thead>
+            <tbody>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/89">#89</a></td><td>DNG import/edit/export and a qualifying conversion backend.</td><td>No DNG row or #20 close before packaged output proof.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/90">#90</a></td><td>CR2/CR3, ARW, RAF, ORF, RW2 decoder work.</td><td>Each family needs a sample-backed #134 row.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/91">#91</a></td><td>HEIF/HEIC/HIF.</td><td>State matches packaged codec.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/92">#92</a></td><td>TIFF and high bit depth.</td><td>Preview and Develop stay separate.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/93">#93</a></td><td>PSD/PSB/JPEG XL.</td><td>Unsupported variants stay visible with reason.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/94">#94</a></td><td>Original/RAW export.</td><td>Export reads the same capability row.</td></tr>
+              <tr><td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/95">#95</a>-<a href="https://github.com/JoakimRosenfeldt/darkroom/issues/98">#98</a></td><td>Video import/playback, transforms, color/presets, export.</td><td>Recognition may precede edit/export.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Camera proof</h3>
+        <ul>
+          <li>Generate versioned rows from checksummed representative samples and the packaged backend.</li>
+          <li>Record vendor, model, compression, bit depth, orientation, dimensions, normalized metadata, color status, backend, fallback, architecture, and app version.</li>
+          <li>A manifest edit cannot promote support without sample output.</li>
+          <li>Recognized unsupported or malformed files remain visible with an exact reason and no partial cache artifact.</li>
+        </ul>
+
+        <h3>Nikon proof</h3>
+        <ul>
+          <li>Version and parse job ID, mode, bit depth, color space, dimensions, orientation, provenance, typed errors, and cancellation at both ends.</li>
+          <li>Probe explicit runtime path, version, checksum, architecture, and package state.</li>
+          <li>Use available, unavailable, misconfigured, or test-only status.</li>
+          <li>Reject the simulated helper in packaged production.</li>
+          <li>Bound process lifetime/output and clean private temporary data after failure.</li>
+        </ul>
+
+        <h3>DNG proof</h3>
+        <ul>
+          <li>The converter is a typed adapter chosen by #89 evidence, licensing, and package availability.</li>
+          <li>Convert a private source snapshot into private destination staging.</li>
+          <li>Validate signature, required output metadata, and digest before publication.</li>
+          <li>Absence, rejection, unsupported camera/compression, invalid output, cancellation, and crash produce no false file or asset.</li>
+        </ul>
+      </section>
+
+      <section id="ref-admin">
+        <h2><span class="n">R6</span>Catalog administration reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing step 13 or changing backup, validation, optimize, export/import, restore, retention, or corrupt-catalog behavior.</div>
+        <ul>
+          <li><strong>Portable catalog.</strong> Step 4 already exports a validated portable copy and opens/imports it as a new catalog for #129. Step 13 reuses that path and adds packages, merge, replace, retention, and restore.</li>
+          <li><strong>Backup.</strong> Use SQLite online backup from the worker. Write schema/app versions, root mapping, timestamp, and SHA-256 for every package file. Publish outside the active catalog path.</li>
+          <li><strong>Validate.</strong> Run checksum, <code>integrity_check</code>, <code>foreign_key_check</code>, location, and relation checks without mutation.</li>
+          <li><strong>Optimize.</strong> Preview proven orphan and size counts. Build a compact temporary database, validate it, then swap under the writer lock.</li>
+          <li><strong>Export/import.</strong> Export a validated package. Import opens as a new catalog by default. Merge and Replace require a conflict dry run and explicit choice.</li>
+          <li><strong>Quiesce.</strong> Replace restore enters maintenance mode and reconciles every nonterminal file item while the current database still owns its operation journal.</li>
+          <li><strong>Restore envelope.</strong> Before database replacement, atomically write target/safety checksums, restore stage, and a forward filesystem manifest outside the database. The manifest records current AssetIds, locations, fingerprints, current-only assets, and published mutation results.</li>
+          <li><strong>Forward reconciliation.</strong> Restore the target into a temporary database. Apply current filesystem facts only. Existing assets keep their historical organization from the backup but receive verified current locations. Current-only files become <code>recovered-after-backup</code>. Unresolved facts remain in an explicit recovery queue.</li>
+          <li><strong>Swap.</strong> Validate the reconciled temporary database, swap, reopen, and reconcile roots. Remove the envelope after every forward fact has a catalog row or recovery record.</li>
+          <li><strong>Restore crash.</strong> Resume or roll back from the external envelope and safety backup. A journal inside the replaced database is never the only recovery source.</li>
+          <li><strong>Corruption.</strong> Open read-only recovery mode when possible. Otherwise retain a registry entry that allows Validate, Restore, and raw evidence export.</li>
+        </ul>
+      </section>
+
+      <section id="ref-migration">
+        <h2><span class="n">R7</span>Migration reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> implementing step 2, changing schema version, repairing a migrated catalog, or reviewing rollback.</div>
+        <ol>
+          <li>Create a temporary v3 database and migration record. Keep it inactive.</li>
+          <li>Parse legacy settings and catalog JSON with the current strict parser. Preserve malformed input unchanged in recovery storage.</li>
+          <li>Create catalog/root identity from legacy <code>rootPath</code>. Build aliases from every encoded relative-path ID in metadata, albums, archive, and online scan.</li>
+          <li>Assign stable AssetIds and copy pick, rating, label, albums, archive, Develop, and valid XMP state losslessly.</li>
+          <li>When root is online, scan and attach observations. Mark unhashed assets <code>fingerprint-missing</code> and record coverage for step 7 backfill. When missing, create placeholders only for paths recoverable from stored references.</li>
+          <li>Run foreign-key, integrity, count, and relation checks.</li>
+          <li>Install and update registry only after every check passes. Keep legacy files until user confirmation.</li>
+        </ol>
+        <div class="warning"><strong>Legacy limit.</strong> v2 stored no complete asset list. With an offline root, unedited files outside albums/archive cannot be reconstructed from JSON. Report the limitation and recover by root relink/rescan. Do not invent placeholder paths.</div>
+        <h3>Rollback</h3>
+        <p>Before activation, remove temporary v3 and continue with v2. After activation, close v3 and reopen the preserved legacy source in the older app. New v3 organization does not back-port. State that boundary in upgrade notes.</p>
+      </section>
+
+      <section id="ref-verification">
+        <h2><span class="n">R8</span>Verification reference</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> preparing proof for any step, choosing Electron fixtures, or deciding whether an issue may close.</div>
+        <p>Use the current <code>package.json</code> scripts. Run the existing test and production build equivalents for every PR. Verify native behavior in the full Electron app. Record existing lint debt separately from failures introduced by the PR.</p>
+        <div class="table">
+          <table>
+            <thead><tr><th>Branch</th><th>Cases</th><th>Proof artifact</th></tr></thead>
+            <tbody>
+              <tr><td>Fault harness</td><td>Inject once at each of the five safe stages, restart worker/runtime, recover a tracer operation, reject production activation.</td><td>Table-driven report with expected files, rows, and recovery state.</td></tr>
+              <tr><td>Catalog isolation</td><td>Two catalogs, same relative paths, several roots, rapid switch, pending scan/write/decode.</td><td>Session/event trace, row query, cache keys, reopened state.</td></tr>
+              <tr><td>Migration</td><td>v1, v2, missing root, malformed JSON, interrupted stage, metadata-only entry.</td><td>Before/after counts, integrity output, legacy checksum, warnings.</td></tr>
+              <tr><td>Scan/watch</td><td>Deep tree, add/change/rename/delete burst, inaccessible dir, watcher error, network-like disconnect, second selection.</td><td>Progress trace, abort boundary, no late mutation, health transition.</td></tr>
+              <tr><td>Duplicates</td><td>Migrated zero-hash catalog, backfill cancel/resume, renamed identical, same name/different bytes, unreadable same-size candidate, changed same path, repeated source, large file.</td><td>Coverage counts, candidate hashes, no false Unique, review result, unchecked count.</td></tr>
+              <tr><td>File operations</td><td>Same/cross-volume, replace/skip/rename, read-only destination, changed source, XMP mismatch, batch cancel.</td><td>Item stage, source/destination digest, AssetId/relations.</td></tr>
+              <tr><td>Crash recovery</td><td>Inject at all five stages for Copy, Move, Rename, DNG. Run one packaged kill/reopen smoke at a representative published-destination stage.</td><td>Harness matrix plus one real restart trace, one safe result, no partial pointer.</td></tr>
+              <tr><td>Relink</td><td>Renamed root, moved subfolder, one file, duplicate names/candidates, cancel/resume.</td><td>Confidence reason, choices, preserved state, unresolved count.</td></tr>
+              <tr><td>Auto Import</td><td>Growing file, burst, duplicate events, restart, read-only ingress, failed destination, controls.</td><td>Stability observations, durable ID, no duplicate, retry state.</td></tr>
+              <tr><td>Formats/cameras</td><td>Checksummed samples, malformed headers, unsupported codec/compression, missing preview, each architecture, test Nikon helper.</td><td>Generated matrix, provenance, output claims.</td></tr>
+              <tr><td>Catalog admin</td><td>Backup failure, checksum corruption, damaged copy, optimize dry run, import conflict, half-published Move before restore, fault at each restore-envelope stage, restart.</td><td>Read-only report, safety backup, forward manifest, linked/reviewed filesystem facts, validated swap.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="issue-map">
+        <h2><span class="n">R9</span>Issue map and close gates</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> starting an issue step, writing its PR body, or deciding whether to use <code>Refs</code> or <code>Closes</code>.</div>
+
+        <div class="table">
+          <table>
+            <thead><tr><th>Issue</th><th>Issue outcome and current gap</th><th>Owning step</th><th>Close gate</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/18">#18 Watching</a></td>
+                <td>Keep an open library current without full import or lost edits. Current gap: no watcher/incremental refresh.</td>
+                <td><a href="#step-8">Step 8</a></td>
+                <td>Add/change/move/delete affects only the right root; bursts stay responsive; metadata survives; switch stops old watcher; degraded state and rescan recover errors.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/20">#20 Placement modes</a></td>
+                <td>Add, Copy, Move, Copy as DNG; adopt only safe destinations. Current gap: read-in-place only.</td>
+                <td><a href="#step-9">9</a>, <a href="#step-10">10</a>, <a href="#step-11">11</a></td>
+                <td>Add leaves source; Copy catalogs complete output; Move reports cleanup failure; per-file conflicts/cancel/restart pass; DNG output is valid or unsupported is explicit. #89 is satisfied.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/21">#21 Duplicates</a></td>
+                <td>Find catalog/session duplicates across rename with explicit action. Current gap: no content/metadata duplicate check.</td>
+                <td><a href="#step-7">Step 7</a></td>
+                <td>A migrated zero-hash catalog reports coverage and runs resumable backfill; import hashes every unindexed same-size candidate before Unique; renamed identical groups; changed source rehashes; incomplete checks stay visible; fingerprints survive restart.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/22">#22 Presets</a></td>
+                <td>Reusable destination/name/metadata/keyword/Develop recipes. Current gap: no preset stage.</td>
+                <td><a href="#step-10">Step 10</a></td>
+                <td>Preset CRUD/default survives restart; preview resolves tokens/conflicts; invalid template fails before writes; metadata and Develop results persist and report unsupported fields.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/23">#23 Auto Import</a></td>
+                <td>Visible, cancellable watched-folder ingest with preset. Current gap: no background ingest.</td>
+                <td><a href="#step-12">Step 12</a></td>
+                <td>Stable file imports once; growing file waits; burst/restart does not duplicate; controls match state; failures remain retryable with reason.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/26">#26 Catalogs/roots</a></td>
+                <td>Open/create/switch/close several catalogs or roots with isolated state. Current gap: one active root and last-folder setting.</td>
+                <td><a href="#step-1">1</a>-<a href="#step-4">4</a></td>
+                <td>Two catalogs and several roots never leak state; restart preserves each; missing/malformed stays recoverable; old settings/catalogs migrate; previous watchers/writes stop before switch.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/27">#27 Catalog admin</a></td>
+                <td>Safe backup, validation, compaction, export/import, restore. Current gap: no admin workflow.</td>
+                <td><a href="#step-13">Step 13</a></td>
+                <td>Checksummed manual/scheduled backup; read-only validate; proven orphan cleanup report; explicit import policy; safety backup and staged restore survive restart/corruption; files published after the target backup remain linked or enter explicit recovery review.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/28">#28 File management</a></td>
+                <td>Safe Rename/Move/Copy while state and sidecars stay connected. Current gap: scan/read/stat/sidecar/trash only.</td>
+                <td><a href="#step-9">Step 9</a></td>
+                <td>Rename/Move preserve identity and relations; Copy leaves original and creates complete output; XMP follows or warns; failure/cancel/restart never leaves partial pointer.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/129">#129 Catalog model</a></td>
+                <td>Make catalog scope first-class, local, and portable. Current gap: root-keyed JSON, one root path, one last-folder setting, and no visible portable library session. The approved design keeps the local-first contract but replaces the issue's original JSON implementation note with per-catalog SQLite.</td>
+                <td><a href="#step-1">1</a>-<a href="#step-4">4</a></td>
+                <td>Existing catalogs round-trip without lost state; roots are independent from last-folder settings; users can create/open/export/import/switch/repair; missing roots retain metadata; active name and roots are visible; format and Lightroom interoperability limits are documented.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/131">#131 Relink</a></td>
+                <td>Relink moved roots/files with reviewed matching and preserved state. Current gap: root replacement has no per-file status/review.</td>
+                <td><a href="#step-8">Step 8</a></td>
+                <td>Missing/ambiguous retains state; review precedes link; duplicates require choice; root/file share resumable flow; cancel reports exact unresolved count.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/133">#133 Formats</a></td>
+                <td>One import/decode/view/Develop/export matrix coordinating #89-#98. Current gap: NEF/JPEG/PNG/WebP list and no shared capability truth.</td>
+                <td><a href="#step-6">Step 6</a></td>
+                <td>One registry drives every consumer; dependencies map to rows; malformed/unsupported has reason; current formats remain; published matrix states view/edit/export.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/134">#134 Camera coverage</a></td>
+                <td>Sample-backed camera validation/package matrix. Current gap: no camera manifest or release answer.</td>
+                <td><a href="#step-6">Step 6</a></td>
+                <td>Versioned matrix ships; #90 owns other RAW decoders; each recognized RAW has state; every architecture checks backend; NEF fallbacks remain usable and labeled.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/135">#135 Nikon fallback</a></td>
+                <td>Documented production capability or accurate unavailable boundary. Current gap: incomplete packaging/licensing/discovery and simulated checked-in helper.</td>
+                <td><a href="#step-6">Step 6</a></td>
+                <td>Protocol validates both ends; packages declare availability; test pixels cannot receive native label; failures fall back visibly; output claims are proved.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/136">#136 Progress/cancel</a></td>
+                <td>Real native progress, real cancel, completed-only commit, no stale replacement. Current gap: post-scan progress and generation-only cancel.</td>
+                <td><a href="#step-5">Step 5</a></td>
+                <td>Progress reflects filesystem work; cancel stops and cleans listeners; previous catalog/cache survives; late events cannot publish; all terminal states are distinct.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="baseline">
+        <h2><span class="n">R10</span>Baseline evidence</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> preflighting step 0 or locating the path-based seam in baseline commit <code>f92f2d4</code>. Use the checked-out code as current truth.</div>
+        <div class="table">
+          <table>
+            <thead><tr><th>Baseline fact</th><th>Evidence</th><th>Why the plan replaces it</th></tr></thead>
+            <tbody>
+              <tr><td>Entry ID is encoded relative path. Formats are fixed to NEF/JPEG/PNG/WebP.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/fs/types.ts#L1-L25">lib/fs/types.ts</a></td><td>Rename changes identity; capability has no preview/edit/export states.</td></tr>
+              <tr><td>Electron completes the recursive scan before returning.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/fs-service.ts">electron/fs-service.ts</a></td><td>Native progress and cancellation arrive too late.</td></tr>
+              <tr><td>Catalog v2 stores root, metadata, albums, archive, but no asset rows.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/catalog/types.ts#L28-L45">lib/catalog/types.ts</a></td><td>Restart and relink depend on the same path.</td></tr>
+              <tr><td>Renderer generation ignores stale results while Electron keeps scanning.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/stores/library-store.ts#L146-L167">stores/library-store.ts</a></td><td>Native work and durable recovery remain outside the state model.</td></tr>
+              <tr><td>Renderer persistence queues debounced snapshots and swallows background errors; Electron writes catalog JSON directly.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/catalog/persistence.ts#L17-L55">renderer queue</a>; <a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/catalog-store.ts">Electron store</a></td><td>Catalog replacement is not atomic, and file placement plus catalog adoption lack one recovery protocol.</td></tr>
+              <tr><td>Preload exposes raw scan/read/stat/catalog/delete paths.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/preload.ts#L33-L105">electron/preload.ts</a></td><td>Renderer callers carry native authority and path policy.</td></tr>
+              <tr><td>Renderer code joins root and relative path before file access.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/fs/platform.ts#L13">lib/fs/platform.ts</a></td><td>Path arithmetic sits outside the process that owns containment and root identity.</td></tr>
+              <tr><td>Main has one mutable active root.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/main.ts#L50-L155">electron/main.ts</a></td><td>Several roots and catalog-scoped work have no durable owner.</td></tr>
+              <tr><td>NEF tries LibRaw, native helper, embedded preview. Build targets Node 20.</td><td><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/raw/profiles/nef.ts">NEF profile</a>; <a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/build.mjs#L9-L15">build</a></td><td>Backends exist, but package truth and camera proof do not.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="risks">
+        <h2><span class="n">R11</span>Decisions</h2>
+        <div class="pointer"><strong>Read this branch when:</strong> step 0 finds an unresolved choice, step 11 needs a DNG backend, step 12 considers network Move, or step 13 sets backup policy.</div>
+        <div class="table">
+          <table>
+            <thead><tr><th>Decision</th><th>Runbook default</th><th>Deadline</th><th>Evidence</th></tr></thead>
+            <tbody>
+              <tr><td>DNG license and target coverage</td><td>Typed unavailable state; backend stays open.</td><td>Before step 11.</td><td>#89, license review, packaged fixtures.</td></tr>
+              <tr><td>Nikon redistribution</td><td>LibRaw/preview remain; native may be unavailable.</td><td>Before closing #135.</td><td>License, package manifest, architecture probe, real sample.</td></tr>
+              <tr><td>Auto Import Move on network ingress</td><td>Copy default; network Move disabled.</td><td>Before step 12 UI freeze.</td><td>Disconnect and source-cleanup proof.</td></tr>
+              <tr><td>Backup retention</td><td>Manual plus configurable schedule. Weekly/retain ten is a proposal.</td><td>During step 13.</td><td>Catalog size, restore drill, product decision.</td></tr>
+              <tr><td>Preview backup</td><td>Optional and off.</td><td>During step 13.</td><td>Backup cost versus regeneration time.</td></tr>
+              <tr><td>External catalog files</td><td>Open Catalog supports them; app-managed remains default.</td><td>During step 2 path policy.</td><td>Removable drive and permission-loss behavior.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="sources">
+        <h2><span class="n">R12</span>Sources</h2>
+        <ul>
+          <li>Tracked issues: <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/18">#18</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/20">#20</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/21">#21</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/22">#22</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/23">#23</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/26">#26</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/27">#27</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/28">#28</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/129">#129</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/131">#131</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/133">#133</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/134">#134</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/135">#135</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/136">#136</a>.</li>
+          <li><a href="https://www.electronjs.org/blog/electron-43-0">Electron 43 release notes</a>.</li>
+          <li><a href="https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html">Node 24 SQLite documentation</a>.</li>
+          <li><a href="https://nodejs.org/api/fs.html">Node filesystem documentation</a>.</li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/tree/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4">Darkroom baseline f92f2d4</a>.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="footer-inner">
+      Darkroom ingest and catalog agent runbook. Rewritten with ordered steps, branch pointers, proof criteria, and required issue-connected PRs.
+    </div>
+  </footer>
+</body>
+</html>

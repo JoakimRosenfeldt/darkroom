@@ -1,0 +1,1368 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agent execution plan for Darkroom undo, history, virtual copies, presets, profiles, settings transfer, batch Develop, batch export, and the final linked pull request.">
+  <title>Darkroom presets and batch implementation runbook</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f13;
+      --panel: #121820;
+      --panel-2: #18212b;
+      --line: #293641;
+      --line-strong: #415568;
+      --text: #edf3f6;
+      --muted: #aab7c1;
+      --faint: #7f8f9c;
+      --cyan: #73d5dc;
+      --cyan-dark: #15383e;
+      --amber: #ebbd69;
+      --amber-dark: #463719;
+      --red: #ee8e86;
+      --red-dark: #482422;
+      --green: #8bd6a3;
+      --green-dark: #1b3c29;
+      --code: #080c10;
+      --radius: 15px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 86% 2%, rgba(115, 213, 220, .09), transparent 29rem),
+        radial-gradient(circle at 2% 52%, rgba(235, 189, 105, .06), transparent 24rem),
+        var(--bg);
+      color: var(--text);
+      font: 15px/1.62 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: var(--cyan); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: #b3f6f8; }
+    a:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+
+    h1, h2, h3, h4, p { margin-top: 0; }
+    h1 {
+      max-width: 920px;
+      margin-bottom: 20px;
+      font-size: clamp(2.5rem, 6vw, 5.25rem);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+    h2 { margin-bottom: 12px; font-size: clamp(1.7rem, 3vw, 2.45rem); line-height: 1.08; letter-spacing: -.035em; }
+    h3 { margin-bottom: 8px; font-size: 1.08rem; line-height: 1.3; }
+    h4 { margin-bottom: 7px; color: var(--cyan); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+    p { color: var(--muted); }
+    strong { color: var(--text); }
+
+    code {
+      padding: .12rem .34rem;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: rgba(255,255,255,.035);
+      color: #d7f5f6;
+      font: .88em ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    pre {
+      margin: 16px 0;
+      padding: 18px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--code);
+      color: #cfe8eb;
+      font: .8rem/1.62 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    ul, ol { margin: 8px 0 0; padding-left: 1.25rem; color: var(--muted); }
+    li + li { margin-top: 6px; }
+    li::marker { color: var(--cyan); }
+
+    .shell { width: min(1460px, 100%); margin: 0 auto; padding: 0 24px 80px; }
+    .hero { padding: 82px 0 54px; border-bottom: 1px solid var(--line); }
+    .eyebrow { margin-bottom: 18px; color: var(--cyan); font-size: .75rem; font-weight: 760; letter-spacing: .15em; text-transform: uppercase; }
+    .lede { max-width: 850px; margin-bottom: 26px; color: #c3ced5; font-size: 1.08rem; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); font-size: .75rem; }
+
+    .layout { display: grid; grid-template-columns: 225px minmax(0, 1fr); gap: 46px; align-items: start; }
+    .nav { position: sticky; top: 20px; padding: 24px 0; }
+    .nav strong { display: block; margin-bottom: 10px; color: var(--faint); font-size: .7rem; letter-spacing: .14em; text-transform: uppercase; }
+    .nav a { display: block; padding: 5px 0; color: var(--muted); font-size: .8rem; text-decoration: none; }
+    .nav a:hover { color: var(--text); }
+
+    main { min-width: 0; }
+    .section { padding: 54px 0; border-bottom: 1px solid var(--line); }
+    .section-intro { max-width: 860px; margin-bottom: 25px; }
+    .grid { display: grid; gap: 13px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card, .step, .callout, .reference {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(255,255,255,.025), rgba(255,255,255,.01));
+    }
+    .card, .callout { padding: 20px; }
+    .card p:last-child, .callout p:last-child { margin-bottom: 0; }
+
+    .leading {
+      padding: 19px;
+      border-left: 3px solid var(--cyan);
+      border-radius: 12px;
+      background: rgba(21, 56, 62, .42);
+    }
+    .leading strong { display: block; margin-bottom: 6px; color: var(--cyan); }
+    .leading p { margin: 0; font-size: .84rem; }
+
+    .route {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: center;
+      margin-top: 24px;
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    .route span:not(.arrow) { padding: 5px 8px; border-radius: 6px; background: var(--panel-2); color: var(--text); font: .74rem ui-monospace, monospace; }
+    .route .arrow { color: var(--cyan); }
+
+    .step-list { display: grid; gap: 15px; }
+    .step { overflow: hidden; }
+    .step-head {
+      display: grid;
+      grid-template-columns: 70px 1fr auto;
+      gap: 15px;
+      align-items: center;
+      padding: 19px 21px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .step-id { color: var(--cyan); font: 760 1rem ui-monospace, monospace; }
+    .step-head h3, .step-head p { margin-bottom: 0; }
+    .step-head p { font-size: .8rem; }
+    .scope { color: var(--amber); font: .72rem ui-monospace, monospace; white-space: nowrap; }
+    .step-body { display: grid; grid-template-columns: 1.25fr .9fr 1.2fr; gap: 22px; padding: 21px; }
+    .step-body ul { font-size: .83rem; }
+    .gate {
+      padding: 15px;
+      border: 1px solid #386c4b;
+      border-radius: 10px;
+      background: rgba(27, 60, 41, .38);
+    }
+    .gate h4 { color: var(--green); }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; background: rgba(8,12,16,.45); }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--faint); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; }
+    td { color: var(--muted); font-size: .83rem; }
+    td:first-child { color: var(--text); font-weight: 660; }
+    tr:last-child td { border-bottom: 0; }
+
+    .callout { margin-top: 17px; border-color: #3b7176; background: rgba(21, 56, 62, .42); }
+    .callout.warn { border-color: #745d2e; background: rgba(70, 55, 25, .40); }
+    .callout.bad { border-color: #75403d; background: rgba(72, 36, 34, .40); }
+
+    details.reference { margin-top: 13px; overflow: hidden; }
+    summary { cursor: pointer; padding: 17px 19px; color: var(--text); font-weight: 720; }
+    details[open] summary { border-bottom: 1px solid var(--line); background: var(--panel); }
+    .reference-body { padding: 20px; }
+    .reference-body > :last-child { margin-bottom: 0; }
+
+    .status { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: .67rem; font-weight: 760; }
+    .status.blocker { color: var(--red); background: var(--red-dark); }
+    .status.high { color: var(--amber); background: var(--amber-dark); }
+    .status.pass { color: var(--green); background: var(--green-dark); }
+
+    .footer { padding: 34px 0 0; }
+    .footer p { color: var(--faint); font-size: .76rem; }
+
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+      .nav { position: static; display: flex; flex-wrap: wrap; gap: 4px 14px; padding-bottom: 0; }
+      .nav strong { width: 100%; }
+      .nav a { padding: 2px 0; }
+      .grid.four { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    }
+
+    @media (max-width: 780px) {
+      .shell { padding: 0 16px 54px; }
+      .hero { padding-top: 58px; }
+      .grid.two, .grid.three, .grid.four, .step-body { grid-template-columns: 1fr; }
+      .step-head { grid-template-columns: 54px 1fr; }
+      .scope { grid-column: 2; }
+    }
+
+    @media print {
+      :root {
+        color-scheme: light;
+        --bg: #fff;
+        --panel: #fff;
+        --panel-2: #f3f3f3;
+        --line: #ccc;
+        --line-strong: #999;
+        --text: #111;
+        --muted: #444;
+        --faint: #666;
+        --cyan: #116c73;
+        --code: #f6f6f6;
+      }
+      body { background: #fff; }
+      .shell { width: 100%; padding: 0; }
+      .nav { display: none; }
+      .layout { display: block; }
+      .step, .card, .reference { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="eyebrow">Agent implementation runbook</div>
+      <h1>Rework Darkroom's presets and batch library flow, then open the linked PR.</h1>
+      <p class="lede">
+        Run this plan when implementing the 12 linked parity issues as one body of work.
+        Follow the steps in order. A step is complete only when its Gate is true.
+        Reference sections hold the domain rules needed by individual branches.
+      </p>
+      <div class="meta" aria-label="Plan metadata">
+        <span class="pill">15 ordered steps</span>
+        <span class="pill">12 issue contracts</span>
+        <span class="pill">One final pull request</span>
+        <span class="pill">Catalog v3 migration</span>
+        <span class="pill">Repository baseline f92f2d4</span>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="nav" aria-label="Plan sections">
+        <strong>Runbook</strong>
+        <a href="#invocation">Invocation</a>
+        <a href="#language">Leading words</a>
+        <a href="#steps">Execution steps</a>
+        <a href="#step-00">00 Baseline</a>
+        <a href="#step-01">01 Contracts and profile spike</a>
+        <a href="#step-02">02 Identity and repository</a>
+        <a href="#step-03">03 Undo and redo</a>
+        <a href="#step-04">04 Virtual copies</a>
+        <a href="#step-05">05 History and snapshots</a>
+        <a href="#step-06">06 Presets</a>
+        <a href="#step-07">07 Preset Amount</a>
+        <a href="#step-08">08 Profiles</a>
+        <a href="#step-09">09 Defaults</a>
+        <a href="#step-10">10 Copy and paste</a>
+        <a href="#step-11">11 Sync and batch</a>
+        <a href="#step-12">12 Batch export</a>
+        <a href="#step-13">13 End-to-end gate</a>
+        <a href="#step-14">14 Pull request</a>
+        <strong style="margin-top: 18px">Reference</strong>
+        <a href="#ref-a">A Domain model</a>
+        <a href="#ref-b">B Persistence</a>
+        <a href="#ref-c">C History</a>
+        <a href="#ref-d">D Presets and transfer</a>
+        <a href="#ref-e">E Profiles and defaults</a>
+        <a href="#ref-f">F Batch states</a>
+        <a href="#ref-g">G Issue contracts</a>
+        <a href="#ref-h">H Verification</a>
+      </nav>
+
+      <main>
+        <section class="section" id="invocation">
+          <h2>Invocation and run contract</h2>
+          <p class="section-intro">
+            This is an execution plan, not a feature inventory. The agent owns the full
+            path through implementation, verification, migration proof, and the final PR.
+          </p>
+
+          <div class="grid two">
+            <article class="card">
+              <h3>Run in order</h3>
+              <ul>
+                <li>Read the repository instructions before Step 00.</li>
+                <li>Finish each Gate before starting the next dependent step.</li>
+                <li>Use the references only when a step points to them.</li>
+                <li>Keep every issue requirement in Reference G accounted for.</li>
+                <li>Preserve unrelated working-tree changes.</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>Keep the change narrow</h3>
+              <ul>
+                <li>Use existing repository patterns and the standard library first.</li>
+                <li>Read the relevant local Next.js 16 guide before editing any Next component.</li>
+                <li>Leave cloud sync, export presets, and complete Adobe compatibility outside this run.</li>
+                <li>Add no test files unless the user separately authorizes them.</li>
+                <li>Use existing checks and record the manual proof in Reference H.</li>
+              </ul>
+            </article>
+          </div>
+
+          <div class="callout bad">
+            <p>
+              <strong>Hard stop.</strong> Step 08 cannot pass on neutral fallback alone.
+              The implementation must prove one compatible raw path that applies a
+              non-neutral profile before Develop tone processing in preview and export.
+              If the current decoders cannot expose that stage, report #84 blocked behind
+              decoder work and stop before the final PR.
+            </p>
+          </div>
+
+          <div class="route" aria-label="Required execution order">
+            <span>baseline</span><span class="arrow">›</span>
+            <span>contracts</span><span class="arrow">›</span>
+            <span>identity + repository</span><span class="arrow">›</span>
+            <span>undo</span><span class="arrow">›</span>
+            <span>copies</span><span class="arrow">›</span>
+            <span>revisions</span><span class="arrow">›</span>
+            <span>presets + profiles</span><span class="arrow">›</span>
+            <span>transfer + batch</span><span class="arrow">›</span>
+            <span>verification</span><span class="arrow">›</span>
+            <span>PR</span>
+          </div>
+        </section>
+
+        <section class="section" id="language">
+          <h2>Leading words</h2>
+          <p class="section-intro">These words carry one meaning throughout the runbook.</p>
+          <div class="grid four">
+            <div class="leading">
+              <strong>Gate</strong>
+              <p>The observable condition that ends a step. Evidence must cover every listed clause.</p>
+            </div>
+            <div class="leading">
+              <strong>Head</strong>
+              <p>The current revision published by the app-owned manifest. It is the edit authority.</p>
+            </div>
+            <div class="leading">
+              <strong>Projection</strong>
+              <p>The original entry's XMP copy of a committed Head. It can diverge and requires reconciliation.</p>
+            </div>
+            <div class="leading">
+              <strong>Receipt</strong>
+              <p>The durable per-target record for a batch. It drives resume, retry, summary, and safe undo.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="steps">
+          <h2>Execution steps</h2>
+          <p class="section-intro">
+            Each step contains the work every run needs. Branch rules stay beside their
+            reference contract, so the main sequence remains readable.
+          </p>
+
+          <div class="step-list">
+            <article class="step" id="step-00">
+              <div class="step-head">
+                <div class="step-id">00</div>
+                <div>
+                  <h3>Establish the baseline</h3>
+                  <p>Fix the starting point before changing contracts.</p>
+                </div>
+                <div class="scope">All issues</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Read the repository instructions and inspect the current worktree.</li>
+                    <li>Read all 12 issue descriptions linked in Reference G.</li>
+                    <li>Trace current identity, catalog persistence, Develop session history, sidecar sync, raw decoding, multi-selection, and export.</li>
+                    <li>Run the current test, build, and lint workflows. Record existing failures separately from new failures.</li>
+                    <li>Write the visible Develop mutation inventory required by #165.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference G for issue contracts.</li>
+                    <li>Reference H for evidence format.</li>
+                    <li>Repository scripts and local Next.js docs are authoritative for commands and APIs.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Every issue requirement maps to a later step.</li>
+                    <li>The worktree snapshot names all pre-existing user changes.</li>
+                    <li>The check baseline distinguishes existing failures.</li>
+                    <li>The mutation inventory names a commit boundary for every visible Develop action.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-01">
+              <div class="step-head">
+                <div class="step-id">01</div>
+                <div>
+                  <h3>Lock contracts and run the camera-profile spike</h3>
+                  <p>Resolve shared types and the risky pixel-stage question.</p>
+                </div>
+                <div class="scope">Foundation</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Define branded source, entry, revision, operation, preset, profile, and job IDs.</li>
+                    <li>Define the completed-command event, revision record, checkpoint rule, application provenance, and domain-specific item states.</li>
+                    <li>Measure real Develop documents and mask assets. Choose file and aggregate limits from those fixtures.</li>
+                    <li>Add a pixel-provenance contract for decoder path, color space, transfer function, bit depth, and profile-stage availability.</li>
+                    <li>Prove one decoder path can apply the supported DCP or profile-XMP transform before Develop tone processing.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference A for identity types.</li>
+                    <li>Reference C for revisions.</li>
+                    <li>Reference E for the profile branch.</li>
+                    <li>Reference F for separate batch states.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>No type overloads decoder identity with camera-render profile identity.</li>
+                    <li>All serialized boundaries have validation and size limits.</li>
+                    <li>Checkpoint frequency and storage caps cite measured fixtures.</li>
+                    <li>At least one named raw path passes the profile spike, or #84 is declared blocked and execution stops.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-02">
+              <div class="step-head">
+                <div class="step-id">02</div>
+                <div>
+                  <h3>Land catalog v3 and the Develop repository</h3>
+                  <p>Give every later command its final identity and commit path.</p>
+                </div>
+                <div class="scope">Enabler</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement the identity and lifecycle contract in Reference A across catalog, library, viewer, caches, masks, and export.</li>
+                    <li>Migrate every source-sensitive caller to the entry-to-source join.</li>
+                    <li>Replace active-view persistence with repository load, create, and commit methods that require an <code>EntryId</code>.</li>
+                    <li>Implement the publication, Projection, migration, and recovery contract in Reference B.</li>
+                    <li>Add fault-injection points at every durable write boundary.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference A for identity and deletion rules.</li>
+                    <li>Reference B for commit, XMP, migration, and recovery.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>A copied v2 catalog migrates and reopens with IDs, albums, archive, metadata, edits, and XMP intact.</li>
+                    <li>An inactive entry loads and commits without mounting a viewer.</li>
+                    <li>An expected-revision conflict fails before mutation.</li>
+                    <li>Crash injection after every write stage recovers one valid Head and preserves any divergent Projection for explicit resolution.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-03">
+              <div class="step-head">
+                <div class="step-id">03</div>
+                <div>
+                  <h3>Complete undo and redo</h3>
+                  <p>Implement #165 on the final entry and command contracts.</p>
+                </div>
+                <div class="scope">Issue #165</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Apply Reference C's command contract to every mutation in the Step 00 inventory.</li>
+                    <li>Adapt slider, keyboard, curve, crop, mask, reset, and catalog-control interactions to explicit preview, commit, and cancel events.</li>
+                    <li>Route every completed command to the target entry's session stack.</li>
+                    <li>Add the complete-state command used by later preset, paste, profile, and recall steps.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference C for command boundaries and metadata scope.</li>
+                    <li>Reference G for #165 completion criteria.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Every mutation in the Step 00 inventory has one explicit boundary.</li>
+                    <li>Slider, curve, crop, and mask gestures create one useful entry without pointer-move noise.</li>
+                    <li>Undo and redo restore complete state and never cross entry IDs.</li>
+                    <li>Reload starts with a clean session stack until Step 05 adds persistent history.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-04">
+              <div class="step-head">
+                <div class="step-id">04</div>
+                <div>
+                  <h3>Ship virtual copies</h3>
+                  <p>Exercise source and entry separation before revision UI grows.</p>
+                </div>
+                <div class="scope">Issue #79</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement every Reference A lifecycle action in catalog, library, viewer, filmstrip, and export.</li>
+                    <li>Add copy labels, adjacent placement, create, rename, switch, archive, collect, export, and delete controls.</li>
+                    <li>Apply Reference B's original-only Projection rule.</li>
+                    <li>Exercise directory reconciliation and source deletion with multiple dependent entries.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference A for lifecycle and export naming.</li>
+                    <li>Reference B for original-only Projection.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Two copies render and export different edits from one source.</li>
+                    <li>Supported ratings and album membership diverge.</li>
+                    <li>Restart restores copy names, selection, order, metadata, and edits.</li>
+                    <li>Deleting one copy preserves source pixels, original entry, and siblings.</li>
+                    <li>Deleting the source accounts for every dependent entry.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-05">
+              <div class="step-head">
+                <div class="step-id">05</div>
+                <div>
+                  <h3>Add persistent history, versions, and snapshots</h3>
+                  <p>Use one linear revision chain and two kinds of named reference.</p>
+                </div>
+                <div class="scope">Issues #77, #78</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference C's revision chain, checkpoints, named references, replay, retention, and recovery.</li>
+                    <li>Append one persistent revision from the same completed event used by session undo.</li>
+                    <li>Add History, Versions, and Snapshots controls for current state, create, rename, activate or recall, and delete.</li>
+                    <li>Route activation and recall through the complete-state command.</li>
+                    <li>Update the Head and original Projection through Reference B.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference C for reconstruction and retention.</li>
+                    <li>Reference B for durable publication and Projection updates.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Restart reconstructs every retained revision and marks the live Head.</li>
+                    <li>Version activation and snapshot recall are undoable restore commands.</li>
+                    <li>The prior live state and referenced state both remain recoverable.</li>
+                    <li>Rename and delete cannot mutate or remove a still-referenced Develop state.</li>
+                    <li>Viewer, thumbnail, Projection, and export use the activated state.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-06">
+              <div class="step-head">
+                <div class="step-id">06</div>
+                <div>
+                  <h3>Build preset storage, management, and apply</h3>
+                  <p>Implement full-strength presets before Amount.</p>
+                </div>
+                <div class="scope">Issue #80</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference D's preset record, app-owned storage, import, conflict, revision, and application contracts.</li>
+                    <li>Add search, categories, favorites, transient preview, apply, create, update, import, delete, and duplicate feedback.</li>
+                    <li>Route preset apply through the complete-state command and normal repository commit.</li>
+                    <li>Show included, unsupported, and skipped fields before apply.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference D for preset and compatibility rules.</li>
+                    <li>Reference C for the one-command boundary.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Created and imported presets appear immediately and after restart.</li>
+                    <li>Apply changes only included fields and creates one undo entry and one persisted revision.</li>
+                    <li>Update, favorite, delete, duplicate, and conflict decisions survive restart.</li>
+                    <li>Viewer, Projection, and export reproduce the expanded document.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-07">
+              <div class="step-head">
+                <div class="step-id">07</div>
+                <div>
+                  <h3>Add Preset Amount</h3>
+                  <p>Persist interpolation inputs instead of a misleading slider link.</p>
+                </div>
+                <div class="scope">Issue #82</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference D's application provenance and exact interpolation policy.</li>
+                    <li>Add Amount, transient preview, keyboard adjustment, reset-to-100, Modified, and Reapply states.</li>
+                    <li>Route Amount and Reapply through the complete-state command and normal persistence.</li>
+                    <li>Expose full-strength and skipped fields beside the control.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference D for the exact field policy.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>0, 50, and 100 match the declared results for every supported field group.</li>
+                    <li>The source preset remains unchanged.</li>
+                    <li>Full-strength and skipped fields stay visible beside Amount.</li>
+                    <li>Manual edits survive and disable Amount until Reapply.</li>
+                    <li>Undo, redo, restart, Projection, and export reproduce amount and expanded state.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-08">
+              <div class="step-head">
+                <div class="step-id">08</div>
+                <div>
+                  <h3>Import and apply supported camera profiles</h3>
+                  <p>Finish #84 only on a proven pixel path.</p>
+                </div>
+                <div class="scope">Issue #84</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement the compatible profile branch in Reference E against the decoder path proven in Step 01.</li>
+                    <li>Add trusted import, app-owned registry storage, rescan, details, duplicate, remove, replacement, and compatibility flows.</li>
+                    <li>Use the same transform implementation in preview and export.</li>
+                    <li>Expose parser, opcode, camera, and pixel-stage failures without mutating the selected document.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Branch</h4>
+                  <ul>
+                    <li>If Step 01 proves a compatible path, implement the proven transform subset.</li>
+                    <li>If no path is compatible, stop. Report the decoder prerequisite against #84 and wait for scope expansion.</li>
+                    <li>Reference E owns both branches.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>One compatible camera and raw path applies a valid non-neutral profile.</li>
+                    <li>Preview and export use the same transform before tone processing.</li>
+                    <li>Duplicate, malformed, incompatible, unsupported-opcode, remove, replacement, and restart cases have explicit outcomes.</li>
+                    <li>Neutral fallback never masquerades as successful profile application.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-09">
+              <div class="step-head">
+                <div class="step-id">09</div>
+                <div>
+                  <h3>Add camera, raw, and ISO defaults</h3>
+                  <p>Resolve one rule inside atomic document creation.</p>
+                </div>
+                <div class="scope">Issue #83</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference E's new-document branch inside repository <code>loadOrCreate</code>.</li>
+                    <li>Add settings persistence and management UI for priority, camera, profile, ISO, unknown fallback, enable, and disable.</li>
+                    <li>Add a matcher that shows the winning rule before save.</li>
+                    <li>Route reset through a normal completed command.</li>
+                    <li>Exercise concurrent creation so one candidate wins and the other leaves no mutation.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference E for precedence, unknown facts, and existing-document behavior.</li>
+                    <li>Reference D for preset payload expansion.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Camera and ISO fixtures select one deterministic rule.</li>
+                    <li>Competing hydration cannot double-apply a default or overwrite manual work.</li>
+                    <li>Controls enable only after the initial document is durable.</li>
+                    <li>Rule changes affect new documents only.</li>
+                    <li>Reset, restart, Projection, and export use the matched baseline.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-10">
+              <div class="step-head">
+                <div class="step-id">10</div>
+                <div>
+                  <h3>Add copy and paste Develop settings</h3>
+                  <p>Create the reusable cross-entry chooser and clipboard payload.</p>
+                </div>
+                <div class="scope">Issue #85</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference D's clipboard shape, field groups, compatibility, and rejection rules.</li>
+                    <li>Add Copy, Paste, Paste Settings, chooser, selected-field summary, and disabled states.</li>
+                    <li>Route a valid payload through one target command, repository commit, and preview invalidation.</li>
+                    <li>Show applied and skipped fields after paste.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference D for chooser groups and target compatibility.</li>
+                    <li>Reference A for source identity.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Basic, full, crop, manual-mask, and AI-mask payloads report every applied or skipped field.</li>
+                    <li>Newer schema, oversized payload, stale asset, and incompatible source fail before mutation.</li>
+                    <li>The target receives one undo command and one persisted revision.</li>
+                    <li>Restart and export use the pasted state.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-11">
+              <div class="step-head">
+                <div class="step-id">11</div>
+                <div>
+                  <h3>Ship Previous, Sync, Auto Sync, and Batch Develop</h3>
+                  <p>Run Develop operations over frozen targets with durable Receipts.</p>
+                </div>
+                <div class="scope">Issues #86, #87</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference F's Develop states, frozen-target Receipt, scheduling, commit, recovery, retry, and safe-undo rules.</li>
+                    <li>Implement Reference F's distinct Previous, Sync, Auto Sync, and Batch Develop semantics.</li>
+                    <li>Add field chooser, source and target counts, progress, cancel, result summary, retry, and conditional Undo batch.</li>
+                    <li>Route every target through the repository and complete-state command.</li>
+                    <li>Exercise selection changes and target revision conflicts during active work.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference D for selected fields.</li>
+                    <li>Reference F for Receipt, state, cancellation, resume, retry, and undo.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Every frozen target reaches completed, skipped, cancelled, or failed.</li>
+                    <li>Cancel preserves completed targets and leaves untouched targets unchanged.</li>
+                    <li>Expected-revision conflicts never mutate the target.</li>
+                    <li>Restart resumes or retries without duplicate edits.</li>
+                    <li>Auto Sync creates one target operation per source command and reports conflicts.</li>
+                    <li>Undo batch skips every target with a later edit.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-12">
+              <div class="step-head">
+                <div class="step-id">12</div>
+                <div>
+                  <h3>Complete batch export</h3>
+                  <p>Keep export state and retry rules separate from Develop batches.</p>
+                </div>
+                <div class="scope">Issue #166</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Implement Reference F's export-specific states, sequential execution, cancellation, warning, and retry rules.</li>
+                    <li>Resolve every selected edit entry through its source and current Head.</li>
+                    <li>Preserve existing destination, collision, overwrite, symlink, and token safety.</li>
+                    <li>Update progress and final summary UI to render every item state.</li>
+                    <li>Exercise cancellation during decode, render, encode, and write.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference F for export-specific states.</li>
+                    <li>Reference A for virtual-copy naming and source resolution.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Queued, active, completed, skipped, cancelled, and failed remain distinct.</li>
+                    <li>Every selected entry appears in the final summary.</li>
+                    <li>UI rows and destination files agree after collision, failure, and cancellation.</li>
+                    <li>Retry never reruns a completed file.</li>
+                    <li>Sequential execution passes before any concurrency work starts.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-13">
+              <div class="step-head">
+                <div class="step-id">13</div>
+                <div>
+                  <h3>Run the end-to-end release gate</h3>
+                  <p>Prove the joined behavior, not isolated panels.</p>
+                </div>
+                <div class="scope">All issues</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Run the repository's current test and production build scripts.</li>
+                    <li>Lint every touched source file and separate known full-repository findings.</li>
+                    <li>Run the desktop workflows in Reference H with standard, raw, embedded-preview, virtual-copy, incompatible-profile, and missing-sidecar targets.</li>
+                    <li>Repeat migration and crash injection after asset, revision, manifest Head, XMP Projection, and projection-record writes.</li>
+                    <li>Compare viewer, thumbnail, manifest, original XMP where applicable, and export output for each affected state.</li>
+                    <li>Review the complete diff against every contract in Reference G.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Reference</h4>
+                  <ul>
+                    <li>Reference G is the scope checklist.</li>
+                    <li>Reference H is the evidence checklist.</li>
+                    <li>References A through F contain the invariants that must survive the diff.</li>
+                  </ul>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>Current tests and production build pass.</li>
+                    <li>Touched files add no lint findings.</li>
+                    <li>Every Reference H workflow has recorded evidence.</li>
+                    <li>Every Reference G issue has met all completion clauses.</li>
+                    <li>The diff contains no unrelated refactor or undocumented schema change.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+
+            <article class="step" id="step-14">
+              <div class="step-head">
+                <div class="step-id">14</div>
+                <div>
+                  <h3>Open one pull request and connect every issue</h3>
+                  <p>The run ends with a reviewable PR, not a local branch.</p>
+                </div>
+                <div class="scope">Required handoff</div>
+              </div>
+              <div class="step-body">
+                <div>
+                  <h4>Work</h4>
+                  <ul>
+                    <li>Use the repository's <code>file-pr</code> workflow.</li>
+                    <li>Write a concise title and a body that explains the problem before the solution.</li>
+                    <li>Include implementation, migration and recovery, verification, and known limitations.</li>
+                    <li>Connect all 12 issues with GitHub closing keywords in the PR body.</li>
+                    <li>Attach the recorded check output and manual acceptance evidence.</li>
+                    <li>Review the final PR diff and issue links after GitHub creates the PR.</li>
+                  </ul>
+                </div>
+                <div>
+                  <h4>Issue block</h4>
+                  <pre aria-label="Required GitHub issue closing block">Closes #165
+Closes #77
+Closes #78
+Closes #79
+Closes #80
+Closes #82
+Closes #83
+Closes #84
+Closes #85
+Closes #86
+Closes #87
+Closes #166</pre>
+                </div>
+                <div class="gate">
+                  <h4>Gate</h4>
+                  <ul>
+                    <li>The PR exists and targets the intended base branch.</li>
+                    <li>The PR body contains all 12 closing lines and GitHub shows every issue as linked.</li>
+                    <li>The body reports the actual checks, migration proof, recovery proof, and manual results.</li>
+                    <li>The PR diff contains only this implementation and required artifacts.</li>
+                    <li>If any issue Gate is incomplete, this final Gate fails and the PR must not claim that issue is closed.</li>
+                  </ul>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="references">
+          <h2>Branch references</h2>
+          <p class="section-intro">
+            Open the reference named by the active step. Each contract has one home.
+          </p>
+
+          <details class="reference" id="ref-a">
+            <summary>Reference A. Domain model and entry lifecycle</summary>
+            <div class="reference-body">
+              <pre aria-label="Source and edit-entry model">type SourceId = string &amp; { readonly __brand: "SourceId" };
+type EntryId = string &amp; { readonly __brand: "EntryId" };
+type RevisionId = string &amp; { readonly __brand: "RevisionId" };
+
+interface SourceRecord {
+  id: SourceId;
+  relativePath: string;
+  decoderProfileId: "standard" | "nef";
+  captureFacts?: CameraFacts;
+  pixelProvenance?: PixelProvenance;
+}
+
+interface SourceSignature {
+  sourceId: SourceId;
+  sourceRevision: string;
+  pixelWidth: number;
+  pixelHeight: number;
+}
+
+type EditEntry =
+  | {
+      kind: "original";
+      id: EntryId;
+      sourceId: SourceId;
+      displayName: string;
+      metadata: EntryMetadata;
+      developRecordId: string;
+      xmpProjection?: { revisionId: RevisionId; digest: string };
+    }
+  | {
+      kind: "virtual-copy";
+      id: EntryId;
+      sourceId: SourceId;
+      parentEntryId: EntryId;
+      displayName: string;
+      metadata: EntryMetadata;
+      developRecordId: string;
+    };</pre>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Action</th><th>Rule</th></tr></thead>
+                  <tbody>
+                    <tr><td>Create copy</td><td>Clone current revision, curation metadata, and album membership. Assign the next display name and a UUID.</td></tr>
+                    <tr><td>Rename copy</td><td>Change catalog display name only. Source path and siblings stay unchanged.</td></tr>
+                    <tr><td>Delete copy</td><td>Tombstone that entry. Preserve source, original, and siblings. Garbage collection runs later.</td></tr>
+                    <tr><td>Delete source</td><td>Show all dependent entries, confirm at source level, move the file to Trash, then remove dependents.</td></tr>
+                    <tr><td>Archive and albums</td><td>Operate on entry IDs so original and copies can differ.</td></tr>
+                    <tr><td>Export copy</td><td>Use shared source pixels and the copy Head. Add a sanitized copy-name suffix before collision handling.</td></tr>
+                    <tr><td>Directory scan</td><td>Reconcile sources first, then join edit entries. A scan never prunes copy UUIDs.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-b">
+            <summary>Reference B. Persistence, migration, XMP, and recovery</summary>
+            <div class="reference-body">
+              <h3>Commit order</h3>
+              <ol>
+                <li>Validate the proposed document and expected parent revision.</li>
+                <li>Write and validate missing content-addressed assets.</li>
+                <li>Write and validate immutable revision metadata.</li>
+                <li>Atomically replace the app-owned manifest to advance the Head. This is the commit point.</li>
+                <li>For the original entry, atomically write the Head to XMP as a Projection.</li>
+                <li>Atomically record projected revision ID and digest in the manifest without changing the Head.</li>
+              </ol>
+
+              <h3 style="margin-top: 22px">Load and conflict rules</h3>
+              <ul>
+                <li>Trust a manifest Head only when its revision, checkpoint chain, assets, and state hash validate.</li>
+                <li>Keep orphan immutable files for later idempotent collection.</li>
+                <li>Compare XMP digest with the last projection record. Mtime is evidence, not authority.</li>
+                <li>A clear external XMP change becomes one new revision.</li>
+                <li>Concurrent app and XMP changes show Keep Darkroom, Import XMP, Inspect differences, and Preserve both as virtual copy.</li>
+              </ul>
+
+              <h3 style="margin-top: 22px">Catalog v2 migration</h3>
+              <ol>
+                <li>Read and validate v2 without mutation.</li>
+                <li>Create one source and one original entry for every current ID. Preserve the original ID.</li>
+                <li>Put the current Develop document in the default version's root checkpoint. Invent no history.</li>
+                <li>Rename decoder identity to <code>decoderProfileId</code>. Set camera profile to neutral unless an explicit supported selection exists.</li>
+                <li>Resolve current XMP before publication. Stop for a conflict when app and XMP both changed.</li>
+                <li>Write v3 through temporary replacement, reopen, validate, and retain a v2 backup through one successful restart.</li>
+              </ol>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-c">
+            <summary>Reference C. Commands, history, versions, snapshots, and retention</summary>
+            <div class="reference-body">
+              <pre aria-label="Command and revision records">interface CommittedDevelopCommand {
+  entryId: EntryId;
+  operationId: string;
+  label: string;
+  before: DevelopDocument;
+  after: DevelopDocument;
+  forwardPatch: DevelopPatch;
+  inversePatch: DevelopPatch;
+}
+
+interface StoredRevision {
+  schemaVersion: 1;
+  id: RevisionId;
+  parentId: RevisionId | null;
+  operationId: string;
+  label: string;
+  createdAt: string;
+  patch: DevelopPatch | null;
+  checkpoint?: DevelopDocument;
+  stateHash: string;
+  assetHashes: string[];
+}</pre>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Concept</th><th>Contract</th></tr></thead>
+                  <tbody>
+                    <tr><td>Session history</td><td>One 100-step stack per entry. New command clears that entry's redo.</td></tr>
+                    <tr><td>Persistent history</td><td>One append-only linear revision chain per entry.</td></tr>
+                    <tr><td>Version</td><td>Named movable revision reference. Activation appends a restore revision.</td></tr>
+                    <tr><td>Snapshot</td><td>Named fixed revision reference. Recall appends a restore revision. Rename and delete do not mutate the state.</td></tr>
+                    <tr><td>Catalog metadata</td><td>Pick, rating, and label may remain session-undoable when Develop owns the controls, but stay outside Develop revisions.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <ul>
+                <li>Root and every twentieth revision contain a full checkpoint. Create one sooner when accumulated patch bytes reach the measured limit.</li>
+                <li>Load the nearest supported checkpoint, migrate it, replay patches, validate each result, and verify the state hash.</li>
+                <li>Stop replay at the last valid revision and expose recovery.</li>
+                <li>Live Heads, versions, snapshots, retained history, and Receipts pin their reconstruction chains and assets.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-d">
+            <summary>Reference D. Presets, Amount, clipboard, and transfer policy</summary>
+            <div class="reference-body">
+              <pre aria-label="Preset record and application provenance">interface PresetRecord {
+  schemaVersion: 1;
+  id: PresetId;
+  revision: string;
+  name: string;
+  author: string;
+  category: string;
+  source: "built-in" | "user" | "imported";
+  favorite: boolean;
+  fields: DevelopFieldSelection;
+  payload: DevelopFieldPayload;
+  compatibility: PresetCompatibility;
+}
+
+interface AppliedPresetState {
+  presetId: PresetId;
+  presetRevision: string;
+  amount: number;
+  includedFields: DevelopFieldSelection;
+  baseline: DevelopFieldPayload;
+  target: DevelopFieldPayload;
+  lastExpanded: DevelopFieldPayload;
+  linkState: "linked" | "modified";
+}</pre>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Field group</th><th>Preset Amount</th><th>Cross-entry transfer</th><th>Default chooser</th></tr></thead>
+                  <tbody>
+                    <tr><td>Basic, mixer, effects</td><td>Linear numeric interpolation.</td><td>Validate against target schema.</td><td>On</td></tr>
+                    <tr><td>Tone curves</td><td>Interpolate 256 evenly spaced samples per channel, then validate.</td><td>Validate complete normalized curves.</td><td>On</td></tr>
+                    <tr><td>Camera profile</td><td>Baseline below 100, compatible target at 100.</td><td>Requires compatible camera and pixel stage.</td><td>Off</td></tr>
+                    <tr><td>Crop</td><td>Baseline below 100, target at 100.</td><td>Normalize coordinates, then validate target bounds.</td><td>Off</td></tr>
+                    <tr><td>Manual masks</td><td>Baseline below 100, target at 100.</td><td>Transfer normalized masks after bounds checks.</td><td>Off</td></tr>
+                    <tr><td>AI masks</td><td>No interpolation.</td><td>Same SourceId only, or explicit regeneration.</td><td>Off</td></tr>
+                    <tr><td>Pick, rating, label</td><td>Excluded.</td><td>Optional clipboard or Sync catalog group.</td><td>Off</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <ul>
+                <li>User and imported presets live in app-owned storage. Imported source files are copied and identified by content hash.</li>
+                <li>Exact duplicate import returns the existing preset. A reused ID with changed content asks Replace or Import copy.</li>
+                <li>Updating a preset creates a new immutable revision. Existing documents retain the revision they applied.</li>
+                <li>Presets compile included fields into an operation. Batch Develop executes an operation. Neither is another field-policy type.</li>
+                <li>Apply touches included fields only. Undeclared masks and source-specific data stay unchanged.</li>
+                <li>Clipboard payload includes version, source provenance, selected groups, and asset hashes. Parse it as unknown input.</li>
+                <li>Amount 0 is baseline. Amount 50 is midpoint for blendable fields. Amount 100 is target and applies compatible full-strength fields.</li>
+                <li>A manual covered-field change preserves provenance, marks modified, and disables Amount until explicit Reapply.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-e">
+            <summary>Reference E. Camera profiles and default creation</summary>
+            <div class="reference-body">
+              <pre aria-label="Pixel provenance contract">interface PixelProvenance {
+  decoderPath: "libraw" | "nikon-sdk" | "embedded-preview" | "processed-standard";
+  colorSpace: string | "unknown";
+  transfer: "linear" | "encoded" | "unknown";
+  bitDepth: number | null;
+  cameraProfileStage:
+    | { kind: "available"; stage: "before-develop-tone" }
+    | { kind: "unavailable"; reason: string };
+}</pre>
+              <h3>Profile branch</h3>
+              <ul>
+                <li>A compatible branch applies one supported non-neutral transform before Develop tone work in both preview and export.</li>
+                <li>An unavailable branch records the decoder reason and uses neutral. It leaves #84 incomplete.</li>
+                <li>An embedded processed preview always takes the unavailable branch for camera-space transforms.</li>
+                <li>Imported files live in app-owned, content-hashed storage. Registry records selected ID and revision, compatibility, version, capabilities, parse errors, and unsupported opcodes.</li>
+              </ul>
+
+              <h3 style="margin-top: 22px">Default creation branch</h3>
+              <ol>
+                <li>Existing app document or accepted source XMP returns immediately. Defaults never run during normal hydration.</li>
+                <li>New document reads minimum normalized camera, decoder, profile, and ISO facts.</li>
+                <li>Priority wins first. Ties use camera and profile specificity, narrower inclusive ISO range, then stable rule ID.</li>
+                <li>Unknown camera or ISO matches only an explicit unknown fallback.</li>
+                <li>The winning preset payload creates the initial document and records rule ID and revision.</li>
+                <li>Compare-and-set installs it only when no document exists.</li>
+              </ol>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-f">
+            <summary>Reference F. Develop and export batch states</summary>
+            <div class="reference-body">
+              <pre aria-label="Develop batch item states">type DevelopBatchItemState =
+  | { kind: "queued"; entryId: EntryId }
+  | { kind: "active"; entryId: EntryId; phase: string }
+  | { kind: "completed"; entryId: EntryId; revisionId: RevisionId; warnings: string[] }
+  | { kind: "skipped"; entryId: EntryId; reason: string }
+  | { kind: "cancelled"; entryId: EntryId; reason: "not-started" }
+  | { kind: "failed"; entryId: EntryId; error: string; retryable: boolean };</pre>
+              <pre aria-label="Export item states">type ExportItemState =
+  | { kind: "queued"; entryId: EntryId }
+  | { kind: "active"; entryId: EntryId; phase: "decode" | "render" | "encode" | "write" }
+  | { kind: "completed"; entryId: EntryId; outputPath: string; warnings: string[] }
+  | { kind: "skipped"; entryId: EntryId; reason: string }
+  | { kind: "cancelled"; entryId: EntryId; reason: "not-started" }
+  | { kind: "failed"; entryId: EntryId; error: string; retryable: boolean };</pre>
+              <ul>
+                <li>A queue helper may share bounded scheduling and cancellation. Develop and export keep separate domain states and retry rules.</li>
+                <li>Every target starts queued and ends in exactly one terminal state.</li>
+                <li>A Develop Receipt stores operation ID, frozen target, expected revision, before revision, after revision, and terminal result.</li>
+                <li>Persist the Receipt after every terminal result. Retry unresolved or retryable items only.</li>
+                <li>Previous applies selected fields from the last different committed entry to the current entry once.</li>
+                <li>Sync uses the active entry as source and the rest of one frozen selection as targets.</li>
+                <li>Auto Sync freezes targets when enabled, emits after each completed source command, serializes per target, and skips an expected-revision conflict.</li>
+                <li>Batch Develop runs preset apply, paste, section reset, or selected-control operations over one frozen library selection.</li>
+                <li>Undo batch compares each current revision with its recorded after-revision and reverts matching completed targets only.</li>
+                <li>Export warnings decorate completed rows. They never form another terminal state.</li>
+                <li>Export cancellation stops new scheduling and lets active native encode report its real result.</li>
+              </ul>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-g" open>
+            <summary>Reference G. Issue contracts and completion clauses</summary>
+            <div class="reference-body">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Issue</th><th>Contract from the issue description</th><th>Owning Gate</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/165" target="_blank" rel="noreferrer">#165 Undo and redo</a></td>
+                      <td>Cover every visible Develop mutation. Group gestures. Restore complete per-photo state. Isolate stacks. Clear redo on a new edit. Keep the 100-entry session limit. Leave persistent history to #77.</td>
+                      <td><a href="#step-03">Step 03 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/77" target="_blank" rel="noreferrer">#77 Persistent History / Versions</a></td>
+                      <td>Persist history and named versions. Activate through the normal session path. Bound storage. Handle conflict and partial writes. Keep catalog, sidecar, viewer, and export consistent.</td>
+                      <td><a href="#step-05">Step 05 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/78" target="_blank" rel="noreferrer">#78 Snapshots</a></td>
+                      <td>Create named immutable Develop states. Recall without destroying live work. Support rename and delete. Persist within limits. Use normal activation so viewer, masks, thumbnails, sidecar, and export agree.</td>
+                      <td><a href="#step-05">Step 05 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/79" target="_blank" rel="noreferrer">#79 Virtual Copies / Duplicates</a></td>
+                      <td>Keep multiple independent edits over one source. Separate supported metadata and collection membership. Add identity, name, create, switch, rename, delete, restart, source validation, and independent export.</td>
+                      <td><a href="#step-04">Step 04 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/80" target="_blank" rel="noreferrer">#80 Apply and manage presets</a></td>
+                      <td>Add validated model and browser. Support search, preview, apply, create, update, import, favorite, delete, conflict handling, app-owned persistence, explicit masks, and one-step undo.</td>
+                      <td><a href="#step-06">Step 06 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/82" target="_blank" rel="noreferrer">#82 Preset Amount</a></td>
+                      <td>Keep source preset ID and amount separate from expanded settings. Define numeric, enum, curve, and mask interpolation. Support 0, 50, 100, preview, keyboard, reset, persistence, undo, and later manual edits.</td>
+                      <td><a href="#step-07">Step 07 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/83" target="_blank" rel="noreferrer">#83 Camera/raw defaults and ISO-adaptive presets</a></td>
+                      <td>Apply deterministic camera, raw-profile, and ISO defaults before manual work. Add priority, ranges, manager, matcher, enable, disable, reset, one-time application, rule identity, and no rewrite of existing edits.</td>
+                      <td><a href="#step-09">Step 09 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/84" target="_blank" rel="noreferrer">#84 Import custom profiles</a></td>
+                      <td>Import valid DCP and profile-XMP files. Normalize registry data. Show compatibility and errors. Preserve imported files. Apply supported transforms, reject unsupported opcodes, use neutral fallback, and keep preview and export consistent.</td>
+                      <td><a href="#step-08">Step 08 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/85" target="_blank" rel="noreferrer">#85 Copy/paste Develop settings</a></td>
+                      <td>Copy all or selected settings with a chooser and versioned platform clipboard. Carry source provenance. Handle crop, masks, metadata, stale and incompatible inputs. Invalidate previews. Apply one target command and persist normally.</td>
+                      <td><a href="#step-10">Step 10 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/86" target="_blank" rel="noreferrer">#86 Sync / Auto Sync / Previous</a></td>
+                      <td>Apply one entry's selected fields to one or many targets. Show per-entry progress and errors. Schedule, cancel, retry, persist successful targets, keep failures visible, and support operation undo where safe.</td>
+                      <td><a href="#step-11">Step 11 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/87" target="_blank" rel="noreferrer">#87 Batch Develop</a></td>
+                      <td>Apply edits, presets, resets, and selected controls over library selection. Use bounded work, per-target results, partial success, cancellation, durable recovery, retry, and duplicate-operation protection.</td>
+                      <td><a href="#step-11">Step 11 Gate</a></td>
+                    </tr>
+                    <tr>
+                      <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/166" target="_blank" rel="noreferrer">#166 Batch export</a></td>
+                      <td>Expose queued, active, completed, skipped, cancelled, and failed states. Keep progress honest through cancellation. Preserve collision safety. Show per-file errors and a complete summary. Retry no successful file.</td>
+                      <td><a href="#step-12">Step 12 Gate</a></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+
+          <details class="reference" id="ref-h">
+            <summary>Reference H. Verification record</summary>
+            <div class="reference-body">
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Evidence</th><th>Required proof</th></tr></thead>
+                  <tbody>
+                    <tr><td>Existing checks</td><td>Current test and production build scripts pass. Touched files add no lint findings. Record known repository-wide findings separately.</td></tr>
+                    <tr><td>Desktop session</td><td>Run the full Electron app with native IPC. Record viewer, thumbnail, sidecar, restart, clipboard, profile import, and export results.</td></tr>
+                    <tr><td>Migration</td><td>Upgrade and reopen a copied v2 catalog. Preserve original IDs, albums, archive, metadata, edits, and XMP.</td></tr>
+                    <tr><td>Crash recovery</td><td>Interrupt after asset, revision, manifest Head, XMP Projection, and projection-record writes. Recover without silent state loss.</td></tr>
+                    <tr><td>Mixed media</td><td>Use standard, raw, embedded-preview, virtual-copy, incompatible-profile, and missing-sidecar entries.</td></tr>
+                    <tr><td>Batch truth</td><td>Every selected target reaches one terminal state. Untouched entries remain unchanged. Retry and undo obey the Receipt.</td></tr>
+                    <tr><td>Export truth</td><td>Summary rows match destination files after writes, skips, cancellation, failures, collisions, and retry.</td></tr>
+                    <tr><td>Issue closure</td><td>Every row in Reference G has evidence before Step 14 uses its closing keyword.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <h3 style="margin-top: 22px">Manual workflow set</h3>
+              <ul>
+                <li>Undo covers sliders, keyboard, curves, crop Done and Cancel, mask strokes and geometry, resets, switching, redo clearing, and catalog controls owned by Develop.</li>
+                <li>History covers restart, old revision restore, version activation, snapshot recall, rename, delete, undo recall, Projection, and export.</li>
+                <li>Copies cover divergent edits and metadata, different albums, restart, naming, export, copy deletion, and source deletion.</li>
+                <li>Presets cover create, import, duplicate, conflict, preview, apply, favorite, update, delete, unsupported fields, Amount, manual modification, Reapply, restart, and export.</li>
+                <li>Profiles and defaults cover valid non-neutral application, malformed and incompatible input, unsupported opcode, embedded preview, removal, replacement, camera and ISO matching, unknown facts, concurrent creation, reset, and restart.</li>
+                <li>Transfer and Develop batch cover every field group, stale clipboard, mixed targets, selection change, revision conflict, cancellation, resume, retry, safe undo, and duplicate operation identity.</li>
+                <li>Export covers one and many entries, duplicate-source copies, collision choices, invalid destination, decode and encode failure, cancellation in every phase, retry failed, repeated run, and filesystem comparison.</li>
+              </ul>
+            </div>
+          </details>
+        </section>
+
+        <section class="section" id="risk">
+          <h2>Stop conditions</h2>
+          <p class="section-intro">These failures invalidate a later Gate. Fix the contract at its owning step.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Severity</th><th>Failure</th><th>Owning response</th></tr></thead>
+              <tbody>
+                <tr><td><span class="status blocker">Blocker</span></td><td>A camera profile would run after irreversible rendered-RGB processing.</td><td>Step 01 or 08 stops. Add decoder work before claiming #84.</td></tr>
+                <tr><td><span class="status blocker">Blocker</span></td><td>Recovery must choose between catalog and XMP by timestamp.</td><td>Step 02 finishes Head authority, Projection digest, and explicit conflict choices.</td></tr>
+                <tr><td><span class="status high">High</span></td><td>A directory scan prunes virtual-copy UUIDs.</td><td>Step 02 reconciles sources separately. Step 04 proves restart.</td></tr>
+                <tr><td><span class="status high">High</span></td><td>History rewrites large mask payloads per command.</td><td>Step 01 sets measured limits. Step 05 uses content-addressed assets and retention.</td></tr>
+                <tr><td><span class="status high">High</span></td><td>A batch job mounts the viewer or writes active-store internals.</td><td>Step 02 supplies target-addressable repository commands before Step 11.</td></tr>
+                <tr><td><span class="status high">High</span></td><td>Auto Sync queues pointer movement.</td><td>Step 11 emits only after completed source commands and serializes each target.</td></tr>
+                <tr><td><span class="status pass">Managed</span></td><td>Export concurrency lacks a measured memory limit or destination lock.</td><td>Step 12 stays sequential. #166 does not require concurrency.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <p>
+            Source: the linked GitHub issue descriptions and the Darkroom repository at
+            commit <code>f92f2d4</code>. The final agent action is Step 14, which opens one
+            PR and connects all 12 issues.
+          </p>
+        </footer>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

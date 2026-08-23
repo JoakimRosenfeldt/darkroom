@@ -10,6 +10,8 @@
     "build": "npm run build:next && npm run build:electron",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3000 && npm run build:electron && cross-env ELECTRON_DEV=1 electron .\"",
     "electron:start": "npm run build:electron && electron .",
+    "test:catalog-worker:worker": "npm run build:electron && cross-env ELECTRON_RUN_AS_NODE=1 electron --no-warnings --experimental-strip-types scripts/catalog-worker-smoke.mts electron-dist/catalog-worker.js",
+    "test:catalog-worker:electron": "npm run build:electron && node --no-warnings --experimental-strip-types scripts/catalog-worker-smoke.mts --app",
     "dist": "npm run build && node scripts/package-release.mjs",
     "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mts",
     "lint": "eslint",
@@ -27,7 +29,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "concurrently": "^9.2.1",
