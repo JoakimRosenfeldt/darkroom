@@ -30,7 +30,7 @@ export function useEntryAspectRatios(
   priorityEntryIds: string[],
 ) {
   const entriesById = useMemo(
-    () => new Map(entries.map((entry) => [entry.id, entry])),
+    () => new Map<string, LibraryEntry>(entries.map((entry) => [entry.id, entry])),
     [entries],
   );
   const entrySetKey = useMemo(() => {

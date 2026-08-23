@@ -8,7 +8,7 @@ import { createNefDecoderService } from "../electron/nef-decoder-service.ts";
 
 const mock = fileURLToPath(new URL("../native/nikon-nef-decoder/mock-decoder.mjs", import.meta.url));
 
-async function fixture() {
+async function fixture(kind: "native" | "test-only" = "test-only") {
   const root = await mkdtemp(path.join(os.tmpdir(), "darkroom-nef-service-test-"));
   const library = path.join(root, "library");
   const temp = path.join(root, "temp");
@@ -16,7 +16,7 @@ async function fixture() {
   const original = Buffer.from("source-nef-remains-unchanged");
   await writeFile(path.join(library, "photo.nef"), original);
   const service = createNefDecoderService({
-    helper: { executable: process.execPath, fixedArgs: [mock] },
+    helper: { executable: process.execPath, fixedArgs: [mock], kind },
     tempRoot: temp,
   });
   return { root, library, temp, original, service };
@@ -34,6 +34,7 @@ test("decodes through the mock, caps preview size, and removes temporary output"
 
   assert.equal(result.available, true);
   if (!result.available) return;
+  assert.equal(result.provenance, "nikon-test-only");
   assert.deepEqual(
     { width: result.width, height: result.height, byteCount: result.byteCount, pixelFormat: result.pixelFormat },
     { width: 8, height: 6, byteCount: 288, pixelFormat: "rgb16le" },
@@ -41,6 +42,49 @@ test("decodes through the mock, caps preview size, and removes temporary output"
   assert.equal(result.pixels.byteLength, 288);
   assert.deepEqual(await readFile(path.join(sample.library, "photo.nef")), sample.original);
   assert.deepEqual(await readdir(sample.temp), []);
+});
+
+test("checked-in mock pixels stay test-only even when the command is mislabeled", async (t) => {
+  const sample = await fixture("native");
+  t.after(() => rm(sample.root, { recursive: true, force: true }));
+
+  const result = await sample.service.decode(sample.library, {
+    relativePath: "photo.nef",
+    mode: "preview",
+    maxEdge: 2560,
+  });
+
+  assert.equal(result.available, true);
+  if (result.available) {
+    assert.equal(result.provenance, "nikon-test-only");
+  }
+});
+
+test("an unqualified development helper cannot claim Nikon SDK provenance", async (t) => {
+  const sample = await fixture();
+  t.after(() => rm(sample.root, { recursive: true, force: true }));
+  const developmentHelper = path.join(sample.root, "development-helper.mjs");
+  await writeFile(developmentHelper, await readFile(mock));
+  const service = createNefDecoderService({
+    helper: {
+      executable: process.execPath,
+      fixedArgs: [developmentHelper],
+      kind: "native",
+      packageState: "development",
+    },
+    tempRoot: sample.temp,
+  });
+
+  const result = await service.decode(sample.library, {
+    relativePath: "photo.nef",
+    mode: "preview",
+    maxEdge: 2560,
+  });
+
+  assert.equal(result.available, true);
+  if (result.available) {
+    assert.equal(result.provenance, "nikon-test-only");
+  }
 });
 
 test("passes only a private snapshot to the helper and preserves the original", async (t) => {

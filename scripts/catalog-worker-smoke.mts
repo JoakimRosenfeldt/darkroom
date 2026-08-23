@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -82,6 +82,22 @@ function packagedExecutable(appPath: string): string {
     return path.join(appPath, "Contents", "MacOS", "Darkroom");
   }
   return appPath;
+}
+
+async function assertPackagedFileTransactionHelper(appPath: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const helperPath = path.join(
+    appPath,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "electron-dist",
+    `file-transaction-helper-${process.platform}-${process.arch}`,
+  );
+  const helper = await lstat(helperPath);
+  assert.equal(helper.isFile(), true);
+  assert.equal(helper.isSymbolicLink(), false);
+  assert.notEqual(helper.mode & 0o111, 0);
 }
 
 async function launchApp(
@@ -206,6 +222,7 @@ async function runAppSmoke(configuredPackagedAppPath: string | null): Promise<vo
 
     const packagedAppPath = configuredPackagedAppPath ?? await buildPackagedApp(path.join(root, "package"));
     await access(path.join(packagedAppPath, "Contents", "Resources", "app.asar"));
+    await assertPackagedFileTransactionHelper(packagedAppPath);
     const packagedExitCode = await launchApp(
       packagedExecutable(packagedAppPath),
       [],

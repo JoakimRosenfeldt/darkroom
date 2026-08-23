@@ -171,13 +171,13 @@ export default function HomePage() {
               <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
                 <div className="space-y-2">
                   <p className="text-sm text-lr-text-muted">
-                    Re-link your folder to continue
+                    Open or re-link a catalog to continue
                   </p>
                   <p className="max-w-sm text-xs text-lr-text-muted">
                     {folderName
-                      ? `Select "${folderName}" again to restore access.`
-                      : "Select your photo folder again to restore access."}{" "}
-                    The folder may have been moved or deleted.
+                      ? `Select a root for "${folderName}" again to restore access.`
+                      : "Open a catalog or link a photo root to restore access."}{" "}
+                    The root may have been moved or deleted.
                   </p>
                 </div>
                 <div className="flex flex-col items-center gap-2 sm:flex-row">
@@ -185,15 +185,15 @@ export default function HomePage() {
                     mode="restore"
                     className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
                   >
-                    {importState === "restoring" ? "Re-linking…" : "Re-link folder"}
+                    {importState === "restoring" ? "Re-linking…" : "Re-link root"}
                   </FolderPickerButton>
                   <FolderPickerButton
                     mode="import"
                     className="rounded border border-lr-border-subtle px-4 py-2 text-sm text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
                   >
                     {importState === "importing"
-                      ? "Importing…"
-                      : "Import different folder"}
+                      ? "Opening…"
+                      : "Open catalog"}
                   </FolderPickerButton>
                 </div>
                 {importStatus ? (
@@ -233,7 +233,7 @@ export default function HomePage() {
               </>
             ) : importState === "importing" || importState === "restoring" ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <p className="text-sm text-lr-text-muted">Reading folder…</p>
+                <p className="text-sm text-lr-text-muted">Reading catalog…</p>
                 {importStatus ? (
                   <p className="max-w-sm text-xs text-lr-text-muted">{importStatus}</p>
                 ) : null}
@@ -264,17 +264,16 @@ export default function HomePage() {
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <p className="text-sm text-lr-text-muted">
-                  Import a folder to begin
+                  Open a catalog to begin
                 </p>
                 <p className="max-w-sm text-xs text-lr-text-muted">
-                  Click Import in the toolbar to link a local photo folder.
-                  Files stay on your machine.
+                  Open a catalog to link local photo roots. Files stay on your machine.
                 </p>
                 <FolderPickerButton
                   mode="import"
                   className="rounded bg-lr-accent px-4 py-2 text-sm text-white transition hover:bg-lr-accent/90"
                 >
-                  Import folder
+                  Open catalog
                 </FolderPickerButton>
               </div>
             )}

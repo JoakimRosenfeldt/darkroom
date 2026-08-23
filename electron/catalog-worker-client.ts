@@ -4,6 +4,13 @@ import { Worker, type WorkerOptions } from "node:worker_threads";
 import type { CatalogFaultPoint } from "./catalog-fault-injection.ts";
 import type { AssetId, CatalogId, OperationId } from "../lib/catalog/ids.ts";
 import type {
+  CatalogLiveApplyInput,
+  CatalogLiveApplyResult,
+  CatalogLiveCreateInput,
+  CatalogLiveQueryInput,
+  CatalogLiveState,
+} from "../lib/catalog/live.ts";
+import type {
   CatalogV3ActivationResult,
   CatalogV3AlbumAssetPage,
   CatalogV3AlbumAssetPageInput,
@@ -25,6 +32,7 @@ import type {
 import {
   parseCatalogWorkerResponse,
   type CatalogWorkerBackupResponse,
+  type CatalogWorkerCloneCatalogResponse,
   type CatalogWorkerCloseResponse,
   type CatalogWorkerError,
   type CatalogWorkerIntegrityCheckResponse,
@@ -37,6 +45,7 @@ import {
   type CatalogWorkerTestTracerInspectResponse,
   type CatalogWorkerTestTracerRunResponse,
   type CatalogWorkerTransactionProbeResponse,
+  type CatalogWorkerVacuumIntoResponse,
 } from "./catalog-worker-protocol.ts";
 
 export interface CatalogWorkerClientOptions {
@@ -332,6 +341,35 @@ export class CatalogWorkerClient {
     return requireKind(response, "backup");
   }
 
+  async vacuumInto(destinationPath: string): Promise<CatalogWorkerVacuumIntoResponse> {
+    const normalizedPath = path.normalize(path.resolve(destinationPath));
+    const response = await this.send({
+      kind: "vacuum-into",
+      requestId: requestId(),
+      destinationPath: normalizedPath,
+    });
+    return requireKind(response, "vacuum-into");
+  }
+
+  async cloneCatalog(input: {
+    readonly sourcePath: string;
+    readonly destinationPath: string;
+    readonly catalogId: CatalogId;
+    readonly displayName: string;
+    readonly appVersion: string;
+  }): Promise<CatalogWorkerCloneCatalogResponse> {
+    const response = await this.send({
+      kind: "clone-catalog",
+      requestId: requestId(),
+      sourcePath: path.normalize(path.resolve(input.sourcePath)),
+      destinationPath: path.normalize(path.resolve(input.destinationPath)),
+      catalogId: input.catalogId,
+      displayName: input.displayName,
+      appVersion: input.appVersion,
+    });
+    return requireKind(response, "clone-catalog");
+  }
+
   async integrityCheck(): Promise<CatalogWorkerIntegrityCheckResponse> {
     const response = await this.send({ kind: "integrity-check", requestId: requestId() });
     return requireKind(response, "integrity-check");
@@ -511,6 +549,32 @@ export class CatalogWorkerClient {
     }
     requireSnapshotRevision(result, input.expectedRevision, "v3-album-assets-page");
     requirePositionPage(result.assets, input.cursor, input.limit, result.nextCursor, "v3-album-assets-page");
+    return result;
+  }
+
+  async liveCreate(input: CatalogLiveCreateInput): Promise<CatalogLiveApplyResult> {
+    const response = await this.send({ kind: "live-create", requestId: requestId(), input });
+    return requireCatalogIdentity(requireKind(response, "live-create").result, input.catalogId, "live-create");
+  }
+
+  async liveQuery(input: CatalogLiveQueryInput): Promise<CatalogLiveState> {
+    const response = await this.send({ kind: "live-query", requestId: requestId(), input });
+    const result = requireKind(response, "live-query").result;
+    if (result.catalog.catalogId !== input.catalogId) {
+      throw new Error("Catalog worker live-query returned a mismatched catalogId.");
+    }
+    if (input.expectedRevision !== null && result.catalog.revision !== input.expectedRevision) {
+      throw new Error("Catalog worker live-query returned a mismatched revision.");
+    }
+    return result;
+  }
+
+  async liveApply(input: CatalogLiveApplyInput): Promise<CatalogLiveApplyResult> {
+    const response = await this.send({ kind: "live-apply", requestId: requestId(), input });
+    const result = requireCatalogIdentity(requireKind(response, "live-apply").result, input.catalogId, "live-apply");
+    if (result.changed && result.revision <= input.expectedRevision) {
+      throw new Error("Catalog worker live-apply returned an invalid revision.");
+    }
     return result;
   }
 

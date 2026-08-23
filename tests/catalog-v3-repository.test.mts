@@ -180,21 +180,22 @@ test("catalog v3 stages assets and ordered relations through the worker", async 
     assert.equal(install.installState, "staging");
 
     direct = new DatabaseSync(databasePath);
-    direct.exec("PRAGMA foreign_keys = ON;");
-    assert.deepEqual(verifyCatalogV3Schema(direct).tables, CATALOG_V3_TABLES);
-    const indexNames = direct.prepare(
+    const installedDatabase = direct;
+    installedDatabase.exec("PRAGMA foreign_keys = ON;");
+    assert.deepEqual(verifyCatalogV3Schema(installedDatabase).tables, CATALOG_V3_TABLES);
+    const indexNames = installedDatabase.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
     ).all().map((row) => Reflect.get(row, "name"));
     assert.equal(indexNames.includes("fingerprints_by_catalog_digest"), true);
     assert.equal(indexNames.includes("migration_aliases_by_asset"), true);
     assert.equal(indexNames.includes("auto_import_one_enabled_per_catalog"), true);
-    assert.throws(() => direct.prepare(`
+    assert.throws(() => installedDatabase.prepare(`
       INSERT INTO roots (
         catalog_id, root_id, label, configured_path, canonical_path,
         health, scan_state, watch_state
       ) VALUES (?, ?, ?, ?, ?, 'missing', 'unknown', 'disabled')
     `).run(createCatalogId(), createRootId(), "Other root", root, null));
-    direct.close();
+    installedDatabase.close();
     direct = undefined;
 
     const firstAssets = await client.writeV3AssetBatch({ catalogId, migrationId, assets: candidates });

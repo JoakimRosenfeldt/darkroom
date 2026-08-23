@@ -55,6 +55,8 @@ export function DevelopSidePanels({
           metadata={decoded.metadata}
           fileName={entry.name}
           profileId={entry.profileId}
+          formatId={entry.formatId}
+          formatAvailability={entry.formatAvailability}
         />
       ) : activePanel === "masking" ? (
         <MaskingPanel

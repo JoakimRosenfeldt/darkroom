@@ -43,7 +43,7 @@ function PhotoPageContent() {
             Photo not found in the current catalog.
           </p>
           <p className="text-xs text-lr-text-dim">
-            Re-import the source folder from the Library module.
+            Open or re-link the catalog from the Library module.
           </p>
         </main>
       </div>

@@ -1,12 +1,20 @@
 "use client";
 
 import { formatMetadataValue } from "@/lib/raw/utils";
+import {
+  getDecoderProvenanceLabel,
+  getFormatCapability,
+  getFormatLabelForEntry,
+} from "@/lib/formats/registry";
+import type { EntryFormatAvailability } from "@/lib/fs/types";
 import { IconInfo } from "@/components/shell/icons";
 
 interface MetadataPanelProps {
   metadata: Record<string, unknown>;
   fileName: string;
   profileId: string | null;
+  formatId?: string | null;
+  formatAvailability?: EntryFormatAvailability;
 }
 
 const CAPTURE_FIELDS: Array<{ key: string; label: string }> = [
@@ -65,6 +73,8 @@ export function MetadataPanel({
   metadata,
   fileName,
   profileId,
+  formatId = null,
+  formatAvailability,
 }: MetadataPanelProps) {
   const captureRows = CAPTURE_FIELDS.flatMap(({ key, label }) => {
     if (!(key in metadata)) {
@@ -77,6 +87,13 @@ export function MetadataPanel({
     "width" in metadata && "height" in metadata
       ? `${metadata.width} × ${metadata.height}`
       : null;
+  const decoderLabel = getDecoderProvenanceLabel(metadata.decoderProvenance);
+  const formatLabel = formatId
+    ? getFormatCapability(formatId)?.label ?? getFormatLabelForEntry(fileName, profileId)
+    : getFormatLabelForEntry(fileName, profileId);
+  const unavailableReason = formatAvailability?.status === "supported"
+    ? null
+    : formatAvailability?.reason ?? null;
 
   return (
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
@@ -90,7 +107,14 @@ export function MetadataPanel({
       <div className="flex-1 overflow-auto">
         <MetadataSection title="File">
           <MetadataRow label="File Name" value={fileName} />
-          <MetadataRow label="Format" value={profileId?.toUpperCase() ?? "—"} />
+          <MetadataRow
+            label="Format"
+            value={unavailableReason ? `${formatLabel} (Unavailable)` : formatLabel}
+          />
+          {unavailableReason ? (
+            <MetadataRow label="Availability" value={unavailableReason} />
+          ) : null}
+          {decoderLabel ? <MetadataRow label="Decoder" value={decoderLabel} /> : null}
           {dimensions ? (
             <MetadataRow label="Dimensions" value={dimensions} />
           ) : null}

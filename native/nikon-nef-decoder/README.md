@@ -34,6 +34,28 @@ The caller owns the timeout, concurrency limit, input path validation, output
 directory, and cleanup. A helper must not access the network or spawn another
 process.
 
+## Version 1 capability probe
+
+Electron may start the helper with `--probe` and no other arguments. A
+successful probe exits `0` and writes one compact JSON object to stdout:
+
+```json
+{"version":1,"helperVersion":"1.0.0","backend":"nikon-sdk","pixelProtocol":"rgb16le-v1","architecture":"arm64"}
+```
+
+`version` is the probe protocol version. `helperVersion` identifies the helper
+build, `backend` is `nikon-sdk` for a qualified native helper or
+`darkroom-test-mock` for the checked-in mock, `pixelProtocol` must be
+`rgb16le-v1`, and `architecture` must name the helper's actual process
+architecture. Probe output is bounded and parsed by Electron. A packaged native
+helper must also match the release manifest checksum supplied by Electron; a
+helper is not qualified merely because its executable path exists or because
+it labels itself native.
+
+The checked-in mock must always report `darkroom-test-mock` and is never native
+Nikon support. A native helper that reports another backend, protocol, or
+architecture is rejected.
+
 ## Successful output
 
 `pixels.bin` contains exactly the pixels described above. After that file is

@@ -21,12 +21,14 @@ import {
 } from "@/lib/library/archive";
 import type { Album } from "@/lib/catalog/types";
 import { useLibraryStore } from "@/stores/library-store";
+import { CatalogManager } from "@/components/catalog/CatalogManager";
 
 export function SidePanel() {
   const entries = useLibraryStore((state) => state.entries);
+  const catalogId = useLibraryStore((state) => state.catalogId);
   const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
-  const rootPath = useLibraryStore((state) => state.rootPath);
+  const catalogRecovery = useLibraryStore((state) => state.catalogRecovery);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const albums = useLibraryStore((state) => state.albums);
   const catalogView = useLibraryStore((state) => state.catalogView);
@@ -35,6 +37,7 @@ export function SidePanel() {
   const renameAlbum = useLibraryStore((state) => state.renameAlbum);
   const deleteAlbum = useLibraryStore((state) => state.deleteAlbum);
   const clearLibrary = useLibraryStore((state) => state.clearLibrary);
+  const openCatalogManager = useLibraryStore((state) => state.openCatalogManager);
 
   const [creatingAlbum, setCreatingAlbum] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
@@ -58,7 +61,7 @@ export function SidePanel() {
     () => buildFolderTree(libraryEntries),
     [libraryEntries],
   );
-  const hasImportedFolder = entries.length > 0 && !needsFolderAccess;
+  const hasImportedFolder = catalogId !== null && !needsFolderAccess;
 
   function handleCreateAlbum() {
     const id = createAlbum(newAlbumName);
@@ -147,9 +150,9 @@ export function SidePanel() {
             </ul>
           ) : (
             <p className="px-2 py-2 text-xs leading-5 text-lr-text-muted">
-              {needsFolderAccess
-                ? "Re-link the folder to browse your catalog."
-                : "Import a folder to browse your photos."}
+              {catalogRecovery ?? (needsFolderAccess
+                ? "Re-link the catalog root to browse your catalog."
+                : "Create a catalog to browse your photos.")}
             </p>
           )}
         </section>
@@ -269,13 +272,20 @@ export function SidePanel() {
         <div className="group border-t border-lr-border-subtle px-4 py-3">
           <div className="flex min-w-0 flex-col gap-1">
             <span className="truncate text-[11px] text-lr-text-muted">
-              {folderName ?? "No folder linked"}
+              {folderName ?? "No catalog open"}
             </span>
             <span className="truncate font-mono text-[10px] text-lr-text-faint">
-              {rootPath ?? "Import a folder to begin"}
+              {entries.length > 0 ? `${entries.length} assets` : "No assets indexed"}
             </span>
           </div>
           <div className="mt-2 flex items-center gap-3 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            <button
+              type="button"
+              onClick={openCatalogManager}
+              className="text-[11px] text-lr-text-muted transition-colors hover:text-lr-text"
+            >
+              Manage
+            </button>
             {folderName ? (
               <FolderPickerButton
                 mode="restore"
@@ -306,6 +316,7 @@ export function SidePanel() {
           onClose={() => setAlbumPendingDelete(null)}
         />
       ) : null}
+      <CatalogManager />
     </>
   );
 }

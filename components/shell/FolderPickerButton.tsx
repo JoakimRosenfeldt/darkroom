@@ -6,10 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import {
-  formatPickerError,
-  openPhotoFolderPicker,
-} from "@/lib/fs/access";
+import { formatPickerError } from "@/lib/fs/access";
 import { isElectronApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
@@ -41,15 +38,20 @@ function handlePickerFailure(
 }
 
 function startFolderPick(mode: "import" | "restore"): void {
-  void openPhotoFolderPicker()
-    .then((result) => {
-      useLibraryStore
-        .getState()
-        .importFromFolderPath(result.path, result.name, mode);
-    })
-    .catch((error) => {
-      handlePickerFailure(error, mode);
-    });
+  if (mode === "import") {
+    useLibraryStore.getState().openCatalogManager();
+    return;
+  }
+  const state = useLibraryStore.getState();
+  const target = state.catalogRoots.find((root) => root.health !== "online")
+    ?? state.catalogRoots[0];
+  if (!target) {
+    handlePickerFailure(new Error("No catalog root is available to relink."), mode);
+    return;
+  }
+  void state.relinkCatalogRoot(target.rootId).catch((error) => {
+    handlePickerFailure(error, mode);
+  });
 }
 
 function subscribeToDesktopApp(): () => void {

@@ -13,7 +13,6 @@ type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
-  rootPath: string | null;
   metadata: EntryMetadata;
   mirrorDocument: (
     document: DevelopDocument,
@@ -25,8 +24,7 @@ interface UseDevelopSettingsSyncOptions {
 
 interface PendingWrite {
   entryId: string;
-  rootPath: string | null;
-  relativePath: string;
+  entry: LibraryEntry;
   documentRevision: number;
   metadataRevision: number;
   document: DevelopDocument;
@@ -89,16 +87,13 @@ async function writeCaptured(captured: PendingWrite): Promise<void> {
   if (current.documentRevision !== current.persistedDocumentRevision) {
     captured.mirrorDocument(captured.document);
   }
-  if (captured.rootPath) {
-    if (!persistence.sidecarContentsKnown) return;
-    persistence.sidecarContents = await writeDevelopSidecar(
-      captured.rootPath,
-      captured.relativePath,
-      captured.document,
-      captured.metadata,
-      persistence.sidecarContents,
-    );
-  }
+  if (!persistence.sidecarContentsKnown) return;
+  persistence.sidecarContents = await writeDevelopSidecar(
+    captured.entry,
+    captured.document,
+    captured.metadata,
+    persistence.sidecarContents,
+  );
   persistence.failedWrite = null;
   useDevelopStore.getState().markPersisted(
     captured.entryId,
@@ -145,7 +140,6 @@ function scheduleWrite(captured: PendingWrite): void {
 
 export function useDevelopSettingsSync({
   entry,
-  rootPath,
   metadata,
   mirrorDocument,
   hydrateMetadata,
@@ -177,9 +171,7 @@ export function useDevelopSettingsSync({
     async function hydrate(): Promise<void> {
       await persistence.queue;
       try {
-        const sidecar = rootPath
-          ? await readDevelopSidecar(rootPath, entry.relativePath)
-          : null;
+        const sidecar = await readDevelopSidecar(entry);
         if (!active) return;
         persistence.sidecarContents = sidecar?.contents ?? null;
         persistence.sidecarContentsKnown = true;
@@ -228,13 +220,12 @@ export function useDevelopSettingsSync({
     };
   }, [
     activateEntry,
+    entry,
     entry.id,
-    entry.relativePath,
     hydrateEntry,
     hydrateMetadata,
     markMetadataHydrated,
     mirrorDocument,
-    rootPath,
     setSidecarStatus,
   ]);
 
@@ -251,7 +242,7 @@ export function useDevelopSettingsSync({
         metadataRevision === persistedMetadataRevision
       )
     ) return;
-    if (rootPath !== null && !persistence.sidecarContentsKnown) {
+    if (!persistence.sidecarContentsKnown) {
       if (documentRevision !== persistedDocumentRevision) {
         mirrorDocument(structuredClone(document));
       }
@@ -264,8 +255,7 @@ export function useDevelopSettingsSync({
     setStatusForEntry(entry.id, "saving");
     scheduleWrite({
       entryId: entry.id,
-      rootPath,
-      relativePath: entry.relativePath,
+      entry,
       documentRevision,
       metadataRevision,
       document: structuredClone(document),
@@ -274,12 +264,11 @@ export function useDevelopSettingsSync({
       ready: persistence.hydration,
     });
   }, [
+    entry,
     entry.id,
-    entry.relativePath,
     metadata.colorLabel,
     metadata.rating,
     mirrorDocument,
-    rootPath,
     document,
     documentRevision,
     metadataRevision,

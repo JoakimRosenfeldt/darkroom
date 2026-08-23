@@ -1,5 +1,6 @@
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { CropSettings, SourceSignature } from "@/lib/develop/types";
+import { assetCacheKey } from "@/lib/cache/asset-cache-key";
 
 export type SourceRenderMode = "source" | "crop-preview" | "export";
 
@@ -204,10 +205,12 @@ export function orientedToOutputUv(
 }
 
 export function sourceSignatureForEntry(
-  entry: Pick<LibraryEntry, "id" | "relativePath" | "size" | "lastModified">,
+  entry: Pick<LibraryEntry, "id" | "catalogId" | "assetRevision" | "relativePath" | "size" | "lastModified">,
 ): SourceSignature {
   return {
     entryId: entry.id,
+    catalogId: entry.catalogId,
+    assetRevision: entry.assetRevision,
     relativePath: entry.relativePath,
     size: entry.size,
     lastModified: entry.lastModified,
@@ -219,16 +222,25 @@ export function sourceSignaturesEqual(
   right: SourceSignature,
 ): boolean {
   return left.entryId === right.entryId &&
+    left.catalogId === right.catalogId &&
+    left.assetRevision === right.assetRevision &&
     left.relativePath === right.relativePath &&
     left.size === right.size &&
     left.lastModified === right.lastModified;
 }
 
 export function sourceSignatureKey(signature: SourceSignature): string {
+  if (signature.catalogId !== undefined && signature.assetRevision !== undefined) {
+    return assetCacheKey({
+      catalogId: signature.catalogId,
+      assetId: signature.entryId,
+      revision: signature.assetRevision,
+    }, "source");
+  }
   return [
     signature.entryId,
-    signature.relativePath,
     signature.size,
     signature.lastModified,
+    "source-legacy",
   ].join("\u001f");
 }

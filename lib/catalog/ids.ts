@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 type Brand<Value, Name extends string> = Value & {
   readonly __brand: Name;
 };
@@ -20,7 +18,7 @@ function parseId<Name extends string>(value: unknown, name: Name): Brand<string,
 }
 
 function createId<Name extends string>(value: string | undefined, name: Name): Brand<string, Name> {
-  return parseId(value ?? randomUUID(), name);
+  return parseId(value ?? globalThis.crypto.randomUUID(), name);
 }
 
 export function isCatalogId(value: unknown): value is CatalogId {

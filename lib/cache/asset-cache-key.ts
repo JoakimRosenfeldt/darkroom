@@ -1,8 +1,6 @@
-import type { AssetId, CatalogId } from "../catalog/ids.ts";
-
 export interface AssetCacheIdentity {
-  catalogId: CatalogId;
-  assetId: AssetId;
+  catalogId: string;
+  assetId: string;
   revision: number;
 }
 

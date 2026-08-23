@@ -1,11 +1,16 @@
 import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { assetCacheKey } from "./asset-cache-key";
 
 const CACHE_PREFIX = "darkroom-aspect:";
 const memoryCache = new Map<string, number>();
 
-function cacheKey(entry: Pick<LibraryEntry, "relativePath" | "lastModified">): string {
-  return `${entry.relativePath}:${entry.lastModified}`;
+function cacheKey(entry: Pick<LibraryEntry, "catalogId" | "id" | "assetRevision">): string {
+  return assetCacheKey({
+    catalogId: entry.catalogId,
+    assetId: entry.id,
+    revision: entry.assetRevision,
+  }, "aspect");
 }
 
 function persistKey(entry: LibraryEntry): string {

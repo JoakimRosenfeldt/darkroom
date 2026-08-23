@@ -1,13 +1,15 @@
 import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { decodeEntry } from "@/lib/raw/decode";
+import { assetCacheKey, type AssetCacheIdentity } from "./asset-cache-key";
 
 const CACHE_PREFIX = "darkroom-thumb:";
 const MAX_MEMORY_THUMBNAILS = 300;
 
 export interface ThumbnailCacheKey {
-  relativePath: string;
-  lastModified: number;
+  catalogId: AssetCacheIdentity["catalogId"];
+  assetId: AssetCacheIdentity["assetId"];
+  revision: number;
   thumbnail: boolean;
 }
 
@@ -64,7 +66,7 @@ function waitForCaller(
 }
 
 function buildCacheKey(key: ThumbnailCacheKey): string {
-  return `${CACHE_PREFIX}${key.relativePath}:${key.lastModified}:${key.thumbnail ? "thumb" : "full"}`;
+  return `${CACHE_PREFIX}${assetCacheKey(key, key.thumbnail ? "thumb" : "full")}`;
 }
 
 function rememberThumbnail(cacheKey: string, blob: Blob): void {
@@ -116,8 +118,9 @@ export async function loadThumbnailBlob(
   options: LoadThumbnailOptions = {},
 ): Promise<Blob> {
   const key = {
-    relativePath: entry.relativePath,
-    lastModified: entry.lastModified,
+    catalogId: entry.catalogId,
+    assetId: entry.id,
+    revision: entry.assetRevision,
     thumbnail: true,
   };
   const cacheKey = buildCacheKey(key);

@@ -1,4 +1,5 @@
 import type { DecodeOptions, DecodedImage, ImageProfile } from "../types";
+import { getFormatExtensionsForProfile, getFormatCapabilityForFileName } from "@/lib/formats/registry";
 import { decodeEmbeddedThumbnail, decodeWithLibRaw } from "../libraw-client";
 
 const PREVIEW_MAX_EDGE = 2_560;
@@ -50,10 +51,10 @@ async function decodeDevelopedNef(
   let fallbackMessage = "Nikon decoder is unavailable.";
   const api = typeof window === "undefined" ? undefined : window.darkroom;
 
-  if (api && options.relativePath) {
+  if (api && options.assetRequest) {
     try {
-      const result = await api.decodeNef({
-        relativePath: options.relativePath,
+      const result = await api.catalogDecodeAsset(options.assetRequest, {
+        kind: "nef",
         mode: options.fullResolution ? "full" : "preview",
         maxEdge: Math.min(options.maxEdge ?? PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE),
       });
@@ -65,7 +66,7 @@ async function decodeDevelopedNef(
           bits: result.bitDepth,
           colors: result.channels,
           metadata: {
-            decoderProvenance: "nikon-sdk",
+            decoderProvenance: result.provenance,
             developSource: "native",
             protocolVersion: result.version,
             sourceWidth: result.width,
@@ -106,8 +107,9 @@ async function decodeDevelopedNef(
 
 export const nefProfile: ImageProfile = {
   id: "nef",
-  extensions: [".nef"],
-  detect: (file) => file.name.toLowerCase().endsWith(".nef"),
+  extensions: getFormatExtensionsForProfile("nef"),
+  detect: (file) =>
+    getFormatCapabilityForFileName(file.name)?.profileId === "nef",
   decode: (input, options: DecodeOptions = {}) =>
     options.fullResolution ||
     (options.thumbnail && options.rawSource === "developed")

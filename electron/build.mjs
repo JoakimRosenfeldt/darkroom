@@ -1,10 +1,13 @@
 import * as esbuild from "esbuild";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildFileTransactionHelper } from "../native/file-transaction-helper/build.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
 const outDir = path.join(rootDir, "electron-dist");
+
+await buildFileTransactionHelper(outDir);
 
 const shared = {
   bundle: true,

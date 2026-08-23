@@ -127,10 +127,10 @@ export function DevelopCanvas({
     const mask = session?.document.settings.masking.masks.find((item) => item.id === selectedMaskId);
     return mask?.components.find((component) => component.id === selectedComponentId) ?? null;
   });
-  const { entryId, relativePath, size, lastModified } = sourceSignature;
+  const { entryId, catalogId, assetRevision, relativePath, size, lastModified } = sourceSignature;
   const stableSourceSignature = useMemo(
-    () => ({ entryId, relativePath, size, lastModified }),
-    [entryId, relativePath, size, lastModified],
+    () => ({ entryId, catalogId, assetRevision, relativePath, size, lastModified }),
+    [entryId, catalogId, assetRevision, relativePath, size, lastModified],
   );
 
   useEffect(() => {

@@ -49,7 +49,6 @@ export interface ExportBatchSummary {
 export interface ExportRunnerOptions {
   entries: LibraryEntry[];
   metadata: Record<string, EntryMetadata>;
-  rootPath: string | null;
   destinationToken: string;
   options: Omit<ExportJobOptions, "destinationToken">;
   onProgress?: (progress: ExportProgress) => void;
@@ -116,7 +115,6 @@ function getMetadata(
 async function resolveDocument(
   entry: LibraryEntry,
   metadata: EntryMetadata,
-  rootPath: string | null,
 ): Promise<DevelopDocument> {
   const current = useDevelopStore.getState();
   if (current.activeEntryId === entry.id) {
@@ -124,9 +122,7 @@ async function resolveDocument(
     if (session) return structuredClone(session.document);
   }
 
-  const sidecar = rootPath
-    ? await readDevelopSidecar(rootPath, entry.relativePath)
-    : null;
+  const sidecar = await readDevelopSidecar(entry);
   return resolveDevelopDocument(sidecar, metadata);
 }
 
@@ -153,7 +149,6 @@ export async function runExportBatch(
   const {
     entries,
     metadata,
-    rootPath,
     destinationToken,
     options,
     onProgress,
@@ -183,7 +178,7 @@ export async function runExportBatch(
       let pixels: RawExportRenderResult | null = null;
       try {
         const entryMetadata = getMetadata(metadata, entry);
-        const developDocument = await resolveDocument(entry, entryMetadata, rootPath);
+        const developDocument = await resolveDocument(entry, entryMetadata);
         exportImage = await loadDevelopExportImage(entry);
 
         progress("rendering");

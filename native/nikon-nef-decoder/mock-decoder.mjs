@@ -85,6 +85,16 @@ function makeGradient(width, height) {
 }
 
 async function main() {
+  if (process.argv.slice(2).length === 1 && process.argv[2] === "--probe") {
+    process.stdout.write(`${JSON.stringify({
+      version: VERSION,
+      helperVersion: "mock-1.0.0",
+      backend: "darkroom-test-mock",
+      pixelProtocol: "rgb16le-v1",
+      architecture: process.arch,
+    })}\n`);
+    return;
+  }
   let args;
   try {
     args = parseArguments(process.argv.slice(2));

@@ -160,6 +160,8 @@ export interface RadialGradientMaskComponent {
 
 export interface SourceSignature {
   entryId: string;
+  catalogId?: string;
+  assetRevision?: number;
   relativePath: string;
   size: number;
   lastModified: number;
