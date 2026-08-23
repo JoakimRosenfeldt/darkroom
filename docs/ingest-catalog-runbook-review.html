@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review: ingest and catalog rework runbook</title>
+<style>
+  :root {
+    --bg: #0f1113;
+    --panel: #16191c;
+    --panel-2: #1c2024;
+    --line: #2a2f35;
+    --text: #e6e8ea;
+    --muted: #9aa3ad;
+    --accent: #7fb5ff;
+    --red: #ff8a80;
+    --amber: #ffcc80;
+    --green: #a5d6a7;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fbfbfa; --panel: #ffffff; --panel-2: #f4f5f6; --line: #e0e2e5;
+      --text: #16181a; --muted: #5c646d; --accent: #1a5fb4;
+      --red: #b3261e; --amber: #8a5a00; --green: #1e6b32;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 40px; }
+  .eyebrow { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 14px; letter-spacing: -.02em; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 68ch; }
+  h2 { font-size: 22px; margin: 48px 0 14px; letter-spacing: -.01em; }
+  h3 { font-size: 17px; margin: 30px 0 8px; }
+  p, li { max-width: 78ch; }
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+  code { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .chip { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; background: var(--panel); }
+  .verdict { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 20px 22px; margin: 8px 0 0; }
+  .verdict p:last-child { margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: none; }
+  .finding { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; margin: 16px 0; }
+  .finding.blocker { border-left: 3px solid var(--red); }
+  .finding.major { border-left: 3px solid var(--amber); }
+  .finding.minor { border-left: 3px solid var(--line); }
+  .finding h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .tag { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; border-radius: 4px; padding: 2px 7px; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
+  .tag.blocker { color: var(--red); border-color: var(--red); }
+  .tag.major { color: var(--amber); border-color: var(--amber); }
+  .fix { border-top: 1px dashed var(--line); margin-top: 14px; padding-top: 12px; }
+  .fix strong { color: var(--accent); }
+  pre { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  .good { color: var(--green); }
+  .toc { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; }
+  .toc ol { margin: 0; }
+  .toc a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .toc a:hover { border-color: var(--accent); color: var(--accent); }
+  footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  @media (max-width: 620px) {
+    .wrap { padding: 32px 16px 64px; }
+    h1 { font-size: 27px; }
+    table { font-size: 13.5px; }
+    th, td { padding: 8px 8px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Darkroom / plan review</p>
+  <h1>Ingest and catalog rework runbook</h1>
+  <p class="lede">The architecture is right and the runtime it assumes actually works — I ran it. Three holes will bite during execution, and the verification burden it sets for itself has no harness to run on.</p>
+  <div class="meta">
+    <span class="chip">Reviewed against working tree at f92f2d4</span>
+    <span class="chip">13 steps, 13 issues</span>
+    <span class="chip">3 blockers, 6 significant, 4 minor</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <p><strong>Verdict: proceed, after patching three gaps.</strong> Option A (per-catalog SQLite in a worker) is the correct call and I verified it runs in this exact Electron build. The identity model, the Electron-owned path authority, the five safe stages, and watcher-as-hint are all sound and all match real seams in the current code — the baseline evidence table is accurate, not decorative.</p>
+  <p>What is missing is not architecture. It is three places where a step depends on state no earlier step produces: duplicate detection needs fingerprints nothing backfills, catalog restore can silently orphan files already written to disk, and issue <span class="mono">#129</span> — the catalog model itself — is absent from the issue map while steps 1–4 deliver its entire close gate.</p>
+</div>
+
+<h2>Contents</h2>
+<div class="toc">
+<ol>
+  <li><a href="#verified">What I verified</a></li>
+  <li><a href="#blockers">Blockers</a></li>
+  <li><a href="#significant">Significant gaps</a></li>
+  <li><a href="#minor">Smaller notes</a></li>
+  <li><a href="#right">What the plan gets right</a></li>
+  <li><a href="#do">What I would change before step 1</a></li>
+</ol>
+</div>
+
+<h2 id="verified">What I verified</h2>
+<p>I ran the runtime probe rather than trusting the plan's premise, and checked every baseline claim against the checked-out files.</p>
+
+<p>Live probe, launched with the repo's own Electron binary:</p>
+<pre>{
+  "node": "24.18.0",
+  "electron": "43.1.0",
+  "chrome": "150.0.7871.47",
+  "sqlite": ["DatabaseSync", "StatementSync", "Session", "constants", "backup"],
+  "query": [{ "a": 1 }],
+  "backupFn": "function",
+  "worker": "worker-sqlite-ok"
+}</pre>
+<p><code>node:sqlite</code> is present in Electron 43's main process, the online <code>backup</code> API the plan's step 13 rests on exists, and a worker thread can open its own database. The foundation the whole plan sits on is real.</p>
+
+<table>
+<thead><tr><th>Plan claim</th><th>Checked</th><th>Result</th></tr></thead>
+<tbody>
+  <tr><td>Electron 43 embeds Node 24; build target is stale</td><td><code>electron/build.mjs:12</code>, <code>package.json</code></td><td class="good">Correct. Target is <code>node20</code>, runtime is 24.18.0, <code>@types/node</code> is ^20.</td></tr>
+  <tr><td>Entry ID is an encoded relative path</td><td><code>lib/fs/types.ts:23</code></td><td class="good">Correct. <code>encodeURIComponent(relativePath)</code>.</td></tr>
+  <tr><td>Catalog v2 has no asset rows</td><td><code>lib/catalog/types.ts</code></td><td class="good">Correct. One <code>rootPath</code>, metadata keyed by entry ID, albums, archive.</td></tr>
+  <tr><td>Renderer carries native authority</td><td><code>electron/preload.ts</code>, 11 caller files</td><td class="good">Correct, and worse than stated: <code>lib/fs/platform.ts:13</code> does renderer-side path arithmetic with a guessed separator.</td></tr>
+  <tr><td>Catalog persistence is unsafe</td><td><code>electron/catalog-store.ts:30</code></td><td class="good">Correct. Plain <code>writeFile</code>, no temp-and-rename. Catalog file is keyed by SHA-256 of the root path, so path is identity at catalog level too.</td></tr>
+  <tr><td>13 requested issues and #89–#98 exist</td><td><code>gh issue view</code></td><td class="good">All present, titles match the plan's descriptions.</td></tr>
+  <tr><td>Formats fixed to NEF/JPEG/PNG/WebP</td><td><code>lib/fs/types.ts:10</code></td><td class="good">Correct.</td></tr>
+</tbody>
+</table>
+
+<h2 id="blockers">Blockers</h2>
+
+<div class="finding blocker">
+  <h3><span class="tag blocker">Blocker 1</span> Step 7 needs fingerprints that nothing produces</h3>
+  <p>Step 7 requires comparing "incoming files with catalog assets" using SHA-256 as proof. But the migration reference says catalog-side hashing is lazy: <em>"When root is online, scan and attach observations. Hash lazily."</em> Nothing between step 2 and step 7 fills the <code>fingerprints</code> table.</p>
+  <p>So on a freshly migrated catalog, the first import either finds zero catalog-side duplicates — the feature silently does nothing, which is the failure mode users will not report — or it hashes the entire library inline, meaning a 40k-NEF library reads roughly a terabyte before the import dialog can render its review step.</p>
+  <div class="fix"><strong>Fix:</strong> add a resumable background fingerprint operation to step 2 or a step 7a, with its own progress and cancel, prioritized by the roots involved in the pending import. State the interim behavior in the UI: duplicate checking is partial until backfill completes, with a count of unhashed assets. Do not let step 7 close <span class="mono">#21</span> while the answer depends on invisible backfill progress.</p></div>
+</div>
+
+<div class="finding blocker">
+  <h3><span class="tag blocker">Blocker 2</span> Restore can orphan files already on disk</h3>
+  <p>The <code>operations</code> and <code>operation_items</code> journals live inside the catalog database. Step 13 replaces that database wholesale during Restore, Replace, and Merge. The plan requires a validated safety backup first, which protects the catalog — it does nothing for the filesystem.</p>
+  <p>Concrete failure: a Move batch reaches <span class="mono">destination-published</span> for 300 of 500 files, the user restores yesterday's backup, and those 300 files now exist at their new location with no catalog row and no journal entry describing them. The plan's own invariant — "never leaves a partial pointer" — is broken by its own admin flow. A paused Auto Import queue has the same shape.</p>
+  <div class="fix"><strong>Fix:</strong> two rules in R6. First, refuse Replace and Restore while any resumable operation exists; require drain or explicit cancel, reusing step 4's writer-drain path. Second, after any restore, force a reconciliation pass over every root before the catalog goes live, so post-backup filesystem work is re-observed instead of lost. Add "restore with in-flight Move journal" to the R8 crash-recovery row.</p></div>
+</div>
+
+<div class="finding blocker">
+  <h3><span class="tag blocker">Blocker 3</span> Issue #129 is missing from the issue map</h3>
+  <p><span class="mono">#129 [Parity] Catalog model</span> is open and its completion criteria are, almost verbatim, what steps 1–4 deliver: catalogs round-trip without lost ratings/labels/Develop/albums, source roots exist independently of last-folder settings, users can create/open/export/import/switch/repair, a missing root does not delete metadata. The plan assigns all of that to <span class="mono">#26</span> and never names <span class="mono">#129</span>.</p>
+  <p>Two bad outcomes. The program hits its own finish line with <span class="mono">#129</span> still open and nothing left to build for it, or someone later opens <span class="mono">#129</span> as fresh work and proposes a second catalog contract on top of v3.</p>
+  <div class="fix"><strong>Fix:</strong> add <span class="mono">#129</span> to the issue map with step 4 as owner and a <code>Closes #129</code> in PR 4 (its export/import criterion may push the close to PR 13 — decide which, and say so). While there: <span class="mono">#130</span> Smart Previews and <span class="mono">#132</span> deleted-photo recovery both write to this schema. <span class="mono">#132</span> wants a deletion ledger with retention state; <code>audit_log</code> is not that, and the asset <code>health</code> enum has no deleted state. Leaving room now costs one column; retrofitting costs a migration.</p></div>
+</div>
+
+<h2 id="significant">Significant gaps</h2>
+
+<div class="finding major">
+  <h3><span class="tag major">4</span> No harness exists for the proof the plan demands</h3>
+  <p>Step 9's gate is forced termination after each of five safe stages, for Rename, Move, Copy, and DNG. That is twenty kill-and-reopen runs, plus cross-volume, read-only destination, XMP mismatch, and changed-source cases. Step 6 wants per-architecture packaged probes. Step 12 wants restart mid-burst.</p>
+  <p>The repo has three <code>node:test</code> files (<code>crop-geometry</code>, <code>nef-decoder-service</code>, <code>raw-utils</code>) and <code>scripts/capture-screenshots.mjs</code>, which AGENTS.md already marks stale. R8 says "verify native behavior in the full Electron app," i.e. by hand, every PR. That is where this plan will actually stall.</p>
+  <div class="fix"><strong>Fix:</strong> fold a scenario harness into step 1, before the schema. Two pieces: fault-injection points named after the five safe stages so recovery is provoked in-process instead of by SIGKILL, and a headless Electron runner over the already-installed Playwright dependency. Then step 9's twenty cases are one table-driven test file rather than a day of manual work per PR.</p></div>
+</div>
+
+<div class="finding major">
+  <h3><span class="tag major">5</span> One WAL connection serializes maintenance against reads</h3>
+  <p>R1 specifies WAL with one worker connection, and gives that same worker backup, <code>integrity_check</code>, <code>foreign_key_check</code>, and compact. WAL's whole point is concurrent readers; a single connection gives that up. "Main stays responsive" is true and beside the point — the window paints, but every grid query queues behind a multi-minute integrity check on a large catalog.</p>
+  <div class="fix"><strong>Fix:</strong> open a second read-only connection for queries, or run maintenance in its own worker against the same file. Cheap now, invasive after step 4 hardens the worker protocol.</div>
+</div>
+
+<div class="finding major">
+  <h3><span class="tag major">6</span> <code>node:sqlite</code> is experimental and unpinned</h3>
+  <p>It works today — I confirmed it above — but it is still an experimental API in Node 24, and Electron majors move Node under you. The Decisions branch covers DNG licensing, Nikon redistribution, network Move, and backup retention, and says nothing about this. It is the single dependency the entire program rests on.</p>
+  <div class="fix"><strong>Fix:</strong> add a Decisions row. The worker request protocol from step 1 is already the adapter seam, so record that <code>better-sqlite3</code> is the fallback and that the seam is what keeps the swap cheap. The repo already ships native modules via <code>asarUnpack</code>, so the fallback is viable, just not free.</div>
+</div>
+
+<div class="finding major">
+  <h3><span class="tag major">7</span> Renderer read-model scale is undecided</h3>
+  <p>Step 4 says "load persisted assets immediately," and today <code>stores/library-store.ts</code> (950 lines) holds every entry in memory. The plan never states a catalog size target, a windowing contract, or a query API — yet step 3 freezes the IPC shape that decides it. At 100k assets this ships every row across the bridge on open.</p>
+  <div class="fix"><strong>Fix:</strong> pick a target size now and give <code>DarkroomLibrary</code> a paged/filtered asset query beside the catalog methods. <span class="mono">#173</span> owns the indexing work, but the contract that makes it possible is decided in step 3.</div>
+</div>
+
+<div class="finding major">
+  <h3><span class="tag major">8</span> Five steps are too big for the plan's own one-PR rule</h3>
+  <p>The plan says a larger PR hides failure boundaries, then puts schema plus migration (2), the full IPC rewrite (3), the transaction engine (9), the entire import UI with presets (10), and the whole admin suite (13) in one PR each. Realistically several thousand lines apiece.</p>
+  <div class="fix"><strong>Fix:</strong> relax the rule from one PR per step to one PR per provable invariant, and pre-split the five. Step 10 splits cleanly at preset CRUD / template preview / execution; step 13 at backup+validate / optimize / export-import-restore.</div>
+</div>
+
+<div class="finding major">
+  <h3><span class="tag major">9</span> Cache re-keying has no migration or eviction story</h3>
+  <p>Step 2 moves cache identity to <code>catalogId:assetId:revision:variant</code>. Today's entries are keyed by <code>relativePath</code> and <code>lastModified</code> in IndexedDB (<code>lib/cache/aspect-ratio-cache.ts</code>, <code>develop-image-cache.ts</code>). Every existing thumbnail becomes unreachable but not deleted, and the plan defines no purge for deleted assets or removed catalogs either. Cache grows forever.</p>
+  <div class="fix"><strong>Fix:</strong> one line in step 2's actions — drop the legacy IndexedDB stores on first v3 activation — plus a catalog-scoped cache eviction in step 4's close path.</div>
+</div>
+
+<h2 id="minor">Smaller notes</h2>
+<ul>
+  <li><strong>Legacy cleanup has no owner.</strong> R7 says keep legacy files "until user confirmation." No step defines who asks or when. Default: the JSON stays forever, which is safe but permanently confusing. Give it to step 4.</li>
+  <li><strong>No undo for Rename/Move/Copy.</strong> <span class="mono">#165</span> exists and is out of scope, but the operations journal is exactly the thing that would make undo possible. Worth one sentence saying whether the frozen plan is retained long enough to reverse.</li>
+  <li><strong>Auto Import stops when the catalog is not active.</strong> Implied by "one enabled active-catalog rule" plus step 4's watcher teardown. True and defensible, but users will read "watched folder" as always-on. State it as a release-one limit in the UI copy, not just the schema.</li>
+  <li><strong>Step 6's parallelism is thinner than it looks.</strong> It is marked parallel after step 3, but its format registry is what step 5's scan and step 7's candidate narrowing both read. Running it truly in parallel means steps 5 and 7 code against a registry that is still moving.</li>
+</ul>
+
+<h2 id="right">What the plan gets right</h2>
+<ul>
+  <li><strong>Option A is the correct choice</strong>, and the rejection of B is well argued — atomic JSON bundles do mean reimplementing transactions, indexes, and compaction in application code.</li>
+  <li><strong>Identity before features.</strong> Stable IDs land in step 2, before anything mutates a file. The alternative ordering is how this kind of rework fails.</li>
+  <li><strong>The five safe stages are the right decomposition</strong>, and pairing them with "publish by atomic rename, apply catalog after publish, clean source last" gives a genuinely recoverable Move.</li>
+  <li><strong>"Watcher events are hints, reconciliation proves state"</strong> is the one rule that keeps filesystem watching from corrupting a catalog. It is stated early and repeated where it matters.</li>
+  <li><strong>Capability registry over capability claims.</strong> Refusing to let a manifest edit promote camera support without sample output, and refusing to let the simulated Nikon helper carry a native label in production, are the two rules that make <span class="mono">#134</span> and <span class="mono">#135</span> closable at all.</li>
+  <li><strong>The Refs/Closes protocol is precise</strong> — earlier PRs use Refs, the last proven PR closes, dependency issues get their own line. This is the part most plans hand-wave.</li>
+  <li><strong>Baseline evidence is accurate.</strong> Every row I checked pointed at a real seam in the current code.</li>
+</ul>
+
+<h2 id="do">What I would change before step 1</h2>
+<ol>
+  <li>Add the fingerprint backfill operation and decide what duplicate detection reports while it is incomplete.</li>
+  <li>Add the quiesce-and-reconcile rules to R6, and a restore-with-in-flight-journal row to R8.</li>
+  <li>Add <span class="mono">#129</span> to the issue map; leave schema room for <span class="mono">#132</span>'s deletion ledger.</li>
+  <li>Move the scenario harness into step 1 and make the safe stages fault-injectable.</li>
+  <li>Add the second read connection, and a <code>node:sqlite</code> row in Decisions naming the fallback.</li>
+  <li>Decide the catalog size target and put a paged asset query in the step 3 IPC contract.</li>
+</ol>
+<p>Items 1–3 change what gets built. Items 4–6 change what it costs to build. None of them change the architecture.</p>
+
+<footer>
+  Reviewed against the working tree at <span class="mono">f92f2d4</span>. Runtime probe run with the repo's own Electron 43.1.0 binary. Issue states from <span class="mono">gh</span> at review time.
+</footer>
+
+</div>
+</body>
+</html>

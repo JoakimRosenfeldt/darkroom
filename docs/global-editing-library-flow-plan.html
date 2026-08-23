@@ -1,0 +1,1885 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agent execution plan for Darkroom's global editing library flow rework across 23 GitHub issues.">
+  <title>Implement Darkroom's global editing library flow rework</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f1eb;
+      --surface: #fffdf9;
+      --surface-2: #f8f5ef;
+      --ink: #202421;
+      --muted: #626963;
+      --line: #d6d4cc;
+      --line-strong: #b9bbb2;
+      --accent: #176a63;
+      --accent-dark: #0f514c;
+      --accent-soft: #dff0ec;
+      --blue: #315f87;
+      --blue-soft: #e4edf5;
+      --amber: #895918;
+      --amber-soft: #f6ead4;
+      --red: #873b36;
+      --red-soft: #f6e5e1;
+      --green: #356744;
+      --green-soft: #e3efe6;
+      --code: #282b29;
+      --code-ink: #f3f2ec;
+      --shadow: 0 1px 2px rgb(29 34 30 / 7%), 0 8px 24px rgb(29 34 30 / 4%);
+      --radius: 11px;
+      --content: 1220px;
+      --nav: 240px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.58 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-rendering: optimizeLegibility;
+    }
+    a {
+      color: var(--accent-dark);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+    a:hover { text-decoration-thickness: 2px; }
+    :focus-visible { outline: 3px solid #59a99f; outline-offset: 3px; }
+    h1, h2, h3, h4 {
+      margin: 0;
+      color: var(--ink);
+      line-height: 1.2;
+      letter-spacing: -.025em;
+    }
+    h1 { max-width: 900px; font-size: clamp(2.3rem, 5vw, 4.5rem); }
+    h2 { margin-top: 4.6rem; font-size: clamp(1.75rem, 3vw, 2.4rem); }
+    h3 { margin-top: 2.4rem; font-size: 1.3rem; }
+    h4 { margin-top: 1.35rem; font-size: 1rem; letter-spacing: -.01em; }
+    p { margin: .72rem 0; }
+    ul, ol { margin: .68rem 0 1rem; padding-left: 1.35rem; }
+    li + li { margin-top: .42rem; }
+    code, pre, .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+    }
+    code {
+      border-radius: 4px;
+      background: #ebe9e2;
+      padding: .1em .32em;
+    }
+    pre {
+      overflow: auto;
+      margin: 1rem 0;
+      border: 1px solid #3d433f;
+      border-radius: 9px;
+      background: var(--code);
+      color: var(--code-ink);
+      padding: 1rem;
+      line-height: 1.5;
+    }
+    pre code { background: transparent; padding: 0; }
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: .7rem;
+      left: .7rem;
+      translate: 0 -200%;
+      border-radius: 6px;
+      background: var(--ink);
+      color: white;
+      padding: .55rem .8rem;
+    }
+    .skip-link:focus { translate: 0; }
+    .masthead {
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(120deg, rgb(23 106 99 / 9%), transparent 42%),
+        var(--surface);
+    }
+    .masthead-inner {
+      width: min(calc(100% - 2rem), var(--content));
+      margin: 0 auto;
+      padding: clamp(3.5rem, 8vw, 6.7rem) 0 3.6rem;
+    }
+    .eyebrow {
+      margin: 0 0 1rem;
+      color: var(--accent-dark);
+      font-size: .77rem;
+      font-weight: 760;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .dek {
+      max-width: 850px;
+      margin: 1.25rem 0 0;
+      color: #475049;
+      font-size: clamp(1.04rem, 2vw, 1.25rem);
+      line-height: 1.55;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .55rem;
+      margin-top: 1.7rem;
+    }
+    .pill, .tag {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: #4f5751;
+      font-size: .76rem;
+      font-weight: 680;
+      line-height: 1;
+      padding: .42rem .65rem;
+    }
+    .pill.accent, .tag.accent {
+      border-color: #a7cec8;
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: var(--nav) minmax(0, 1fr);
+      gap: clamp(2rem, 5vw, 4rem);
+      width: min(calc(100% - 2rem), var(--content));
+      margin: 0 auto;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow: auto;
+      padding: 2.4rem .1rem 2rem 0;
+    }
+    .toc h2 {
+      margin: 0 0 .75rem;
+      color: var(--muted);
+      font-size: .74rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .toc ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .toc li + li { margin-top: .08rem; }
+    .toc a {
+      display: block;
+      border-left: 2px solid transparent;
+      color: #555d57;
+      padding: .34rem .52rem;
+      text-decoration: none;
+    }
+    .toc a:hover {
+      border-left-color: var(--accent);
+      color: var(--ink);
+      background: rgb(255 255 255 / 45%);
+    }
+    main { min-width: 0; padding: 0 0 6rem; }
+    section { scroll-margin-top: 1.4rem; }
+    .section-intro {
+      max-width: 820px;
+      margin: .7rem 0 1.4rem;
+      color: var(--muted);
+      font-size: 1.01rem;
+    }
+    .callout {
+      margin: 1.2rem 0;
+      border: 1px solid #a7cec8;
+      border-left: 5px solid var(--accent);
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+      padding: .95rem 1.05rem;
+    }
+    .callout.warn {
+      border-color: #d7ba89;
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+    }
+    .callout.danger {
+      border-color: #d8a7a2;
+      border-left-color: var(--red);
+      background: var(--red-soft);
+    }
+    .callout p:first-child, .callout h3:first-child, .callout h4:first-child { margin-top: 0; }
+    .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1.15rem 0;
+    }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 1.05rem;
+      box-shadow: var(--shadow);
+    }
+    .card h3, .card h4 { margin-top: 0; }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1rem 0 1.35rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .91rem;
+    }
+    caption {
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+      color: #4f5751;
+      padding: .7rem .82rem;
+      font-size: .81rem;
+      font-weight: 720;
+      text-align: left;
+    }
+    th, td {
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      padding: .76rem .82rem;
+      text-align: left;
+    }
+    th {
+      background: var(--surface-2);
+      color: #454c47;
+      font-size: .75rem;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td ul { margin-top: 0; margin-bottom: 0; }
+    .step {
+      display: grid;
+      grid-template-columns: 100px minmax(0, 1fr);
+      gap: 1.05rem;
+      margin: 1rem 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 1.05rem;
+      box-shadow: var(--shadow);
+    }
+    .step-index {
+      color: var(--accent-dark);
+      font-size: .76rem;
+      font-weight: 780;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .step h3 { margin-top: 0; }
+    .step .goal {
+      color: var(--muted);
+      font-size: .92rem;
+    }
+    .gate {
+      margin-top: .8rem;
+      border-left: 4px solid var(--green);
+      background: var(--green-soft);
+      color: #2e5639;
+      padding: .7rem .8rem;
+      font-size: .89rem;
+    }
+    .load {
+      margin: .75rem 0;
+      border-left: 3px solid var(--blue);
+      background: var(--blue-soft);
+      color: #31536f;
+      padding: .55rem .7rem;
+      font-size: .86rem;
+    }
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 42px 1.15fr 42px 1fr;
+      gap: .4rem;
+      align-items: stretch;
+      margin: 1.3rem 0;
+    }
+    .architecture .module {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      padding: .95rem;
+      box-shadow: var(--shadow);
+    }
+    .architecture .arrow {
+      display: grid;
+      place-items: center;
+      color: #7c837d;
+      font-size: 1.35rem;
+      font-weight: 800;
+    }
+    .architecture h3 { margin-top: 0; font-size: 1.04rem; }
+    .architecture ul { font-size: .86rem; }
+    .stage-list {
+      margin: 1rem 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: stage;
+    }
+    .stage-list li {
+      display: grid;
+      grid-template-columns: 2.2rem minmax(150px, .62fr) minmax(240px, 1.38fr);
+      gap: .65rem;
+      align-items: start;
+      margin: 0;
+      border-bottom: 1px solid var(--line);
+      padding: .7rem .15rem;
+      counter-increment: stage;
+    }
+    .stage-list li::before {
+      content: counter(stage, decimal-leading-zero);
+      color: var(--accent);
+      font: 700 .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .stage-list li:last-child { border-bottom: 0; }
+    .stage-list strong { line-height: 1.35; }
+    .stage-list span { color: var(--muted); font-size: .88rem; }
+    details.reference {
+      margin: 1rem 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgb(255 255 255 / 38%);
+      overflow: clip;
+    }
+    details.reference > summary {
+      cursor: pointer;
+      background: var(--surface-2);
+      padding: .9rem 1rem;
+      font-weight: 750;
+      list-style-position: inside;
+    }
+    .reference-body { padding: .2rem 1rem 1rem; }
+    .issue-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: .9rem;
+      margin: 1rem 0;
+    }
+    .issue {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      padding: .95rem;
+      box-shadow: var(--shadow);
+    }
+    .issue h3 { margin: 0; font-size: 1.1rem; }
+    .issue h4 {
+      margin: .9rem 0 .22rem;
+      color: #4a514c;
+      font-size: .7rem;
+      letter-spacing: .075em;
+      text-transform: uppercase;
+    }
+    .issue p, .issue li { font-size: .89rem; }
+    .issue ul { margin-bottom: .45rem; }
+    .checklist {
+      padding-left: 0;
+      list-style: none;
+    }
+    .checklist li {
+      position: relative;
+      padding-left: 1.55rem;
+    }
+    .checklist li::before {
+      content: "□";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+      font-weight: 800;
+    }
+    .small { color: var(--muted); font-size: .86rem; }
+    footer {
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .footer-inner {
+      width: min(calc(100% - 2rem), var(--content));
+      margin: 0 auto;
+      padding: 2rem 0 3rem;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+    @media (max-width: 1000px) {
+      .shell { grid-template-columns: 1fr; }
+      .toc { position: static; max-height: none; padding-bottom: 0; }
+      .toc ol { columns: 2; }
+      .toc li { break-inside: avoid; }
+      .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      body { font-size: 14px; }
+      .masthead-inner, .shell, .footer-inner { width: min(calc(100% - 1.2rem), var(--content)); }
+      .grid, .grid.three, .issue-grid { grid-template-columns: 1fr; }
+      .step { grid-template-columns: 1fr; gap: .3rem; }
+      .architecture { grid-template-columns: 1fr; }
+      .architecture .arrow { rotate: 90deg; min-height: 26px; }
+      .stage-list li { grid-template-columns: 2rem 1fr; }
+      .stage-list li span { grid-column: 2; }
+    }
+    @media (max-width: 480px) {
+      .toc ol { columns: 1; }
+    }
+    @media print {
+      :root { --paper: white; --surface: white; --surface-2: #f5f5f5; }
+      body { font-size: 10pt; }
+      .masthead-inner, .shell, .footer-inner { width: 100%; }
+      .shell { display: block; }
+      .toc { display: none; }
+      main { padding: 0; }
+      h2, h3, h4 { break-after: avoid; }
+      .card, .step, .issue, .callout, .table-wrap { box-shadow: none; break-inside: avoid; }
+      details.reference { break-inside: auto; }
+      details.reference > summary { list-style: none; }
+      .issue-grid { display: block; }
+      .issue { margin-bottom: .8rem; }
+      a { color: inherit; }
+      pre { white-space: pre-wrap; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to the execution plan</a>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <p class="eyebrow">Agent execution plan · 23 issues · PR required</p>
+      <h1>Implement the global editing library flow rework</h1>
+      <p class="dek">
+        Run this plan in order. Preserve the exact Library result when Develop opens. Keep every v2 photo on
+        its current render path until the user accepts a v3 upgrade. Route preview and export through one
+        versioned color-managed plan. Finish by opening a pull request that closes every completed issue.
+      </p>
+      <div class="meta-row" aria-label="Plan metadata">
+        <span class="pill accent">How-to for implementation agents</span>
+        <span class="pill">Baseline: main @ f92f2d4</span>
+        <span class="pill">Prepared: 23 August 2026</span>
+        <span class="pill">Advance only at a green gate</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="toc" aria-label="Plan contents">
+      <h2>Contents</h2>
+      <ol>
+        <li><a href="#outcome">1. Finish state</a></li>
+        <li><a href="#run-rules">2. Run rules</a></li>
+        <li><a href="#steps">3. Execution steps</a></li>
+        <li><a href="#architecture">4. Architecture reference</a></li>
+        <li><a href="#render">5. Render reference</a></li>
+        <li><a href="#migration">6. Migration reference</a></li>
+        <li><a href="#issues">7. Issue contracts</a></li>
+        <li><a href="#verification">8. Verification reference</a></li>
+        <li><a href="#pull-request">9. Pull request</a></li>
+      </ol>
+    </nav>
+
+    <main id="main">
+      <section id="outcome">
+        <h2>1. Finish state</h2>
+        <p class="section-intro">
+          Treat the work as one product flow. A visible control is not completion. The source, document,
+          sidecar, preview, filmstrip, cache, undo history, batch path, and export must agree.
+        </p>
+
+        <div class="callout">
+          <h3>Run rule</h3>
+          <p>
+            Each execution step ends with a Gate. Advance only when every condition in that Gate is true.
+            When a step points to issue contracts, read those contracts before editing code.
+          </p>
+        </div>
+
+        <div class="grid three">
+          <div class="card">
+            <h3>Library context</h3>
+            <p>Develop retains the Library album, folder, archive state, filters, sort order, active photo, and selection after navigation and hard refresh.</p>
+          </div>
+          <div class="card">
+            <h3>Versioned edits</h3>
+            <p>v2 remains frozen. v3 has strict codecs, one owner for each value, an explicit upgrade, a rollback payload, and visible compatibility errors.</p>
+          </div>
+          <div class="card">
+            <h3>One render plan</h3>
+            <p>Preview and export compile the same semantic stages. Quality, dimensions, overlays, and output intent are explicit request differences.</p>
+          </div>
+          <div class="card">
+            <h3>Honest capabilities</h3>
+            <p>The UI identifies 8-bit input, embedded RAW preview, missing profiles, missing assets, stale jobs, SDR display, and unsupported output.</p>
+          </div>
+          <div class="card">
+            <h3>Complete tool behavior</h3>
+            <p>Every sampler, automatic action, guided action, and generated job has Cancel, error or no-result state, one acceptance point, and one undo group.</p>
+          </div>
+          <div class="card">
+            <h3>Connected PR</h3>
+            <p>The implementation ends in one PR. The PR targets the default branch and connects every completed issue with a closing keyword.</p>
+          </div>
+        </div>
+
+        <h3>Boundaries</h3>
+        <ul>
+          <li>Keep Adobe private process data outside Darkroom's schema.</li>
+          <li>Keep HDR merge outside issue #61.</li>
+          <li>Keep AI Denoise #73 outside standard noise reduction.</li>
+          <li>Keep AI Sharpening #74 and export output sharpening outside Develop sharpening.</li>
+          <li>Support only decoder, profile, display, and encoder capabilities that the app can report and verify.</li>
+          <li>Limit the Library change to Develop context preservation and batch entry points.</li>
+        </ul>
+      </section>
+
+      <section id="run-rules">
+        <h2>2. Run rules</h2>
+        <p class="section-intro">
+          These rules apply to every step. The repository remains the source of truth for commands, code
+          shape, and current instructions.
+        </p>
+
+        <ol>
+          <li>Read the repository <code>AGENTS.md</code> before code changes. Preserve unrelated user files and dirty-tree changes.</li>
+          <li>Before changing a Next.js route or convention, read the matching guide in <code>node_modules/next/dist/docs/</code>.</li>
+          <li>Keep React and Zustand as adapters. Put persistence, render order, batch loops, stale-job checks, and export behavior behind the Develop session.</li>
+          <li>Keep the frozen v2 decoder and renderer available throughout the work. Create v3 beside it.</li>
+          <li>Use typed diagnostics for every fallback. A fallback is part of the user-visible result.</li>
+          <li>Use existing checks and record the manual workflow. Get explicit approval before adding test files, as required by this repository.</li>
+          <li>Keep each change inside the current step. Move duplicated orchestration only after its callers use the new owner.</li>
+          <li>Record every Gate result for the PR body. A failed Gate remains open work.</li>
+        </ol>
+
+        <div class="callout warn">
+          <h3>Escalate these decisions before feature work</h3>
+          <ul>
+            <li>The v3 working color space does not pass camera-profile, saturated-color, gradient, HDR, and proof fixtures.</li>
+            <li>The target Electron platforms cannot provide typed high-bit decode, intermediate render targets, or full-resolution output.</li>
+            <li>No acceptable licensed camera profile, lens profile, local removal model, or depth model is available.</li>
+            <li>The v2 baseline cannot be reproduced after the session or compiler boundary is added.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="steps">
+        <h2>3. Execution steps</h2>
+        <p class="section-intro">
+          Run the steps in order. The references later in this document define architecture, render stages,
+          migration fields, issue outcomes, and verification cases.
+        </p>
+
+        <article class="step" id="step-0">
+          <div class="step-index">Step 0</div>
+          <div>
+            <h3>Freeze the baseline and lock v3 decisions</h3>
+            <p class="goal">Goal: make compatibility and platform limits observable before moving code.</p>
+            <div class="load">
+              Load <a href="#architecture">Architecture reference</a>,
+              <a href="#render">Render reference</a>, and
+              <a href="#issue-156">#156</a>, <a href="#issue-64">#64</a>, and <a href="#issue-157">#157</a>.
+            </div>
+            <ol>
+              <li>Record the base commit, dirty tree, current commands, and current failing lint set.</li>
+              <li>Capture current v2 documents and outputs for decoded NEF, embedded-preview NEF, JPEG, PNG, crop, curve, mixer, masks, sharpening, noise reduction, and export.</li>
+              <li>Write the v3 schema, semantic stage order, source record, coordinate frame, color spaces, capability tiers, diagnostics, and output intent as code contracts.</li>
+              <li>Spike LibRaw 16-bit output, standard-image profile decode, RGBA16F render targets, typed tiled output, Sharp profile and bit-depth metadata, HDR display state, and proof transforms.</li>
+              <li>Choose the licensed camera and lens profile sources. Choose the local model policy for distraction removal and depth.</li>
+              <li>If tests are approved, add the smallest migration, pixel, XMP, coordinate, and cache contract checks. Otherwise, record repeatable manual commands and expected output hashes.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 0.</strong> The recorded v2 fixtures reproduce current output. Every v3 type and stage has one owner. The capability matrix names supported and unsupported tiers. The working color space, profile sources, model policy, and typed export path have no open decision.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-1">
+          <div class="step-index">Step 1</div>
+          <div>
+            <h3>Preserve the exact Library result</h3>
+            <p class="goal">Goal: make Develop navigation use the result the user opened.</p>
+            <div class="load">
+              Load <a href="#library-result-contract">Library result contract</a>.
+            </div>
+            <ol>
+              <li>Add <code>LibraryResultRepository</code> with a compact query record and an exact ordered-ID snapshot under one result ID.</li>
+              <li>Pin the active snapshot. Expire only unreferenced recent ordered-ID snapshots. Retain their query records for reconstruction.</li>
+              <li>Capture album, folder, archive state, filters, sort keys, active photo, selection, ordered IDs, and catalog revision before navigation.</li>
+              <li>Change the photo route to carry only <code>result</code> and <code>id</code>.</li>
+              <li>Resolve the stored result after hard refresh. Mark missing entries. Refresh the query only after an explicit user action.</li>
+              <li>If both records are missing, return to Library with an actionable error. Keep the current all-photos filename sort out of the fallback path.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 1.</strong> Album, folder, archive state, every filter and sort, selection, filmstrip order, previous and next, and hard refresh all restore the same ordered IDs. Missing entries stay visible. Only the explicit Refresh action can change the order.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-2">
+          <div class="step-index">Step 2</div>
+          <div>
+            <h3>Put current Develop behind one session</h3>
+            <p class="goal">Goal: give navigation, commands, persistence, rendering, analysis, jobs, batch work, and export one caller-facing owner without changing v2 pixels.</p>
+            <div class="load">
+              Load <a href="#session-contract">Develop session contract</a>,
+              <a href="#state-ownership">State ownership</a>, and
+              <a href="#issue-156">#156</a>.
+            </div>
+            <ol>
+              <li>Add <code>DevelopSession</code> with <code>snapshot</code>, <code>dispatch</code>, <code>render</code>, and <code>save</code>.</li>
+              <li>Wrap current Zustand actions and history behind typed session commands.</li>
+              <li>Add <code>DevelopRepository</code> as the only catalog and XMP reader and writer.</li>
+              <li>Reconcile catalog and external XMP before the session returns an editable document.</li>
+              <li>Journal catalog and XMP writes. Recover or roll back an interrupted save before opening the document.</li>
+              <li>Wrap the current renderer and export runner as the frozen v2 backend.</li>
+              <li>Keep React state for view concerns only. Move crop draft commit, sidecar timing, navigation, batch loops, and generated-result acceptance into session commands as each caller changes.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 2.</strong> Current v2 edit, undo, redo, reset, reload, XMP import, sidecar save, filmstrip navigation, and export pass the Step 0 baseline. React does not choose sidecar precedence, stage order, batch iteration, or export document state.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-3">
+          <div class="step-index">Step 3</div>
+          <div>
+            <h3>Ship the v3 render foundation</h3>
+            <p class="goal">Goal: make a simple v3 edit deterministic from typed source decode to full-resolution output.</p>
+            <div class="load">
+              Load <a href="#render">Render reference</a>,
+              <a href="#migration">Migration reference</a>, and
+              <a href="#issue-156">#156</a>, <a href="#issue-64">#64</a>, and <a href="#issue-157">#157</a>.
+            </div>
+            <ol>
+              <li>Add separate strict v2 and v3 codecs. Add canonical v3 defaults, unknown-field quarantine, payload bounds, and a read-only response for newer process versions.</li>
+              <li>Add the fixed semantic stage registry and a backend-neutral compiler. Validate duplicate stage ownership, missing dependencies, and cycles.</li>
+              <li>Add the immutable source record with signature, dimensions, orientation, decoder provenance, precision, transfer, input profile, as-shot WB, camera, and lens metadata.</li>
+              <li>Add grid, fit, loupe, and export quality requests. Give decoded-source, plan, frame, and analysis caches separate keys and budgets.</li>
+              <li>Add source region and tile requests, cancellation, active-loupe priority, and full-resolution tiled output.</li>
+              <li>Add the high-bit preview and export backend only on proven capability tiers. Emit typed diagnostics for every reduction.</li>
+              <li>Add the explicit v2 to v3 upgrade. Build the candidate from the migration table, show a same-quality comparison, group upgrade and first edit into one command, and retain the canonical v2 payload.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 3.</strong> v2 still matches the baseline. A v3 exposure edit replays from catalog and XMP, matches preview and tiled export within the declared tolerance, exports verified bit depth and profile metadata on supported tiers, and reports every fallback on unsupported tiers.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-4">
+          <div class="step-index">Step 4</div>
+          <div>
+            <h3>Add input profiles, optics, and canonical geometry</h3>
+            <p class="goal">Goal: make every coordinate-bearing edit and overlay use one versioned transform.</p>
+            <div class="load">
+              Load <a href="#issue-56">#56</a>, <a href="#issue-54">#54</a>,
+              <a href="#issue-55">#55</a>, <a href="#issue-154">#154</a>, and
+              <a href="#issue-155">#155</a>.
+            </div>
+            <ol>
+              <li>Add camera and input profile selection, profile fallback, calibration values, registry revision, and source compatibility.</li>
+              <li>Add lens match confidence, manual override, distortion, illumination, chromatic aberration, and defringe.</li>
+              <li>Add quarter turns, horizontal and vertical flips, fine angle, manual transform, guided and automatic Upright, and explicit Constrain Crop.</li>
+              <li>Compose EXIF orientation, optics, user orientation, transform, and crop through one coordinate model.</li>
+              <li>Route the canvas, crop overlay, masks, cleanup coordinates, zoom, pan, cache identity, sidecar, and export through that model.</li>
+              <li>Keep unsupported profiles neutral and visible. Keep automatic Upright from replacing manual settings or crop without an accepted command.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 4.</strong> Supported and unsupported profile cases match their contracts. Every EXIF orientation, turn, flip, angle, lens transform, Upright mode, crop, mask, zoom, preview, and export stays aligned at fit and 1:1. Angle-only v2 documents retain their v2 output.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-5">
+          <div class="step-index">Step 5</div>
+          <div>
+            <h3>Add global color, tone, and live analysis</h3>
+            <p class="goal">Goal: make sampled and automatic global edits ordinary deterministic commands.</p>
+            <div class="load">
+              Load <a href="#issue-151">#151</a>, <a href="#issue-48">#48</a>,
+              <a href="#issue-49">#49</a>, <a href="#issue-50">#50</a>,
+              <a href="#issue-51">#51</a>, and <a href="#issue-53">#53</a>.
+            </div>
+            <ol>
+              <li>Add current, camera, custom, sampled, and Auto WB modes. Give the sampler Cancel, invalid-source feedback, and one undo group.</li>
+              <li>Add deterministic Auto Tone from the <code>tone-input</code> tap. Commit ordinary tone and global color values only.</li>
+              <li>Keep Auto Tone and Auto WB as separate commands and undo groups.</li>
+              <li>Add bounded Point Color samples before the HSL mixer and effects.</li>
+              <li>Add the B&amp;W profile and channel-luminance branch. Retain color values while mono is active.</li>
+              <li>Add shadow, midtone, and highlight Color Grading with numeric keyboard alternatives.</li>
+              <li>Add nonblocking full-frame histogram and SDR clipping from <code>display-output</code>. Keep all toggles in view state.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 5.</strong> Every command changes only its declared fields and restores exact pre-action values on undo. All values survive reload and export. B&amp;W restores prior color state. Histogram and clipping update after each accepted edit without depending on zoom. HDR headroom remains open until Step 9.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-6">
+          <div class="step-index">Step 6</div>
+          <div>
+            <h3>Add presence and stabilize detail</h3>
+            <p class="goal">Goal: make multipass presence, standard noise reduction, and Develop sharpening stable across quality tiers.</p>
+            <div class="load">
+              Load <a href="#issue-52">#52</a>, <a href="#issue-153">#153</a>, and
+              <a href="#issue-152">#152</a>.
+            </div>
+            <ol>
+              <li>Add independent Texture, Clarity, and Dehaze values with source-relative, edge-safe multipass kernels.</li>
+              <li>Move the existing luminance and color noise controls to the early standard-denoise stage without changing stored values or ranges.</li>
+              <li>Move the existing four sharpening controls to the Develop-sharpen stage without changing stored values or ranges.</li>
+              <li>Declare every stage's scale, tile halo, border policy, input precision, and position relative to crop, masks, resize, and output.</li>
+              <li>Apply standard denoise and Develop sharpening once. Keep AI and output sharpening outside these stages.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 6.</strong> Fine-detail, fog, gradient, low-light color, edge, and high-noise fixtures remain stable at fit, 1:1, and full export. Tile seams are absent. Reset, undo, sidecar, and batch preserve every current detail field. No render path applies denoise or sharpening twice.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-7">
+          <div class="step-index">Step 7</div>
+          <div>
+            <h3>Add asset storage and manual cleanup</h3>
+            <p class="goal">Goal: make repairs editable, portable by reference, and safe under geometry changes.</p>
+            <div class="load">
+              Load <a href="#asset-contract">Asset contract</a>,
+              <a href="#issue-57">#57</a>, and <a href="#issue-59">#59</a>.
+            </div>
+            <ol>
+              <li>Add content-addressed storage for masks, repair patches, and depth. Store source, coordinate, color-stage, producer, dimension, and checksum metadata.</li>
+              <li>Store bounded asset references in the v3 document. Keep generated bytes out of XMP.</li>
+              <li>Add editable and reorderable Heal, Clone, and Remove components with source and target geometry, feather, opacity, mode, and enabled state.</li>
+              <li>Add automatic proposals and manual regions for red-eye. Persist only the accepted eye regions and values.</li>
+              <li>Add missing-asset diagnostics, explicit disable commands, recovery protection, and reference-based garbage collection.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 7.</strong> Repairs and red-eye remain aligned through every geometry operation at fit and 1:1. Move, disable, reorder, reset, undo, reload, and export are deterministic. XMP contains bounded references. A missing asset names the photo and component and blocks silent export.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-8">
+          <div class="step-index">Step 8</div>
+          <div>
+            <h3>Add reviewed generated work</h3>
+            <p class="goal">Goal: keep model results outside the document until the user accepts a current candidate.</p>
+            <div class="load">
+              Load <a href="#job-contract">Generated job contract</a>,
+              <a href="#issue-58">#58</a>, and <a href="#issue-60">#60</a>.
+            </div>
+            <ol>
+              <li>Add one local job contract for People, Reflection, Dust, and depth generation.</li>
+              <li>Record the job kind, input fingerprint, model revision, progress, cancellation, candidate assets, and error.</li>
+              <li>Preview candidates without committing them. Accept only after source, document revision, coordinate frame, color stage, and target still match.</li>
+              <li>Integrate accepted distraction results into the cleanup layer.</li>
+              <li>Add Lens Blur depth preview, focus picker, focus range, radius, bokeh, foreground, background, progress, Cancel, Retry, and missing-depth state.</li>
+              <li>Keep the manual cleanup path usable when the model capability is unavailable.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 8.</strong> Cancel and Reject leave no document change. A stale candidate cannot commit. Accepted results reload and export from content-addressed assets. Each automatic removal flow has the manual fallback. Missing or stale depth disables Lens Blur with an actionable status.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-9">
+          <div class="step-index">Step 9</div>
+          <div>
+            <h3>Add HDR, proofing, gamut, and headroom</h3>
+            <p class="goal">Goal: keep scene headroom until the requested display or output transform.</p>
+            <div class="load">
+              Load <a href="#issue-61">#61</a>, <a href="#issue-63">#63</a>, and
+              the HDR part of <a href="#issue-53">#53</a>.
+            </div>
+            <ol>
+              <li>Add HDR source metadata, scene headroom, HDR edit values, display capability, and explicit SDR view transform.</li>
+              <li>Add HDR output with gain-map or compatible metadata only on verified encoders.</li>
+              <li>Add proof profile, intent, black-point compensation, proof transform, and out-of-gamut mask.</li>
+              <li>Keep proof and gamut settings in local view state. Reuse the proof profile for export only when the output intent requests it.</li>
+              <li>Add HDR headroom analysis from <code>scene-headroom</code> and complete histogram clipping behavior.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 9.</strong> Supported HDR sources retain verified headroom on capable preview and output. SDR display fallback remains explicit and leaves HDR edit state intact. Missing proof profiles disable proof claims. Proof toggles never mutate the document. HDR merge remains absent.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-10">
+          <div class="step-index">Step 10</div>
+          <div>
+            <h3>Route batch application through the session</h3>
+            <p class="goal">Goal: apply selected semantic groups to the exact Library selection with a truthful per-photo result.</p>
+            <div class="load">
+              Reload <a href="#state-ownership">State ownership</a> and every issue contract whose group can be copied.
+            </div>
+            <ol>
+              <li>Default batch copy to the current semantic group. Require an explicit choice for the full document.</li>
+              <li>Declare copy behavior for source-specific profile IDs, sample coordinates, repairs, generated assets, crop, masks, and output intent.</li>
+              <li>Open, reconcile, command, save, and export each selected entry through the same session and repository paths.</li>
+              <li>Report progress, v2 upgrade needs, unsupported capabilities, conflicts, missing assets, skips, and failures per photo.</li>
+              <li>Keep a failed entry from changing the success state of another entry.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 10.</strong> Batch work uses the exact stored selection. Every copied group follows its declared source-specific policy. Partial success lists each changed, skipped, and failed photo. Catalog, XMP, preview, and export agree for every changed photo.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-11">
+          <div class="step-index">Step 11</div>
+          <div>
+            <h3>Run the full verification matrix</h3>
+            <p class="goal">Goal: prove every issue contract across navigation, persistence, rendering, capability fallback, and output.</p>
+            <div class="load">
+              Load <a href="#verification">Verification reference</a> and all
+              <a href="#issues">issue contracts</a>.
+            </div>
+            <ol>
+              <li>Run every existing project check that applies. Compare lint against the recorded pre-existing set.</li>
+              <li>Run the Library scope, v2, document, XMP, coordinate, color, precision, parity, cache, cancellation, generated work, accessibility, batch, and output cases.</li>
+              <li>Run each issue's neutral, representative, extreme, unsupported, error, Cancel, reset, undo, redo, reload, hard refresh, sidecar, batch, and export cases where they apply.</li>
+              <li>Record the capability tier, source provenance, output intent, command, result, and known limit for each manual run.</li>
+              <li>Fix every new failure. Keep unsupported behavior only when the UI reports the exact capability limit and the issue contract permits that limit.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 11.</strong> Every one of the 23 issue contracts has recorded passing evidence on supported tiers. v2 compatibility, unknown XMP, hard-refresh scope, preview and export, cache invalidation, stale-job rejection, missing assets, accessibility, batch reporting, and rollback pass. Existing commands pass or have only the recorded pre-existing lint failures.
+            </div>
+          </div>
+        </article>
+
+        <article class="step" id="step-12">
+          <div class="step-index">Step 12</div>
+          <div>
+            <h3>Create the connected pull request</h3>
+            <p class="goal">Goal: hand off one reviewable PR that connects every completed issue.</p>
+            <div class="load">
+              Load <a href="#pull-request">Pull request instructions</a>. Use the repository's <code>file-pr</code> skill.
+            </div>
+            <ol>
+              <li>Review the full diff and remove unrelated changes, temporary artifacts, dead adapters, and stale compatibility notes.</li>
+              <li>Write a concise PR title. Explain the problem before the solution.</li>
+              <li>Target the repository's default branch. GitHub interprets closing keywords only for that target.</li>
+              <li>Add the exact verification results and the required closing-keyword block to the PR body.</li>
+              <li>Create the PR with <code>file-pr</code>.</li>
+              <li>Verify the PR target and <code>closingIssuesReferences</code> with the command in the PR instructions.</li>
+            </ol>
+            <div class="gate">
+              <strong>Gate 12.</strong> The PR URL exists. The PR targets the default branch. The body explains the problem, solution, migration, capability limits, and verification. GitHub reports all 23 completed issues in <code>closingIssuesReferences</code>. Required checks have started.
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section id="architecture">
+        <h2>4. Architecture reference</h2>
+        <p class="section-intro">
+          Load this section in Steps 0 through 4 and Step 10. Keep the public interface small. Keep the stage
+          registry, storage formats, GPU types, and capability policy private.
+        </p>
+
+        <h3 id="library-result-contract">Library result contract</h3>
+        <pre><code>const resultId = await libraryResults.capture(currentQueryState);
+
+const session = await develop.open({
+	activePhotoId,
+	resultId,
+});</code></pre>
+        <ul>
+          <li><code>LibraryQueryRecord</code> owns album, folder, archive state, filters, sort keys, and catalog revision.</li>
+          <li><code>LibraryResultSnapshot</code> owns exact ordered IDs, active photo, selection, and its query-record ID.</li>
+          <li>The route stores only <code>resultId</code> and <code>activePhotoId</code>.</li>
+          <li>The repository pins the active snapshot and retains its query record.</li>
+          <li>An explicit Refresh action replays the query. A normal reload reuses the exact ordered IDs.</li>
+        </ul>
+
+        <h3 id="session-contract">Develop session contract</h3>
+        <pre><code>interface DevelopSession {
+	snapshot(): DevelopSnapshot;
+	dispatch(command: EditCommand): Promise&lt;EditResult&gt;;
+	render(request: RenderRequest): Promise&lt;RenderResult&gt;;
+	save(): Promise&lt;SaveResult&gt;;
+}</code></pre>
+        <div class="architecture" role="img" aria-label="Library results feed the Develop session, which coordinates the private kernel">
+          <div class="module">
+            <h3>Library results</h3>
+            <ul>
+              <li>Query and exact order</li>
+              <li>Active entry and selection</li>
+              <li>Hard-refresh recovery</li>
+            </ul>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="module">
+            <h3>Develop session</h3>
+            <ul>
+              <li>Snapshot and commands</li>
+              <li>History and persistence</li>
+              <li>Analysis and jobs</li>
+              <li>Batch and navigation</li>
+              <li>Preview and export requests</li>
+            </ul>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="module">
+            <h3>Private kernel</h3>
+            <ul>
+              <li>v2 and v3 codecs</li>
+              <li>Semantic compiler</li>
+              <li>Coordinate and color models</li>
+              <li>Render backends</li>
+              <li>Assets and caches</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3 id="state-ownership">State ownership</h3>
+        <div class="table-wrap">
+          <table>
+            <caption>One owner and persistence policy for each state class</caption>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Owner</th>
+                <th>Persistence</th>
+                <th>Contents</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Library result</td>
+                <td><code>LibraryResultRepository</code></td>
+                <td>Bounded Electron app data</td>
+                <td>Query, order, active photo, selection, catalog revision</td>
+              </tr>
+              <tr>
+                <td>Source record</td>
+                <td><code>SourceProvider</code></td>
+                <td>Catalog-derived and recomputable</td>
+                <td>Signature, dimensions, orientation, precision, profile, camera, lens, WB, decoder provenance</td>
+              </tr>
+              <tr>
+                <td>Semantic edits</td>
+                <td><code>DevelopRepository</code></td>
+                <td>Canonical catalog document and supported XMP projection</td>
+                <td>Process, tone, color, geometry, masks, repairs, accepted asset refs, HDR edit values</td>
+              </tr>
+              <tr>
+                <td>Unknown external metadata</td>
+                <td>XMP adapter</td>
+                <td>Original XML DOM</td>
+                <td>Unknown namespaces, attributes, elements, unsupported Lightroom fields</td>
+              </tr>
+              <tr>
+                <td>Undo history</td>
+                <td><code>DevelopSession</code></td>
+                <td>Memory and optional recovery journal</td>
+                <td>Command groups, accepted process upgrade, accepted job result</td>
+              </tr>
+              <tr>
+                <td>Derived assets</td>
+                <td><code>DevelopAssetStore</code></td>
+                <td>Content-addressed Electron app data</td>
+                <td>Mask mattes, repair patches, depth maps</td>
+              </tr>
+              <tr>
+                <td>Jobs</td>
+                <td><code>GeneratedJobRunner</code></td>
+                <td>Runtime until accepted</td>
+                <td>Input fingerprint, progress, Cancel, model revision, candidate, error</td>
+              </tr>
+              <tr>
+                <td>View state</td>
+                <td>Develop view adapter</td>
+                <td>Local workspace preferences</td>
+                <td>Zoom, pan, tool, histogram, clipping, proof, gamut, before and after</td>
+              </tr>
+              <tr>
+                <td>Export intent</td>
+                <td>Export request and preset</td>
+                <td>Local export preference</td>
+                <td>Size, format, bit depth, profile, transfer, quality, HDR fallback</td>
+              </tr>
+              <tr>
+                <td>Cache</td>
+                <td>Cache service</td>
+                <td>Disposable</td>
+                <td>Decoded tiles, compiled plans, frames, analyses, proof transforms</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="asset-contract">Asset contract</h3>
+        <ol>
+          <li>Create a temporary candidate with kind, checksum, source signature, coordinate revision, color-stage ID, dimensions, and producer revision.</li>
+          <li>Preview the candidate without changing the document.</li>
+          <li>Recheck the full fingerprint at acceptance.</li>
+          <li>Move accepted bytes into content-addressed storage and commit a bounded reference through one command.</li>
+          <li>Protect assets referenced by canonical documents, retained v2 payloads, and recovery journals.</li>
+          <li>Delete rejected, cancelled, stale, and unreferenced candidates after the recovery window.</li>
+        </ol>
+
+        <h3 id="job-contract">Generated job contract</h3>
+        <pre><code>interface GeneratedJob {
+	id: string;
+	kind: "people" | "reflection" | "dust" | "depth";
+	inputFingerprint: string;
+	modelRevision: string;
+	progress: number;
+	status: "running" | "cancelled" | "failed" | "candidate";
+	candidateAssets: readonly DevelopAssetRef[];
+	error?: GeneratedJobError;
+}</code></pre>
+        <p>
+          Acceptance compares the original source signature, document revision, coordinate revision,
+          color-stage ID, target component, and producer revision with current state. A mismatch returns a stale
+          result. Only an accepted result can create a document command.
+        </p>
+      </section>
+
+      <section id="render">
+        <h2>5. Render reference</h2>
+        <p class="section-intro">
+          Load this section in Steps 0, 3, 4, 5, 6, and 9. The v2 plan stays frozen. The v3 compiler emits this
+          fixed semantic order for preview and export.
+        </p>
+
+        <div class="grid">
+          <div class="card">
+            <h3>v2 process</h3>
+            <p>Keep the current decoder choices, defaults, shader order, math, preview policy, and 8-bit export path. Existing documents stay here until an accepted v3 upgrade.</p>
+          </div>
+          <div class="card">
+            <h3>v3 process</h3>
+            <p>Use typed source pixels, a versioned working space, high-bit intermediates, named analysis taps, a canonical coordinate model, and typed output.</p>
+          </div>
+        </div>
+
+        <h3>v3 semantic order</h3>
+        <ol class="stage-list">
+          <li><strong>Decode and orientation</strong><span>Decode or demosaic typed pixels. Record precision, transfer, dimensions, EXIF orientation, and embedded-preview provenance.</span></li>
+          <li><strong>WB and input profile</strong><span>Apply selected WB in source space. Apply the input profile and camera calibration into the working space.</span></li>
+          <li><strong>Optics</strong><span>Apply lens distortion and illumination. Apply chromatic aberration and defringe.</span></li>
+          <li><strong>Standard denoise</strong><span>Apply luminance and color noise reduction once at source-pixel scale.</span></li>
+          <li><strong>Canonical geometry</strong><span>Compose user turns, flips, angle, Upright, perspective, Constrain Crop, and crop through one coordinate model.</span></li>
+          <li><strong>Source repair</strong><span>Composite accepted Heal, Clone, Remove, red-eye, and distraction patches in their declared source-repair frame.</span></li>
+          <li><strong>Basic tone</strong><span>Apply exposure, contrast, highlights, shadows, whites, blacks, vibrance, saturation, and accepted Auto Tone values.</span></li>
+          <li><strong>Curve and color</strong><span>Apply curve, Point Color, HSL mixer, the B&amp;W branch, and Color Grading.</span></li>
+          <li><strong>Local adjustments</strong><span>Resolve masks through the coordinate model and apply local values at named stage taps.</span></li>
+          <li><strong>Presence</strong><span>Apply Texture, Clarity, and Dehaze with edge-safe source-relative kernels.</span></li>
+          <li><strong>Creative spatial effect</strong><span>Apply Lens Blur from a current source-signed depth asset.</span></li>
+          <li><strong>Develop sharpening</strong><span>Apply amount, radius, detail, and masking once.</span></li>
+          <li><strong>Post-crop effects</strong><span>Apply vignette and grain.</span></li>
+          <li><strong>Resize and tile assembly</strong><span>Resolve fit, loupe, or export dimensions. Render full output through overlapping tiles.</span></li>
+          <li><strong>Output or proof transform</strong><span>Convert working pixels to the requested display, proof, or output profile and SDR or HDR transfer.</span></li>
+          <li><strong>Analysis, overlays, and encode</strong><span>Read histogram, clipping, HDR headroom, and gamut taps before transient overlays. Encode typed pixels and metadata.</span></li>
+        </ol>
+
+        <h3>Named analysis taps</h3>
+        <ul>
+          <li><code>tone-input</code> is the full-frame output of Source repair, stage 6. It excludes current tone, curve/color, local adjustments, presence, blur, sharpening, and post-crop effects.</li>
+          <li><code>wb-sample</code> is source-linear data with the canonical coordinate map.</li>
+          <li><code>display-output</code> is output-transformed full-frame data before overlays.</li>
+          <li><code>scene-headroom</code> is scene-linear data before SDR mapping.</li>
+          <li><code>proof-output</code> is proof-transformed data plus the out-of-gamut mask.</li>
+        </ul>
+
+        <h3>Plan identity</h3>
+        <pre><code>processVersion
++ canonicalDocumentHash
++ sourceSignature
++ acceptedAssetRevisions
++ compilerVersion
++ stageRegistryVersion
++ coordinateFrameRevision
++ capabilityTier
++ qualityAndDimensions
++ colorIntent
++ backend</code></pre>
+
+        <h3>Capability behavior</h3>
+        <div class="table-wrap">
+          <table>
+            <caption>Required preview and export behavior for reduced capabilities</caption>
+            <thead>
+              <tr>
+                <th>Condition</th>
+                <th>Preview</th>
+                <th>Export</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Embedded or reduced RAW preview</td>
+                <td>Show provenance and cap loupe honestly.</td>
+                <td>Require the full decoder or a named reduced-output fallback.</td>
+              </tr>
+              <tr>
+                <td>8-bit backend</td>
+                <td>Show the precision tier and disable unsupported HDR or proof claims.</td>
+                <td>Block requested high-bit or HDR output unless the output intent approves fallback.</td>
+              </tr>
+              <tr>
+                <td>Missing input profile</td>
+                <td>Use a named valid embedded or default transform. Otherwise mark input characterization unavailable.</td>
+                <td>Require the approved default-input policy or fail.</td>
+              </tr>
+              <tr>
+                <td>Missing lens profile</td>
+                <td>Use a neutral optical no-op and show the status.</td>
+                <td>Use the same no-op. Never substitute unrelated lens data.</td>
+              </tr>
+              <tr>
+                <td>Missing proof profile</td>
+                <td>Disable proof and gamut claims.</td>
+                <td>Require a valid output profile or a non-proof output intent.</td>
+              </tr>
+              <tr>
+                <td>Missing edit asset</td>
+                <td>Disable the affected component and name it.</td>
+                <td>Fail the photo until the user disables or repairs the component.</td>
+              </tr>
+              <tr>
+                <td>Stale generated result</td>
+                <td>Keep it as an uncommittable candidate with Retry.</td>
+                <td>Exclude it because it never entered the document.</td>
+              </tr>
+              <tr>
+                <td>SDR display</td>
+                <td>Use an explicit SDR view transform and retain scene headroom.</td>
+                <td>Allow HDR output only when the encoder supports it.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="migration">
+        <h2>6. Migration reference</h2>
+        <p class="section-intro">
+          Load this section in Step 3. The frozen v2 record remains the rollback source. The table defines the
+          candidate created after the user chooses a v3-only action.
+        </p>
+
+        <pre><code>type PersistedDevelopDocument =
+	| DevelopDocumentV2
+	| DevelopDocumentV3;
+
+interface DevelopRecord {
+	revision: string;
+	source: SourceRecordRef;
+	document: PersistedDevelopDocument;
+}</code></pre>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Field-by-field v2 to v3 migration contract</caption>
+            <thead>
+              <tr>
+                <th>v2 value</th>
+                <th>v3 mapping</th>
+                <th>Required behavior</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>version: 2</code></td>
+                <td>Create v3 with <code>process: darkroom-v3</code>.</td>
+                <td>Keep the canonical full v2 payload in <code>compatibility.legacyV2</code>. Persist only after acceptance.</td>
+              </tr>
+              <tr>
+                <td>Exposure, contrast, highlights, shadows, whites, blacks</td>
+                <td>Copy to <code>tone.basic</code> with the v2 mapping revision.</td>
+                <td>Keep ranges and zero defaults. Show changed scene-linear output in the upgrade comparison.</td>
+              </tr>
+              <tr>
+                <td>Temperature and tint</td>
+                <td>Copy to <code>color.whiteBalance.adjustment</code> with mode <code>legacy-custom</code>.</td>
+                <td>Keep camera and sampled modes unset. Keep legacy sidecar fields.</td>
+              </tr>
+              <tr>
+                <td>Vibrance and saturation</td>
+                <td>Copy to <code>color.global</code> with the v2 mapping revision.</td>
+                <td>Keep neutral values neutral. Compare non-zero values under the v3 working space.</td>
+              </tr>
+              <tr>
+                <td>Crop enabled, bounds, aspect preset, and custom aspect</td>
+                <td>Copy normalized values to <code>geometry.crop</code>.</td>
+                <td>Preserve disabled values. Align bounds within the coordinate tolerance.</td>
+              </tr>
+              <tr>
+                <td>Crop angle</td>
+                <td>Copy to <code>geometry.orientation.fineAngle</code>. Set quarter turns to 0 and flips to false.</td>
+                <td>Keep framing stable. Infer no turn or flip.</td>
+              </tr>
+              <tr>
+                <td>Perspective X, perspective Y, and distortion</td>
+                <td>Copy to manual transform and manual distortion override. Set Upright mode to manual and Constrain Crop to false.</td>
+                <td>Infer no automatic correction or crop change.</td>
+              </tr>
+              <tr>
+                <td>All RGB, red, green, and blue curve points</td>
+                <td>Copy ordered normalized points to <code>tone.curves</code>.</td>
+                <td>Validate bounds and order. Keep current sidecar projection.</td>
+              </tr>
+              <tr>
+                <td>All eight mixer bands and HSL values</td>
+                <td>Copy to <code>color.mixer.bands</code> with the v2 mapping revision.</td>
+                <td>Keep IDs, ranges, values, and neutral defaults.</td>
+              </tr>
+              <tr>
+                <td>Vignette and grain fields</td>
+                <td>Copy to <code>effects.postCrop</code>.</td>
+                <td>Keep ranges and defaults. Preserve the post-crop position.</td>
+              </tr>
+              <tr>
+                <td>Sharpening amount, radius, detail, and masking</td>
+                <td>Copy to <code>detail.sharpening</code> with the v2 mapping revision.</td>
+                <td>Apply once. Show stage-order differences in the upgrade comparison.</td>
+              </tr>
+              <tr>
+                <td>All luminance and color noise fields</td>
+                <td>Copy to <code>detail.noiseReduction</code> with the v2 mapping revision.</td>
+                <td>Apply once at the early source-scale stage. Preserve every sidecar value.</td>
+              </tr>
+              <tr>
+                <td>Every mask value</td>
+                <td>Copy the canonical v2 payload losslessly to <code>local.masks</code> before coordinate conversion.</td>
+                <td>Include mask ID, name, enabled, inverted, component ID, kind, operation, order, every brush and stroke value, every linear and radial value, every AI selector, asset, model, source, inference value, and every local basic value. Tag geometry as <code>legacy-oriented-v2</code>.</td>
+              </tr>
+              <tr>
+                <td>Inline mask PNG assets</td>
+                <td>Verify checksums, copy bytes unchanged into content-addressed storage, and store asset refs.</td>
+                <td>Block upgrade if a copy fails. Keep the inline original in retained v2.</td>
+              </tr>
+              <tr>
+                <td>Source metadata absent from v2</td>
+                <td>Create a separate immutable source record from catalog, filesystem, and decoder data.</td>
+                <td>Keep missing camera, lens, profile, or WB metadata explicitly unknown.</td>
+              </tr>
+              <tr>
+                <td>Unknown XMP and unsupported Lightroom fields</td>
+                <td>Keep them in the original XML DOM and a compatibility-field index.</td>
+                <td>Give them no render effect until a supported import command maps them.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Catalog and XMP write sequence</h3>
+        <ol>
+          <li>Open catalog and XMP through <code>DevelopRepository</code>.</li>
+          <li>Resolve an external newer XMP change before returning an editable document.</li>
+          <li>Write a recovery journal.</li>
+          <li>Write canonical catalog state.</li>
+          <li>Update known values in the original XMP DOM.</li>
+          <li>Clear the journal.</li>
+          <li>On startup, complete or roll back an interrupted sequence before the session opens.</li>
+        </ol>
+      </section>
+
+      <section id="issues">
+        <h2>7. Issue contracts</h2>
+        <p class="section-intro">
+          Load only the contracts named by the current execution step. Each contract uses the current GitHub
+          issue description. The Gate is the minimum issue-specific completion evidence.
+        </p>
+
+        <details class="reference" open>
+          <summary>Foundation contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-156">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/156">#156 Non-destructive render model</a></h3>
+                <h4>Outcome</h4>
+                <p>Keep Darkroom's local document model while making replay, migration, reset, sidecar persistence, and export deterministic.</p>
+                <h4>Current gap</h4>
+                <p>v2 has incomplete version boundaries, unsupported-field handling, stage ownership, and source, edit, cache, and output ownership.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Strict versions and migrations preserve v2 output.</li>
+                  <li>Every value has one owner and deterministic default.</li>
+                  <li>Supported XMP round-trips. Unknown external fields remain visible and preserved.</li>
+                  <li>Source changes invalidate the complete derived result.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-64">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/64">#64 High-bit color-managed pipeline</a></h3>
+                <h4>Outcome</h4>
+                <p>Replace 8-bit bottlenecks with a high-bit or float color-managed path through decode, preview, and export.</p>
+                <h4>Current gap</h4>
+                <p>Render readback and export are 8-bit. Input, working, display, proof, and output profiles are not explicit.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Supported high-bit gradients and highlights avoid current 8-bit banding.</li>
+                  <li>Preview and export report the same color intent and any capability difference.</li>
+                  <li>Export metadata reports the requested bit depth and profile.</li>
+                  <li>Unsupported tiers show a named fallback.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-157">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/157">#157 Full-resolution preview fidelity</a></h3>
+                <h4>Outcome</h4>
+                <p>Choose Develop quality from the source and view instead of a fixed 2,560 px limit. Show RAW fallback provenance.</p>
+                <h4>Current gap</h4>
+                <p>Loupe uses a capped preview. NEF can use an embedded JPEG. Cache identity does not express full quality and source state.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Fit, loupe, and export use explicit quality requests.</li>
+                  <li>1:1 loads the highest supported source pixels without freezing navigation.</li>
+                  <li>Embedded and reduced states are visible and cannot become full-resolution output.</li>
+                  <li>Grid and active loupe use separate cache budgets.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+
+        <details class="reference" open>
+          <summary>Input, optics, and geometry contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-56">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/56">#56 Camera profiles and Calibration</a></h3>
+                <h4>Outcome</h4>
+                <p>Add selectable camera or RAW profiles and calibration controls for primary hues, shadows, and profile defaults.</p>
+                <h4>Current gap</h4>
+                <p>The app has no versioned profile registry, camera matching, profile browser, or input calibration stage.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Supported profile switches change base rendering before global edits.</li>
+                  <li>Calibration moves primaries predictably.</li>
+                  <li>Unsupported profiles show the selected fallback.</li>
+                  <li>Profile identity and values survive sidecar reload and export.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-54">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/54">#54 Lens profiles and corrections</a></h3>
+                <h4>Outcome</h4>
+                <p>Apply automatic or selected profiles for distortion, vignetting, and related optical corrections.</p>
+                <h4>Current gap</h4>
+                <p>The app has no profile descriptor, match confidence, profile correction, manual override, or unsupported state.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>A supported profile corrects geometry and falloff.</li>
+                  <li>An unsupported lens uses a visible neutral no-op.</li>
+                  <li>Manual override survives reload.</li>
+                  <li>Crop, viewer, and export use the same profile result.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-55">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/55">#55 Chromatic aberration and defringe</a></h3>
+                <h4>Outcome</h4>
+                <p>Add red and cyan plus blue and yellow correction with sampled or range-limited fringe removal.</p>
+                <h4>Current gap</h4>
+                <p>The app has no channel-aware correction, fringe selector, hue range, or 100 percent inspection workflow.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Colored edges reduce at 100 percent without broad desaturation.</li>
+                  <li>Range controls isolate the intended hues.</li>
+                  <li>Neutral defaults do not change pixels.</li>
+                  <li>Preview, reload, and export match.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-154">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/154">#154 Rotate and flip</a></h3>
+                <h4>Outcome</h4>
+                <p>Add quarter turns, fine angle, and horizontal and vertical flips through one transform.</p>
+                <h4>Current gap</h4>
+                <p>Only an angle is stored. Repeated turns and missing flip fields leave orientation and local coordinates incomplete.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Turns and flips are reversible and do not accumulate rounding.</li>
+                  <li>Fine angle composes with turns and flips.</li>
+                  <li>Crop, masks, cleanup, zoom, preview, sidecar, and export stay aligned.</li>
+                  <li>Angle-only v2 documents keep their v2 output.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-155">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/155">#155 Upright, Transform, and Constrain Crop</a></h3>
+                <h4>Outcome</h4>
+                <p>Combine manual perspective, guided or automatic Upright, and explicit crop constraint.</p>
+                <h4>Current gap</h4>
+                <p>Manual controls and heuristic straighten exist, but full modes, no-result feedback, and explicit Constrain Crop do not.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Manual, guided, automatic, reset, and no-result states are explicit.</li>
+                  <li>Constrain Crop is visible and prevents empty borders only when enabled.</li>
+                  <li>Automatic correction cannot replace manual values or crop silently.</li>
+                  <li>Viewer, masks, sidecar, and export share the transform.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+
+        <details class="reference" open>
+          <summary>Global color, tone, and analysis contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-151">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/151">#151 White balance and global color</a></h3>
+                <h4>Outcome</h4>
+                <p>Keep current global color values and add recorded camera WB, neutral sampling, and separate Auto WB.</p>
+                <h4>Current gap</h4>
+                <p>RAW decode bakes camera WB into 8-bit output. The canvas has no eyedropper or separate Auto WB action.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Camera WB appears only when metadata supports it.</li>
+                  <li>Other sources get a manual fallback.</li>
+                  <li>The sampler has Cancel, invalid-source feedback, and one undo step.</li>
+                  <li>Auto WB changes only WB fields and survives reload and export.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-48">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/48">#48 Auto tone</a></h3>
+                <h4>Outcome</h4>
+                <p>Add a deterministic Auto action that analyzes the decoded image and writes ordinary global values.</p>
+                <h4>Current gap</h4>
+                <p>The app has no automatic global edit or stable analysis tap tied to the Develop source.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Underexposed, overexposed, mixed-light, monochrome, and balanced cases produce repeatable results.</li>
+                  <li>Auto Tone and Auto WB remain separate.</li>
+                  <li>Undo and redo restore exact pre-action and post-action values.</li>
+                  <li>Reload and export reproduce stored values without rerunning analysis.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-49">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/49">#49 Point Color</a></h3>
+                <h4>Outcome</h4>
+                <p>Add sampled hue ranges with hue, saturation, luminance, range, and falloff controls.</p>
+                <h4>Current gap</h4>
+                <p>The app has no sampled point model, affected-pixel view, point list, or sidecar representation.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>A red sample can change without shifting an adjacent orange patch outside falloff.</li>
+                  <li>Multiple points compose before the mixer and effects.</li>
+                  <li>Sampler Cancel, reset, delete, and keyboard focus work.</li>
+                  <li>Points and ranges survive sidecar reload and export.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-50">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/50">#50 Black-and-white controls</a></h3>
+                <h4>Outcome</h4>
+                <p>Add an explicit monochrome mode, profile choice, and per-color luminance mixer.</p>
+                <h4>Current gap</h4>
+                <p>The app has no B&amp;W branch, profile, channel-luminance model, or color-retention rule.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Red, green, blue, and neutral fixtures respond through their intended luminance channels.</li>
+                  <li>Monochrome output has no unintended chroma.</li>
+                  <li>Returning to color restores prior color settings.</li>
+                  <li>Viewer, thumbnail, sidecar, batch, and export agree.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-51">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/51">#51 Color Grading</a></h3>
+                <h4>Outcome</h4>
+                <p>Add shadow, midtone, and highlight grading with hue, saturation, luminance, balance, and blending.</p>
+                <h4>Current gap</h4>
+                <p>The app has no tonal-range wheels, smooth weights, numeric alternatives, or persisted grading values.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Each wheel primarily affects its intended tonal range.</li>
+                  <li>Balance and blending stay smooth on a neutral gradient.</li>
+                  <li>Numeric keyboard controls expose the same values as the wheels.</li>
+                  <li>Undo, reload, B&amp;W interaction, and export are stable.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-53">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/53">#53 Histogram and clipping warnings</a></h3>
+                <h4>Outcome</h4>
+                <p>Add live full-frame histogram, channel clipping, and HDR headroom warnings for rendered pixels.</p>
+                <h4>Current gap</h4>
+                <p>The app has no bins, thresholds, named analysis tap, nonblocking update, loading state, or transient overlay owner.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Black, white, single-channel, normal, and HDR fixtures update after each edit.</li>
+                  <li>Warnings do not depend on viewport zoom.</li>
+                  <li>Normal clipping reads <code>display-output</code>. HDR warnings read <code>scene-headroom</code>.</li>
+                  <li>Histogram and warning settings stay out of catalog and XMP.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+
+        <details class="reference" open>
+          <summary>Presence and detail contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-52">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/52">#52 Texture, Clarity, Dehaze</a></h3>
+                <h4>Outcome</h4>
+                <p>Add independent global Texture, Clarity, and Dehaze controls with stable preview and export output.</p>
+                <h4>Current gap</h4>
+                <p>The effects group lacks these values and the renderer lacks their multipass contract.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Fine-detail, flat, foggy, and edge fixtures show distinct intended behavior.</li>
+                  <li>Neutral values do not change pixels.</li>
+                  <li>Fit, 1:1, and tiled export stay within tolerance.</li>
+                  <li>Reset and batch treat each value independently.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-153">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/153">#153 Luminance and color noise reduction</a></h3>
+                <h4>Outcome</h4>
+                <p>Make the existing standard luminance and color controls stable in preview, masks, sidecars, batch, and export.</p>
+                <h4>Current gap</h4>
+                <p>Controls exist, but channel behavior, order, scale, and preview-to-export behavior are not a fixed contract.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Keep every current value, range, default, and sidecar field.</li>
+                  <li>Apply standard denoise once before tonal amplification and resize.</li>
+                  <li>Fit, 1:1, crop, masks, sharpening, and export are stable.</li>
+                  <li>No standard control invokes AI Denoise #73.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-152">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/152">#152 Sharpening</a></h3>
+                <h4>Outcome</h4>
+                <p>Make current amount, radius, detail, and masking controls stable and document Darkroom's mapping and order.</p>
+                <h4>Current gap</h4>
+                <p>Controls exist, but crop, noise, masks, resize, and export order is not fixed and Adobe values are not equivalent.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Keep current ranges, defaults, reset, sidecar, and batch values.</li>
+                  <li>Apply Develop sharpening once.</li>
+                  <li>Edge, texture, noise, crop, mask, and export cases follow the recorded order.</li>
+                  <li>AI Sharpening #74 and output sharpening remain separate.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+
+        <details class="reference" open>
+          <summary>Cleanup and generated-work contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-57">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/57">#57 Heal, Clone, Remove, and spot cleanup</a></h3>
+                <h4>Outcome</h4>
+                <p>Add editable, disableable, and reorderable Heal, Clone, and Remove repairs.</p>
+                <h4>Current gap</h4>
+                <p>The app has no repair layer, source and target geometry, canvas tool, edit order, or bounded asset contract.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Repairs keep mode, source, target, feather, opacity, order, and enabled state.</li>
+                  <li>Move, disable, reorder, reset, undo, reload, and export are deterministic.</li>
+                  <li>Repairs align through every geometry operation.</li>
+                  <li>XMP stores bounded refs instead of generated pixels.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-59">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/59">#59 Red-eye correction</a></h3>
+                <h4>Outcome</h4>
+                <p>Add automatic proposals and manual eye regions that preserve catchlights and surrounding skin.</p>
+                <h4>Current gap</h4>
+                <p>The app has no eye-region model, manual fallback, pupil controls, canvas handles, or source-signed state.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Automatic and manual cases preserve catchlights and skin boundaries.</li>
+                  <li>Each eye has editable bounds, pupil, amount, enabled state, and delete.</li>
+                  <li>Regions align through geometry at fit and 1:1.</li>
+                  <li>Reload and export need no hidden detector state.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-58">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/58">#58 People, Reflection, and Dust removal</a></h3>
+                <h4>Outcome</h4>
+                <p>Add automated distraction removal with reviewable candidates and a manual fallback.</p>
+                <h4>Current gap</h4>
+                <p>The app has no job, model capability, confidence, patch asset, review flow, Cancel, or stale-result guard.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Each flow has progress, Cancel, preview, Accept, Reject, Retry, and manual cleanup.</li>
+                  <li>Source, edit, or coordinate changes make old candidates uncommittable.</li>
+                  <li>Rejected candidates never enter undo, catalog, XMP, or export.</li>
+                  <li>Accepted results remain editable through the cleanup layer.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-60">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/60">#60 Lens Blur</a></h3>
+                <h4>Outcome</h4>
+                <p>Add source-signed depth, focus selection, bokeh controls, foreground, background, and reviewable depth.</p>
+                <h4>Current gap</h4>
+                <p>The app has no depth asset, estimator job, focus sampler, edge-aware blur stage, or missing-depth state.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Focus and range isolate intended depth without unacceptable foreground halos.</li>
+                  <li>Depth preview, progress, Cancel, Retry, reset, and missing-depth state work.</li>
+                  <li>Stale depth cannot render or export silently.</li>
+                  <li>1:1 and tiled export use the same accepted depth.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+
+        <details class="reference" open>
+          <summary>HDR and proof contracts</summary>
+          <div class="reference-body">
+            <div class="issue-grid">
+              <article class="issue" id="issue-61">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/61">#61 HDR edit and output</a></h3>
+                <h4>Outcome</h4>
+                <p>Add HDR-aware display and editing plus HDR output with headroom and gain-map or compatible metadata where supported.</p>
+                <h4>Current gap</h4>
+                <p>The 8-bit clamped path has no scene headroom, HDR display state, HDR values, transfer metadata, or explicit SDR fallback.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>Supported HDR sources retain verified headroom in capable preview and output.</li>
+                  <li>SDR display uses an explicit view transform and keeps HDR edit state.</li>
+                  <li>Supported output verifies pixels and gain-map or compatible metadata.</li>
+                  <li>The feature contains no HDR merge behavior.</li>
+                </ul>
+              </article>
+
+              <article class="issue" id="issue-63">
+                <h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/63">#63 Soft proof and gamut warnings</a></h3>
+                <h4>Outcome</h4>
+                <p>Add proof profiles, rendering intent, black-point compensation, and gamut warnings before export.</p>
+                <h4>Current gap</h4>
+                <p>The app has no proof transform, gamut mask, profile controls, or view-only ownership.</p>
+                <h4>Gate</h4>
+                <ul>
+                  <li>At least two profiles create distinct verified proof results.</li>
+                  <li>Warnings mark out-of-gamut pixels.</li>
+                  <li>Proof state never enters the Develop document.</li>
+                  <li>Export reuses the proof profile only when requested.</li>
+                </ul>
+              </article>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section id="verification">
+        <h2>8. Verification reference</h2>
+        <p class="section-intro">
+          Load this section in Step 11. Current baseline tests cover crop geometry, RAW utilities, and the Nikon
+          service. They do not cover the contracts below.
+        </p>
+
+        <div class="callout warn">
+          <h3>Test-file branch</h3>
+          <p>
+            Add focused automated tests only after explicit approval. Without that approval, run the same cases
+            as repeatable manual checks and record commands, inputs, expected values, hashes, screenshots, and
+            output metadata in the PR notes.
+          </p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Required evidence before the PR Gate</caption>
+            <thead>
+              <tr>
+                <th>Area</th>
+                <th>Cases</th>
+                <th>Passing result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Library scope</td>
+                <td>Album, folder, archive, filters, sorts, selection, previous and next, hard refresh, missing entry, explicit Refresh.</td>
+                <td>The exact ordered IDs persist until Refresh. Recovery never becomes all photos sorted by filename.</td>
+              </tr>
+              <tr>
+                <td>v2 compatibility</td>
+                <td>Decoded NEF, embedded NEF, JPEG, PNG, crop, curve, mixer, masks, sharpening, noise reduction, export.</td>
+                <td>Plan and pixel output match the Step 0 baseline on the frozen backend.</td>
+              </tr>
+              <tr>
+                <td>Document and XMP</td>
+                <td>Partial, malformed, future, external newer XMP, unknown XML, interrupted writes, missing assets.</td>
+                <td>Known values replay. Unknown values remain. Recovery reaches one canonical document.</td>
+              </tr>
+              <tr>
+                <td>Coordinates</td>
+                <td>Every EXIF orientation, turn, flip, angle, optics, Upright, crop, mask, repair, eye, depth.</td>
+                <td>CPU or reference and GPU mappings stay within tolerance at fit, 1:1, and export.</td>
+              </tr>
+              <tr>
+                <td>Color and precision</td>
+                <td>8-bit and 16-bit source, wide gamut, camera profiles, WB neutral, gradients, SDR, HDR, proof profiles, 16-bit output.</td>
+                <td>Numeric vectors and metadata match the active color and capability contract.</td>
+              </tr>
+              <tr>
+                <td>Preview and export</td>
+                <td>Fit, loupe, tiled output, crop edges, stage halos, analysis taps, output profiles.</td>
+                <td>The same plan fingerprint produces results within the declared per-stage tolerance.</td>
+              </tr>
+              <tr>
+                <td>Cache and Cancel</td>
+                <td>Source, document, asset, compiler, capability, quality, color, coordinate changes, rapid navigation.</td>
+                <td>No stale frame returns. Obsolete decode, render, analysis, and jobs stop. Grid cannot evict active loupe.</td>
+              </tr>
+              <tr>
+                <td>Generated work</td>
+                <td>Progress, Cancel, Reject, Retry, stale source, stale document, stale coordinates, model change, missing candidate.</td>
+                <td>Only a current accepted candidate enters the document.</td>
+              </tr>
+              <tr>
+                <td>Accessibility</td>
+                <td>Keyboard samplers, Cancel and focus return, wheels and numeric inputs, warning alternatives, progress and errors.</td>
+                <td>Every action and state works without pointer input and warnings do not rely on color alone.</td>
+              </tr>
+              <tr>
+                <td>Batch</td>
+                <td>Current group, selected groups, full document, v2 upgrade, source-specific values, partial failure.</td>
+                <td>Each photo has an accurate changed, skipped, or failed result.</td>
+              </tr>
+              <tr>
+                <td>Project commands</td>
+                <td><code>npm test</code>, <code>npm run build</code>, and lint delta.</td>
+                <td>Tests and build pass. Lint adds no error beyond the recorded pre-existing set.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Manual issue run</h3>
+        <ol>
+          <li>Open the photo from a filtered and sorted Library result. Record the filmstrip order.</li>
+          <li>Run neutral, representative, extreme, unsupported, error, Cancel, reset, undo, and redo cases that apply.</li>
+          <li>Check fit and 1:1 with the source, quality, and capability status visible.</li>
+          <li>Navigate away and back. Hard refresh. Reload catalog and XMP.</li>
+          <li>Export full resolution. Inspect pixels, bit depth, profile, transfer, HDR metadata, and asset diagnostics that apply.</li>
+          <li>Apply the safe semantic group to multiple selected photos. Record every changed, skipped, and failed entry.</li>
+        </ol>
+      </section>
+
+      <section id="pull-request">
+        <h2>9. Pull request</h2>
+        <p class="section-intro">
+          Step 12 is part of completion. Use the repository's <code>file-pr</code> skill. Target the default
+          branch. GitHub connects closing keywords in a PR description only when the PR targets that branch.
+          See <a href="https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue">GitHub's issue-linking rules</a>.
+        </p>
+
+        <h3>PR body template</h3>
+        <pre><code>## Problem
+
+Develop discarded the active Library result and spread edit ownership across React,
+Zustand, catalog, XMP, preview, and export paths. The 8-bit v2 renderer could not
+support the linked global-editing contracts without compatibility and fidelity risk.
+
+## Solution
+
+- Preserve the exact Library result through a durable result ID.
+- Route commands, persistence, analysis, generated work, batch work, preview, and
+  export through DevelopSession.
+- Keep v2 frozen and add an explicit v3 process with one semantic render plan.
+- Add the global color, detail, optics, geometry, cleanup, HDR, and proof contracts.
+
+## Migration and capability limits
+
+Describe the v2 rollback, XMP behavior, asset portability, supported capability tiers,
+and every remaining explicit fallback.
+
+## Verification
+
+List the exact commands and recorded Gate results. Include v2 parity, hard-refresh
+scope, XMP preservation, preview and export, color metadata, coordinates, stale jobs,
+missing assets, accessibility, batch, build, and lint delta.
+
+## Issues
+
+Closes #48
+Closes #49
+Closes #50
+Closes #51
+Closes #52
+Closes #53
+Closes #54
+Closes #55
+Closes #56
+Closes #57
+Closes #58
+Closes #59
+Closes #60
+Closes #61
+Closes #63
+Closes #64
+Closes #151
+Closes #152
+Closes #153
+Closes #154
+Closes #155
+Closes #156
+Closes #157</code></pre>
+
+        <div class="callout warn">
+          <h3>Closing keyword rule</h3>
+          <p>
+            Use <code>Closes</code> only after the matching issue Gate passes. If implementation is split,
+            use <code>Refs #N</code> for incomplete issues and close each issue in the PR that completes its
+            Gate. Every issue must have a PR connection before handoff.
+          </p>
+        </div>
+
+        <h3>Verify the connection</h3>
+        <p>After <code>file-pr</code> returns the PR number, run:</p>
+        <pre><code>gh pr view &lt;number&gt; \
+	--json baseRefName,closingIssuesReferences,url \
+	--jq '{
+		url,
+		base: .baseRefName,
+		issues: [.closingIssuesReferences[].number] | sort
+	}'</code></pre>
+        <p>The result must contain the default branch and this exact sorted issue list:</p>
+        <pre><code>[48,49,50,51,52,53,54,55,56,57,58,59,60,61,63,64,151,152,153,154,155,156,157]</code></pre>
+
+        <div class="gate">
+          <strong>PR Gate.</strong> The PR targets the default branch. The body follows the template, contains truthful verification, and names every capability limit. <code>closingIssuesReferences</code> contains every completed issue. Required checks have started. Return the PR URL.
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="footer-inner">
+      <p>
+        Source contracts come from the current
+        <a href="https://github.com/JoakimRosenfeldt/darkroom/issues">Darkroom GitHub issues</a>.
+        Repository baseline: <span class="mono">f92f2d4</span>.
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

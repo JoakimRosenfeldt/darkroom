@@ -1,0 +1,1554 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Darkroom library flow rework agent runbook</title>
+  <style>
+    :root {
+      --page: #f3f0e8;
+      --paper: #fffdf8;
+      --ink: #18201d;
+      --muted: #59635e;
+      --line: #d8d3c8;
+      --line-strong: #aba69b;
+      --accent: #245f51;
+      --accent-soft: #e1eee8;
+      --blue: #285c8a;
+      --blue-soft: #e6eff8;
+      --amber: #8a5a12;
+      --amber-soft: #fbefd9;
+      --red: #8b3a32;
+      --red-soft: #f8e8e5;
+      --code: #eef0eb;
+      --shadow: 0 14px 40px rgba(24, 32, 29, 0.08);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(36, 95, 81, 0.09), transparent 30rem),
+        var(--page);
+      font: 15px/1.58 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    code {
+      padding: 0.12em 0.34em;
+      border-radius: 5px;
+      background: var(--code);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 12px 0 0;
+      padding: 15px 17px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--code);
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    h1, h2, h3, h4 { line-height: 1.2; text-wrap: balance; }
+    h1 { margin: 0; max-width: 920px; font-size: clamp(2rem, 5vw, 4rem); letter-spacing: -0.045em; }
+    h2 { margin: 0 0 16px; font-size: clamp(1.5rem, 3vw, 2.2rem); letter-spacing: -0.025em; }
+    h3 { margin: 0 0 10px; font-size: 1.16rem; }
+    h4 { margin: 18px 0 8px; font-size: 1rem; }
+    p { margin: 0 0 12px; }
+    ul, ol { margin: 8px 0 0; padding-left: 1.35rem; }
+    li + li { margin-top: 5px; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(220px, 270px) minmax(0, 1120px);
+      gap: 28px;
+      width: min(1460px, 100%);
+      margin: 0 auto;
+      padding: 28px;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 20px;
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--paper) 92%, transparent);
+      box-shadow: var(--shadow);
+    }
+
+    .toc strong {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--muted);
+      font-size: 0.74rem;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .toc a {
+      display: block;
+      padding: 7px 8px;
+      border-radius: 7px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+
+    .toc a:hover { background: var(--accent-soft); color: var(--accent); }
+    .toc .sub { padding-left: 20px; color: var(--muted); font-size: 0.84rem; }
+
+    main { min-width: 0; }
+
+    .hero, section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: clamp(24px, 5vw, 54px);
+      background:
+        linear-gradient(135deg, rgba(36, 95, 81, 0.12), transparent 50%),
+        var(--paper);
+    }
+
+    section { margin-top: 22px; padding: clamp(22px, 4vw, 38px); scroll-margin-top: 18px; }
+
+    .eyebrow {
+      margin-bottom: 15px;
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    .lede {
+      max-width: 820px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+    .chip, .tag {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--paper);
+      font-size: 0.78rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .chip { padding: 8px 10px; }
+    .tag { padding: 5px 7px; white-space: nowrap; }
+    .tag.ref { border-color: #a8bfd4; background: var(--blue-soft); color: var(--blue); }
+    .tag.close { border-color: #9ebdad; background: var(--accent-soft); color: var(--accent); }
+    .tag.gate { border-color: #d6b77f; background: var(--amber-soft); color: var(--amber); }
+
+    .callout {
+      margin: 16px 0 0;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 9px 9px 0;
+      background: var(--accent-soft);
+    }
+
+    .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+    .callout.danger { border-left-color: var(--red); background: var(--red-soft); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .grid { display: grid; gap: 14px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      min-width: 0;
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--paper) 94%, var(--page));
+    }
+
+    .card p:last-child, .card ul:last-child, .card ol:last-child { margin-bottom: 0; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.86rem; }
+
+    .rule-list {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 10px 13px;
+      margin-top: 18px;
+    }
+
+    .rule-number {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+    }
+
+    .rule-body {
+      padding: 4px 0 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .rule-body:last-child { border-bottom: 0; }
+    .rule-body strong { display: block; margin-bottom: 3px; }
+    .done { margin-top: 8px; color: var(--accent); font-weight: 700; }
+
+    .phase-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .phase-flow div {
+      position: relative;
+      min-height: 88px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--code);
+      font-size: 0.82rem;
+    }
+
+    .phase-flow strong { display: block; margin-bottom: 4px; color: var(--accent); }
+
+    .table-wrap { overflow-x: auto; margin-top: 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { padding: 10px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+
+    .package {
+      margin-top: 16px;
+      padding: 19px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--paper) 95%, var(--page));
+      scroll-margin-top: 18px;
+    }
+
+    .package-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .package-head h3 { margin: 0; }
+    .package-tags { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .package dl { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 7px 12px; margin: 13px 0 0; }
+    .package dt { color: var(--muted); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+    .package dd { margin: 0; }
+    .package .steps { margin-top: 13px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .package .steps strong { font-size: 0.82rem; letter-spacing: 0.06em; text-transform: uppercase; }
+
+    details {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--paper) 96%, var(--page));
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      font-weight: 750;
+    }
+
+    details[open] summary { border-bottom: 1px solid var(--line); }
+    .detail-body { padding: 15px 17px 18px; }
+
+    .checklist { list-style: none; padding: 0; }
+    .checklist li { position: relative; padding-left: 25px; }
+    .checklist li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.34em;
+      width: 13px;
+      height: 13px;
+      border: 1.5px solid var(--line-strong);
+      border-radius: 3px;
+      background: var(--paper);
+    }
+
+    .contract {
+      margin-top: 14px;
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--code);
+    }
+
+    .contract h3 { color: var(--accent); }
+    .contract ul { margin-bottom: 0; }
+
+    .footer {
+      margin: 22px 0 0;
+      padding: 12px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-align: center;
+    }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; padding: 16px; }
+      .toc { position: static; max-height: none; }
+      .toc nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid.three, .phase-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+      .shell { padding: 10px; gap: 12px; }
+      .hero, section { border-radius: 10px; }
+      .grid.two, .grid.three, .phase-flow { grid-template-columns: 1fr; }
+      .toc nav { grid-template-columns: 1fr; }
+      .package-head { display: block; }
+      .package-tags { justify-content: flex-start; margin-top: 8px; }
+      .package dl { grid-template-columns: 1fr; gap: 2px; }
+      .package dt { margin-top: 8px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+    @media print {
+      body { background: white; color: black; }
+      .shell { display: block; width: 100%; padding: 0; }
+      .toc { display: none; }
+      .hero, section { box-shadow: none; break-inside: avoid; }
+      details { break-inside: avoid; }
+      details > .detail-body { display: block; }
+      a { color: black; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #111513;
+        --paper: #191e1b;
+        --ink: #edf1ed;
+        --muted: #a8b1ab;
+        --line: #343c37;
+        --line-strong: #59645e;
+        --accent: #84c9b5;
+        --accent-soft: #203a32;
+        --blue: #9cc6ea;
+        --blue-soft: #213445;
+        --amber: #e5bd75;
+        --amber-soft: #3b3020;
+        --red: #e1a19a;
+        --red-soft: #402825;
+        --code: #222824;
+        --shadow: 0 16px 42px rgba(0, 0, 0, 0.22);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="toc" aria-label="Table of contents">
+      <strong>Runbook</strong>
+      <nav>
+        <a href="#start">Start here</a>
+        <a href="#protocol">Execution protocol</a>
+        <a href="#pull-requests">Pull request rules</a>
+        <a href="#outcome">Outcome and boundaries</a>
+        <a href="#delivery">Delivery map</a>
+        <a class="sub" href="#phase-0">Phase 0: shared base</a>
+        <a class="sub" href="#phase-1">Phase 1: core library</a>
+        <a class="sub" href="#phase-2">Phase 2: find</a>
+        <a class="sub" href="#phase-3">Phase 3: collections</a>
+        <a class="sub" href="#phase-4">Phase 4: keywords</a>
+        <a class="sub" href="#phase-5">Phase 5: stacks</a>
+        <a class="sub" href="#phase-6">Phase 6: inspect</a>
+        <a class="sub" href="#phase-7">Phase 7: duplicates</a>
+        <a href="#contracts">Shared contracts</a>
+        <a href="#issues">Issue descriptions</a>
+        <a href="#verification">Verification</a>
+        <a href="#exit">Program exit</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero" id="start">
+        <div class="eyebrow">Darkroom implementation plan</div>
+        <h1>Library flow rework agent runbook</h1>
+        <p class="lede">
+          Rework organize, search, cull, inspect, and duplicate review around one scoped and ordered library result. Deliver the work as small pull requests. Every pull request must name its GitHub issues, and only the pull request that satisfies an issue's full closure gate may close it.
+        </p>
+        <div class="chips" aria-label="Plan facts">
+          <span class="chip">15 linked issues</span>
+          <span class="chip">26 pull request packages</span>
+          <span class="chip">Electron + Next.js 16</span>
+          <span class="chip">Local JSON catalog</span>
+          <span class="chip">Updated 23 August 2026</span>
+        </div>
+        <div class="callout">
+          <p><strong>Operating rule:</strong> start with the next ready package in the delivery map. Read its linked issue before editing. Finish with a verified pull request that uses <code>Refs</code>, <code>Part of</code>, or <code>Closes</code> exactly as defined below.</p>
+        </div>
+      </header>
+
+      <section id="protocol">
+        <div class="eyebrow">01 / Execution</div>
+        <h2>Execution protocol</h2>
+        <p>This loop applies to every package. The issue body supplies branch-specific product context. This runbook supplies order, shared contracts, and integration rules. Repository instructions in <code>AGENTS.md</code> remain in force.</p>
+
+        <div class="rule-list">
+          <div class="rule-number">1</div>
+          <div class="rule-body">
+            <strong>Select one ready package.</strong>
+            Confirm every dependency named in the delivery map is merged. Read <code>AGENTS.md</code>, the package card, its shared contracts, and every linked issue body.
+            <div class="done">Complete when the branch has one stated package goal and no unmet dependency.</div>
+          </div>
+
+          <div class="rule-number">2</div>
+          <div class="rule-body">
+            <strong>Write the task boundary before editing.</strong>
+            Record Goal, Scope, Context, Constraints, and Verification in the working note or agent prompt. Name the files likely to change and what is out of scope.
+            <div class="done">Complete when another agent could implement the package without choosing a different product direction.</div>
+          </div>
+
+          <div class="rule-number">3</div>
+          <div class="rule-body">
+            <strong>Establish the current behavior.</strong>
+            Reproduce the package's primary case in Electron and record the visible result. For migrations, copy a catalog before loading it. Do not add a new test suite unless the user asks for tests.
+            <div class="done">Complete when the before state and expected after state are both observable.</div>
+          </div>
+
+          <div class="rule-number">4</div>
+          <div class="rule-body">
+            <strong>Implement the smallest coherent slice.</strong>
+            Follow existing module boundaries. Keep filesystem authority in Electron. Keep derived library results out of persisted catalog data. Add a dependency only after the package's dependency gate passes.
+            <div class="done">Complete when the package goal works without placeholders, parallel implementations, or unrelated refactors.</div>
+          </div>
+
+          <div class="rule-number">5</div>
+          <div class="rule-body">
+            <strong>Connect the shared result.</strong>
+            Route grid, counts, selection, filmstrip, viewer navigation, culling, and compare through the shared library result when the package affects scope or order.
+            <div class="done">Complete when two UI surfaces cannot derive different entry sets for the same state.</div>
+          </div>
+
+          <div class="rule-number">6</div>
+          <div class="rule-body">
+            <strong>Verify the package.</strong>
+            Run the required commands, execute the package's manual cases, restart Electron, and check the linked issue's completion criteria. Record known repository-wide lint failures separately from new diagnostics.
+            <div class="done">Complete when the pull request can state what passed, what failed, and why.</div>
+          </div>
+
+          <div class="rule-number">7</div>
+          <div class="rule-body">
+            <strong>Review the blast radius.</strong>
+            Check catalog migration, persistence, path safety, visible order, selection restoration, and source-file behavior as applicable. Inspect the final diff for unrelated changes.
+            <div class="done">Complete when each material risk has either a passing check or an explicit pull request note.</div>
+          </div>
+
+          <div class="rule-number">8</div>
+          <div class="rule-body">
+            <strong>Open the connected pull request.</strong>
+            Use the repository's <code>file-pr</code> skill. Follow the issue-link rules in the next section. Do not mark a partial implementation as closing an issue.
+            <div class="done">Complete when the pull request is open, checks are reported, and every affected issue is linked with the correct keyword.</div>
+          </div>
+        </div>
+
+        <h3>Task brief template</h3>
+        <pre>Goal
+What must be true when this package is done.
+
+Scope
+Files and modules to change. State what is out of scope.
+
+Context
+Linked issue bodies, relevant package dependencies, current behavior, and shared contracts.
+
+Constraints
+Catalog compatibility, filesystem boundaries, API contracts, ordering rules, and repository instructions.
+
+Verification
+Commands and observable Electron cases that prove completion.</pre>
+      </section>
+
+      <section id="pull-requests">
+        <div class="eyebrow">02 / Delivery record</div>
+        <h2>Pull request rules</h2>
+        <div class="grid two">
+          <div class="card">
+            <h3>Default shape</h3>
+            <ul>
+              <li>Use one branch and one pull request per package.</li>
+              <li>Keep foundational model work separate from its UI closure slice.</li>
+              <li>Merge packages in dependency order.</li>
+              <li>Use the <code>file-pr</code> skill when opening each pull request.</li>
+              <li>Do not combine packages because they touch the same file.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Issue keywords</h3>
+            <ul>
+              <li><code>Refs #34</code>: relevant foundation or supporting work.</li>
+              <li><code>Part of #34</code>: a required slice that does not satisfy the full issue.</li>
+              <li><code>Closes #34</code>: the issue body and every completion criterion pass after merge.</li>
+              <li>Put each closing keyword on its own line when one pull request completes several issues.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout warn">
+          <p><strong>Closure guard:</strong> a closure package inherits the earlier supporting packages for that issue. Before writing <code>Closes</code>, rerun the whole issue checklist against the merged dependency state. A green package check alone is not enough.</p>
+        </div>
+
+        <h3>Required pull request body</h3>
+        <pre>## Problem
+State the user-visible gap and current behavior.
+
+## Solution
+State the implemented package boundary and shared contracts used.
+
+## Issues
+Refs #137
+Part of #34
+Closes #140
+
+## Verification
+- npm run build
+- Changed-file lint or repo lint result
+- Electron cases, including restart
+
+## Risk and rollback
+Catalog migration, filesystem, ordering, or performance risks when applicable.</pre>
+
+        <p class="small muted">If the whole program is deliberately delivered on one branch, the final pull request may list all 15 <code>Closes</code> lines only after all program exit checks pass. Smaller pull requests remain the default.</p>
+      </section>
+
+      <section id="outcome">
+        <div class="eyebrow">03 / Product boundary</div>
+        <h2>Outcome and boundaries</h2>
+        <div class="grid two">
+          <div class="card">
+            <h3>Program outcome</h3>
+            <p>A user can browse a folder subtree, organize photos into manual and saved collections, find photos by text and metadata, group related frames, inspect and compare them, cull in visible order, archive without losing organization, and review byte-identical files safely.</p>
+            <p>Every surface consumes one derived result: active scope, search, facets, curation filters, format, deterministic sort, and stack projection.</p>
+          </div>
+          <div class="card">
+            <h3>Completion standard</h3>
+            <ul class="checklist">
+              <li>All 15 issue closure gates pass in Electron after restart.</li>
+              <li>Catalog migrations preserve current metadata and albums.</li>
+              <li>Grid, counts, viewer, filmstrip, compare, and culling agree on scope and order.</li>
+              <li>Every package has a connected pull request and recorded verification.</li>
+              <li>No action deletes a source file outside an explicit, confirmed OS-trash flow.</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>Decisions fixed for this program</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Area</th><th>Decision</th><th>Reason</th></tr></thead>
+            <tbody>
+              <tr><td>Catalog</td><td>Keep one local JSON catalog per root. Add explicit parser migrations and atomic replacement.</td><td>The current product is local-first and needs no database for these issues.</td></tr>
+              <tr><td>Entry identity</td><td>Keep encoded relative-path entry IDs for this program.</td><td>A stable-ID migration changes import, rename, sidecar, and deletion semantics beyond the requested work.</td></tr>
+              <tr><td>Collections</td><td>Use one tree containing sets, manual albums, and Smart Albums. The root is virtual.</td><td>One hierarchy avoids separate navigation and ordering systems.</td></tr>
+              <tr><td>Tree movement</td><td>Use explicit menu actions for move and sibling reorder. Do not require drag and drop.</td><td>The issue permits menu-based movement and keyboard use is easier to verify.</td></tr>
+              <tr><td>Search</td><td>Use normalized, case-insensitive, diacritic-insensitive substring matching. Whitespace tokens use AND.</td><td>The rule is deterministic and useful for names, paths, and indexed metadata.</td></tr>
+              <tr><td>Facets</td><td>Use OR within one facet and AND between facet types. Counts exclude the facet being counted.</td><td>Users can predict the result and still see available alternatives.</td></tr>
+              <tr><td>Location</td><td>Use embedded city, state, country, and a GPS-present value. Do not reverse geocode.</td><td>Reverse geocoding adds network, privacy, cache, and locale work.</td></tr>
+              <tr><td>Capture date</td><td>Use embedded capture time. Put missing or invalid dates in a missing bucket with path tie-breaking, never disguised as modification time.</td><td>The sort label must mean capture date.</td></tr>
+              <tr><td>Duplicates</td><td>Detect exact byte matches only. Use OS trash for source removal.</td><td>Visual similarity and permanent deletion are separate safety problems.</td></tr>
+              <tr><td>Refresh</td><td>Provide explicit refresh. Do not add a filesystem watcher.</td><td>External rename and deletion need reconciliation, but continuous watching is not required.</td></tr>
+              <tr><td>Testing</td><td>Use existing checks and an explicit Electron matrix. Do not add tests unless requested.</td><td>This follows repository instructions while keeping completion observable.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Out of scope</h3>
+        <p>Multiple library roots, a database, stable file identities across external rename, cloud sync, reverse geocoding, visual-similarity detection, face recognition, a filesystem watcher, permanent file deletion, and a general drag-and-drop tree framework are not part of this program.</p>
+      </section>
+
+      <section id="delivery">
+        <div class="eyebrow">04 / Ordered work</div>
+        <h2>Delivery map</h2>
+        <p>Run phases in order. Packages within the same phase may run in parallel only when their listed dependencies are already merged and their file scopes do not overlap.</p>
+
+        <div class="phase-flow" aria-label="Dependency flow">
+          <div><strong>0. Shared base</strong>Durable catalog, one result resolver, metadata index.</div>
+          <div><strong>1 to 2. Scope and find</strong>Folders, albums, archive, dates, text, facets.</div>
+          <div><strong>3 to 5. Organize</strong>Collection tree, Smart Albums, keywords, stacks.</div>
+          <div><strong>6 to 7. Decide safely</strong>Zoom, cull, compare, exact duplicate review.</div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Package</th><th>Depends on</th><th>Issue link</th><th>Closure</th></tr></thead>
+            <tbody>
+              <tr><td>0A Catalog durability</td><td>None</td><td>Refs 29, 30, 31, 32, 34, 36, 39, 140, 143</td><td>None</td></tr>
+              <tr><td>0B Shared library result</td><td>0A</td><td>Refs 137, 30, 31, 32, 33, 34, 40, 140, 142</td><td>None</td></tr>
+              <tr><td>0C Metadata index and IPC</td><td>0A</td><td>Refs 33, 34, 39, 140</td><td>None</td></tr>
+              <tr><td>1A Folder subtree</td><td>0B</td><td>Closes 137</td><td>#137</td></tr>
+              <tr><td>1B Manual albums</td><td>0A, 0B</td><td>Closes 138</td><td>#138</td></tr>
+              <tr><td>1C Archive restoration</td><td>1B</td><td>Closes 143</td><td>#143</td></tr>
+              <tr><td>1D Capture order</td><td>0B, 0C</td><td>Closes 140</td><td>#140</td></tr>
+              <tr><td>2A Text search</td><td>0B, 0C</td><td>Closes 33</td><td>#33</td></tr>
+              <tr><td>2B Facet engine</td><td>2A</td><td>Part of 34</td><td>None</td></tr>
+              <tr><td>2C Facet interface</td><td>2B</td><td>Closes 34</td><td>#34</td></tr>
+              <tr><td>3A Collection tree model</td><td>1B</td><td>Part of 29</td><td>None</td></tr>
+              <tr><td>3B Collection tree interface</td><td>3A</td><td>Closes 29</td><td>#29</td></tr>
+              <tr><td>3C Quick and target</td><td>3A, 3B</td><td>Closes 32</td><td>#32</td></tr>
+              <tr><td>3D Smart evaluator</td><td>2B, 3A</td><td>Part of 30</td><td>None</td></tr>
+              <tr><td>3E Smart editor</td><td>3D</td><td>Closes 30</td><td>#30</td></tr>
+              <tr><td>4A Keyword model</td><td>2B, 3A</td><td>Part of 36</td><td>None</td></tr>
+              <tr><td>4B Keyword interface and XMP</td><td>4A</td><td>Closes 36</td><td>#36</td></tr>
+              <tr><td>5A Stack model</td><td>0B, 1C</td><td>Part of 31</td><td>None</td></tr>
+              <tr><td>5B Stack interface</td><td>5A</td><td>Closes 31</td><td>#31</td></tr>
+              <tr><td>6A Viewer transform</td><td>0B</td><td>Part of 141</td><td>None</td></tr>
+              <tr><td>6B Zoom controls</td><td>6A</td><td>Closes 141</td><td>#141</td></tr>
+              <tr><td>6C Auto-advance</td><td>0B</td><td>Closes 142</td><td>#142</td></tr>
+              <tr><td>6D Compare view</td><td>6B, 0B</td><td>Closes 40</td><td>#40</td></tr>
+              <tr><td>7A Fingerprint service</td><td>0A, 0C</td><td>Part of 39</td><td>None</td></tr>
+              <tr><td>7B Duplicate review</td><td>7A, 5A</td><td>Part of 39</td><td>None</td></tr>
+              <tr><td>7C Duplicate actions</td><td>7B, 1C, 5B</td><td>Closes 39</td><td>#39</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="phase-0">
+        <div class="eyebrow">Phase 0</div>
+        <h2>Build the shared base</h2>
+
+        <article class="package" id="package-0a">
+          <div class="package-head">
+            <h3>0A. Make catalog writes durable and migrations explicit</h3>
+            <div class="package-tags"><span class="tag ref">Refs #29 #30 #31 #32 #34 #36 #39 #140 #143</span></div>
+          </div>
+          <p><strong>Goal:</strong> later packages can add persisted state without risking a partial JSON file or scattering migration logic.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>lib/catalog/types.ts</code>, <code>lib/catalog/persistence.ts</code>, <code>electron/catalog-store.ts</code>, preload/main catalog contracts.</dd>
+            <dt>Constraints</dt><dd>Keep one JSON file per root in Electron user data. Read catalog versions 1 and 2. Do not predict or pre-add fields for later features.</dd>
+            <dt>Complete when</dt><dd>A copied v1 and v2 catalog load to the current in-memory shape; a forced interrupted write leaves either the prior valid file or the full new file; parse and write errors reach visible UI state.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Centralize the latest writable catalog version and one migration path per version.</li>
+              <li>Validate before writing. Write a sibling temporary file, flush it, then atomically replace the target. Keep one last-known-good backup before a schema migration.</li>
+              <li>Expose write failure through the persistence queue instead of swallowing it. Keep later writes serialized per root.</li>
+              <li>Document the rule: the package that adds persisted fields owns its version bump, parser, migration, pruning, and restart check.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-0b">
+          <div class="package-head">
+            <h3>0B. Introduce one library result resolver</h3>
+            <div class="package-tags"><span class="tag ref">Refs #137 #30 #31 #32 #33 #34 #40 #140 #142</span></div>
+          </div>
+          <p><strong>Goal:</strong> one pure contract controls active scope, filters, deterministic order, projected stack tiles, and selection reconciliation.</p>
+          <dl>
+            <dt>Scope</dt><dd>New focused module under <code>lib/library/</code>, <code>app/page.tsx</code>, <code>app/photo/page.tsx</code>, <code>stores/library-store.ts</code>.</dd>
+            <dt>Constraints</dt><dd>Do not persist derived result arrays. Keep current behavior for unsupported future view kinds.</dd>
+            <dt>Complete when</dt><dd>Grid and viewer receive the same ordered IDs for All, Folder, Album, and Archive; changing scope reconciles selection to a visible ID or clears it; no page performs its own sort chain.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Define <code>resolveLibraryResult(input)</code> and the output contract in Shared contracts.</li>
+              <li>Move the current archive, catalog-view, curation, format, and sort chain into the resolver without changing visible behavior.</li>
+              <li>Make <code>app/page.tsx</code> render the result and <code>app/photo/page.tsx</code> navigate its ordered IDs.</li>
+              <li>Centralize selection reconciliation against the result and preserve an existing selected ID when it remains visible.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-0c">
+          <div class="package-head">
+            <h3>0C. Hydrate normalized file metadata in the background</h3>
+            <div class="package-tags"><span class="tag ref">Refs #33 #34 #39 #140</span></div>
+          </div>
+          <p><strong>Goal:</strong> capture time, search fields, facet fields, and file fingerprint inputs are available without decoding files during render.</p>
+          <dl>
+            <dt>Scope</dt><dd>Filesystem scan types and service, Electron IPC/preload, catalog entry analysis fields, new query-index module under <code>lib/library/</code>.</dd>
+            <dt>Constraints</dt><dd>Parsing runs in Electron with bounded concurrency. The renderer receives typed values, not raw absolute-path authority. Search indexes stay in memory and are rebuilt from persisted source fields.</dd>
+            <dt>Complete when</dt><dd>Import returns thumbnails and entries before analysis ends; progress and cancellation work; unchanged files reuse fields by size and modification-time cache key; one changed file invalidates only its index record.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Define typed source fields for capture time and provenance, camera make/model, lens, ISO, focal length, embedded location, GPS presence, size, and modification time.</li>
+              <li>Run a decoder gate against supported JPEG, HEIC, TIFF, and available RAW fixtures. Add <code>exifr</code> only if it parses the required fields for supported formats and packages cleanly; otherwise use the current decoding path and report unsupported values as missing.</li>
+              <li>Add cancellable, bounded metadata work after the scan's first usable result. Persist normalized source fields with a cache signature.</li>
+              <li>Build per-entry normalized search text and facet indexes in memory. Never parse display strings to evaluate a query.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-1">
+        <div class="eyebrow">Phase 1</div>
+        <h2>Fix the core library flow</h2>
+
+        <article class="package" id="package-1a">
+          <div class="package-head">
+            <h3>1A. Make folder selection mean the whole subtree</h3>
+            <div class="package-tags"><span class="tag close">Closes #137</span></div>
+          </div>
+          <p><strong>Goal:</strong> a selected folder includes its direct files and every descendant, with no sibling leakage.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>lib/library/folders.ts</code>, shared result folder branch, <code>components/shell/SidePanel.tsx</code>.</dd>
+            <dt>Constraints</dt><dd>Compare normalized relative path segments. Root matches all entries. A prefix such as <code>trip</code> must not match <code>trip-old</code>.</dd>
+            <dt>Complete when</dt><dd>Root, direct child, two-level descendant, sibling, similarly named sibling, trailing separator, archived, filtered, viewer, reload, and empty-folder cases all match issue #137.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add one segment-aware subtree predicate with documented root and separator examples.</li>
+              <li>Use it in the resolver. Make folder counts apply the same downstream active filters as the result they describe.</li>
+              <li>Keep the selected folder path readable from existing saved view state and reconcile selection after result changes.</li>
+              <li>Verify keyboard culling and viewer navigation never leave the subtree.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-1b">
+          <div class="package-head">
+            <h3>1B. Tighten flat manual album invariants</h3>
+            <div class="package-tags"><span class="tag close">Closes #138</span></div>
+          </div>
+          <p><strong>Goal:</strong> current flat albums have idempotent membership, stable order, a clear empty state, and safe reload behavior before hierarchy work begins.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>lib/catalog/types.ts</code>, <code>lib/library/folders.ts</code>, <code>stores/library-store.ts</code>, album picker and side panel.</dd>
+            <dt>Constraints</dt><dd>Keep albums flat in this package. Adding an existing ID and removing a missing ID are no-ops. Prune IDs that no longer resolve after refresh.</dd>
+            <dt>Complete when</dt><dd>Create, rename, delete, add, repeated add, remove, repeated remove, ordered multi-add, empty album, archive visibility, missing entry, folder refresh, and restart satisfy issue #138.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Co-locate album invariants with parser and store mutations: unique album IDs, unique ordered entry IDs, and valid entry references.</li>
+              <li>Preserve first-add order and append only new IDs from a multi-selection in visible order.</li>
+              <li>Keep empty albums visible and addressable. Confirm deletion of the album definition without implying source deletion.</li>
+              <li>Restore the active view to All only when its album is deleted.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-1c">
+          <div class="package-head">
+            <h3>1C. Restore album membership after archive</h3>
+            <div class="package-tags"><span class="tag close">Closes #143</span></div>
+          </div>
+          <p><strong>Goal:</strong> archive remains a reversible visibility action and restores memberships that still have a valid destination.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog archive schema/migration, archive helpers, <code>stores/library-store.ts</code>, archive and restore copy.</dd>
+            <dt>Constraints</dt><dd>Keep <code>archivedEntryIds</code> readable. Never recreate a deleted album. Never touch source files.</dd>
+            <dt>Complete when</dt><dd>New and legacy archives load; multi-album membership and positions restore where possible; deleted albums remain deleted; repeated archive/restore is idempotent; restart preserves the result.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add an optional snapshot per entry with album ID and prior index. Migrate legacy archived IDs with no snapshot.</li>
+              <li>At archive time, record deduplicated valid memberships before removing the entry from active album lists.</li>
+              <li>At restore, insert into existing albums at the clamped prior index, once. Skip deleted albums and invalid entries.</li>
+              <li>Separate archive language from the existing physical-file trash flow.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-1d">
+          <div class="package-head">
+            <h3>1D. Sort by embedded capture time</h3>
+            <div class="package-tags"><span class="tag close">Closes #140</span></div>
+          </div>
+          <p><strong>Goal:</strong> Capture date means embedded capture time across the grid, filmstrip, and viewer.</p>
+          <dl>
+            <dt>Scope</dt><dd>Metadata normalization, <code>lib/library/curation.ts</code> or shared comparator, sort indicator and metadata provenance copy.</dd>
+            <dt>Constraints</dt><dd>Priority is subsecond DateTimeOriginal, DateTimeOriginal, then embedded CreateDate. An explicit offset produces an instant. A missing offset is a floating wall time encoded deterministically. Missing and invalid values sort in a missing bucket after known dates in both directions. Tie-break by normalized relative path, then ID.</dd>
+            <dt>Complete when</dt><dd>Mixed formats, offsets, floating time, modified mtimes, invalid values, missing values, equal values, reverse order, grid, filmstrip, viewer, and restart satisfy issue #140.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Persist the comparison key and provenance separately from the raw display value.</li>
+              <li>Replace only the Capture date comparator. Keep filename and other modes unchanged.</li>
+              <li>Show <em>Capture time unavailable</em> for the missing bucket. Do not label modification time as capture time.</li>
+              <li>Feed all ordered surfaces from the shared result.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-2">
+        <div class="eyebrow">Phase 2</div>
+        <h2>Add text search and metadata facets</h2>
+
+        <article class="package" id="package-2a">
+          <div class="package-head">
+            <h3>2A. Add indexed filename and metadata search</h3>
+            <div class="package-tags"><span class="tag close">Closes #33</span></div>
+          </div>
+          <p><strong>Goal:</strong> text search filters only the active scope and stays responsive as the query changes.</p>
+          <dl>
+            <dt>Scope</dt><dd>Query index, shared resolver, <code>hooks/useLibraryViewSettings.ts</code>, <code>components/shell/LibraryToolbar.tsx</code>, empty state.</dd>
+            <dt>Constraints</dt><dd>Normalize Unicode with compatibility decomposition, remove combining marks, and case-fold. Split trimmed whitespace into tokens. Every token must occur as a substring in at least one indexed field. Empty query is no filter.</dd>
+            <dt>Complete when</dt><dd>Filename, relative path, camera, and lens searches pass exact, partial, case, diacritic, multi-token, empty, no-result, combined-filter, rename, metadata update, clear, navigation, 50k-catalog, and restart cases.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Index filename, relative path, camera make/model, and lens from typed source fields. Let later keyword work add keyword paths to the same index.</li>
+              <li>Add query state to the existing local library-view settings so viewer navigation and restart recover it.</li>
+              <li>Apply text after primary scope and before facets. Keep curation, format, and sort composition in the shared resolver.</li>
+              <li>Add input, clear action, focus shortcut, result count, and distinct no-results copy. Use deferred rendering or a short debounce with stale-query rejection.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-2b">
+          <div class="package-head">
+            <h3>2B. Build typed facet predicates and counts</h3>
+            <div class="package-tags"><span class="tag ref">Part of #34</span></div>
+          </div>
+          <p><strong>Goal:</strong> one query model evaluates camera, lens, ISO, focal length, location, edited state, and album membership without parsing UI strings.</p>
+          <dl>
+            <dt>Scope</dt><dd>Query types, metadata indexes, shared resolver, store/view settings.</dd>
+            <dt>Constraints</dt><dd>OR within one facet, AND between facets. Numeric ranges are inclusive. Unknown is an explicit value. A photo is edited when a Develop document exists. Location uses embedded text fields and GPS presence only.</dd>
+            <dt>Complete when</dt><dd>A non-UI harness or Electron console exercise proves single value, multiple values, multiple facet types, numeric bounds, unknown, edited, album membership, and self-excluding counts against a fixed catalog.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Define serializable view-filter state with typed values and inclusive numeric ranges.</li>
+              <li>Build index buckets by entry ID and update only the changed entry or album relation.</li>
+              <li>Compute each facet's available counts from active scope, text, curation, format, and every other selected facet. Exclude its own selection while counting itself.</li>
+              <li>Return photo count, visible tile count, facet values, and active filters from the same result revision.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-2c">
+          <div class="package-head">
+            <h3>2C. Add the facet interface</h3>
+            <div class="package-tags"><span class="tag close">Closes #34</span></div>
+          </div>
+          <p><strong>Goal:</strong> users can discover, combine, inspect, and remove active facet filters from the toolbar.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>components/shell/LibraryToolbar.tsx</code>, focused facet popover components, result and empty-state copy.</dd>
+            <dt>Constraints</dt><dd>Use existing component and styling patterns. Make every control keyboard reachable and labelled. Preserve facet state with existing local view settings.</dd>
+            <dt>Complete when</dt><dd>Every facet required by #34 shows correct values and counts; value search, one/many select, range, unknown, clear-one, clear-all, chips, no-metadata, no-results, combined text, album update, Develop update, and restart pass.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add a filter popover grouped by camera, lens, ISO, focal length, location, edited state, and album.</li>
+              <li>Add search within long value lists, counts, inclusive range inputs, and clear actions.</li>
+              <li>Render removable active chips in the toolbar without hiding the current result count.</li>
+              <li>Explain whether a blank group means no source metadata or no values under the other active filters.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-3">
+        <div class="eyebrow">Phase 3</div>
+        <h2>Build the collection system</h2>
+
+        <article class="package" id="package-3a">
+          <div class="package-head">
+            <h3>3A. Replace the flat album array with a collection tree model</h3>
+            <div class="package-tags"><span class="tag ref">Part of #29</span></div>
+          </div>
+          <p><strong>Goal:</strong> sets, manual albums, and later Smart Albums share one cycle-safe ordered tree.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog schema/migration, collection types and parser, store actions, album API adapters, pruning.</dd>
+            <dt>Constraints</dt><dd>The root is virtual and represented by <code>parentId: null</code>. Manual album entry order is retained. Each node has one parent, one kind, and an integer sibling order. A manual album remains the only collection kind with stored entry IDs.</dd>
+            <dt>Complete when</dt><dd>Every v2 flat album migrates at root with unchanged membership and order; create, rename, move, reorder, cycle rejection, malformed parent, and both nonempty-set deletion choices persist after restart.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add discriminated <code>CollectionNode</code> records for <code>set</code> and <code>album</code>. Reserve <code>smart</code> only when package 3D adds its validated rule.</li>
+              <li>Validate unique IDs, valid parents, set-only parents, acyclic ancestry, unique sibling order after normalization, and valid album entry IDs.</li>
+              <li>Add create set, create album in set, rename, move, move up/down, and delete actions. Moving checks ancestry before mutation.</li>
+              <li>For deleting a nonempty set, require either <em>promote children to parent</em> or <em>delete descendant collection definitions</em>. Neither choice deletes source photos.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-3b">
+          <div class="package-head">
+            <h3>3B. Render and manage the collection tree</h3>
+            <div class="package-tags"><span class="tag close">Closes #29</span></div>
+          </div>
+          <p><strong>Goal:</strong> deep collection sets and albums remain navigable, editable, and understandable at supported desktop widths.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>components/shell/SidePanel.tsx</code>, recursive tree components, <code>components/library/AlbumPickerPopup.tsx</code>, active path display.</dd>
+            <dt>Constraints</dt><dd>Use disclosure buttons plus menu commands for movement and reorder. Persist expanded node IDs in local view settings keyed by catalog root.</dd>
+            <dt>Complete when</dt><dd>Creation at root and depth three, collapse/expand, rename, move, reorder, cycle rejection, both delete choices, active path, album picker at depth, narrow width, keyboard navigation, migration, and restart satisfy issue #29.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Render a recursive semantic tree with labelled disclosure controls and indentation that remains readable when narrow.</li>
+              <li>Expose create, rename, move to set, move up/down, and delete in node menus.</li>
+              <li>Show album photo counts from the current catalog and the active collection path for the selected node.</li>
+              <li>Update the album picker to list only manual albums at any depth and resolve by ID.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-3c">
+          <div class="package-head">
+            <h3>3C. Add Quick Collection and a target album</h3>
+            <div class="package-tags"><span class="tag close">Closes #32</span></div>
+          </div>
+          <p><strong>Goal:</strong> culling can place the active or selected photos into a temporary set or designated manual album without leaving the current view.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog schema/migration, store actions and view kinds, side panel, toolbar, context menus, keyboard commands.</dd>
+            <dt>Constraints</dt><dd>Quick Collection is an ordered set of entry IDs. Target is a manual album ID or null. Duplicate actions are idempotent. Deleting the target album clears target. Prune stale quick IDs.</dd>
+            <dt>Complete when</dt><dd>Set/clear target, <code>B</code> add to target, <code>Q</code> toggle Quick, <code>Shift+B</code> choose album, single and range selection, duplicate action, counts, Quick view, Target marker, clear, remove, curation inside each view, deleted target, and restart satisfy issue #32.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add persisted quick IDs and target album ID with migration and pruning.</li>
+              <li>Centralize actions that preserve selected IDs and append in current visible order once.</li>
+              <li>Add Quick as a library scope and mark the target album in the tree. Show both counts and the active target in grid and viewer contexts.</li>
+              <li>Register shortcuts in the central keyboard path and include accessible menu equivalents.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-3d">
+          <div class="package-head">
+            <h3>3D. Add a typed Smart Album evaluator</h3>
+            <div class="package-tags"><span class="tag ref">Part of #30</span></div>
+          </div>
+          <p><strong>Goal:</strong> a saved rule is data, not executable code or copied photo membership, and gives a deterministic ordered result.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog collection schema, predicate AST/parser, query evaluator, store actions and result resolver.</dd>
+            <dt>Constraints</dt><dd>Groups use <code>all</code> or <code>any</code>. Maximum nesting depth 5 and maximum 100 total nodes. Reject unknown fields and invalid operator/value combinations. Store no result IDs.</dd>
+            <dt>Complete when</dt><dd>Rules serialize and parse; all/any, empty, missing, invalid field, depth limit, group limit, rating, flag, label, date, path, filename, format, album, keyword when available, camera, lens, ISO, focal length, location, and edited state evaluate deterministically.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add <code>smart</code> collection nodes with a versioned rule group and typed predicates.</li>
+              <li>Whitelist field/operator pairs. Give every field explicit missing-value semantics.</li>
+              <li>Evaluate against the same query indexes as search and facets. Use shared deterministic sort after matching.</li>
+              <li>Invalidate affected results after import, refresh, metadata, album, keyword, archive, or Develop changes without rebuilding the source metadata index.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-3e">
+          <div class="package-head">
+            <h3>3E. Add the Smart Album editor and tree item</h3>
+            <div class="package-tags"><span class="tag close">Closes #30</span></div>
+          </div>
+          <p><strong>Goal:</strong> users can create, preview, save, revisit, duplicate, rename, and delete rule-based collections.</p>
+          <dl>
+            <dt>Scope</dt><dd>Collection tree item, Smart Album rule editor, preview count, empty and invalid states.</dd>
+            <dt>Constraints</dt><dd>Use the typed AST controls. Keep unsaved editor state separate from the saved rule until Save. Manual album membership never changes.</dd>
+            <dt>Complete when</dt><dd>Create, nested placement, all/any editing, preview, save, rename, duplicate, delete, empty rule, invalid migrated field, import, metadata edit, album change, Develop change, navigation, and restart satisfy issue #30.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add a rule builder that only offers valid operators and input types for the selected field.</li>
+              <li>Show live preview count and a plain reason when a rule is empty or invalid.</li>
+              <li>Add save, cancel, rename, duplicate, and delete. Place Smart Albums in any collection set.</li>
+              <li>Resolve Smart Album selection through the shared result so viewer and culling remain in its result.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-4">
+        <div class="eyebrow">Phase 4</div>
+        <h2>Add keywords and hierarchy</h2>
+
+        <article class="package" id="package-4a">
+          <div class="package-head">
+            <h3>4A. Add cycle-safe keyword data and assignments</h3>
+            <div class="package-tags"><span class="tag ref">Part of #36</span></div>
+          </div>
+          <p><strong>Goal:</strong> keyword hierarchy and photo assignment have stable IDs, deterministic merge behavior, and query semantics.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog schema/migration, keyword parser, store actions, query indexes and predicates.</dd>
+            <dt>Constraints</dt><dd>Sibling display names are unique after search normalization. A direct assignment stores only the selected keyword ID, not copied ancestor IDs. Every entry's assignment list is unique and valid.</dd>
+            <dt>Complete when</dt><dd>Create, nested create, rename, move, cycle rejection, merge, both subtree deletion choices, single assignment, batch assignment, remove, exact, descendants, ancestors, unkeyworded, stale reference pruning, search-index update, and restart work.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add Keyword records with ID, parent ID, display name, synonyms, export flag, and timestamps, plus entry-to-keyword assignments.</li>
+              <li>Add create, rename, move, merge, delete, assign, remove, and batch actions. Merge redirects assignments and children to the kept node once.</li>
+              <li>Define filters: exact means directly assigned; descendants means selected or any descendant; ancestors means selected or any ancestor; unkeyworded means no direct assignment.</li>
+              <li>Index display names, synonyms, and full hierarchy paths for text search.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-4b">
+          <div class="package-head">
+            <h3>4B. Add keyword editing, filtering, and XMP round-trip</h3>
+            <div class="package-tags"><span class="tag close">Closes #36</span></div>
+          </div>
+          <p><strong>Goal:</strong> users can edit and assign keywords to one or many photos, filter by hierarchy, and preserve supported sidecar keyword data.</p>
+          <dl>
+            <dt>Scope</dt><dd>Keyword panel and autocomplete, metadata surface, facet/query UI, <code>lib/develop/xmp.ts</code>, sidecar sync.</dd>
+            <dt>Constraints</dt><dd>Write flat values to <code>dc:subject</code> and hierarchy paths to <code>lr:hierarchicalSubject</code>. Preserve unknown XML. Surface conflicts and unsupported constructs instead of silently discarding them.</dd>
+            <dt>Complete when</dt><dd>Hierarchy editing, autocomplete, counts, single and batch assignment, exact/descendant/ancestor/unkeyworded filters, text search, sidecar read, write, external conflict, unsupported path, unknown XML preservation, and restart satisfy issue #36.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add a keyboard-usable tree and autocomplete assignment control that preserves the current photo selection.</li>
+              <li>Add merge and delete confirmation with the model's child and assignment consequences stated before action.</li>
+              <li>Parse flat and Lightroom hierarchical keyword fields. Map supported paths to keyword nodes and display conflicts before overwrite.</li>
+              <li>Write both supported representations through the current atomic sidecar path and retain unrelated XMP.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-5">
+        <div class="eyebrow">Phase 5</div>
+        <h2>Add stacks</h2>
+
+        <article class="package" id="package-5a">
+          <div class="package-head">
+            <h3>5A. Add stack records and visible-item projection</h3>
+            <div class="package-tags"><span class="tag ref">Part of #31</span></div>
+          </div>
+          <p><strong>Goal:</strong> stack membership is valid catalog state and collapsed stacks project to one visible tile without changing source files.</p>
+          <dl>
+            <dt>Scope</dt><dd>Catalog schema/migration, stack parser and store actions, shared result projection, archive and source-removal pruning.</dd>
+            <dt>Constraints</dt><dd>An entry belongs to at most one stack. Members are unique and ordered. Cover is a member. Fewer than two valid members dissolves the stack. Archive hides a member but retains membership; source removal prunes it.</dd>
+            <dt>Complete when</dt><dd>Create, invalid overlap, add, remove, reorder, cover change, archive, restore, missing entry, source removal, auto-dissolve, unstack, catalog migration, and restart produce valid state.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add stable Stack records with ordered member IDs, cover ID, timestamps, and optional reason.</li>
+              <li>Co-locate create, add, remove, reorder, cover, and unstack invariants with pruning.</li>
+              <li>Filter individual entries first, then project matching members. A collapsed stack uses its cover if matched, otherwise its first matching member as a temporary representative without changing the saved cover.</li>
+              <li>Return both matching photo count and visible tile count. Expanded stacks expose matching members in saved order.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-5b">
+          <div class="package-head">
+            <h3>5B. Add stack controls to grid and viewer</h3>
+            <div class="package-tags"><span class="tag close">Closes #31</span></div>
+          </div>
+          <p><strong>Goal:</strong> users can create, inspect, expand, reorder, choose a cover, and dissolve stacks while selection follows visible items.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>PhotoGrid</code>, <code>DynamicPhotoGrid</code>, <code>PhotoTile</code>, context menus, viewer navigation and stack strip.</dd>
+            <dt>Constraints</dt><dd>Expanded state is local view state. Collapsed keyboard navigation visits one representative. Opening a stack explicitly exposes its members. Batch actions report whether they target the stack or selected members.</dd>
+            <dt>Complete when</dt><dd>Create from selection, badge/count, expand/collapse, visible order, keyboard selection, cover change, member reorder, viewer entry, archive, source trash pruning, unstack, narrow grid, and restart satisfy issue #31.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add a labelled badge and disclosure control to the representative tile.</li>
+              <li>Add context commands for stack selection, add/remove members, choose cover, reorder, and unstack.</li>
+              <li>Make grid selection and keyboard ranges operate on current visible items. An expanded stack contributes its visible members.</li>
+              <li>Add an explicit stack-member strip in the viewer so entering members is intentional and returning preserves expansion.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-6">
+        <div class="eyebrow">Phase 6</div>
+        <h2>Improve inspection and culling</h2>
+
+        <article class="package" id="package-6a">
+          <div class="package-head">
+            <h3>6A. Replace the binary viewer scale with one transform model</h3>
+            <div class="package-tags"><span class="tag ref">Part of #141</span></div>
+          </div>
+          <p><strong>Goal:</strong> fit, fill, actual pixels, custom steps, pan, crop, rotation, and zoom anchoring use one coordinate system.</p>
+          <dl>
+            <dt>Scope</dt><dd><code>components/viewer/PhotoViewer.tsx</code>, <code>components/develop/DevelopCanvas.tsx</code>, focused viewer geometry module.</dd>
+            <dt>Constraints</dt><dd>Actual pixels maps one source pixel to one device pixel using device pixel ratio. Pan is clamped to the transformed crop bounds; an image smaller than the viewport stays centered. Photo, crop, rotation, or viewport changes always revalidate offsets.</dd>
+            <dt>Complete when</dt><dd>Pure geometry exercises cover landscape, portrait, small, high-resolution, cropped, rotated, DPR 1 and 2, pointer anchor, center anchor, every mode, and clamp after resize without invalid offsets.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Define mode, scale, offset, viewport, transformed bounds, clamp, and reset invariants beside the geometry functions.</li>
+              <li>Replace fit/detail state with <code>fit</code>, <code>fill</code>, <code>actual</code>, and <code>custom</code>.</li>
+              <li>Route all scale changes through one anchor-preserving function.</li>
+              <li>Share the transform model with compare panes in package 6D.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-6b">
+          <div class="package-head">
+            <h3>6B. Add zoom and pan controls</h3>
+            <div class="package-tags"><span class="tag close">Closes #141</span></div>
+          </div>
+          <p><strong>Goal:</strong> mouse, trackpad, keyboard, and toolbar controls expose the same scale model and predictable reset behavior.</p>
+          <dl>
+            <dt>Scope</dt><dd>Viewer toolbar, wheel/pinch/pointer handlers, keyboard command path, accessible value copy.</dd>
+            <dt>Constraints</dt><dd>Use documented stepped values 25, 50, 100, 200, and 400 percent within decode limits, plus fit and fill. Pointer input anchors at pointer; keyboard and toolbar anchor at viewport center.</dd>
+            <dt>Complete when</dt><dd>Fit, fill, 1:1, steps, wheel, pinch, keys, toolbar, pointer anchor, center anchor, pan clamp, reset, photo change, crop change, rotation, small image, high-DPI, and missing/decode-error states satisfy issue #141.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Add labelled mode controls, percent display, zoom in/out, and reset.</li>
+              <li>Map wheel, pinch, keyboard, and toolbar to the shared transform functions.</li>
+              <li>Keep panning disabled when no overflow exists and clamp after every transform change.</li>
+              <li>Expose the command labels in existing shortcut/help surfaces.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-6c">
+          <div class="package-head">
+            <h3>6C. Add explicit auto-advance</h3>
+            <div class="package-tags"><span class="tag close">Closes #142</span></div>
+          </div>
+          <p><strong>Goal:</strong> an optional mode advances once after a single-photo curation action using the current visible order.</p>
+          <dl>
+            <dt>Scope</dt><dd>Library view preferences, central curation command path, grid and viewer controls, selection transition.</dd>
+            <dt>Constraints</dt><dd>Eligible actions are pick, reject, unflag, star rating, and color label. Develop edits and navigation never advance. Multi-selection and range actions keep the selection and do not advance. The final item remains selected when still visible.</dd>
+            <dt>Complete when</dt><dd>Toggle on/off, every eligible action, ineligible actions, rapid input, filtered-out current item, archive scope, Quick/Target/Smart scope, stack projection, single, batch, final item, undo path, and restart satisfy issue #142.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Persist the accessible toggle in local library-view settings.</li>
+              <li>Before mutation, capture the result revision, visible ordered IDs, and active index. After mutation, select the first later ID still present in the new result.</li>
+              <li>If no later ID remains, keep the current ID when visible, otherwise choose the nearest prior visible ID, otherwise clear selection.</li>
+              <li>Centralize this post-action transition so keyboard, toolbar, and context commands cannot advance twice.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-6d">
+          <div class="package-head">
+            <h3>6D. Add a two-pane Compare view</h3>
+            <div class="package-tags"><span class="tag close">Closes #40</span></div>
+          </div>
+          <p><strong>Goal:</strong> compare an active photo and candidate inside the current result, with linked or independent inspection and curation.</p>
+          <dl>
+            <dt>Scope</dt><dd>Compare route/state, reusable viewer surface, grid/filmstrip/viewer entry points, compare toolbar and metadata.</dd>
+            <dt>Constraints</dt><dd>Exactly two selected photos enter from grid: the last active is Select and the other is Candidate. From viewer, current is Select and next visible is Candidate. Linked pan uses normalized image coordinates so different dimensions remain aligned.</dd>
+            <dt>Complete when</dt><dd>Grid and viewer entry, names, metadata, active pane, fit, linked and independent zoom/pan, next/previous candidate, replace, pick, reject, rating, label, keep selection, folder/album/search/Smart scope, missing file, decode error, responsive desktop width, return, and restart satisfy issue #40.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Keep compare session state separate from the single viewer route while retaining the source result descriptor and ordered IDs.</li>
+              <li>Extract one viewer surface with independent load and error state and the package 6A transform.</li>
+              <li>Add active-pane indication, linked toggle, candidate navigation, replacement, and curation commands.</li>
+              <li>When result membership changes, keep valid IDs or select the next deterministic candidate without leaking outside scope.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="phase-7">
+        <div class="eyebrow">Phase 7</div>
+        <h2>Add exact duplicate review</h2>
+
+        <article class="package" id="package-7a">
+          <div class="package-head">
+            <h3>7A. Formalize fingerprints and stream exact hashing</h3>
+            <div class="package-tags"><span class="tag ref">Part of #39</span></div>
+          </div>
+          <p><strong>Goal:</strong> identify candidate byte-identical files without blocking the library and reuse valid hashes on later scans.</p>
+          <dl>
+            <dt>Scope</dt><dd>Electron filesystem service and IPC, catalog fingerprint cache, background job state and progress.</dd>
+            <dt>Constraints</dt><dd>The current import flow has no strong fingerprint contract, so define one shared contract first. Group candidates by size, then SHA-256. Use modification time only to validate cache freshness, never to declare equality. Hash with bounded stream concurrency and cancellation.</dd>
+            <dt>Complete when</dt><dd>Renamed copies group; same-name different bytes do not; unique sizes avoid hashing; unchanged files reuse cache; changed files rehash; progress, cancellation, missing file, unreadable file, and restart are reported without freezing the renderer.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Define <code>FileFingerprint</code> with size, modification time, SHA-256, algorithm version, and verified timestamp.</li>
+              <li>Stream files in Electron with an AbortSignal and a default concurrency of two. Emit scanned bytes, files complete, cache hits, and failures.</li>
+              <li>Hash only size groups with more than one member. Form exact groups from equal size and hash.</li>
+              <li>Resolve paths from the registered root and relative entry ID in Electron. Do not accept renderer-chosen absolute paths for new duplicate actions.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-7b">
+          <div class="package-head">
+            <h3>7B. Add the duplicate review workspace</h3>
+            <div class="package-tags"><span class="tag ref">Part of #39</span></div>
+          </div>
+          <p><strong>Goal:</strong> each exact group shows enough file and catalog context to choose a keeper before any action.</p>
+          <dl>
+            <dt>Scope</dt><dd>Duplicate result model and route/view, group cards, progress/cancel states, preview and selection.</dd>
+            <dt>Constraints</dt><dd>Never label visual similarity as exact. Default keeper is the first non-archived member by normalized relative path; the user can change it. No action runs from an incomplete scan without saying so.</dd>
+            <dt>Complete when</dt><dd>Groups show paths, format, size, capture time, metadata differences, collection memberships, keyword count, stack, archive state, default keeper, changed keeper, group selection, sort/filter, progress, cancel, partial failures, and final summary.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Create a review model with members, chosen keeper, selected actions, source state, catalog relationships, and scan status.</li>
+              <li>Add a Duplicates scope with group count, reclaimable byte estimate, sorting, failure filter, and per-group select all.</li>
+              <li>Show the consequences of stack, archive, catalog remove, and source trash before execution.</li>
+              <li>Keep group state stable while a background result arrives, but discard results from an older cancelled job.</li>
+            </ol>
+          </div>
+        </article>
+
+        <article class="package" id="package-7c">
+          <div class="package-head">
+            <h3>7C. Add recoverable duplicate actions</h3>
+            <div class="package-tags"><span class="tag close">Closes #39</span></div>
+          </div>
+          <p><strong>Goal:</strong> apply keep, stack, archive, catalog-remove, or source-trash decisions with clear scope and recoverable catalog state.</p>
+          <dl>
+            <dt>Scope</dt><dd>Duplicate action service, stack/archive integration, catalog exclusions, Electron trash IPC boundary, confirmation and summary.</dd>
+            <dt>Constraints</dt><dd>Source removal means OS trash only. Before trash, revalidate target and keeper size and hash. Resolve and canonicalize paths in Electron, require they remain under the registered root, reject symlink escape, and never trash the keeper. Catalog remove uses a persisted exclusion ID and offers Restore to catalog.</dd>
+            <dt>Complete when</dt><dd>Keep-only, stack, archive, catalog exclude/restore, source trash, mixed groups, stale file, changed hash, permission error, partial OS-trash failure, retry, catalog backup, refresh, cancellation, summary, and restart satisfy issue #39.</dd>
+          </dl>
+          <div class="steps"><strong>Steps</strong>
+            <ol>
+              <li>Write a last-known-good catalog snapshot before applying a review batch.</li>
+              <li>For stack and archive, use the existing store invariants. For catalog remove, persist excluded IDs so refresh does not re-add them and provide a restore list.</li>
+              <li>For source trash, verify exactness again, move one file at a time through Electron's OS-trash service, then commit that member's catalog update. Record every success and failure.</li>
+              <li>Show a final action ledger with recovery location, skipped members, and remaining groups. Never turn a partial failure into an all-success state.</li>
+            </ol>
+          </div>
+        </article>
+      </section>
+
+      <section id="contracts">
+        <div class="eyebrow">05 / Single source of truth</div>
+        <h2>Shared contracts</h2>
+        <p>These rules prevent later packages from creating a second implementation. Keep each definition beside the module that enforces it.</p>
+
+        <div class="contract">
+          <h3>Catalog and persistence</h3>
+          <ul>
+            <li><code>parsePhotoCatalog</code> accepts supported stored versions and returns only the latest in-memory shape.</li>
+            <li>The feature package that adds persisted fields also adds its version, migration, validation, pruning, and restart case.</li>
+            <li>Unknown future versions fail with a useful message. Malformed current data names the failing path.</li>
+            <li>Writes validate first, use a temporary sibling, replace atomically, and remain serialized per root.</li>
+            <li>A migration keeps one last-known-good backup. Derived search results, facet counts, and Smart Album memberships are never stored.</li>
+          </ul>
+        </div>
+
+        <div class="contract">
+          <h3>Shared library result</h3>
+          <pre>resolveLibraryResult({
+  entries,
+  catalogState,
+  primaryScope,
+  textQuery,
+  facets,
+  curationFilter,
+  formatFilter,
+  sort,
+  expandedStackIds
+}) =&gt; {
+  matchingEntryIds,
+  visibleItems,
+  viewerEntryIds,
+  photoCount,
+  tileCount,
+  facetCounts,
+  revision
+}</pre>
+          <ol>
+            <li>Resolve valid entries and the primary scope: All, Folder, Manual Album, Smart Album, Quick, Archive, or Duplicates.</li>
+            <li>Apply archive visibility required by that scope.</li>
+            <li>Apply text query.</li>
+            <li>Apply facets using OR within and AND between.</li>
+            <li>Apply curation and format filters.</li>
+            <li>Sort entries with deterministic tie-breaking.</li>
+            <li>Project stacks into visible items. Keep the ordered matching IDs available for counts and explicit stack entry.</li>
+          </ol>
+          <p><strong>Consumer rule:</strong> grid, folder counts, toolbar counts, selection ranges, viewer, filmstrip, auto-advance, and compare receive this result or a named projection of it. They do not rebuild the pipeline.</p>
+        </div>
+
+        <div class="contract">
+          <h3>Metadata and query</h3>
+          <ul>
+            <li>Persist typed source values and provenance. Build normalized search text and bucket indexes in memory.</li>
+            <li>Index invalidation keys are entry ID plus file size and modification time for file metadata, and explicit revisions for catalog metadata, albums, keywords, archive, and Develop.</li>
+            <li>Search tokens use AND. A token may match any indexed field by substring after case and diacritic normalization.</li>
+            <li>Facet counts apply every active constraint except the facet being counted.</li>
+            <li>Capture date never falls back silently to modification time. Missing stays a named state.</li>
+            <li>Metadata hydration and hashing are cancellable Electron jobs with monotonic job IDs so stale results cannot overwrite newer work.</li>
+          </ul>
+        </div>
+
+        <div class="contract">
+          <h3>Collections, keywords, and stacks</h3>
+          <ul>
+            <li>One collection tree owns sets, manual albums, and Smart Albums. Only manual albums store entry membership.</li>
+            <li>Quick Collection stores ordered unique IDs. Target stores a valid manual album ID or null.</li>
+            <li>Smart rules are validated data with bounded depth and node count. They never contain code or cached member IDs.</li>
+            <li>Keyword assignment stores direct IDs. Ancestor and descendant behavior is derived from the cycle-safe tree.</li>
+            <li>An entry belongs to at most one stack. Archive hides but retains membership. Source removal prunes. A stack with fewer than two valid members dissolves.</li>
+            <li>Delete actions remove organization records only unless an explicit source-trash confirmation says otherwise.</li>
+          </ul>
+        </div>
+
+        <div class="contract">
+          <h3>Viewer, culling, and compare</h3>
+          <ul>
+            <li>Viewer order comes from the shared result and is captured with a result revision.</li>
+            <li>The transform owns mode, scale, offset, viewport, crop/rotation bounds, anchor, and clamping.</li>
+            <li>Auto-advance snapshots visible order before the mutation and reconciles against the next result once.</li>
+            <li>Batch curation never auto-advances. Develop edits and navigation never auto-advance.</li>
+            <li>Compare panes share the transform implementation but own independent load/error state. Linked movement maps normalized image coordinates.</li>
+          </ul>
+        </div>
+
+        <div class="contract">
+          <h3>Filesystem safety</h3>
+          <ul>
+            <li>The renderer identifies catalog entries. Electron resolves absolute paths from the active registered root.</li>
+            <li>Electron canonicalizes root and target, rejects escape and symlink escape, and checks the target is a supported file before destructive work.</li>
+            <li>Source removal uses <code>shell.trashItem</code> and a confirmation that lists file count and paths. No permanent delete is added.</li>
+            <li>Catalog mutation follows the result of each OS action and records partial success. A failed file action cannot be reported as a completed batch.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="issues">
+        <div class="eyebrow">06 / Branch context</div>
+        <h2>Issue descriptions and closure gates</h2>
+        <p>Open the linked issue before starting its package. The summaries below keep the issue outcome and closure conditions in this plan; the live issue remains the source for later edits and discussion.</p>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/137">#137 Folder hierarchy browsing</a> · package 1A</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> selecting a folder shows all supported photos below it. Folder tree, counts, grid, viewer, and selection share one descendant scope.</p>
+            <p><strong>Current gap:</strong> scanning and the tree include descendants, but selected-folder filtering matches immediate-parent files, so a parent looks incomplete.</p>
+            <ul class="checklist"><li>Direct and descendant files appear.</li><li>Siblings and similarly named paths do not.</li><li>Counts and empty states match the grid.</li><li>Archive, search, sort, selection, viewer, and saved views compose with the subtree.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/138">#138 Manual albums</a> · package 1B</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> create, rename, delete, add, remove, and revisit local albums without duplicate membership or lost photo metadata.</p>
+            <p><strong>Current gap:</strong> flat albums exist, but membership, ordering, empty-album, duplicate-request, pruning, and persistence rules need tightening. Hierarchy stays in #29.</p>
+            <ul class="checklist"><li>All current manual album actions remain.</li><li>Add and remove are idempotent.</li><li>Entry order is stable and unique.</li><li>Empty albums remain visible.</li><li>This issue keeps albums flat.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/29">#29 Nested album folders / collection sets</a> · packages 3A and 3B</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> turn flat albums into a hierarchy of collection sets and albums that supports create, rename, move, reorder, collapse, and delete while preserving membership and catalog compatibility.</p>
+            <p><strong>Current gap:</strong> no album hierarchy.</p>
+            <ul class="checklist"><li>Flat albums migrate without membership changes.</li><li>Nested create, rename, reorder, and safe movement work.</li><li>Set deletion offers explicit child choices and never deletes photos.</li><li>Nested selection and active path are correct.</li><li>Keyboard navigation and expanded state survive restart.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/30">#30 Smart Albums / Smart Collections</a> · packages 3D and 3E</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> saved rule-based collections recompute from catalog, source, folder, and Develop state. A Smart Album stores a query definition, never copied membership.</p>
+            <p><strong>Current gap:</strong> no saved rule/query model.</p>
+            <ul class="checklist"><li>Create, save, rename, duplicate, and delete work.</li><li>All/any groups and missing values follow documented rules.</li><li>Import and metadata changes update results.</li><li>Manual membership remains untouched.</li><li>Invalid fields are reported and rules survive restart.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/31">#31 Stacks</a> · packages 5A and 5B</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> related photos occupy one tile when collapsed, retain a chosen cover, and remain inspectable and actionable when expanded. Stacks never move or delete source files.</p>
+            <p><strong>Current gap:</strong> no stack model or grouped grid behavior.</p>
+            <ul class="checklist"><li>Create and cover choice work.</li><li>Collapsed/expanded count, order, selection, and keyboard behavior are correct.</li><li>Archive and source removal preserve catalog validity.</li><li>Unstack preserves files, metadata, albums, and Develop state.</li><li>State survives restart.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/32">#32 Quick / Target Collection</a> · package 3C</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> provide a fast temporary collection and a designated target manual album for one-action additions without losing selection.</p>
+            <p><strong>Current gap:</strong> no target collection workflow.</p>
+            <ul class="checklist"><li>Set or clear an existing manual album as target.</li><li>One action adds active or selected photos exactly once.</li><li>Quick Collection can be viewed, cleared, and restored after restart.</li><li>Removal never archives or deletes the source.</li><li>Curation works inside both views.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/140">#140 Capture-date sorting</a> · package 1D</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> sort by embedded capture time with a named fallback. Grid, filmstrip, viewer, and indicator agree.</p>
+            <p><strong>Current gap:</strong> the Capture date mode currently orders by filesystem modification time.</p>
+            <ul class="checklist"><li>Usable embedded capture time drives sort.</li><li>Missing and invalid values use the documented missing bucket.</li><li>Equal values have stable tie-breaking.</li><li>All ordered surfaces agree.</li><li>Unrelated sort modes remain unchanged.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/33">#33 Filename or metadata search</a> · package 2A</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> a fast search field filters the active scope by filename, path, and indexed metadata while composing with current filters.</p>
+            <p><strong>Current gap:</strong> no library search control or predicate.</p>
+            <ul class="checklist"><li>Filename and path follow documented case/token rules.</li><li>Search never leaks outside active scope.</li><li>Metadata edits and rename update results.</li><li>Clear restores the prior scope and valid selection.</li><li>Large catalogs stay responsive.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/34">#34 Metadata search facets</a> · packages 2B and 2C</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> camera, lens, ISO, focal length, location, edited, and album facets show available values and counts for the current scope and compose with text search.</p>
+            <p><strong>Current gap:</strong> none of these structured facets exists.</p>
+            <ul class="checklist"><li>Required values and counts are correct.</li><li>Single, multi-value, and multi-facet rules are documented and correct.</li><li>Counts reflect scope, search, archive, and curation.</li><li>Metadata and album changes update without restart.</li><li>Unknown metadata is safe and consistent.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/36">#36 Keywords and keyword hierarchy</a> · packages 4A and 4B</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> nested catalog keywords support batch editing, autocomplete, filtering, and supported XMP round-trip with unambiguous hierarchy and export behavior.</p>
+            <p><strong>Current gap:</strong> no keyword state, editor, filter, or sidecar path.</p>
+            <ul class="checklist"><li>Cycle-safe hierarchy edit and merge work.</li><li>Single and batch assignment update counts.</li><li>Exact, descendant, ancestor, and unkeyworded filters work.</li><li>Supported XMP hierarchy round-trips and conflicts are reported.</li><li>Migration and restart leave no orphan IDs.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/39">#39 Exact duplicate management</a> · packages 7A, 7B, and 7C</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> group byte-identical files across the library, show paths and catalog state, and apply safe keep, archive, stack, catalog-remove, or source-trash actions.</p>
+            <p><strong>Current gap:</strong> no duplicate analysis or group action. The existing import path also lacks the strong fingerprint contract assumed by the issue, so package 7A creates it first.</p>
+            <ul class="checklist"><li>Renamed exact copies group and same-name variants do not.</li><li>Progress, cancellation, stale, and unreadable files are reported.</li><li>All review actions state scope and update catalog correctly.</li><li>Hash cache avoids unnecessary work.</li><li>Source trash is confirmed, root-bounded, and recoverable through the OS trash.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/141">#141 Zoom and pan</a> · packages 6A and 6B</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> the loupe viewer supports fit, fill, 1:1, and stepped zoom. Pan stays valid after image, crop, rotation, and viewport changes.</p>
+            <p><strong>Current gap:</strong> Darkroom has a fit/detail toggle and pan, but lacks a single multi-input scale model and full reset behavior.</p>
+            <ul class="checklist"><li>All required modes exist.</li><li>All input methods share one scale model.</li><li>Zoom uses the documented pointer or center anchor.</li><li>Pan does not expose space beyond valid image bounds.</li><li>Photo and crop changes leave valid state.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/40">#40 Compare view</a> · package 6D</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> a two-up candidate/select workspace supports linked inspection, metadata and curation controls, and candidate navigation inside the active scope.</p>
+            <p><strong>Current gap:</strong> no side-by-side candidate/select workflow.</p>
+            <ul class="checklist"><li>Two photos render with names and metadata.</li><li>Fit, zoom, pan, link, and focus are predictable.</li><li>Candidate navigation stays in current scope.</li><li>Curation and replacement persist.</li><li>One pane's missing/decode error does not break the other.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/142">#142 Auto-advance culling</a> · package 6C</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> an explicit optional mode advances after flag, rating, or color-label actions in current visible order.</p>
+            <p><strong>Current gap:</strong> curation shortcuts exist, but every action leaves the current photo selected.</p>
+            <ul class="checklist"><li>Mode is visible and reversible.</li><li>Eligible actions advance once.</li><li>Develop and navigation do not advance.</li><li>Filters, archive, and final-item cases keep selection valid.</li><li>Batch behavior is documented and passes.</li></ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/143">#143 Archive and restore</a> · package 1C</summary>
+          <div class="detail-body">
+            <p><strong>Outcome:</strong> archive hides photos without destroying catalog relationships, and restore recovers memberships whose albums still exist.</p>
+            <p><strong>Current gap:</strong> archive removes album membership and restore clears archive state without rebuilding it.</p>
+            <ul class="checklist"><li>Archive records membership without touching files.</li><li>Restore uses existing albums only.</li><li>No duplicate memberships are stored.</li><li>Legacy catalogs load.</li><li>Deleted albums are never recreated.</li></ul>
+          </div>
+        </details>
+      </section>
+
+      <section id="verification">
+        <div class="eyebrow">07 / Proof</div>
+        <h2>Verification</h2>
+
+        <h3>Required for every pull request</h3>
+        <div class="grid two">
+          <div class="card">
+            <h3>Commands</h3>
+            <ul class="checklist">
+              <li><code>npm run build</code> passes.</li>
+              <li>Run <code>npm run lint</code> or lint changed files. Record current repository-wide failures and prove no new diagnostic in changed files.</li>
+              <li>Review <code>git diff --check</code> and the final changed-file list.</li>
+              <li>Do not add a new test suite unless requested.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Electron</h3>
+            <ul class="checklist">
+              <li>Run <code>npm run electron:dev</code>. In Cursor Cloud use <code>DISPLAY=:1 ELECTRON_DISABLE_SANDBOX=1 npm run electron:dev</code>.</li>
+              <li>Exercise the package's primary case, boundary cases, and error case.</li>
+              <li>Quit and reopen Electron, then repeat the persisted case.</li>
+              <li>Check keyboard-only operation and accessible names for new controls.</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>Program integration matrix</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Fixture</th><th>Required contents</th><th>Proof</th></tr></thead>
+            <tbody>
+              <tr><td>Catalog migration</td><td>Copies of v1, v2, current, malformed, and newer-version catalogs.</td><td>Supported versions preserve curation, Develop, albums, and archive; malformed and future versions fail with a useful path; original copy remains recoverable.</td></tr>
+              <tr><td>Folder scope</td><td>Root files, depth-three folders, sibling names <code>trip</code> and <code>trip-old</code>, empty folder, archived entry.</td><td>Counts, grid, viewer, selection, search, facets, and culling use the same subtree.</td></tr>
+              <tr><td>Metadata</td><td>Supported JPEG/HEIC/TIFF/RAW examples with offsets, missing/invalid dates, camera, lens, ISO, focal length, text location, GPS-only, and no EXIF.</td><td>Hydration remains background work; typed fields, missing states, capture order, search, and facets match policy.</td></tr>
+              <tr><td>Collections</td><td>Flat migrated albums, depth-three sets, manual and Smart Albums, empty album, Quick, target, archived members.</td><td>Tree actions, membership, rule results, viewer scope, archive/restore, and restart remain valid.</td></tr>
+              <tr><td>Keywords/stacks</td><td>Nested keywords, synonym, batch selection, XMP sidecar, stack with archived cover and removed member.</td><td>Hierarchy and XMP round-trip work; stack cover, projection, counts, and pruning remain deterministic.</td></tr>
+              <tr><td>Viewer/cull</td><td>Landscape, portrait, small, large, crop, rotation, two unlike aspect ratios, missing and decode-error entries.</td><td>Zoom clamp, linked compare, visible navigation, curation, and auto-advance follow shared result.</td></tr>
+              <tr><td>Duplicates</td><td>Renamed exact copy, same-name different file, unique size, changed mtime, changed bytes, unreadable file, missing file, symlink escape candidate.</td><td>Only exact copies group; cache, cancellation, path rejection, partial failure, OS trash, and recovery ledger work.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Performance gates</h3>
+        <ul class="checklist">
+          <li>On a synthetic 50,000-entry catalog after index warm-up, changing text or one facet produces the resolved ID set in under 100 ms on the development machine.</li>
+          <li>Typing, metadata progress, and duplicate cancellation acknowledge input within 250 ms.</li>
+          <li>Import renders its first usable entry list before background metadata hydration completes.</li>
+          <li>Unchanged metadata and duplicate scans show cache hits and avoid reopening every source file.</li>
+          <li>If the catalog exceeds 50 MB or a normal catalog write exceeds 250 ms, record measurements and open a separate cache/storage follow-up. Do not add a database inside this program.</li>
+        </ul>
+      </section>
+
+      <section id="exit">
+        <div class="eyebrow">08 / Finish</div>
+        <h2>Program exit</h2>
+        <p>The rework is finished only when all checks below are true.</p>
+        <div class="grid two">
+          <div class="card">
+            <h3>Product</h3>
+            <ul class="checklist">
+              <li>All 15 issue descriptions and completion checklists pass against the shipped Electron build.</li>
+              <li>One shared result controls scope, filters, order, counts, selection, viewer, compare, and auto-advance.</li>
+              <li>Migration from current catalogs preserves user state and a recoverable backup.</li>
+              <li>Exact duplicate source actions remain root-bounded, confirmed, and recoverable through OS trash.</li>
+              <li>No out-of-scope system was introduced.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Delivery</h3>
+            <ul class="checklist">
+              <li>Every package ended in a reviewed pull request with required body sections.</li>
+              <li>Every partial package references its issues without closing them.</li>
+              <li>Each issue's closure package contains the correct <code>Closes #…</code> line after full re-verification.</li>
+              <li>Build and manual Electron results are recorded in the final pull request chain.</li>
+              <li>Unrelated worktree changes remain untouched.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="callout">
+          <p><strong>Final issue set:</strong> <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/137">#137</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/138">#138</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/29">#29</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/30">#30</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/31">#31</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/32">#32</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/140">#140</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/33">#33</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/34">#34</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/36">#36</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/39">#39</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/141">#141</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/40">#40</a>, <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/142">#142</a>, and <a href="https://github.com/JoakimRosenfeldt/darkroom/issues/143">#143</a>.</p>
+        </div>
+      </section>
+
+      <footer class="footer">Darkroom library flow rework · agent-facing implementation runbook</footer>
+    </main>
+  </div>
+</body>
+</html>

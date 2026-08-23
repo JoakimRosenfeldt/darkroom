@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Agent execution plan for Darkroom metadata and viewer library-flow issues 44 through 47 and 144 through 150.">
+  <title>Darkroom metadata and viewer flow rework</title>
+  <style>
+    :root {
+      --bg: #0b0d0f;
+      --panel: #13171a;
+      --panel-2: #181d21;
+      --line: #2b3339;
+      --line-strong: #43505a;
+      --text: #eef2f4;
+      --muted: #aab3b9;
+      --dim: #7f8a93;
+      --accent: #8bcaf2;
+      --accent-bg: #132a39;
+      --green: #78d99f;
+      --green-bg: #12261a;
+      --amber: #f2bf6a;
+      --amber-bg: #2a2113;
+      --red: #ff9393;
+      --red-bg: #30191b;
+      --max: 1220px;
+      --radius: 10px;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.62 var(--sans); }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { color: #c3e8ff; }
+    a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    code, pre, .mono { font-family: var(--mono); }
+    code { border: 1px solid var(--line); border-radius: 4px; background: #0d1113; padding: .1rem .32rem; color: #dce8ee; font-size: .88em; overflow-wrap: anywhere; }
+    pre { margin: 14px 0 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #0c1012; padding: 17px; color: #d9e2e7; font-size: 12px; line-height: 1.6; }
+    pre code { border: 0; background: transparent; padding: 0; font-size: inherit; }
+    .skip { position: fixed; top: -80px; left: 16px; z-index: 100; border-radius: 6px; background: var(--text); padding: 8px 12px; color: var(--bg); }
+    .skip:focus { top: 12px; }
+    .topbar { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid var(--line); background: rgba(11, 13, 15, .94); backdrop-filter: blur(12px); }
+    .topbar-inner { width: min(calc(100% - 32px), var(--max)); min-height: 48px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--muted); font: 600 11px/1.4 var(--mono); }
+    .brand { color: var(--text); letter-spacing: .04em; }
+    .layout { width: min(calc(100% - 32px), var(--max)); margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 42px; padding: 42px 0 80px; }
+    .toc { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 96px); overflow: auto; padding-right: 10px; }
+    .toc-title { margin: 0 0 10px; color: var(--dim); font: 700 10px/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .toc a { display: block; border-left: 2px solid var(--line); padding: 6px 10px; color: var(--muted); text-decoration: none; font-size: 12px; line-height: 1.35; }
+    .toc a:hover { border-left-color: var(--accent); background: #12171a; color: var(--text); }
+    main { min-width: 0; }
+    section { margin-top: 66px; scroll-margin-top: 72px; }
+    section:first-child { margin-top: 0; }
+    h1, h2, h3, h4 { line-height: 1.2; letter-spacing: -.02em; }
+    h1 { max-width: 900px; margin: 0 0 16px; font-size: clamp(32px, 5vw, 48px); }
+    h2 { margin: 0 0 18px; font-size: 27px; }
+    h3 { margin: 0 0 9px; font-size: 17px; }
+    h4 { margin: 0 0 7px; font-size: 14px; }
+    p { margin: 0 0 16px; }
+    ul, ol { margin: 10px 0 0; padding-left: 22px; }
+    li + li { margin-top: 7px; }
+    .eyebrow { margin-bottom: 12px; color: var(--accent); font: 700 11px/1.2 var(--mono); letter-spacing: .13em; text-transform: uppercase; }
+    .lede { max-width: 920px; color: #d1d8dc; font-size: 19px; line-height: 1.52; }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .meta-row, .phase-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+    .meta-row { margin-top: 24px; }
+    .phase-meta { margin-bottom: 14px; }
+    .pill, .status { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: #101416; padding: 4px 9px; color: var(--muted); font: 650 10px/1.35 var(--mono); }
+    .status { letter-spacing: .05em; text-transform: uppercase; }
+    .status.good { border-color: #2f6844; background: var(--green-bg); color: var(--green); }
+    .status.warn { border-color: #6c522d; background: var(--amber-bg); color: var(--amber); }
+    .status.blocked { border-color: #754146; background: var(--red-bg); color: var(--red); }
+    .status.info { border-color: #34566b; background: var(--accent-bg); color: var(--accent); }
+    .verdict, .callout { border: 1px solid var(--line-strong); border-radius: var(--radius); background: #101416; padding: 18px 20px; }
+    .verdict { margin-top: 28px; border-left: 4px solid var(--accent); background: linear-gradient(135deg, #13232d, #12171a 72%); }
+    .verdict strong { display: block; margin-bottom: 7px; font-size: 19px; }
+    .verdict p, .callout p:last-child { margin: 0; }
+    .callout + .callout { margin-top: 12px; }
+    .callout.good { border-color: #2f6844; background: #112018; }
+    .callout.warn { border-color: #6d532f; background: #211a11; }
+    .callout.blocked { border-color: #754146; background: #261719; }
+    .grid-2, .grid-3, .grid-4 { display: grid; gap: 14px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 18px; }
+    .card p, .card li { color: var(--muted); font-size: 13px; }
+    .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+    .card-kicker { margin-bottom: 10px; color: var(--dim); font: 700 10px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    table { width: 100%; min-width: 780px; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--line); padding: 12px 14px; vertical-align: top; text-align: left; }
+    th { background: #191e22; color: #cbd3d8; font: 700 10px/1.35 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    td { color: #c3cbd0; font-size: 13px; }
+    td:first-child { color: var(--text); }
+    tbody tr:last-child td { border-bottom: 0; }
+    details.phase { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    details.phase + details.phase { margin-top: 10px; }
+    details > summary { cursor: pointer; list-style: none; padding: 15px 17px; color: var(--text); font-weight: 700; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::after { content: "+"; float: right; color: var(--dim); font-family: var(--mono); }
+    details[open] > summary::after { content: "−"; }
+    .details-body { border-top: 1px solid var(--line); padding: 17px; }
+    .complete { margin-top: 18px; border: 1px solid #2f6844; border-radius: 8px; background: var(--green-bg); padding: 14px 16px; color: #ccebd7; }
+    .complete strong { color: var(--green); }
+    .flow { display: grid; grid-template-columns: 1fr 42px 1fr 42px 1fr; align-items: stretch; margin-top: 18px; }
+    .flow-node { min-height: 120px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 16px; }
+    .flow-node strong { display: block; margin-bottom: 7px; }
+    .flow-node span { color: var(--muted); font-size: 12px; }
+    .flow-arrow { display: grid; place-items: center; color: var(--dim); font: 700 20px/1 var(--mono); }
+    .source-list { columns: 2; column-gap: 30px; }
+    .source-list li { break-inside: avoid; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+    footer { margin-top: 66px; border-top: 1px solid var(--line); padding-top: 22px; color: var(--dim); font-size: 12px; }
+    @media (max-width: 960px) {
+      .layout { display: block; }
+      .toc { position: static; max-height: none; margin-bottom: 36px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 14px; }
+      .toc a { display: inline-block; border: 0; padding: 6px 8px; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow { grid-template-columns: 1fr; gap: 8px; }
+      .flow-arrow { min-height: 28px; transform: rotate(90deg); }
+    }
+    @media (max-width: 680px) {
+      .topbar-inner { align-items: flex-start; flex-direction: column; padding: 10px 0; }
+      .layout { width: min(calc(100% - 22px), var(--max)); padding-top: 26px; }
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .source-list { columns: 1; }
+      h2 { font-size: 23px; }
+      .lede { font-size: 17px; }
+    }
+    @media print {
+      :root { --bg: #fff; --panel: #fff; --line: #c9c9c9; --line-strong: #888; --text: #111; --muted: #444; --dim: #666; --accent: #075985; }
+      body { background: #fff; color: #111; }
+      .topbar, .toc { display: none; }
+      .layout { display: block; width: 100%; padding: 0; }
+      details > .details-body { display: block; }
+      a { color: #075985; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to plan</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand">DARKROOM / AGENT EXECUTION PLAN</span>
+      <span>Metadata and viewer flow · 23 August 2026 · baseline f92f2d4</span>
+    </div>
+  </header>
+  <div class="layout">
+    <nav class="toc" aria-label="Plan contents">
+      <p class="toc-title">Run order</p>
+      <a href="#run">Run contract</a>
+      <a href="#steps">Steps 0 to 10</a>
+      <a href="#closure">Issue closure ledger</a>
+      <a href="#architecture">Architecture reference</a>
+      <a href="#xmp-reference">XMP reference</a>
+      <a href="#viewer-reference">Viewer reference</a>
+      <a href="#verification">Verification and rollout</a>
+      <a href="#pr">PR handoff</a>
+      <a href="#sources">Sources</a>
+    </nav>
+    <main id="content">
+      <section id="run">
+        <p class="eyebrow">Run contract</p>
+        <h1>Build one dependable metadata system and one coherent viewer flow.</h1>
+        <p class="lede">Implement all 11 linked issues as one staged rework. The finished system extracts source facts once, stores user intent separately, reconciles XMP by field, and keeps the grid, filmstrip, comparison modes, and Reference View on one ordered library result.</p>
+
+        <div class="meta-row" aria-label="Plan summary">
+          <span class="pill">11 issues</span>
+          <span class="pill">11 ordered steps</span>
+          <span class="pill">61 to 94 engineering days</span>
+          <span class="pill">2 parallel lanes after foundation</span>
+          <span class="pill">1 connected integration PR</span>
+        </div>
+
+        <div class="verdict">
+          <strong>Required outcome</strong>
+          <p>Complete every row in the <a href="#closure">issue closure ledger</a>, pass the packaged Electron acceptance matrix, then open one PR that connects all 11 issues. Keep XMP writes disabled until parser, sidecar safety, field semantics, and Lightroom compatibility gates pass.</p>
+        </div>
+
+        <h2 style="margin-top: 34px">How to run this plan</h2>
+        <ol>
+          <li>Execute <a href="#steps">Steps 0 through 10</a> in order. Steps 2A and 2B may run in parallel. The metadata and viewer lanes may run in parallel after Step 2.</li>
+          <li>Before XMP work, read the <a href="#xmp-reference">XMP reference</a>. Before viewer work, read the <a href="#viewer-reference">viewer reference</a>. Before claiming an issue complete, read its row in the <a href="#closure">closure ledger</a>.</li>
+          <li>Keep each step independently reviewable. Land inactive foundations before enabling write controls. Do not add a feature-flag framework for this work.</li>
+          <li>Record evidence as the work proceeds. Step 10 uses that evidence to choose <code>Closes</code> or <code>Refs</code> for every issue.</li>
+        </ol>
+
+        <div class="grid-3" style="margin-top: 20px">
+          <article class="card">
+            <p class="card-kicker">Originals</p>
+            <h3>Read only</h3>
+            <p>Never modify embedded EXIF, IPTC, XMP, pixels, or RAW container data. Darkroom may write its catalog, cache, journals, backups, XMP sidecars, and exported copies.</p>
+          </article>
+          <article class="card">
+            <p class="card-kicker">Durable owner</p>
+            <h3>Electron</h3>
+            <p>Parsing, catalog mutation, XMP publication, jobs, and restart recovery live behind validated preload APIs. React and Zustand hold projections and drafts.</p>
+          </article>
+          <article class="card">
+            <p class="card-kicker">Viewer context</p>
+            <h3>One query</h3>
+            <p>The grid, filmstrip, Previous and Next, return state, Before/After, and Reference View consume the same ordered asset IDs.</p>
+          </article>
+        </div>
+
+        <h3 style="margin-top: 28px">Hard boundaries</h3>
+        <ul>
+          <li>Keep the current single-root product and per-root JSON catalog. Do not introduce SQLite, multi-root catalogs, cloud sync, rename tracking, or original-file metadata writes.</li>
+          <li>Use an opaque <code>AssetId</code> at domain boundaries. It may wrap the current path-derived ID until a separate stable-ID foundation exists.</li>
+          <li>Keep raw parser records, XML documents, and filesystem paths behind adapters. UI and domain callers receive typed values and explicit availability states.</li>
+          <li>Search and facets are required scope. Issues #44, #45, and #46 require normalized metadata to affect search, filtering, sorting, and batch results.</li>
+          <li>Reference images are excluded from mutation command targets at the domain boundary. Visual focus alone never chooses a write target.</li>
+        </ul>
+
+        <div class="callout warn" style="margin-top: 18px">
+          <strong>Baseline to preserve.</strong> At commit <code>f92f2d4</code>, <code>npm test</code> passes 18 tests. <code>npm run lint</code> reports 32 errors and 3 warnings in existing code and generated Electron output. Touched files must lint clean, and the repository totals must not increase.
+        </div>
+      </section>
+      <section id="steps">
+        <p class="eyebrow">Ordered execution</p>
+        <h2>Steps 0 through 10</h2>
+        <p class="muted">Each step ends with one checkable completion criterion. Do not start work that depends on a failed gate. Estimates are rough engineering days and must be revised after Step 0.</p>
+
+        <details class="phase" open>
+          <summary>Step 0 · Freeze contracts and prove risky dependencies · 3 to 4 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="status blocked">Four gates</span><span class="pill">All issues</span><span class="pill">No production behavior</span></div>
+            <p><strong>Goal.</strong> Remove the four uncertainties that can invalidate the design before production code depends on them.</p>
+            <p><strong>Scope.</strong> Fixtures, packaged spikes, field rules, platform notes, and acceptance procedures. Production feature behavior is out of scope.</p>
+            <ol>
+              <li>Create a checksummed fixture manifest for JPEG, PNG, WebP, LibRaw NEF, native NEF, embedded-preview fallback, absent metadata, malformed and oversized blocks, orientation, timestamps, GPS, foreign XMP, catalog/XMP conflicts, and Lightroom masks.</li>
+              <li>Prove the selected standard-image parser and XML parser in packaged Electron. Record package versions, licenses, bundle inclusion, bounded reads, memory behavior, diagnostics, and failure isolation.</li>
+              <li>Freeze the v1 XMP field matrix. Resolve rating versus reject, pick mapping, language alternatives, append and clear behavior, capture-time timezone rules, GPS precision, unsupported values, and Darkroom field ownership.</li>
+              <li>Run sidecar replacement experiments for expected absence and expected content on macOS, Windows, and Linux. Document the remaining external-writer race, backup order, replace semantics, read-back, and crash recovery. Do not describe a portable rename as content-aware compare-and-swap.</li>
+              <li>Build Lightroom-authored fixtures from the current and previous supported major versions. Define the first supported mask overlap and an actual Lightroom round-trip procedure.</li>
+              <li>Freeze viewer rules for active-item rebase, stale routes, Before geometry, linked transforms, reference persistence, and active-only commands.</li>
+            </ol>
+            <div class="table-wrap" style="margin-top: 16px">
+              <table>
+                <thead><tr><th>Gate</th><th>Required evidence</th><th>Unblocks</th></tr></thead>
+                <tbody>
+                  <tr><td>G0.1 Parser and fixtures</td><td>Packaged parser reads the fixture matrix within limits and malformed metadata never breaks pixel viewing.</td><td>Steps 2 and 3</td></tr>
+                  <tr><td>G0.2 Sidecar safety</td><td>Platform-specific write, backup, race, read-back, and restart behavior is accepted in writing.</td><td>Automatic writes in Steps 4 and 5</td></tr>
+                  <tr><td>G0.3 Field and UX semantics</td><td>The field matrix and edit, batch, reset, time, conflict, and comparison rules have no unresolved state.</td><td>Steps 3 through 8</td></tr>
+                  <tr><td>G0.4 Lightroom masks</td><td>Fixture matrix identifies supported, preserved-only, reduced, and rejected structures.</td><td>Step 6</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="complete"><strong>Complete when.</strong> All four gates have named evidence, owners, versions, and pass or fail decisions. Every dependent step is either unblocked or explicitly stopped.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 1 · Add durable state behind Electron · 4 to 6 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">Foundation</span><span class="pill">#45</span><span class="pill">#46</span><span class="pill">#146</span><span class="pill">#150</span></div>
+            <p><strong>Goal.</strong> Make catalog and operation state atomic, typed, and recoverable before storing new user intent.</p>
+            <p><strong>Scope.</strong> Catalog v3, migration, repository queue, journals, backups, domain types, preload contracts, and renderer projections. Metadata extraction and XMP parsing begin later.</p>
+            <ol>
+              <li>Add catalog v3 with typed metadata overrides, per-field ownership, curation, Develop, presets, sync baseline references, conflict references, compact operation summaries, and a monotonic revision.</li>
+              <li>Model metadata overrides as <code>set</code> and <code>clear</code>. Missing override means inherit. Preserve source facts outside the user catalog.</li>
+              <li>Migrate v2 strictly. Back up the v2 file, write a temp v3 file, validate it, replace atomically, reopen it, and retain the backup until a successful v3 reopen and clean shutdown.</li>
+              <li>Serialize catalog mutation through one Electron-owned queue. Remove direct renderer persistence from the new path.</li>
+              <li>Add durable operation journals with command digest, expected fingerprints, per-entry stage, outcomes, retry state, and startup recovery. Add content-addressed byte-for-byte XMP backups.</li>
+              <li>Expose typed preload commands and immutable renderer snapshots. Validate root containment, IDs, revisions, payload size, and unknown external data at the Electron boundary.</li>
+            </ol>
+            <p><strong>Likely files.</strong> <code>lib/catalog/types.ts</code>, <code>electron/catalog-store.ts</code>, new metadata operation and journal modules, preload types, and renderer store projections.</p>
+            <div class="complete"><strong>Complete when.</strong> v2 migration, concurrent catalog commands, temp-write failure, corrupt reopen, and process termination at every journal stage recover without lost user state, duplicate application, or renderer-owned durable work.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 2 · Extract and normalize source metadata · 10 to 16 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#44</span><span class="pill">#144</span><span class="pill">#145</span><span class="status info">2A and 2B parallel</span></div>
+            <p><strong>Goal.</strong> Produce one typed source snapshot for standard images and RAW without coupling extraction to pixel decode.</p>
+            <p><strong>Scope.</strong> Extraction service, normalized model, cache, standard adapters, RAW adapters, provenance, warnings, and manual re-read. Editing and sidecar writes are out of scope.</p>
+            <ol>
+              <li>Define typed file, capture, camera, lens, description, location, provenance, claim, warning, and unavailable-reason models. Keep raw tags in diagnostics, never in core UI contracts.</li>
+              <li>Add a bounded Electron extraction queue with active, selected, visible, and background priorities, cancellation, progress, root containment, symlink refusal, and payload limits.</li>
+              <li>Store normalized source snapshots and compact query projections in a separate rebuildable cache. A clean hit requires source SHA-256 plus parser and adapter versions. Use byte size and mtime only as scheduling hints.</li>
+              <li><strong>Lane 2A:</strong> parse JPEG, PNG, and WebP EXIF, IPTC, and embedded XMP. Map semantic fields, preserve competing claims, isolate malformed and oversized blocks, and avoid a second full-pixel decode.</li>
+              <li><strong>Lane 2B:</strong> normalize LibRaw, native Nikon, and embedded-preview fallback into identical labels and units for make, model, lens, focal length, aperture, shutter, ISO, orientation, bit depth, color space, and capture time.</li>
+              <li>Retain backend and fallback provenance. Represent absent, unsupported, malformed, and backend-missing values explicitly. Never display zero as a missing capture value.</li>
+              <li>Add manual re-read, parser-version invalidation, bounded backfill after first grid paint, and a cache rebuild path.</li>
+            </ol>
+            <p><strong>Likely files.</strong> New <code>lib/metadata</code> types and adapters, <code>electron/metadata-service.ts</code>, <code>electron/metadata-cache.ts</code>, existing standard and RAW profiles, and preload API types.</p>
+            <div class="complete"><strong>Complete when.</strong> The full standard and RAW fixture matrix yields typed, provenance-aware snapshots; an unchanged restart hits cache; changed bytes or adapter versions reparse; malformed metadata leaves the image viewable; and grid paint does not wait for root backfill.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 3 · Build the metadata read UI and query projection · 4 to 6 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#44</span><span class="pill">#45</span><span class="pill">#144</span><span class="pill">#145</span></div>
+            <p><strong>Goal.</strong> Make normalized metadata useful and inspectable before enabling edits.</p>
+            <p><strong>Scope.</strong> Metadata sidebar, diagnostics, search, facets, capture sort, and read states. Save controls remain disabled.</p>
+            <ol>
+              <li>Replace the hard-coded RAW keys and generic dump with grouped File, Capture, Camera and Lens, Description, Location, Curation, Develop and Sync, and Diagnostics sections.</li>
+              <li>Render values with canonical units and labels. Show pending, absent, malformed, backend unavailable, source fallback, cache age, parser version, and manual re-read states.</li>
+              <li>Build an in-memory query projection for filename, title, caption, copyright, keywords, camera, and lens. Add camera, lens, capture year, metadata status, and conflict facets.</li>
+              <li>Add capture-time sort using camera wall time, a visible filesystem-mtime fallback, and deterministic filename plus AssetId ties.</li>
+              <li>Keep source facts, user overrides, curation, Develop, sync state, and diagnostics visually distinct. Core UI must never parse display strings or decoder-specific keys.</li>
+            </ol>
+            <p><strong>Likely files.</strong> <code>components/viewer/MetadataPanel.tsx</code>, <code>lib/library/query.ts</code>, filter controls, and <code>stores/library-store.ts</code>.</p>
+            <div class="complete"><strong>Complete when.</strong> Representative JPEG, PNG, WebP, LibRaw, native RAW, fallback, absent, and malformed fixtures render correctly; search, facets, and capture sort stay correct after restart and manual re-read; and no read control can mutate metadata.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 4 · Build the XMP codec and three-way reconciliation · 9 to 14 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#45</span><span class="pill">#146</span><span class="pill">#150</span><span class="status blocked">Read XMP reference first</span></div>
+            <p><strong>Goal.</strong> Round-trip supported fields without losing unknown data, then reconcile catalog and sidecar changes without timestamp wins.</p>
+            <p><strong>Scope.</strong> Typed XML codec, semantic merge, sync baselines, conflict engine, backup, publication journal, status, and recovery. Metadata editing UI begins in Step 5.</p>
+            <ol>
+              <li>Read the <a href="#xmp-reference">XMP reference</a> before coding. Implement the frozen field matrix for descriptive metadata, GPS, capture time, curation, Develop, and the Darkroom lossless mask payload.</li>
+              <li>Parse into a typed supported projection while keeping the XML document and unknown values private to the codec. Preserve foreign namespaces, attributes, language alternatives, bag order, packet instructions, unrelated Adobe values, and opaque mask groups semantically.</li>
+              <li>Merge only fields Darkroom owns into the original document. Serialization failure returns the original bytes and an error. Never rebuild a sidecar from only the known map.</li>
+              <li>Persist the last-agreed supported fields, field hashes, catalog revision, sidecar fingerprint, schema version, and content references needed to show a base value.</li>
+              <li>Implement three-way decisions for clean, catalog-only, sidecar-only, equal-result, non-overlapping concurrent, overlapping concurrent, missing, malformed, oversized, and externally changed sidecars.</li>
+              <li>Journal backup, last-second hash, recheck, publish, read-back, catalog commit, and completion. A failed backup blocks replacement. Keep automatic writes off unless G0.2 passed for the current platform.</li>
+              <li>Add per-photo sync status and a conflict view with field-level base, catalog, and sidecar choices, choose-all, merge, keep-both, rescan, retry, and backup inspection.</li>
+            </ol>
+            <div class="complete"><strong>Complete when.</strong> New, Darkroom-authored, Lightroom-authored, foreign-namespace, multilingual, malformed, oversized, missing, concurrent, and crash-stage fixtures produce deterministic states; unknown semantic data survives; and no automatic replacement can occur without a verified backup and fresh observation.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 5 · Add single editing, batch jobs, and presets · 6 to 9 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#45</span><span class="pill">#46</span><span class="pill">#146</span><span class="pill">#150</span></div>
+            <p><strong>Goal.</strong> Let users edit descriptive metadata safely, apply field-aware batches, and reuse versioned presets.</p>
+            <p><strong>Scope.</strong> Draft forms, patch calculation, validation, batch planning, preset lifecycle, progress, cancellation, retry, and recovery.</p>
+            <ol>
+              <li>Add explicit Edit mode with draft, Save, Cancel, Reset to source, validation, inherited or set or cleared states, and conflict indicators. Blur never commits.</li>
+              <li>Use one typed patch calculator for single and batch operations. Validate latitude, longitude, capture time, token allowlists, append modes, and empty values before catalog commit.</li>
+              <li>Reset removes the catalog override. Queue sidecar field removal only when the sync baseline proves Darkroom owns that field. If the sidecar changed, create a conflict and remove nothing.</li>
+              <li>Add catalog-scoped, versioned preset create, update, duplicate, apply, delete, preview, and migration. Support scalar replace or clear, caption append, and keyword replace or append.</li>
+              <li>Freeze selected IDs, source signatures, preset version, field modes, base revisions, and command digest before a batch starts. Checkpoint after each entry.</li>
+              <li>Cancel forward-only between entries. Keep completed work, cancel queued work, and report changed, skipped, failed, unsupported, conflict, and cancelled separately. Report catalog and XMP results separately.</li>
+              <li>Update effective values, sidebar, search, facets, and sort after catalog commit even when a sidecar remains pending or failed.</li>
+            </ol>
+            <div class="complete"><strong>Complete when.</strong> Single save, cancel, reset, invalid GPS and time, preset lifecycle, mixed batch, append and replace, missing token, conflict, cancel, retry, restart, sidecar failure, and per-entry summary all pass without hidden partial success.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 6 · Implement Lightroom mask interchange · 6 to 10 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#147</span><span class="pill">#146</span><span class="pill">#150</span><span class="status blocked">Fixture-led claim</span></div>
+            <p><strong>Goal.</strong> Import and export only the verified overlap between Darkroom and Lightroom masks while preserving everything outside that overlap.</p>
+            <p><strong>Scope.</strong> Versioned compatibility adapter, stable external IDs, geometry and adjustment mapping, opaque preservation, save modes, preflight, and real Lightroom acceptance.</p>
+            <ol>
+              <li>Implement the G0.4 compatibility matrix as data and tests. Do not infer modern mask behavior from Adobe's public Camera Raw namespace page.</li>
+              <li>Map only fixture-proven brush, linear, radial, operation, geometry, and local adjustment structures. Normalize coordinates and keep stable external group and component IDs.</li>
+              <li>Handle ID collision and reordered XML deterministically. Reconciliation compares stable IDs and semantic values, not serialized node order.</li>
+              <li>Keep unsupported groups, AI data, range masks, unknown nesting, and future properties as opaque XML tied to the original sidecar. Always retain the Darkroom lossless payload.</li>
+              <li>Offer Darkroom lossless and Lightroom compatible save modes. Preflight lists compatible, reduced, preserved-only, and rejected components before publication.</li>
+              <li>Run import, edit, save, and reopen in every target Lightroom version. A generated XML file is not compatibility proof.</li>
+            </ol>
+            <div class="complete"><strong>Complete when.</strong> Supported masks remain editable across Darkroom and every target Lightroom version, unsupported data is preserved or visibly blocked, malformed structures reject deterministically, and the compatibility matrix matches actual application behavior.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 7 · Unify grid, filmstrip, and viewer context · 3 to 5 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#148</span><span class="pill">#47</span><span class="status info">Read viewer reference first</span></div>
+            <p><strong>Goal.</strong> Make viewer membership and order exactly match the library result that opened it.</p>
+            <p><strong>Scope.</strong> Pure library query, ordered-ID viewer session, route contract, rebase, stale-route fallback, and return restoration.</p>
+            <ol>
+              <li>Read the <a href="#viewer-reference">viewer reference</a> before coding. Move source, archive policy, search, metadata facets, format, curation, sort, and direction into one versioned <code>LibraryQuery</code>.</li>
+              <li>Use one pure selector in the grid and photo route. Remove the normal viewer fallback that sorts every catalog entry by filename.</li>
+              <li>Create a versioned viewer session with query, ordered IDs, catalog revision, active ID, selected IDs, focus, and scroll anchor. Keep ordered IDs out of the URL; route with active ID and short session ID.</li>
+              <li>After a settled mutation, recompute the query. If the active item becomes ineligible, choose the nearest surviving item in the old order. If none survive, return to the library with the query intact.</li>
+              <li>Restore query, selection, focus, and virtual-grid scroll anchor on return. On a stale or direct route, rebuild from the last valid root-scoped query, then fall back safely and tell the user context was rebuilt.</li>
+            </ol>
+            <p><strong>Likely files.</strong> <code>lib/library/query.ts</code>, <code>lib/viewer/session.ts</code>, <code>app/page.tsx</code>, <code>app/photo/page.tsx</code>, and library store projections.</p>
+            <div class="complete"><strong>Complete when.</strong> All, folder, album, archive, search, rating, label, format, filename, and capture-time cases have identical grid and filmstrip membership and order before and after mutations; stale, deleted, empty, root-switch, direct-route, and return cases fail safely.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 8 · Build controlled viewer modes · 11 to 17 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">#149</span><span class="pill">#47</span><span class="pill">#148</span></div>
+            <p><strong>Goal.</strong> Add dependable Before/After and Reference View on shared decode, viewport, transform, and command boundaries.</p>
+            <p><strong>Scope.</strong> Decode snapshots, controlled viewport, ViewerSurface, comparison layouts, reference lifecycle, pane state, transforms, and command targeting.</p>
+            <ol>
+              <li>Extract asset loading and caching from the current viewer into immutable decode snapshots with independent cancellation, loading, error, and provenance.</li>
+              <li>Extract a controlled <code>ImageViewport</code> from the current Develop canvas. Make render plan, fit or manual transform, normalized oriented-source focal point, pane focus, and read-only interactions explicit inputs.</li>
+              <li>Create <code>ViewerSurface</code> with single, Before/After, and Reference layouts. Preserve existing single-photo view, Develop, crop, masks, shortcuts, preload, errors, and export behavior before enabling new layouts.</li>
+              <li>Add persistent Off, side-by-side, and split comparison. Render imported baseline and current document from one decoded source. Link zoom and pan in normalized source coordinates.</li>
+              <li>Support pointer drag plus focused arrow, Home, End, and Escape divider input. Keep hold-backslash as a temporary original view. Comparison state never creates an undo entry or changes exported pixels.</li>
+              <li>Add Set as reference from grid, filmstrip, and viewer; locked label; Make active; Replace; Clear; and linked or independent transforms. Active navigation remains inside the Step 7 ordered IDs.</li>
+              <li>Give active and reference panes independent loading and errors. Enforce active-only curation, metadata, Develop, and export commands in the domain service. Clear reference identity on full app restart.</li>
+              <li>Bound memory: Before/After shares one decoded source; Reference holds active and reference sources plus the existing adjacent preload budget.</li>
+            </ol>
+            <p><strong>Likely files.</strong> Current photo viewer and Develop canvas, new <code>components/viewer/ViewerSurface.tsx</code> and controlled viewport modules, viewer session, and command services.</p>
+            <div class="complete"><strong>Complete when.</strong> Single view remains regression-free; Before/After passes crop, rotation, masks, linked detail, divider, keyboard, narrow-window, missing-source, and non-mutation cases; Reference passes set, lock, navigate, replace, activate, clear, transforms, independent errors, scope change, active-only commands, and restart.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 9 · Finish export, migration, performance, and packaged acceptance · 4 to 6 days</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">All issues</span><span class="status good">Release gate</span></div>
+            <p><strong>Goal.</strong> Prove the two lanes work together in the real Electron product and that users can recover from every durable change.</p>
+            <p><strong>Scope.</strong> Export projection, first-open backfill, performance baselines, packaged matrices, rollback rehearsal, and final closure evidence.</p>
+            <ol>
+              <li>Write effective descriptive metadata, capture time, GPS, keywords, curation policy, and supported XMP to exported copies through current Sharp output APIs. Normalize output orientation and leave originals untouched.</li>
+              <li>Run first-open metadata backfill with visible progress, pause, cancel, retry, cache size, and manual rebuild. Do not block first grid paint.</li>
+              <li>Measure import-to-grid, unchanged restart, extraction throughput, catalog writes, batch progress, viewer navigation, comparison frame time, and peak memory against Step 0 baselines.</li>
+              <li>Run migration, parser, XMP, crash recovery, conflict, editing, batch, mask, shared-query, viewer, and export matrices in the full Electron app and packaged builds.</li>
+              <li>Rehearse v2 catalog restore, XMP backup restore, journal recovery, cache rebuild, and UI rollback. Keep durable v3 data when rolling back a projection.</li>
+              <li>Read every row in the <a href="#closure">issue closure ledger</a>. Attach commands, fixture results, screenshots or recordings, and any platform-specific notes.</li>
+            </ol>
+            <div class="complete"><strong>Complete when.</strong> <code>npm test</code> and <code>npm run build</code> pass, touched files lint clean, repository lint debt does not increase, packaged acceptance passes on target platforms, rollback is rehearsed, and every closure-ledger row has explicit evidence or an explicit failed criterion.</div>
+          </div>
+        </details>
+
+        <details class="phase">
+          <summary>Step 10 · Open the PR and connect every issue · 0.5 to 1 day</summary>
+          <div class="details-body">
+            <div class="phase-meta"><span class="pill">All issues</span><span class="status good">Required handoff</span></div>
+            <p><strong>Goal.</strong> Create one reviewable integration PR whose GitHub links match the evidence.</p>
+            <p><strong>Scope.</strong> Final review, PR creation, issue linkage, evidence summary, migration and rollback notes, and CI status. Merging is out of scope unless the user asks.</p>
+            <ol>
+              <li>Review the final diff against this run contract, the XMP and viewer references, and all closure-ledger rows. Remove temporary guards and compatibility facades only when rollback no longer needs them.</li>
+              <li>Use the repository <code>file-pr</code> workflow. Suggested title: <code>Rework metadata and viewer library flow</code>.</li>
+              <li>Start the PR body with the user problem, then explain the solution. Include architecture, migration, backup and recovery, rollback, parser and Lightroom compatibility, performance, commands, packaged scenarios, screenshots or recordings, and known limitations.</li>
+              <li>Connect every issue. Use <code>Closes #N</code> only when that issue's closure row passed. Otherwise use <code>Refs #N</code> and state the missing criterion. Never omit an issue to make the PR appear complete.</li>
+              <li>Confirm GitHub shows all 11 issue connections and that CI status and the known lint baseline are stated. Leave the PR open and unmerged.</li>
+            </ol>
+            <div class="complete"><strong>Complete when.</strong> A PR URL exists, GitHub shows all 11 linked issues, every <code>Closes</code> claim has matching closure evidence, every incomplete issue uses <code>Refs</code> with its gap, CI status is visible, and the PR remains unmerged.</div>
+          </div>
+        </details>
+      </section>
+      <section id="closure">
+        <p class="eyebrow">Authoritative issue contract</p>
+        <h2>Issue closure ledger</h2>
+        <p class="muted">This is the only issue closure definition in the plan. Steps describe delivery order. This ledger decides whether Step 10 uses <code>Closes</code> or <code>Refs</code>.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Issue and description</th><th>Required outcome from the issue</th><th>Primary step</th><th>Closure evidence</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/144">#144 Metadata sidebar</a></td>
+                <td>One useful normalized sidebar for every supported image type, with file, capture, lens, descriptive, location, edit, provenance, diagnostics, and explicit unavailable values.</td>
+                <td>3</td>
+                <td>JPEG, PNG, WebP, LibRaw NEF, native NEF, embedded fallback, missing-data, and malformed fixtures render grouped semantic values and units. Generic decoder keys do not leak into core sections.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/44">#44 JPEG/PNG/WebP EXIF/IPTC parsing</a></td>
+                <td>Parse EXIF, IPTC, and embedded XMP into semantic values for catalog, viewer, search, facets, sidecars, and export, while retaining raw diagnostics and keeping pixels viewable on parser failure.</td>
+                <td>2 and 3</td>
+                <td>All three formats pass metadata, no-metadata, malformed, oversized, orientation, competing-value, timestamp, cache, restart, manual re-read, search, facet, sidecar, and export cases in packaged Electron.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/145">#145 RAW capture metadata display</a></td>
+                <td>Show dependable RAW capture and technical fields with the same labels and formatting across LibRaw, native Nikon, and embedded-preview fallback, including clear provenance.</td>
+                <td>2 and 3</td>
+                <td>Both backends plus missing lens, fractional shutter, rotated orientation, bit depth, color space, competing timestamps, and embedded fallback are readable, semantically equal where expected, and correctly attributed.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/45">#45 Title, caption, copyright, GPS, capture time</a></td>
+                <td>Support non-destructive single and batch editing with save, cancel, reset-to-source, validation, persistence, search and sort effects, XMP round-trip, export, and deliberate conflict resolution.</td>
+                <td>5</td>
+                <td>Single edit, batch edit, invalid input, cancel, reset, capture sort, search, facets, restart, conflict, XMP, and export pass on mixed formats. Inherit, set, clear, pending, failed, and conflict states remain distinct.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/46">#46 Batch metadata editing / presets</a></td>
+                <td>Provide reusable versioned presets and field-aware batches with preview, explicit replace or append modes, progress, cancellation, retry, recovery, and truthful per-entry results.</td>
+                <td>5</td>
+                <td>Preset create, update, duplicate, apply, delete, migration, token validation, mixed formats, empty values, conflict, mid-batch cancel, sidecar failure, retry, restart, immediate query update, and separate catalog and XMP summaries pass.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/146">#146 XMP sidecar writing</a></td>
+                <td>Round-trip curation, descriptive fields, Develop, and supported masks through XMP while retaining unknown namespaces and unrelated Adobe content.</td>
+                <td>4 through 6</td>
+                <td>New, Darkroom-authored, Lightroom-authored, foreign-namespace, multilingual, malformed, oversized, catalog-only, sidecar-only, and concurrent fixtures prove supported-field round-trip, semantic foreign preservation, backup, publication, read-back, status, and recovery without silent loss.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/147">#147 Lightroom mask interchange</a></td>
+                <td>Import and export the verified overlap between Darkroom and Lightroom masks while preserving Darkroom-only and unknown Lightroom data and warning before any reduction.</td>
+                <td>6</td>
+                <td>Actual target Lightroom versions import and reopen supported brush, linear, radial, operations, geometry, and adjustments as usable structures. AI, range, nested, unknown, mixed, and malformed content is preserved, reduced with preflight, or rejected exactly as documented.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/148">#148 Filmstrip follows current source/filter/order</a></td>
+                <td>Keep the viewer inside the exact source, archive state, search, facets, filters, sort, and direction that produced the grid, including stable return and live rebase.</td>
+                <td>7</td>
+                <td>All, folder, album, archive, search, rating, label, format, filename, and capture-time results match grid and filmstrip before and after catalog changes. Removed, empty, stale-route, root-switch, and return-restoration cases are deterministic.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/149">#149 Before/After comparison</a></td>
+                <td>Provide persistent Off, side-by-side, and draggable split comparison between imported baseline and edited render, with linked detail and no document mutation.</td>
+                <td>8</td>
+                <td>Original, edits, crop, rotation, masks, fit, linked zoom and pan, narrow window, missing source, pointer divider, keyboard divider, hold-backslash, and edited-only export pass. Mode changes leave catalog, history, sidecar, and output unchanged.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/47">#47 Reference View</a></td>
+                <td>Lock one reference while the active image navigates inside the current query, with clear identity, independent recovery, transform controls, and active-only edits.</td>
+                <td>8</td>
+                <td>Set from grid or filmstrip or viewer, lock, navigate, replace, make active, clear, fit, zoom, pan, link or unlink, missing reference, scope change, edit, curation, metadata, export, and full restart pass without reference-targeted mutation or focus accidents.</td>
+              </tr>
+              <tr>
+                <td><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/150">#150 Catalog/XMP conflict handling</a></td>
+                <td>Make catalog and sidecar reconciliation explicit, reviewable, and recoverable across curation, descriptive metadata, Develop, and masks.</td>
+                <td>4 and 5</td>
+                <td>Clean, sidecar-only, catalog-only, equal-result, non-overlap, simultaneous overlap, equal-mtime-different-content, malformed, missing, interrupted, keep-both, rescan, batch, and external-edit-during-queue cases produce deterministic field-level state backed by an exact prior copy.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="architecture">
+        <p class="eyebrow">Branch reference</p>
+        <h2>Architecture and storage</h2>
+        <p class="muted">Use this section while implementing Steps 1 through 3. It fixes ownership and module boundaries. Keep implementation details inside these boundaries.</p>
+
+        <div class="flow" aria-label="Architecture flow">
+          <div class="flow-node">
+            <strong>React and Zustand</strong>
+            <span>Library query, drafts, selection, viewer session, immutable snapshots, and progress. No filesystem joins, XML parsing, or durable write queues.</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Validated preload API</strong>
+            <span>Root session, AssetId, typed commands, revisions, fingerprints, progress events, cancellation, and parsed outcomes.</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node">
+            <strong>Electron operation service</strong>
+            <span>Extraction, catalog writes, XMP merge, backup, fresh comparison, journals, job recovery, and cache ownership.</span>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 28px">Observed seams at the plan baseline</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Area</th><th>Observed behavior</th><th>Required change</th></tr></thead>
+            <tbody>
+              <tr><td>Catalog</td><td>Catalog v2 stores curation and Develop. The store writes directly.</td><td>Add strict v3 migration, one atomic repository queue, and restart-safe journals before new user state.</td></tr>
+              <tr><td>Standard images</td><td>The standard profile returns format and source after image decode.</td><td>Extract metadata headers independently in Electron.</td></tr>
+              <tr><td>RAW</td><td>LibRaw has rich values, while normalized output and native Nikon coverage differ.</td><td>Adapt every backend into one typed semantic model and expose provenance.</td></tr>
+              <tr><td>Sidebar</td><td>The current panel hard-codes a small RAW key list and then dumps generic values.</td><td>Consume grouped semantic fields, unavailable states, and structured diagnostics.</td></tr>
+              <tr><td>XMP sync</td><td>The existing codec handles Develop, rating, label, and Darkroom mask data. A renderer hook uses sidecar mtime and queues writes.</td><td>Keep the safe path boundary; replace known-field rebuilding and renderer-owned orchestration with typed merge, baseline, and journaled operations.</td></tr>
+              <tr><td>Library order</td><td>The grid applies scope and filters. The viewer independently sorts all entries by filename.</td><td>Use one query selector and one versioned session.</td></tr>
+              <tr><td>Rendering</td><td>The current Develop canvas owns one renderer and transform; original display is global Develop state.</td><td>Extract controlled decode, render plan, viewport transform, and command target seams before dual-pane modes.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top: 28px">Durable stores</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Store</th><th>Contents</th><th>Authority</th></tr></thead>
+            <tbody>
+              <tr><td>Catalog v3 JSON</td><td>User overrides, curation, Develop, presets, per-field sidecar ownership, pending owned-field removals, sync state, conflict references, revision.</td><td>User truth. Strictly parsed and serialized through Electron.</td></tr>
+              <tr><td>Metadata cache</td><td>Normalized source snapshot, compact query projection, raw diagnostics, warnings, parser and adapter versions, source fingerprint.</td><td>Rebuildable. Deleting it cannot lose edits.</td></tr>
+              <tr><td>Operation journals</td><td>Command digest, expected fingerprints, stages, per-entry results, retry state.</td><td>Authoritative until completion. Scan on startup.</td></tr>
+              <tr><td>XMP backups</td><td>Exact prior bytes, content hash, path reference, time, operation ID.</td><td>Recovery data. Failed backup blocks replacement.</td></tr>
+              <tr><td>Renderer stores</td><td>Immutable projections, drafts, query, selection, viewer mode, transforms, progress.</td><td>Disposable projection. Never durable authority.</td></tr>
+              <tr><td>Original image</td><td>Pixels and embedded container metadata.</td><td>Read-only source.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre><code>userData/
+  catalogs/&lt;root-hash&gt;.json
+  catalogs/&lt;root-hash&gt;.v2-backup.json
+  metadata-cache/&lt;root-hash&gt;/...
+  metadata-journals/&lt;root-hash&gt;/&lt;operation-id&gt;.json
+  xmp-backups/&lt;root-hash&gt;/&lt;sha256&gt;.xmp</code></pre>
+
+        <h3 style="margin-top: 28px">Domain rules</h3>
+        <ul>
+          <li>Source facts record what the file contains. They never create sidecar write intent.</li>
+          <li>Catalog intent contains only user-owned overrides, curation, Develop, presets, and pending removal of fields Darkroom previously owned.</li>
+          <li>Effective values resolve typed override first, then source. Display strings do not become storage or query keys.</li>
+          <li>Capture time stores camera wall time and optional offset separately. Never infer an unknown offset from the current computer.</li>
+          <li>Cache identity uses source SHA-256 plus parser and adapter versions. Size and mtime are scheduling hints and diagnostics.</li>
+          <li>Incomplete journals and their backups are never pruned. Unreferenced backups from completed operations default to 30-day retention until a documented policy replaces it.</li>
+        </ul>
+
+        <h3 style="margin-top: 28px">Primary module seams</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Module</th><th>Owns</th><th>Does not own</th></tr></thead>
+            <tbody>
+              <tr><td><code>lib/metadata/types.ts</code></td><td>Field keys, claims, source model, overrides, effective values, warnings.</td><td>XML, IPC, labels, React.</td></tr>
+              <tr><td><code>electron/metadata-service.ts</code></td><td>Bounded extraction, priorities, signatures, cache, progress, cancellation.</td><td>Viewer decode and UI formatting.</td></tr>
+              <tr><td><code>lib/metadata/xmp-codec.ts</code></td><td>Typed supported projection, RDF merge, foreign data preservation, mask adapter hook.</td><td>Filesystem access and conflict policy.</td></tr>
+              <tr><td><code>electron/metadata-operations.ts</code></td><td>Edit commands, sync, backup, journal stages, batch recovery, outcomes.</td><td>Draft form state.</td></tr>
+              <tr><td><code>lib/library/query.ts</code></td><td>Pure scope, search, facet, curation, format, sort, and tie-break rules.</td><td>Routes and scroll restoration.</td></tr>
+              <tr><td><code>lib/viewer/session.ts</code></td><td>Query, ordered IDs, rebase, origin state, active and reference identity, command targets.</td><td>Catalog mutation and file decode.</td></tr>
+              <tr><td><code>components/viewer/ViewerSurface.tsx</code></td><td>Single, Before/After, and Reference layouts over controlled viewports.</td><td>Develop mutation and export policy.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="xmp-reference">
+        <p class="eyebrow">Branch reference</p>
+        <h2>XMP ownership, mapping, and reconciliation</h2>
+        <p class="muted">Read this entire section before Steps 4 through 6. Step 0 freezes the exact v1 mappings. These rules define what may be written and when.</p>
+
+        <h3>Extraction and precedence</h3>
+        <div class="grid-2">
+          <article class="card">
+            <h3>Source extraction</h3>
+            <ul>
+              <li>Use the standard-image parser selected by G0.1. Use Sharp header metadata for structural facts and fallback diagnostics, not as a second semantic parser.</li>
+              <li>Prioritize active, selected, and visible entries. Backfill the rest after first grid paint in a bounded queue.</li>
+              <li>Cap XMP and decompressed metadata at 16 MiB unless Step 0 records a different accepted bound.</li>
+              <li>Parser failure records a warning and leaves the image viewable.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Field precedence</h3>
+            <ul>
+              <li>Structural facts come from the container. Capture facts use the richest RAW or EXIF claim and retain alternatives.</li>
+              <li>Embedded descriptive precedence is XMP, then IPTC, then EXIF description or artist. Keep all source claims inspectable.</li>
+              <li>Capture time uses DateTimeOriginal first, then frozen fallbacks. Store wall time and optional offset separately.</li>
+              <li>GPS stores signed decimal degrees, optional altitude, and source precision.</li>
+            </ul>
+          </article>
+        </div>
+
+        <h3 style="margin-top: 28px">Recommended v1 field matrix</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Darkroom field</th><th>XMP mapping</th><th>Write rule</th></tr></thead>
+            <tbody>
+              <tr><td>Title</td><td><code>dc:title</code> language alternative, <code>x-default</code></td><td>Read preferred language, then x-default. Write x-default only until Darkroom models languages. Preserve other alternatives.</td></tr>
+              <tr><td>Caption</td><td><code>dc:description</code> language alternative</td><td>Replace or append with newline. Preserve other language alternatives.</td></tr>
+              <tr><td>Copyright</td><td><code>dc:rights</code> language alternative</td><td>Replace or clear x-default. Preserve rights-management fields Darkroom does not own.</td></tr>
+              <tr><td>Keywords</td><td><code>dc:subject</code> RDF Bag</td><td>Replace or append. Deduplicate by normalized comparison while keeping first spelling and order.</td></tr>
+              <tr><td>Capture time</td><td><code>exif:DateTimeOriginal</code></td><td>Write ISO 8601 wall time. Include a known offset and omit an unknown offset. Never invent one.</td></tr>
+              <tr><td>GPS</td><td><code>exif:GPSLatitude</code>, <code>exif:GPSLongitude</code>, optional altitude and reference</td><td>Validate latitude from -90 to 90 and longitude from -180 to 180 before commit. Clear only owned fields.</td></tr>
+              <tr><td>Rating and reject</td><td><code>xmp:Rating</code>, including Adobe's rejected value</td><td>G0.3 resolves Darkroom's independent reject and positive-star combination. Preserve any state that cannot map losslessly and warn before change.</td></tr>
+              <tr><td>Color label</td><td><code>xmp:Label</code></td><td>Round-trip supported colors. Keep unknown external label text opaque and visible.</td></tr>
+              <tr><td>Pick flag</td><td>Fixture-proven Lightroom property plus <code>darkroom:PickStatus</code> fallback</td><td>Disable Lightroom-compatible writing until G0.3 proves the application mapping.</td></tr>
+              <tr><td>Develop</td><td>Existing supported <code>crs:*</code> projection</td><td>Compare canonical semantic values. Leave foreign Camera Raw properties untouched.</td></tr>
+              <tr><td>Masks</td><td>Fixture-proven Lightroom structures plus <code>darkroom:MaskingData</code></td><td>Always retain the Darkroom lossless payload and unrecognized Lightroom groups. Compatible mode writes only proven overlap.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top: 28px">Three-way decision table</h3>
+        <p>Compare the last agreed baseline with current catalog intent and a freshly parsed sidecar projection. Compare semantic fields and hashes. Do not let mtime choose a winner.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Observed change</th><th>Required action</th><th>Visible state</th></tr></thead>
+            <tbody>
+              <tr><td>Neither replica changed</td><td>Do nothing.</td><td>Clean</td></tr>
+              <tr><td>Sidecar only</td><td>Adopt supported changes into catalog intent, preserve foreign data, and record a new baseline.</td><td>Clean after import, with summary</td></tr>
+              <tr><td>Catalog only</td><td>Queue merge, exact backup, fresh hash, publish, read-back, and baseline commit.</td><td>Pending, then clean or error</td></tr>
+              <tr><td>Both changed on different fields</td><td>Auto-merge non-overlapping fields and publish one agreed projection.</td><td>Merged, with audit summary</td></tr>
+              <tr><td>Both changed differently on the same field</td><td>Persist a field conflict and overwrite neither value.</td><td>Conflict with base, catalog, sidecar</td></tr>
+              <tr><td>Malformed or oversized sidecar</td><td>Keep bytes, mark invalid, and block automatic replacement until explicit backup and choice.</td><td>Error or conflict</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout blocked" style="margin-top: 16px">
+          <strong>Sidecar publication safety.</strong> Portable filesystems do not provide a content-aware atomic replacement against an uncooperative external editor. Serialize Darkroom writers, hash immediately before replacement, copy exact prior bytes, recheck, publish with the platform's accepted atomic primitive, and read back. If observation changed, stop and create a conflict. Keep automatic writing disabled until G0.2 accepts the remaining race and recovery behavior.
+        </div>
+
+        <div class="callout" style="margin-top: 12px">
+          <strong>Reset-to-source rule.</strong> Remove the catalog override. Remove a sidecar field only when the baseline says Darkroom owns it. If the sidecar changed after the baseline, reset creates a conflict and removes nothing. Preserve fields Darkroom never owned unless the user explicitly adopts or clears them.
+        </div>
+
+        <h3 style="margin-top: 28px">Lightroom compatibility boundary</h3>
+        <p>Adobe's public Camera Raw namespace reference does not document the modern mask structures needed by #147. Treat compatibility as an empirical claim based on real fixtures and application round-trips.</p>
+        <div class="grid-3">
+          <article class="card"><p class="card-kicker">Compatible</p><h3>Only proven overlap</h3><p>Brush, linear, radial, operations, local adjustments, multiple masks, and stable IDs enter the supported set only after real Lightroom import and export succeeds.</p></article>
+          <article class="card"><p class="card-kicker">Preserved</p><h3>Unknown stays opaque</h3><p>Unknown groups, range masks, unsupported nesting, AI payloads, and future properties remain in opaque XML and the lossless Darkroom payload.</p></article>
+          <article class="card"><p class="card-kicker">Save choice</p><h3>Lossless or compatible</h3><p>Darkroom lossless retains all Darkroom state. Lightroom compatible adds only verified structures and previews reduced, preserved-only, or rejected components.</p></article>
+        </div>
+      </section>
+      <section id="viewer-reference">
+        <p class="eyebrow">Branch reference</p>
+        <h2>Library query and controlled viewer rules</h2>
+        <p class="muted">Read this section before Steps 7 and 8. These rules prevent grid and viewer drift and keep dual-pane interactions from changing the wrong asset.</p>
+
+        <pre><code>interface LibraryQuery {
+  version: 1;
+  source: AllSource | FolderSource | AlbumSource | ArchiveSource;
+  text: string;
+  format: "all" | "raw" | "standard";
+  curation: CurationFilter;
+  facets: MetadataFacets;
+  sort: {
+    field: "name" | "capture-time" | "rating" | "pick";
+    direction: "asc" | "desc";
+  };
+}
+
+interface ViewerSession {
+  version: 1;
+  query: LibraryQuery;
+  orderedIds: readonly AssetId[];
+  catalogRevision: number;
+  activeId: AssetId;
+  origin: {
+    selectedIds: readonly AssetId[];
+    focusedId: AssetId;
+    scrollAnchor: AssetId | null;
+  };
+  mode: ViewerMode;
+}</code></pre>
+
+        <div class="grid-2" style="margin-top: 18px">
+          <article class="card">
+            <h3>Query and route</h3>
+            <ul>
+              <li>One pure selector applies source, archive policy, search, metadata facets, format, curation, sort, direction, and deterministic ties.</li>
+              <li>Search covers filename, title, caption, copyright, keywords, camera, and lens. Metadata facets cover camera, lens, capture year, metadata status, and conflict status.</li>
+              <li>The grid creates a versioned session before routing. The route carries active ID and short session ID, not the result set.</li>
+              <li>After a settled mutation, recompute and rebase. Choose the nearest survivor from the prior order if active becomes ineligible.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Return and restart</h3>
+            <ul>
+              <li>Returning in the same app session restores query, selection, focused asset, and virtual-grid scroll anchor.</li>
+              <li>An empty result returns to the library with the query intact and an empty-state message.</li>
+              <li>Renderer reload may restore a valid session. A direct or stale route rebuilds from the last root-scoped query, then falls back safely and states that context was rebuilt.</li>
+              <li>Layout preferences may persist. Reference identity clears on full app restart.</li>
+            </ul>
+          </article>
+        </div>
+
+        <h3 style="margin-top: 28px">Controlled rendering</h3>
+        <div class="flow" aria-label="Viewer rendering flow">
+          <div class="flow-node"><strong>useDecodedAsset</strong><span>Immutable decode snapshot, cache key, provenance, independent loading, cancellation, and error.</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node"><strong>ImageViewport</strong><span>Render plan, controlled fit or transform, oriented-source focal point, pointer and keyboard inputs.</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node"><strong>ViewerSurface</strong><span>Single, Before/After, or Reference layout. Owns pane focus and divider, not catalog or Develop mutation.</span></div>
+        </div>
+
+        <div class="table-wrap" style="margin-top: 16px">
+          <table>
+            <thead><tr><th>Mode</th><th>Inputs</th><th>Transform and command rule</th></tr></thead>
+            <tbody>
+              <tr><td>Single</td><td>Active asset and edited Develop document.</td><td>One controlled viewport. Existing editing behavior remains unchanged.</td></tr>
+              <tr><td>Before/After side-by-side</td><td>Same decoded source, imported baseline, current document.</td><td>Map both panes through normalized oriented-source coordinates. Show both complete versions.</td></tr>
+              <tr><td>Before/After split</td><td>Two render surfaces in one frame with controlled divider.</td><td>Link geometry and focal point. Divider events cannot dispatch Develop actions.</td></tr>
+              <tr><td>Reference</td><td>Locked reference snapshot and changing active snapshot.</td><td>Transforms may link or remain independent. Only active receives curation, metadata, Develop, or export commands.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top: 28px">Interaction invariants</h3>
+        <ul>
+          <li>Before means the imported baseline. The hold-backslash request is temporary and active-pane-only.</li>
+          <li>Comparison mode, divider, reference identity, pane focus, and viewport transforms never enter the catalog, sidecar, Develop undo history, or exported pixels.</li>
+          <li>Before/After shares one decoded source. Reference uses independent active and reference snapshots and errors.</li>
+          <li>Crop and mask tools remain on the active pane. Reference cannot become a command target until the user explicitly makes it active.</li>
+          <li>Viewer navigation always uses the current session query. A locked reference never changes because active navigation advances.</li>
+        </ul>
+      </section>
+      <section id="verification">
+        <p class="eyebrow">Branch reference</p>
+        <h2>Verification, rollout, and stop conditions</h2>
+
+        <h3>Minimum verification by layer</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Layer</th><th>Automated proof</th><th>Electron proof</th></tr></thead>
+            <tbody>
+              <tr><td>Catalog and journals</td><td>Strict migration, atomic temp path, revisions, idempotent replay, corruption, crash stages, backup references.</td><td>Quit or kill at each stage, reopen, inspect state, retry, and restore.</td></tr>
+              <tr><td>Extraction</td><td>Fixture values, source and adapter invalidation, cache hits, limits, warnings, cancellation, provenance.</td><td>Backfill does not block grid, active priority wins, malformed metadata leaves pixels viewable.</td></tr>
+              <tr><td>XMP and sync</td><td>Semantic preservation, language alternatives, bags, dates, GPS, field hashes, three-way decisions, malformed inputs.</td><td>External edits before, during, and after debounce; backup inspection; conflict actions; keep-both; restart.</td></tr>
+              <tr><td>Editing and presets</td><td>Draft validation, preview equals execution patch, token validation, append and replace, idempotence, cancellation boundaries.</td><td>Mixed formats, conflict, cancel, quit, resume, retry, and truthful per-entry summary.</td></tr>
+              <tr><td>Lightroom masks</td><td>Fixture mapping, stable IDs, coordinate conversion, opaque round-trip, deterministic rejection.</td><td>Open, edit, save, and reopen in every target Lightroom version.</td></tr>
+              <tr><td>Library session</td><td>Selector order, stable ties, rebase, nearest fallback, empty result, stale revision, active-only targets.</td><td>Every source and filter, route reload, deletion, root change, return focus and scroll.</td></tr>
+              <tr><td>Viewer surfaces</td><td>Render-plan purity, transform mapping, divider bounds, mode state, reference exclusion.</td><td>Crop, rotation, masks, narrow window, pointer, keyboard, independent errors, edited-only export.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout" style="margin-top: 16px">
+          <strong>Runtime command.</strong> Launch with <code>DISPLAY=:1 ELECTRON_DISABLE_SANDBOX=1 npm run electron:dev</code>. Seed the last folder to the bundled demo root for normal viewer checks. Use a separate checksummed fixture root for metadata and XMP acceptance. D-Bus and GPU-process log noise is not a failure by itself.
+        </div>
+
+        <h3 style="margin-top: 28px">Release order</h3>
+        <div class="grid-3">
+          <article class="card"><p class="card-kicker">Release 1</p><h3>Read-only metadata</h3><p>Catalog v3, extraction cache, standard and RAW normalization, grouped sidebar, search, facets, and capture sort. XMP writing remains disabled.</p></article>
+          <article class="card"><p class="card-kicker">Release 2</p><h3>Safe editing</h3><p>Typed XMP codec, baselines, conflicts, backups, journals, single editing, batches, presets, and verified mask compatibility.</p></article>
+          <article class="card"><p class="card-kicker">Release 3</p><h3>Viewer flow</h3><p>Shared query, session restoration, controlled surface, Before/After, Reference View, export projection, and full acceptance.</p></article>
+        </div>
+
+        <h3 style="margin-top: 28px">Rollout and rollback</h3>
+        <ul>
+          <li>Land foundation code inactive, then enable read-only extraction and sidebar first.</li>
+          <li>Keep write controls disabled until G0.2 and Step 4 pass backup, conflict, publication, read-back, and restart checks.</li>
+          <li>Retain the v2 catalog backup until successful v3 reopen and clean shutdown. Never downgrade a v3 catalog in place.</li>
+          <li>Retain sidecar backups through the documented rollback window. Cache can be deleted and rebuilt; overrides, presets, conflicts, journals, and backups cannot.</li>
+          <li>On regression, disable the affected UI entry point, finish or surface pending journals, retain durable user data, and roll back the projection layer.</li>
+        </ul>
+
+        <h3 style="margin-top: 28px">Stop conditions</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Risk</th><th>Stop condition</th><th>Required response</th></tr></thead>
+            <tbody>
+              <tr><td>External editor race</td><td>Platform replacement and recovery contract is unproven.</td><td>Keep automatic XMP writing disabled.</td></tr>
+              <tr><td>Foreign XML loss</td><td>Any unknown semantic node, attribute, namespace, or opaque mask payload is lost.</td><td>Block publication and keep original bytes.</td></tr>
+              <tr><td>False mask compatibility</td><td>Generated structures do not reopen as usable masks in a target Lightroom version.</td><td>Move the structure to preserved-only or rejected; do not close #147.</td></tr>
+              <tr><td>Catalog performance</td><td>First grid paint waits for full cache load or backfill.</td><td>Move work behind bounded lazy projection before release.</td></tr>
+              <tr><td>Dual-pane performance</td><td>p95 frame time regresses more than 10 percent from the Step 0 reference machine without an accepted tradeoff.</td><td>Optimize or keep the mode disabled.</td></tr>
+              <tr><td>Ambiguous capture time</td><td>An invalid date or unknown offset would be silently normalized.</td><td>Block save and show the field error.</td></tr>
+              <tr><td>Batch truthfulness</td><td>The result cannot distinguish catalog success from XMP pending or failure.</td><td>Block release until per-entry states are separate.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="pr">
+        <p class="eyebrow">Required final handoff</p>
+        <h2>Open one connected integration PR</h2>
+        <p>The implementing agent must create the PR after Step 9. Use the repository <code>file-pr</code> workflow. Do not merge it unless the user asks.</p>
+
+        <div class="grid-2">
+          <article class="card">
+            <p class="card-kicker">Suggested title</p>
+            <h3>Rework metadata and viewer library flow</h3>
+            <p>Keep the title about the user-visible rework. Put implementation detail in the body.</p>
+          </article>
+          <article class="card">
+            <p class="card-kicker">Body order</p>
+            <h3>Problem before solution</h3>
+            <p>Problem, solution, architecture, migration, recovery and rollback, verification evidence, screenshots or recordings, issue links, limitations, and CI status.</p>
+          </article>
+        </div>
+
+        <h3 style="margin-top: 28px">Connection block when every ledger row passes</h3>
+        <pre><code>Closes #144
+Closes #44
+Closes #145
+Closes #45
+Closes #46
+Closes #146
+Closes #147
+Closes #148
+Closes #149
+Closes #47
+Closes #150</code></pre>
+
+        <div class="callout warn" style="margin-top: 16px">
+          <strong>Match keywords to evidence.</strong> Use <code>Closes #N</code> only when the matching <a href="#closure">closure-ledger row</a> passed. Replace it with <code>Refs #N</code> when a criterion remains open, and state that missing criterion in the PR. Every issue must appear once as <code>Closes</code> or <code>Refs</code>.
+        </div>
+
+        <h3 style="margin-top: 28px">PR evidence checklist</h3>
+        <ul>
+          <li>Final architecture and module ownership.</li>
+          <li>Catalog v2 to v3 migration, backup retention, journal recovery, sidecar recovery, and rollback steps.</li>
+          <li>Fixture manifests and parser, XMP, conflict, batch, mask, library-query, comparison, reference, and export results.</li>
+          <li><code>npm test</code>, <code>npm run build</code>, touched-file lint, whole-repo lint baseline, and CI status.</li>
+          <li>Packaged Electron platforms and Lightroom versions actually exercised.</li>
+          <li>Before/After, Reference View, metadata edit, batch progress, conflict resolution, and failure-state screenshots or recordings.</li>
+          <li>Known limitations and any issue that uses <code>Refs</code>.</li>
+        </ul>
+      </section>
+      <section id="sources">
+        <p class="eyebrow">Primary references</p>
+        <h2>Issues, repository evidence, and format documentation</h2>
+        <ul class="source-list">
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/144">#144 Metadata sidebar</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/44">#44 JPEG/PNG/WebP EXIF/IPTC parsing</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/145">#145 RAW capture metadata display</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/45">#45 Title, caption, copyright, GPS, capture time</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/46">#46 Batch metadata editing / presets</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/146">#146 XMP sidecar writing</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/147">#147 Lightroom mask interchange</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/148">#148 Filmstrip follows current source/filter/order</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/149">#149 Before/After comparison</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/47">#47 Reference View</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/150">#150 Catalog/XMP conflict handling</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/tree/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4">Repository baseline f92f2d4</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/catalog/types.ts#L11">Catalog v2 types</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/electron/catalog-store.ts#L30">Catalog store write path</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/components/viewer/MetadataPanel.tsx#L12">Current metadata panel</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/lib/develop/xmp.ts#L119">Current XMP codec</a></li>
+          <li><a href="https://github.com/JoakimRosenfeldt/darkroom/blob/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4/components/develop/useDevelopSettingsSync.ts#L177">Current renderer sync hook</a></li>
+          <li><a href="https://github.com/mattiasw/exifreader">ExifReader repository and format support</a></li>
+          <li><a href="https://sharp.pixelplumbing.com/api-input/">Sharp input metadata API</a></li>
+          <li><a href="https://sharp.pixelplumbing.com/api-output/">Sharp output metadata API</a></li>
+          <li><a href="https://developer.adobe.com/xmp/docs/xmp-specifications/">Adobe XMP specifications</a></li>
+          <li><a href="https://developer.adobe.com/xmp/docs/xmp-namespaces/">Adobe XMP namespace index</a></li>
+          <li><a href="https://developer.adobe.com/xmp/docs/xmp-namespaces/crs/">Adobe Camera Raw namespace</a></li>
+          <li><a href="https://www.iptc.org/std/photometadata/specification/IPTC-PhotoMetadata-2025.1.html">IPTC Photo Metadata Standard 2025.1</a></li>
+          <li><a href="https://helpx.adobe.com/lightroom-classic/desktop/organize-photos-in-lightroom-classic/metadata-basics-actions.html">Lightroom Classic metadata and sidecar behavior</a></li>
+          <li><a href="https://helpx.adobe.com/uk/lightroom-classic/help/develop-module-tools.html">Lightroom Classic Before/After and Reference View</a></li>
+        </ul>
+        <p class="small muted">Repository observations use commit f92f2d462d66c8b386f7e4f0611777b27ad8dfa4. Recheck external package, platform, and Lightroom compatibility claims when implementation begins.</p>
+      </section>
+      <footer>
+        <p>Agent planning artifact only. No production source, catalog, sidecar, fixture, or test file was changed while preparing this plan.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

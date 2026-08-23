@@ -1,0 +1,1242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agent execution plan for Darkroom format support, export fidelity, publish queues, and connected delivery.">
+  <title>Darkroom formats and delivery rework: agent runbook</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f1ec;
+      --panel: #fffdfa;
+      --ink: #211f1c;
+      --muted: #665f57;
+      --line: #d8d0c6;
+      --strong-line: #b8ab9d;
+      --accent: #245f78;
+      --accent-soft: #e4eff3;
+      --purple: #664b80;
+      --purple-soft: #eee7f4;
+      --good: #2d6841;
+      --good-soft: #e5f0e7;
+      --warn: #87501c;
+      --warn-soft: #f7e9d8;
+      --danger: #8c3434;
+      --danger-soft: #f6e3e0;
+      --code: #ece7df;
+      --shadow: 0 1px 2px rgb(42 32 22 / 8%);
+      --radius: 10px;
+      --content: 1220px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.58 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    :focus-visible { outline: 3px solid #77a9bf; outline-offset: 3px; }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9em;
+    }
+    code {
+      padding: .08rem .28rem;
+      border-radius: 4px;
+      background: var(--code);
+    }
+    pre {
+      overflow-x: auto;
+      margin: .8rem 0;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #26231f;
+      color: #f6f1e9;
+      line-height: 1.5;
+    }
+    h1, h2, h3, h4 { line-height: 1.2; letter-spacing: -.02em; }
+    h1 { max-width: 900px; margin: .25rem 0 .7rem; font-size: clamp(2.15rem, 5vw, 4.1rem); }
+    h2 { margin: 0 0 .8rem; font-size: clamp(1.55rem, 3vw, 2.25rem); }
+    h3 { margin: 1.2rem 0 .45rem; font-size: 1.12rem; }
+    h4 { margin: 0 0 .35rem; font-size: .98rem; }
+    p { margin: .55rem 0; }
+    ul, ol { padding-left: 1.35rem; }
+    li + li { margin-top: .35rem; }
+    section { scroll-margin-top: 1rem; }
+
+    .masthead {
+      border-bottom: 1px solid var(--strong-line);
+      background:
+        linear-gradient(115deg, rgb(36 95 120 / 9%), transparent 42%),
+        linear-gradient(245deg, rgb(102 75 128 / 8%), transparent 44%),
+        var(--panel);
+    }
+    .masthead-inner {
+      width: min(var(--content), calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 3.2rem 0 2.4rem;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .lede { max-width: 870px; color: var(--muted); font-size: 1.08rem; }
+    .pills, .meta { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .pills { margin-top: 1.15rem; }
+    .pill {
+      padding: .3rem .65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      font-size: .76rem;
+      font-weight: 700;
+    }
+    .pill.accent { border-color: #a9c6d2; background: var(--accent-soft); color: var(--accent); }
+    .pill.purple { border-color: #c9bad8; background: var(--purple-soft); color: var(--purple); }
+    .pill.warn { border-color: #dfbd94; background: var(--warn-soft); color: var(--warn); }
+    .meta { margin-top: 1rem; color: var(--muted); font-size: .76rem; }
+    .meta span + span::before { content: "•"; margin-right: .5rem; color: var(--strong-line); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 218px minmax(0, 1fr);
+      gap: 2rem;
+      width: min(var(--content), calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 2rem 0 4rem;
+    }
+    nav {
+      position: sticky;
+      top: 1rem;
+      align-self: start;
+      max-height: calc(100vh - 2rem);
+      overflow-y: auto;
+      padding: .9rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgb(255 253 250 / 92%);
+      box-shadow: var(--shadow);
+    }
+    nav h2 {
+      margin: 0 0 .55rem;
+      color: var(--muted);
+      font-size: .72rem;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    nav a {
+      display: block;
+      padding: .26rem .42rem;
+      border-radius: 5px;
+      color: var(--muted);
+      font-size: .8rem;
+      text-decoration: none;
+    }
+    nav a:hover { background: var(--accent-soft); color: var(--accent); }
+    main { min-width: 0; }
+    main > section {
+      margin-bottom: 1.25rem;
+      padding: clamp(1.1rem, 3vw, 2rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .callout, .card, .step, .phase, .issue, .pr-unit {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    .callout { margin: 1rem 0; padding: 1rem 1.1rem; }
+    .callout.info { border-left: 4px solid var(--accent); background: var(--accent-soft); }
+    .callout.good { border-left: 4px solid var(--good); background: var(--good-soft); }
+    .callout.warn { border-left: 4px solid var(--warn); background: var(--warn-soft); }
+    .callout.danger { border-left: 4px solid var(--danger); background: var(--danger-soft); }
+    .callout p:first-child { margin-top: 0; }
+    .callout p:last-child { margin-bottom: 0; }
+    .grid-2, .grid-3, .steps, .issue-grid, .contract-grid {
+      display: grid;
+      gap: .85rem;
+    }
+    .grid-2, .steps, .issue-grid, .contract-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card { padding: 1rem; }
+    .card h3 { margin-top: 0; }
+    .muted { color: var(--muted); }
+    .small { font-size: .8rem; }
+
+    .step { position: relative; padding: 1rem 1rem 1rem 3.35rem; }
+    .step-num, .phase-num {
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      font-weight: 800;
+    }
+    .step-num {
+      position: absolute;
+      top: 1rem;
+      left: 1rem;
+      width: 1.75rem;
+      height: 1.75rem;
+      font-size: .78rem;
+    }
+    .step h3 { margin: .1rem 0 .35rem; }
+    .criterion {
+      margin-top: .75rem;
+      padding-top: .65rem;
+      border-top: 1px solid var(--line);
+      color: var(--good);
+      font-size: .82rem;
+      font-weight: 700;
+    }
+    .pointer {
+      margin-top: .55rem;
+      color: var(--purple);
+      font-size: .8rem;
+    }
+
+    .phase { margin: 1rem 0; overflow: hidden; }
+    .phase-head {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      padding: .85rem 1rem;
+      border-bottom: 1px solid var(--line);
+      background: #eee9e2;
+    }
+    .phase-head h3 { margin: 0; flex: 1; }
+    .phase-num { width: 2rem; height: 2rem; font-size: .82rem; }
+    .phase-body { padding: 1rem; }
+    .phase-goal { color: var(--muted); }
+    .pr-list { display: grid; gap: .7rem; margin: 1rem 0; padding: 0; list-style: none; }
+    .pr-unit { padding: .85rem .95rem; }
+    .pr-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: .45rem; }
+    .pr-head h4 { margin: 0; }
+    .issue-link {
+      display: inline-block;
+      padding: .12rem .4rem;
+      border: 1px solid #b8cad2;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: .69rem;
+      font-weight: 800;
+      text-decoration: none;
+    }
+    .close-link { border-color: #a8c6b0; background: var(--good-soft); color: var(--good); }
+    .done {
+      margin-top: .55rem;
+      color: var(--good);
+      font-size: .8rem;
+    }
+    .phase-exit {
+      margin: 1rem 0 0;
+      padding: .75rem .9rem;
+      border-left: 4px solid var(--good);
+      background: var(--good-soft);
+      font-size: .85rem;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: .55rem;
+      margin: 1rem 0;
+    }
+    .flow > div {
+      position: relative;
+      padding: .8rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f9f6f1;
+      font-size: .78rem;
+    }
+    .flow > div:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -.45rem;
+      z-index: 1;
+      color: var(--accent);
+      font-weight: 800;
+      transform: translateY(-50%);
+    }
+    .flow strong { display: block; margin-bottom: .25rem; color: var(--accent); }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1rem 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    caption { padding: .7rem .8rem; text-align: left; font-weight: 700; }
+    th, td { padding: .68rem .78rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #eee9e2; color: #4e4841; font-size: .7rem; letter-spacing: .05em; text-transform: uppercase; }
+    td { font-size: .82rem; }
+    tbody tr:last-child td { border-bottom: 0; }
+
+    .issue { overflow: hidden; }
+    .issue header {
+      padding: .85rem .95rem;
+      border-bottom: 1px solid var(--line);
+      background: #f3efe9;
+    }
+    .issue header h3 { margin: 0; font-size: 1rem; }
+    .issue header p { margin: .25rem 0 0; color: var(--muted); font-size: .75rem; }
+    .issue-body { padding: .9rem .95rem; }
+    .issue-body h4 { margin-top: .75rem; color: var(--accent); font-size: .76rem; letter-spacing: .05em; text-transform: uppercase; }
+    .issue-body h4:first-child { margin-top: 0; }
+    .issue-body p, .issue-body li { font-size: .82rem; }
+
+    .tag {
+      display: inline-block;
+      padding: .15rem .42rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: .68rem;
+      font-weight: 700;
+    }
+    .status {
+      display: inline-block;
+      margin-bottom: .5rem;
+      color: var(--accent);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .checklist { list-style: "✓  "; }
+    .guardrail { list-style: "■  "; }
+    .source-note { color: var(--muted); font-size: .8rem; }
+    footer {
+      padding: 1.2rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      text-align: center;
+      font-size: .75rem;
+    }
+
+    @media (max-width: 920px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: static; max-height: none; columns: 2; }
+      nav h2 { column-span: all; }
+      .flow { grid-template-columns: 1fr; }
+      .flow > div:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -.7rem; transform: translateX(50%); }
+    }
+    @media (max-width: 680px) {
+      .masthead-inner, .layout { width: min(100% - 1rem, var(--content)); }
+      .masthead-inner { padding: 2.2rem .25rem 1.7rem; }
+      main > section { padding: 1rem; }
+      nav { columns: 1; }
+      .grid-2, .grid-3, .steps, .issue-grid, .contract-grid { grid-template-columns: 1fr; }
+      .meta { display: block; }
+      .meta span { display: block; margin-top: .25rem; }
+      .meta span + span::before { content: ""; margin: 0; }
+      .phase-head { align-items: flex-start; }
+    }
+    @media print {
+      body { background: white; font-size: 11px; }
+      nav { display: none; }
+      .layout { display: block; width: 100%; }
+      main > section, .phase, .issue, .card, .step, .pr-unit { break-inside: avoid; box-shadow: none; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <p class="eyebrow">Agent execution plan</p>
+      <h1>Darkroom formats and delivery rework</h1>
+      <p class="lede">Use this runbook to implement 19 linked issues without extending the current 8-bit foreground export path past its limits. Work one pull request unit at a time. Connect every pull request to its issues.</p>
+      <div class="pills" aria-label="Plan summary">
+        <span class="pill accent">19 issue contracts</span>
+        <span class="pill">9 stages</span>
+        <span class="pill">35 pull request units</span>
+        <span class="pill purple">2 product programs</span>
+        <span class="pill warn">PR required for every unit</span>
+      </div>
+      <div class="meta">
+        <span>Prepared 23 August 2026</span>
+        <span>Baseline commit <a href="https://github.com/JoakimRosenfeldt/darkroom/tree/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4"><code>f92f2d4</code></a></span>
+        <span>Baseline checks passed with <code>npm test</code> and <code>npm run build</code></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav aria-label="Document contents">
+      <h2>Runbook</h2>
+      <a href="#mission">Mission and done</a>
+      <a href="#execution">Execution loop</a>
+      <a href="#pull-requests">Pull request protocol</a>
+      <a href="#work-graph">Work graph</a>
+      <a href="#stages">Stage plan</a>
+      <a href="#architecture">Architecture reference</a>
+      <a href="#contracts">Domain contracts</a>
+      <a href="#decisions">Fixed decisions</a>
+      <a href="#migration">Migration rules</a>
+      <a href="#verification">Verification</a>
+      <a href="#issues">Issue reference</a>
+      <a href="#risks">Risks and scope</a>
+      <a href="#sources">Sources</a>
+    </nav>
+
+    <main>
+      <section id="mission">
+        <h2>Mission and completion bound</h2>
+        <div class="callout info">
+          <p><strong>Build two programs in sequence.</strong> Program A is the local media and export engine. Program B is connected delivery. The local engine must work without an account or network. Connected delivery must reuse its immutable recipes, jobs, files, and destination boundary.</p>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <span class="status">Program A, stages 0 to 5</span>
+            <h3>Local media and export</h3>
+            <p>DNG, camera RAW, HEIF, TIFF, high-bit output, original copy, quality, naming, resolution, PPI, ICC, metadata, alpha, watermark, presets, large files, and Content Credentials.</p>
+          </article>
+          <article class="card">
+            <span class="status">Program B, stages 6 to 8</span>
+            <h3>Connected delivery</h3>
+            <p>Durable publish state, multiple destinations, provider adapters, print partners, contributor and editor roles, QR links, and embeds.</p>
+          </article>
+        </div>
+
+        <h3>Whole-program completion criterion</h3>
+        <div class="callout good">
+          <p>On every claimed packaged desktop target, each recognized fixture completes import, Develop, reopen, and the selected export with the declared format, dimensions, orientation, provenance, profile, precision, alpha, metadata, and delivery result. Unsupported input fails before mutation with a per-file reason. Source hashes stay unchanged. Restart, cancellation, collision, retry, and partial failure never present an incomplete file as complete. Existing JPEG, PNG, WebP, and NEF behavior still passes.</p>
+        </div>
+        <p>Connected delivery is complete when publish state survives restart, secrets remain outside catalogs and jobs, the service rejects every unauthorized action, and provider failures leave an item-level recovery action plus a local package where possible.</p>
+
+        <h3>Hard boundary</h3>
+        <p>The current renderer returns one full 8-bit RGBA buffer over IPC. The encoder strips alpha. New controls must not claim 16-bit output, alpha preservation, bounded large output, or color-managed fidelity until the replacement path proves those facts. This is the main design constraint.</p>
+      </section>
+
+      <section id="execution">
+        <h2>Execution loop</h2>
+        <p>Run these steps for every pull request unit in the stage plan. A unit is complete only after step 6.</p>
+
+        <div class="steps">
+          <article class="step">
+            <span class="step-num">1</span>
+            <h3>Load the branch context</h3>
+            <p>Read the root <code>AGENTS.md</code>, the live GitHub issues named by the unit, and the matching cards in <a href="#issues">Issue reference</a>. If the unit changes Next.js code, read the relevant guide in <code>node_modules/next/dist/docs/</code>. Inspect the current worktree before assuming this baseline still applies.</p>
+            <p class="pointer">Pointer: issue cards define the requested outcome. Repository source defines current behavior.</p>
+            <p class="criterion">Complete when the unit notes its issue links, dependencies, files in scope, contracts that must stay stable, and verification evidence.</p>
+          </article>
+
+          <article class="step">
+            <span class="step-num">2</span>
+            <h3>Check the dependency gate</h3>
+            <p>Confirm every earlier contract used by the unit is merged or present on the branch. Re-run the relevant capability probe when a native library, packaged target, provider API, or hosted service may have changed.</p>
+            <p class="pointer">Pointer: use <a href="#work-graph">Work graph</a> for order and <a href="#decisions">Fixed decisions</a> for choices the unit may not reopen casually.</p>
+            <p class="criterion">Complete when each dependency has a commit, artifact, or written verdict. An inconclusive native or service gate blocks the dependent claim.</p>
+          </article>
+
+          <article class="step">
+            <span class="step-num">3</span>
+            <h3>Resolve the contract first</h3>
+            <p>Update the smallest shared type, registry entry, migration, or adapter contract needed by the unit. Keep filesystem access, credentials, native calls, and service data at their owning boundary. Keep recipe and preflight logic pure.</p>
+            <p class="pointer">Pointer: load only the relevant rows in <a href="#contracts">Domain contracts</a> and <a href="#architecture">Architecture reference</a>.</p>
+            <p class="criterion">Complete when impossible states have no representable success path and every new persisted value has a version or migration.</p>
+          </article>
+
+          <article class="step">
+            <span class="step-num">4</span>
+            <h3>Implement one coherent slice</h3>
+            <p>Follow existing repository patterns and keep the diff inside the unit scope. Include truthful unavailable and failure states. Preserve unrelated user changes. Keep old readers until the new writer and migration have passed.</p>
+            <p class="criterion">Complete when the user-facing path, boundary implementation, recovery path, and cleanup path all use the same resolved contract.</p>
+          </article>
+
+          <article class="step">
+            <span class="step-num">5</span>
+            <h3>Prove the claim</h3>
+            <p>Run existing checks, the focused artifact check, <code>npm run build</code>, and the real Electron path when the unit touches IPC, native code, persistence, rendering, or export. Inspect output files with an independent tool. Record existing warnings separately from new failures.</p>
+            <p class="pointer">Pointer: <a href="#verification">Verification</a> is the evidence contract. New automated tests need explicit user authorization under repository rules.</p>
+            <p class="criterion">Complete when every acceptance statement for the unit points to a passing artifact on each claimed target. A UI label is not evidence.</p>
+          </article>
+
+          <article class="step">
+            <span class="step-num">6</span>
+            <h3>Open the connected pull request</h3>
+            <p>Use the repository <code>file-pr</code> workflow. Open a focused pull request. Connect every affected issue in the body. Use <code>Refs #N</code> for partial work and <code>Closes #N</code> only when this pull request satisfies the whole issue card.</p>
+            <p class="pointer">Pointer: follow the exact body and closure rules in <a href="#pull-requests">Pull request protocol</a>.</p>
+            <p class="criterion">Complete when a pull request URL exists, GitHub shows the issue connections, the body contains verification evidence, and one final pull request owns closure for each completed issue.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="pull-requests">
+        <h2>Pull request protocol</h2>
+        <div class="callout danger">
+          <p><strong>A commit is not the handoff.</strong> Every implementation unit ends with an open pull request. The pull request must connect its issues through GitHub keywords.</p>
+        </div>
+
+        <h3>Connection rules</h3>
+        <ul class="guardrail">
+          <li>Use <code>Refs #89</code> when the pull request supplies a dependency, experiment, shared contract, or partial implementation.</li>
+          <li>Use <code>Closes #89</code> only when all completion checks in the #89 card pass on every claimed target.</li>
+          <li>List every affected issue. A shared registry change may reference several issues even when it closes none.</li>
+          <li>Assign one closure owner to each issue. Earlier pull requests use <code>Refs</code>. The final qualifying pull request uses <code>Closes</code>.</li>
+          <li>Keep unrelated issues out of the closing list. Mention a dependency without claiming delivery.</li>
+        </ul>
+
+        <h3>Required pull request body</h3>
+        <pre aria-label="Pull request body template">## Problem
+State the user-visible or system constraint this unit resolves.
+
+## Issue connections
+Refs #N
+Closes #N only when the full issue contract passes.
+
+## Change
+List the smallest coherent behavior change and any migration.
+
+## Verification
+List commands, fixtures, packaged targets, independent inspectors, and results.
+
+## Risks and recovery
+State compatibility impact, rollback path, and unfinished follow-up.</pre>
+
+        <p>The pull request title names the delivered behavior, not the phase number. Attach screenshots for UI changes and file-inspection output for fidelity claims. Link the decision-log row when an experiment selected an adapter or changed a fixed decision.</p>
+      </section>
+
+      <section id="work-graph">
+        <h2>Work graph</h2>
+        <p>Run stages in order. Units inside a stage may run in parallel only after their shared contract has merged.</p>
+        <div class="flow" aria-label="Dependency sequence">
+          <div><strong>0 to 1</strong>Probes, fixtures, registry, decode facts, persistence</div>
+          <div><strong>2</strong>Immutable jobs, bounded spool, original copy</div>
+          <div><strong>3 to 5</strong>Formats, truthful controls, repeatable recipes</div>
+          <div><strong>6 to 7</strong>Publish state, queues, providers</div>
+          <div><strong>8</strong>Hosted roles, QR, embed, review</div>
+        </div>
+        <ul>
+          <li>Stages 0 to 2 are the shared base. Finish them before parallel format and output-control work.</li>
+          <li>Stage 3 RAW adapters and most Stage 4 controls can run in parallel after the media and job contracts freeze.</li>
+          <li>Stage 5 presets wait for every saved recipe field. Content Credentials waits for the final encoder output.</li>
+          <li>Stage 6 owns durable publish identity. Stage 7 providers consume it.</li>
+          <li>Stage 8 is a separate hosted-service project. Local client controls cannot close #111.</li>
+        </ul>
+      </section>
+
+      <section id="stages">
+        <h2>Stage plan and pull request units</h2>
+        <p>Each unit below uses the execution loop. The issue keyword shown is the expected connection. Change <code>Refs</code> to <code>Closes</code> only when the linked issue card is fully satisfied.</p>
+
+        <article class="phase" id="stage-0">
+          <div class="phase-head"><span class="phase-num">0</span><h3>Prove risky boundaries</h3><span class="tag">4 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: replace guesses about precision, memory, codecs, metadata, and signing with packaged evidence.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>0A. Fixture manifest and decision log</h4><span class="issue-link">Refs #89 #90 #91 #92 #102 #109 #168</span></div>
+                <p>Add a manifest for format, camera, compression, orientation, dimensions, channels, precision, profile, alpha, metadata, provenance, license, and SHA-256. Add the implementation decision log at <code>docs/plans/library-flow-export-decisions.tsv</code>.</p>
+                <p class="done">Done when every planned format and failure class has an approved fixture or a checksum record for a private fixture.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>0B. High-bit render and bounded-spool experiment</h4><span class="issue-link">Refs #92 #102 #168</span></div>
+                <p>Measure integer or half-float readback, tile transfer, peak renderer memory, main-process memory, GPU memory, temp disk use, cancellation, and output pixels.</p>
+                <p class="done">Done when macOS, Windows, and Linux have VERIFIED, NOT VERIFIED, or INCONCLUSIVE verdicts with artifacts. Only VERIFIED paths may back a product claim.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>0C. HEIF and metadata packaging experiment</h4><span class="issue-link">Refs #91 #104</span></div>
+                <p>Package candidate HEIF and metadata adapters with 8-bit, 10-bit, alpha, wide-gamut, corrupt, Unicode metadata, GPS removal, and TIFF fixtures. Record redistribution and codec terms.</p>
+                <p class="done">Done when every claimed target has a clean-machine result and the plan selects one adapter per proven gap.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>0D. C2PA packaging experiment</h4><span class="issue-link">Refs #109</span></div>
+                <p>Package the current CAI Node binding with Electron. Sign with test credentials, verify independently, tamper the output, and inspect logs and process boundaries for key material.</p>
+                <p class="done">Done when Electron ABI, supported formats, signer flow, independent verification, tamper failure, and secret isolation have written verdicts.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> All four pull requests are merged. Every risky boundary has a written verdict. Stage 1 consumes only verified paths.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-1">
+          <div class="phase-head"><span class="phase-num">1</span><h3>Unify media facts and persistence</h3><span class="tag">3 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: give scan, decode, UI, preflight, and export one source of truth.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>1A. Versioned media registry and runtime capability probe</h4><span class="issue-link">Refs #89 #90 #91 #92 #167</span></div>
+                <p>Add one registry for suffixes, sniffing, labels, decoder ownership, input facts, output descriptors, and runtime availability. Derive scanner filters and visible capability status from it.</p>
+                <p class="done">Done when current formats still scan and one registry controls recognition, labels, decode routing, preflight, and output-control availability.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>1B. Decode result, provenance, and cache identity</h4><span class="issue-link">Refs #89 #90 #91 #92</span></div>
+                <p>Add discriminated decoded, unavailable, and failed results. Carry format ID, decoder, embedded or full provenance, precision, profile, orientation, alpha, normalized metadata, and warnings. Include source revision and decoder capability version in cache keys.</p>
+                <p class="done">Done when unsupported camera and missing-codec states remain visible without freezing the queue, and stale pixels cannot survive a source or decoder change.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>1C. Versioned atomic settings and catalog writes</h4><span class="issue-link">Refs #107 #108</span></div>
+                <p>Add schema versions, migration parsers, temporary-file writes, validation, atomic rename, and one validated backup. Keep job journals outside the catalog snapshot.</p>
+                <p class="done">Done when old settings and catalog data reopen, interrupted writes preserve the last valid state, and unknown future versions fail visibly.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> Current imports and edits pass. New formats can be recognized without pretending they can decode. Every persisted document has a versioned reader.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-2">
+          <div class="phase-head"><span class="phase-num">2</span><h3>Replace foreground export with immutable jobs</h3><span class="tag">4 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: make output restart-safe, bounded, inspectable, and separate from UI lifetime.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>2A. Versioned recipes, preflight, and job journal</h4><span class="issue-link">Refs #94 #99 #100 #101 #102 #104 #105 #106 #107 #108 #109 #167 #168</span></div>
+                <p>Add separate Original and Rendered recipes, one resolved preflight plan, immutable item snapshots, stage events, per-file results, retry, and restart reconciliation. Keep execution sequential until measurement supports concurrency.</p>
+                <p class="done">Done when a queued item no longer reads mutable UI or preset state and restart resolves running temp artifacts without false completion.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>2B. Chunk spool, stage cancellation, inspection, and atomic commit</h4><span class="issue-link">Refs #102 #105 #168</span></div>
+                <p>Emit validated render chunks into a private spool. Encode only after the spool closes. Inspect the encoded temp file before atomic destination rename. Clean each owned temp artifact on cancel or startup recovery.</p>
+                <p class="done">Done when renderer and main-process peak memory stay inside the Stage 0 budget, and cancellation at every stage leaves no destination partial.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>2C. Byte-identical original copy</h4><span class="issue-link close-link">Closes #94</span></div>
+                <p>Stream the source into a temp destination, hash source and copy, apply the shared conflict policy, optionally copy the explicit Darkroom sidecar, then rename atomically.</p>
+                <p class="done">Done when source and destination hashes match for every fixture, source metadata remains untouched, sidecar behavior is explicit, and permission, disk-full, cancel, and collision cases recover.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>2D. Device-aware large-output limits</h4><span class="issue-link close-link">Closes #168</span></div>
+                <p>Replace the global 50 MP rejection with preflight memory and disk estimates, measured tile and concurrency limits, codec constraints, and a final corrupt-dimension ceiling.</p>
+                <p class="done">Done when supported 51 MP and 100 MP fixtures export within budget, unsafe plans fail before rendering, and wide, tall, cancellation, restart, and disk-pressure cases pass.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #94 and #168 are closed by connected pull requests. Every rendered export runs through the immutable job and bounded spool.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-3">
+          <div class="phase-head"><span class="phase-num">3</span><h3>Add DNG and camera RAW families</h3><span class="tag">4 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: add camera formats through the registry and decode contract, one fixture-backed family at a time.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>3A. DNG profile and full flow</h4><span class="issue-link close-link">Closes #89</span></div>
+                <p>Add DNG recognition, metadata, embedded preview, full decode, provenance, Develop reopen, sidecar, rendered export, original copy, and explicit unsupported compression.</p>
+                <p class="done">Done when every #89 fixture and failure row passes on the claimed packaged targets.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>3B. CR2 and CR3</h4><span class="issue-link">Refs #90</span></div>
+                <p>Add Canon profiles and camera fixtures. Return camera-unsupported when the linked LibRaw build lacks a model or compression variant.</p>
+                <p class="done">Done when Canon rows pass scan, thumbnail, Develop, reopen, sidecar, both export modes, cancel, and packaged failure checks.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>3C. ARW and RAF</h4><span class="issue-link">Refs #90</span></div>
+                <p>Add Sony and Fujifilm profiles. Cover orientation, camera variants, and RAF X-Trans behavior through named fixtures.</p>
+                <p class="done">Done when Sony and Fujifilm rows pass the same full-flow matrix and unsupported models name the missing capability.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>3D. ORF and RW2 plus support report</h4><span class="issue-link close-link">Closes #90</span></div>
+                <p>Add Olympus and Panasonic profiles. Generate the visible camera and backend support report from the fixture manifest and runtime probe.</p>
+                <p class="done">Done when every claimed #90 family passes and the report distinguishes file-family recognition from tested camera support.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #89 and #90 are closed by their connected pull requests. Every claimed camera row has fixture evidence and an honest unsupported state.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-4">
+          <div class="phase-head"><span class="phase-num">4</span><h3>Make input and rendered output truthful</h3><span class="tag">9 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: make requested settings match decoded and inspected file facts.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4A. HEIF, HEIC, and HIF input</h4><span class="issue-link close-link">Closes #91</span></div>
+                <p>Ship the verified adapter and startup probe. Preserve orientation, profile, declared precision, and alpha. Report missing codec, unsupported variant, and corrupt input per file.</p>
+                <p class="done">Done when 8-bit, 10-bit, alpha, wide-gamut, rotated, large, missing-codec, and corrupt fixtures pass in packaged apps.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4B. TIFF input and high-bit path</h4><span class="issue-link close-link">Closes #92</span></div>
+                <p>Add 8-bit and 16-bit TIFF decode for supported tiled, compressed, grayscale, RGB, alpha, and ICC variants. Route 16-bit output through the verified high-bit path.</p>
+                <p class="done">Done when independent inspection confirms precision, channels, alpha, profile, orientation, and edit output without an 8-bit readback.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4C. Format-owned quality and lossless controls</h4><span class="issue-link close-link">Closes #167</span></div>
+                <p>Put quality, compression, lossless, effort, range, and defaults in output descriptors. Make UI visibility and encoder validation consume the same descriptor.</p>
+                <p class="done">Done when every format accepts only supported combinations and inspected outputs reflect quality or lossless settings.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4D. Filename templates and stable sequences</h4><span class="issue-link close-link">Closes #99</span></div>
+                <p>Add source, date, folder, rating, label, and sequence tokens. Resolve the full batch before export. Sanitize Unicode, reserved names, traversal, collisions, and suffixes.</p>
+                <p class="done">Done when preflight and output names agree across ordering, retry, restart, collision, Unicode, and path-safety fixtures.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4E. Resolution modes and independent PPI</h4><span class="issue-link close-link">Closes #100</span></div>
+                <p>Add original, long-edge, fit-box, and exact policy with preserve-aspect behavior, explicit rounding, and no-upscale. Store PPI as metadata separate from pixel size.</p>
+                <p class="done">Done when portrait, landscape, crop, no-upscale, PPI-only, and unsupported metadata cases match preflight and file inspection.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4F. Output color space and ICC profile</h4><span class="issue-link close-link">Closes #101</span></div>
+                <p>Track source profiles and missing-profile policy. Convert deterministically to sRGB, Display P3, Adobe RGB, ProPhoto RGB, or a validated custom local ICC profile.</p>
+                <p class="done">Done when color patches, missing profiles, invalid custom profiles, wide-gamut sources, alpha edges, and reopen inspection match the selected policy.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4G. Real output bit depth</h4><span class="issue-link close-link">Closes #102</span></div>
+                <p>Expose only depths supported by the format and verified pipeline. Record requested, render, and encoded precision separately. Reject silent downgrade.</p>
+                <p class="done">Done when ramps and highlights survive the 16-bit route and an independent inspector reports the requested channel depth.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4H. Metadata inclusion and privacy</h4><span class="issue-link close-link">Closes #104</span></div>
+                <p>Add All, Copyright, Camera, and None policies plus explicit GPS removal. Normalize EXIF, IPTC, and XMP, apply named allowlists, preview effective fields, and serialize after encode.</p>
+                <p class="done">Done when independent inspection matches every policy, GPS never leaks when removed, Unicode survives, and source metadata never changes.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>4I. Alpha preservation and flattening</h4><span class="issue-link close-link">Closes #105</span></div>
+                <p>Carry alpha semantics through decode, render, resize, profile conversion, and capable encoders. Require a chosen flatten color for JPEG when the source has alpha.</p>
+                <p class="done">Done when PNG, TIFF, and WebP preserve alpha where supported, JPEG flattens predictably, and edge fixtures show no halo or channel loss.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #91, #92, #99, #100, #101, #102, #104, #105, and #167 are closed by connected pull requests. Preflight, encoder result, and independent inspection agree.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-5">
+          <div class="phase-head"><span class="phase-num">5</span><h3>Add repeatable marks and provenance</h3><span class="tag">3 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: make complete recipes reusable and attach provenance only to final output bytes.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>5A. Text and graphic watermark</h4><span class="issue-link close-link">Closes #106</span></div>
+                <p>Add versioned text and graphic watermark models. Share layout math between preview and export. Apply after resize and before encode. Bound assets, sanitize generated SVG, pin font fallback, and keep local paths out of summaries.</p>
+                <p class="done">Done when scale, position, margin, opacity, rotation, alpha, missing asset, missing font, batch, retry, and large-output fixtures stay deterministic.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>5B. Named presets and previous successful settings</h4><span class="issue-link close-link">Closes #107</span></div>
+                <p>Add create, rename, update, duplicate, delete, reset, import, and last-success behavior for the full versioned recipe. Queue items keep resolved snapshots after preset edits.</p>
+                <p class="done">Done when migration, rename, overwrite, delete-in-use, invalid custom assets, unknown future version, failed job, successful job, and restart cases pass.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>5C. Content Credentials adapter</h4><span class="issue-link close-link">Closes #109</span></div>
+                <p>Run the verified C2PA adapter after encoding. Keep Attach and Publish as separate operations. Store keys outside settings, catalog, recipe, job payload, metadata, logs, and renderer state.</p>
+                <p class="done">Done when signed output verifies independently, tampering fails, unsupported formats fail before completion, and attach, publish, and verification results remain distinct.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #106, #107, and #109 are closed by connected pull requests. A frozen recipe reproduces the same output after restart.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-6">
+          <div class="phase-head"><span class="phase-num">6</span><h3>Turn jobs into a local publish queue</h3><span class="tag">2 pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: publish one immutable selection to multiple local destinations with durable state.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>6A. Catalog v3 identity and publish fingerprints</h4><span class="issue-link">Refs #108</span></div>
+                <p>Add stable asset IDs, retained missing assets, destinations, recipe references, and last-published fingerprints. Derive New, Modified, Published, and Deleted from source identity, source revision, Develop document, resolved recipe, metadata policy, and destination capability version.</p>
+                <p class="done">Done when v2 migrates through a validated temporary snapshot, missing assets remain representable, and fingerprint states survive restart and relink.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>6B. Two local destinations and publish controls</h4><span class="issue-link close-link">Closes #108</span></div>
+                <p>Add a destination adapter, queue review, pause, cancel, retry, conflict handling, partial results, manual mark-as-published, restart recovery, and explicit confirmation for delete or replace.</p>
+                <p class="done">Done when a killed and restarted two-destination queue resumes without duplicate output, lost state, blind delete, or false Published status.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #108 is closed by its connected pull request. Local publish state is durable enough for provider adapters.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-7">
+          <div class="phase-head"><span class="phase-num">7</span><h3>Add provider and print connections</h3><span class="tag">2 foundation pull requests plus providers</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: add real destinations without creating a second rendering or queue system.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>7A. Provider contract, secret references, and fake adapter</h4><span class="issue-link">Refs #112</span></div>
+                <p>Define manifests for authentication, capability discovery, preflight, upload or order submission, polling, retry, disconnect, and local fallback. Store credentials in the platform secret store. Prove the contract with a deterministic fake.</p>
+                <p class="done">Done when auth expiry, rate limits, duplicate submission, retry, cancellation, privacy, disconnect, and offline package cases pass.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>7B. First real provider</h4><span class="issue-link close-link">Closes #112 when contract passes</span></div>
+                <p>Add one approved provider in its own pull request. Record API access, terms, regions, required metadata, idempotency, order or publish confirmation, rate limits, and support owner before code.</p>
+                <p class="done">Done when the real provider passes its documented contract and a failed submission leaves a local package and recovery action.</p>
+              </li>
+            </ol>
+            <p>Each later provider gets its own issue and pull request. No manifest placeholder counts as a working connection.</p>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #112 closes only through a connected pull request for at least one real provider that passes the shared contract.</p>
+          </div>
+        </article>
+
+        <article class="phase" id="stage-8">
+          <div class="phase-head"><span class="phase-num">8</span><h3>Build hosted collaboration</h3><span class="tag">4 or more pull requests</span></div>
+          <div class="phase-body">
+            <p class="phase-goal">Goal: enforce contributor and editor permissions in a hosted service, then connect the desktop app.</p>
+            <ol class="pr-list">
+              <li class="pr-unit">
+                <div class="pr-head"><h4>8A. Service architecture and permission matrix</h4><span class="issue-link">Refs #111</span></div>
+                <p>Choose the hosted service and operations owner. Define album and asset identity, role capabilities, invitations, token scope, expiry, revocation, audit, retention, conflict, and abuse controls before implementation.</p>
+                <p class="done">Done when auth, permissions, and data-model reviewers approve one matrix that names every allowed and denied action.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>8B. Server-enforced roles and scoped tokens</h4><span class="issue-link">Refs #111</span></div>
+                <p>Implement server checks, short-lived tokens, origin and CSRF policy, rate limits, upload validation, storage rules, revocation, and audit.</p>
+                <p class="done">Done when the service rejects every denied action, expired token, revoked token, cross-album request, hostile origin, and malformed upload.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>8C. Electron connection, invitations, QR, and embed</h4><span class="issue-link">Refs #111</span></div>
+                <p>Add account connection, role management, invitations, revoke, QR generation, embed-code copy, scope and expiry disclosure, and offline queue states. Keep authorization on the server.</p>
+                <p class="done">Done when the client exposes only service-confirmed capabilities and every link shows its scope, expiry, and revocation state.</p>
+              </li>
+              <li class="pr-unit">
+                <div class="pr-head"><h4>8D. Constrained review surface and full authorization matrix</h4><span class="issue-link close-link">Closes #111</span></div>
+                <p>Ship the web review flow for granted view, comment, like, contribute, edit, and download actions. Sanitize user input and reconcile contributor edits with item-level conflicts.</p>
+                <p class="done">Done when every role and token passes the full allowed and denied matrix, including revoke, expiry, cross-album access, malicious input, concurrent edit, and offline recovery.</p>
+              </li>
+            </ol>
+            <p class="phase-exit"><strong>Stage completion criterion.</strong> #111 is closed by the review-surface pull request only after the hosted service rejects every unauthorized path. Hidden client controls never count as authorization.</p>
+          </div>
+        </article>
+      </section>
+
+      <section id="architecture">
+        <h2>Architecture reference</h2>
+        <p>This section records constraints that are expensive to rediscover. Re-read the source before each unit because earlier pull requests will move ownership.</p>
+
+        <h3>Baseline at commit <code>f92f2d4</code></h3>
+        <div class="table-wrap">
+          <table>
+            <caption>Current owners and blocking behavior</caption>
+            <thead><tr><th>Owner</th><th>Current behavior</th><th>Constraint</th></tr></thead>
+            <tbody>
+              <tr><td><code>lib/fs/types.ts</code></td><td>Recognizes NEF, JPEG, PNG, and WebP through a suffix list.</td><td>Recognition is separate from decode and output capability.</td></tr>
+              <tr><td><code>lib/raw/decode.ts</code></td><td>Uses a hard-coded standard and NEF profile array.</td><td>Adding suffixes alone creates unsupported or accidental decode paths.</td></tr>
+              <tr><td><code>lib/raw/libraw-client.ts</code></td><td>Requests 8-bit LibRaw output.</td><td>RAW input cannot carry truthful high-bit facts through the current path.</td></tr>
+              <tr><td><code>lib/develop/renderer.ts</code></td><td>Reads a complete RGBA image as <code>UNSIGNED_BYTE</code>.</td><td>It allocates the full output and fixes precision at 8-bit.</td></tr>
+              <tr><td><code>lib/export/runner.ts</code></td><td>Runs a foreground sequential batch. Cancellation stops between items.</td><td>UI lifetime owns the job and active stages cannot cancel safely.</td></tr>
+              <tr><td><code>electron/export-service.ts</code></td><td>Encodes through Sharp and calls <code>removeAlpha()</code>.</td><td>Alpha is discarded and output truth depends on one service.</td></tr>
+              <tr><td><code>lib/export/types.ts</code></td><td>Rejects output above 50 MP.</td><td>A fixed pixel count ignores device memory, disk, codec, and tile behavior.</td></tr>
+              <tr><td><code>electron/settings.ts</code></td><td>Stores unversioned last-folder and export options.</td><td>Presets and new fields need migrations and atomic writes.</td></tr>
+              <tr><td><code>electron/catalog-store.ts</code></td><td>Stores catalog v2 metadata with path-derived identity.</td><td>Publish history needs stable assets and retained missing records.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Target ownership</h3>
+        <div class="table-wrap">
+          <table>
+            <caption>Proposed module boundaries</caption>
+            <thead><tr><th>Module</th><th>Owns</th><th>Rule</th></tr></thead>
+            <tbody>
+              <tr><td><code>lib/media/formats.ts</code></td><td>Static versioned format definitions and pure capability lookup.</td><td>Scanner, UI, preflight, and adapters consume it.</td></tr>
+              <tr><td><code>lib/media/types.ts</code></td><td>Decode result, pixel facts, normalized metadata, and provenance.</td><td>No filesystem path or Electron transport fields.</td></tr>
+              <tr><td><code>lib/media/decode.ts</code></td><td>Profile selection and normalized decode results.</td><td>Adapters return facts or explicit unavailability.</td></tr>
+              <tr><td><code>lib/export/recipe.ts</code></td><td>Versioned Original and Rendered recipes plus migration.</td><td>Pure data. No credentials, mutable preset reference, or resolved filename.</td></tr>
+              <tr><td><code>lib/export/preflight.ts</code></td><td>Resolved dimensions, names, capabilities, estimates, and warnings.</td><td>The job executes this immutable plan.</td></tr>
+              <tr><td><code>electron/export-jobs.ts</code></td><td>Job journal, stage transitions, restart recovery, and summaries.</td><td>Main process owns external state.</td></tr>
+              <tr><td><code>electron/pixel-spool.ts</code></td><td>Private chunk files, bounds, checksums, and cleanup.</td><td>Renderer cannot choose arbitrary output paths.</td></tr>
+              <tr><td><code>electron/destinations/</code></td><td>Local folders, providers, secrets, retries, and result links.</td><td>Every destination consumes the same resolved recipe.</td></tr>
+              <tr><td><code>components/export/ExportDialog.tsx</code></td><td>Recipe editing, preflight, and job submission.</td><td>It does not execute jobs or infer codec support.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Boundary flow</h3>
+        <div class="flow" aria-label="Target export boundary flow">
+          <div><strong>Recognize</strong>Registry and runtime probe classify capability.</div>
+          <div><strong>Resolve</strong>Preflight freezes names, facts, estimates, and warnings.</div>
+          <div><strong>Render</strong>Develop emits bounded validated chunks.</div>
+          <div><strong>Encode</strong>Main process writes and inspects private temp output.</div>
+          <div><strong>Commit</strong>Destination atomically renames or submits the verified artifact.</div>
+        </div>
+      </section>
+
+      <section id="contracts">
+        <h2>Domain contracts</h2>
+        <p>These are behavioral contracts, not final filenames or exact TypeScript shapes. Match repository patterns when implementing them.</p>
+        <div class="contract-grid">
+          <article class="card">
+            <h3>Media format</h3>
+            <p>Stable format ID, suffixes and optional sniff rule, decoder adapter, runtime status, input facts, output descriptor, provenance modes, and support note.</p>
+            <p class="criterion">Complete when every consumer asks the registry instead of maintaining its own format list.</p>
+          </article>
+          <article class="card">
+            <h3>Decode result</h3>
+            <p>A decoded result carries dimensions, channels, precision, alpha, profile, orientation, normalized metadata, provenance, warnings, and source revision. Unavailable and failed results carry stable reason codes and user actions.</p>
+            <p class="criterion">Complete when missing capability cannot masquerade as a generic image.</p>
+          </article>
+          <article class="card">
+            <h3>Export recipe</h3>
+            <p>Original is a byte-copy policy. Rendered contains format, output descriptor values, dimensions, PPI, profile, precision, metadata policy, alpha policy, watermark, naming, and destination choices.</p>
+            <p class="criterion">Complete when Original and Rendered cannot form one ambiguous object.</p>
+          </article>
+          <article class="card">
+            <h3>Resolved plan</h3>
+            <p>Immutable source revision, Develop revision, resolved output name, encoder facts, dimension result, memory and disk estimate, warnings, destination capabilities, and recipe schema version.</p>
+            <p class="criterion">Complete when retry never re-reads changed UI or preset state.</p>
+          </article>
+          <article class="card">
+            <h3>Job and item state</h3>
+            <p>Queued, planning, rendering, encoding, signing, delivering, completed, failed, cancelled, and needs-review states with stage-owned temp artifacts and per-item results.</p>
+            <p class="criterion">Complete when restart can reconcile every nonterminal state without guessing.</p>
+          </article>
+          <article class="card">
+            <h3>Destination</h3>
+            <p>Capability probe, preflight, submit, status, retry, cancel, disconnect, result link, credential reference, and local fallback.</p>
+            <p class="criterion">Complete when a provider cannot bypass local rendering, privacy, naming, or job state.</p>
+          </article>
+        </div>
+
+        <h3>Publish fingerprint</h3>
+        <p>Issue #108 needs a stable answer to &quot;Modified since what?&quot; Hash the source identity, source revision, Develop document, resolved rendered recipe, metadata policy, and destination capability version. Filename and modification time are not enough.</p>
+      </section>
+
+      <section id="decisions">
+        <h2>Fixed decisions and approval gates</h2>
+        <div class="table-wrap">
+          <table>
+            <caption>Decisions agents should use without reopening during a slice</caption>
+            <thead><tr><th>Decision</th><th>Chosen rule</th><th>Change gate</th></tr></thead>
+            <tbody>
+              <tr><td>Program split</td><td>Build local media and export before connected delivery.</td><td>Architecture review.</td></tr>
+              <tr><td>Original export</td><td>Original means one byte-identical source copy. Sidecar copy is a separate option and defaults off.</td><td>Product decision.</td></tr>
+              <tr><td>High-bit preview</td><td>An 8-bit interactive preview may remain if a separate verified high-bit export exists and the UI states the difference.</td><td>Product and rendering review.</td></tr>
+              <tr><td>Job storage</td><td>Use atomic versioned JSON journals first. Measure before adopting a database.</td><td>Measured scale failure.</td></tr>
+              <tr><td>Metadata migration</td><td>Migrated recipes default to metadata None. They do not create a named preset.</td><td>Privacy review.</td></tr>
+              <tr><td>HEIF support</td><td>Recognize the family. Claim decode only where packaged codec and license gates pass.</td><td>Stage 0 evidence.</td></tr>
+              <tr><td>Content Credentials</td><td>Attach and Publish are separate states after encode. Secrets stay external.</td><td>Security review.</td></tr>
+              <tr><td>Providers</td><td>Fake adapter first. Each real provider gets its own issue and pull request.</td><td>API and commercial approval.</td></tr>
+              <tr><td>Collaboration</td><td>A hosted service enforces roles and tokens. The Electron client never becomes the authority.</td><td>Auth, permission, and data-model review.</td></tr>
+              <tr><td>New tests</td><td>This plan does not grant test-writing permission. Ask for explicit authorization. Use existing checks and reproducible scripts if authorization is withheld.</td><td>User approval.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="migration">
+        <h2>Migration and recovery rules</h2>
+        <h3>Settings</h3>
+        <ol>
+          <li>Add a schema version and reject unknown future versions without overwriting them.</li>
+          <li>Map current format, quality, lossless, size, suffix, and conflict values into a Rendered recipe.</li>
+          <li>Use metadata None, sRGB, 8-bit, no watermark, and no credentials for migrated values. Preserve the current opaque-file result.</li>
+          <li>Store the migrated recipe as last-used. Let the user name presets.</li>
+          <li>Write a validated temporary file, rename atomically, and retain one good backup until the next successful launch.</li>
+        </ol>
+
+        <h3>Catalog v3</h3>
+        <ol>
+          <li>Delay the broad catalog migration until Stage 6. Stages 0 to 5 do not need publish history.</li>
+          <li>Generate stable asset IDs and copy metadata, albums, archive state, and Develop documents into a temporary v3 snapshot.</li>
+          <li>Retain missing asset records. Mark them missing so Deleted, relinked, and previously published states remain representable.</li>
+          <li>Add destinations, preset IDs, and publish fingerprints. Keep active job journals outside the catalog snapshot.</li>
+          <li>Validate every reference before rename. Keep v2 unchanged until v3 opens successfully.</li>
+        </ol>
+
+        <h3>Cancellation and recovery</h3>
+        <ul>
+          <li>Planning cancellation mutates no destination.</li>
+          <li>Rendering stops at the next validated tile boundary. The stage that owns a temp artifact removes it.</li>
+          <li>Encoding and C2PA write private temp files. Only inspected output receives the final destination name.</li>
+          <li>Retry uses the original immutable plan and resolved name.</li>
+          <li>Completed items stay completed when a batch cancels. The summary reports partial completion.</li>
+          <li>Provider submission uses an idempotency key when supported. Unknown remote state becomes Needs review.</li>
+        </ul>
+      </section>
+
+      <section id="verification">
+        <h2>Verification contract</h2>
+        <div class="callout warn">
+          <p>The linked issues ask for fixture matrices, but repository rules require explicit permission before adding tests. Ask once at kickoff. If permission is withheld, keep the same cases as deterministic scripts and packaged manual records. State the lower confidence in each pull request.</p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Evidence required by change type</caption>
+            <thead><tr><th>Layer</th><th>Proves</th><th>Evidence</th></tr></thead>
+            <tbody>
+              <tr><td>Pure contract</td><td>Registry parsing, recipe migration, preflight, naming, size, metadata policy, states, and fingerprints.</td><td>Existing checks, authorized focused tests, or deterministic scripts.</td></tr>
+              <tr><td>Real integration</td><td>Native decode, Sharp encode, temp files, collisions, permissions, cancellation, metadata, ICC, PPI, alpha, and precision.</td><td>Temporary directories and real codecs.</td></tr>
+              <tr><td>Fixture matrix</td><td>Every claimed format, camera, compression, orientation, precision, profile, alpha, corruption, and scale row.</td><td>Versioned manifest, hashes, licenses, and artifact reports.</td></tr>
+              <tr><td>Packaged Electron</td><td>Native libraries, IPC, WebGL, dialogs, jobs, restart, and clean-machine behavior.</td><td>macOS, Windows, and Linux run records for claimed targets.</td></tr>
+              <tr><td>Independent inspection</td><td>Dimensions, PPI, bit depth, alpha, ICC, EXIF, IPTC, XMP, and C2PA facts.</td><td><code>vipsheader</code> or <code>identify</code>, <code>exiftool</code>, and <code>c2patool</code>.</td></tr>
+              <tr><td>Service authorization</td><td>Roles and tokens fail closed across action, scope, expiry, revoke, origin, and malicious input.</td><td>Service integration checks against real authorization and storage.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Checks for every pull request unit</h3>
+        <ol>
+          <li>Run <code>npm test</code> and compare with the 18-test baseline.</li>
+          <li>Run the focused artifact check or approved test for the unit.</li>
+          <li>Run <code>npm run build</code>. Separate existing warnings from regressions.</li>
+          <li>Run the real Electron path when the unit touches rendering, IPC, files, persistence, native code, or UI.</li>
+          <li>Inspect produced files or service results independently.</li>
+          <li>Add a decision-log row for every measured choice.</li>
+          <li>Open the pull request and verify its issue connections on GitHub.</li>
+        </ol>
+
+        <h3>Issue closure rule</h3>
+        <p>Code presence does not close an issue. The closing pull request must map every requirement in the matching issue card to a passing artifact on each claimed target. It must preserve the existing regression matrix and state unsupported cases honestly.</p>
+      </section>
+
+      <section id="issues">
+        <h2>Issue reference</h2>
+        <p>Before a pull request unit starts, read its linked live issue and the matching card here. This section paraphrases all 19 issue descriptions and fixes the completion bound used by the stage plan.</p>
+
+        <div class="issue-grid">
+          <article class="issue" id="issue-89">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/89">#89 DNG import, edit, and export</a></h3><p>Stage 3A</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Treat DNG as a first-class library asset. Read metadata and previews, use the best available full decode for non-destructive Develop, preserve provenance, reopen edits, and export either a rendered file or the untouched original.</p>
+              <h4>Completion bound</h4>
+              <p>DNG scan, thumbnail, metadata, orientation, embedded and full decode, Develop, sidecar reopen, rendered output, byte-identical original, cancel, malformed input, and unsupported compression pass on every claimed packaged target.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-90">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/90">#90 Other camera RAW formats</a></h3><p>Stages 3B to 3D</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Support CR2, CR3, ARW, RAF, ORF, and RW2 through a versioned registry and bounded per-family work. Distinguish a recognized family from camera models and compression variants tested with the shipped LibRaw build.</p>
+              <h4>Completion bound</h4>
+              <p>Each claimed family and camera row passes the full library, Develop, reopen, original, rendered, cancellation, and packaged matrix. Unsupported cameras return a specific capability reason. A generated support report matches the manifest and runtime probe.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-91">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/91">#91 HEIF, HEIC, and HIF input</a></h3><p>Stage 4A</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Import HEIF-family still images through a packaged decoder. Probe availability at startup. Preserve orientation, source profile, declared bit depth, and alpha. Give an actionable reason when a codec or variant is unavailable.</p>
+              <h4>Completion bound</h4>
+              <p>HEIF, HEIC, and HIF fixtures cover 8-bit, 10-bit, alpha, wide gamut, rotation, large dimensions, corruption, unsupported variants, and missing codecs. Every enabled platform passes in the packaged app.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-92">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/92">#92 TIFF input and high bit depth</a></h3><p>Stage 4B</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Import supported 8-bit and 16-bit TIFF variants, including tiled or compressed data, grayscale, RGB, alpha, and ICC profiles. Keep precision explicit through Develop and output.</p>
+              <h4>Completion bound</h4>
+              <p>Independent inspection confirms decoded and exported precision, channels, alpha, profile, orientation, and edit result. A 16-bit claim never passes through the current 8-bit readback.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-94">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/94">#94 Original or RAW export</a></h3><p>Stage 2C</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Copy original bytes through a mode separate from rendered export. Stream into an atomic destination, preserve the source, share collision behavior, and expose Darkroom sidecar copy as an explicit adjacent-file option.</p>
+              <h4>Completion bound</h4>
+              <p>Source and destination SHA-256 match. Source metadata and timestamps are never mutated by export. Sidecar, collision, permission, disk-full, cancellation, and retry behavior remain explicit and recoverable.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-167">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/167">#167 Quality and lossless controls</a></h3><p>Stage 4C</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Show quality, compression, lossless, and effort controls only where the chosen output format supports them. Use format-owned ranges and defaults in both UI and encoder validation.</p>
+              <h4>Completion bound</h4>
+              <p>Every output descriptor accepts only supported combinations. Boundary values, defaults, lossless modes, preset migration, and inspected outputs match the encoder request.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-99">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/99">#99 Filename templates and sequences</a></h3><p>Stage 4D</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Build deterministic output names from source, date, folder, rating, label, and sequence tokens. Preview the resolved batch before writing and make names safe on each target filesystem.</p>
+              <h4>Completion bound</h4>
+              <p>Preflight and output agree across ordering, restart, retry, collisions, duplicate stems, Unicode, reserved names, traversal attempts, empty tokens, and extension handling.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-100">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/100">#100 Output resolution and PPI</a></h3><p>Stage 4E</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Offer original size, long edge, fit box, and a defined exact-dimensions policy while preserving aspect ratio as required. Make no-upscale and rounding visible. Keep PPI metadata independent from pixel dimensions.</p>
+              <h4>Completion bound</h4>
+              <p>Portrait, landscape, crop, fit box, no-upscale, PPI-only, invalid input, unsupported PPI metadata, preset, and retry cases match preflight and file inspection.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-101">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/101">#101 Output color space and ICC profile</a></h3><p>Stage 4F</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Track source and target profiles. Convert deterministically to sRGB, Display P3, Adobe RGB, ProPhoto RGB, or a validated custom ICC profile. Apply an explicit missing-profile policy instead of guessing.</p>
+              <h4>Completion bound</h4>
+              <p>Known color patches, missing profiles, invalid custom profiles, wide-gamut sources, alpha edges, presets, and reopened output match the selected transform and embedded profile.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-102">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/102">#102 Output bit depth</a></h3><p>Stage 4G</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Offer only bit depths supported by the output format and real pipeline. Keep requested, rendered, and encoded precision distinct. Never label an 8-bit readback as 16-bit output.</p>
+              <h4>Completion bound</h4>
+              <p>Ramps, highlights, masks, alpha, crop, resize, profile conversion, metadata, and large output survive the verified high-bit route. Independent inspection reports the requested channel depth.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-104">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/104">#104 Metadata inclusion and privacy</a></h3><p>Stage 4H</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Offer All, Copyright, Camera, and None policies plus GPS removal. Normalize EXIF, IPTC, and XMP, apply named allowlists, and preview the effective fields before export without changing source metadata.</p>
+              <h4>Completion bound</h4>
+              <p>Independent inspection matches every policy across supported formats. GPS never leaks when removed. Unicode and rights fields survive where selected. Oversized or malformed metadata fails safely.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-105">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/105">#105 Alpha preservation</a></h3><p>Stage 4I</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Carry alpha through decode, Develop, resize, color conversion, and encoders that support it. Require an explicit flatten color when the target format cannot store alpha.</p>
+              <h4>Completion bound</h4>
+              <p>PNG, TIFF, and WebP preserve supported alpha. JPEG flattening matches the selected color. Straight, premultiplied, rotated, resized, color-managed, and watermark edge fixtures show no halos.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-106">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/106">#106 Watermark</a></h3><p>Stage 5A</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Add versioned text and graphic watermarks with preview, scale, position, margins, opacity, and rotation. Apply them after resize and before encode. Treat fonts and image assets as bounded local inputs.</p>
+              <h4>Completion bound</h4>
+              <p>Preview and export share layout math. Missing font, missing image, unsafe SVG, alpha, color conversion, large output, batch, cancel, retry, and preset cases stay deterministic.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-107">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/107">#107 Export presets and previous settings</a></h3><p>Stage 5B</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Save the full export recipe as a versioned named preset. Support create, rename, update, duplicate, delete, reset, and import. Remember the last completed job as Previous settings. Queue snapshots remain immutable after preset edits.</p>
+              <h4>Completion bound</h4>
+              <p>Migration, future version, overwrite, duplicate name, delete-in-use, missing custom asset, failed job, successful job, restart, and preset-edit-after-queue cases pass without losing user state.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-108">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/108">#108 Multiple destinations and publish queues</a></h3><p>Stage 6</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Publish one selection to multiple destinations through durable jobs. Store destination fingerprints and derive New, Modified, Published, and Deleted. Support review, pause, cancel, retry, conflicts, partial completion, restart, and explicit destructive confirmation.</p>
+              <h4>Completion bound</h4>
+              <p>Two local destinations survive kill and restart without duplicate output, lost state, blind delete, or false Published status. Recipe or source changes produce Modified through a stable fingerprint.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-109">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/109">#109 Content Credentials</a></h3><p>Stage 5C</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Attach C2PA provenance after encoding through an isolated adapter. Keep Attach and Publish separate. Keep signing material outside the renderer, recipes, jobs, settings, catalog, metadata, and logs.</p>
+              <h4>Completion bound</h4>
+              <p>Supported output verifies with an independent tool. Tampering fails verification. Unsupported format, missing signer, revoked credential, network failure, cancel, retry, and Electron packaging cases produce accurate item states.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-168">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/168">#168 Large output support</a></h3><p>Stage 2D</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Export supported images above the current 50 MP ceiling through measured device and codec budgets, bounded chunking, disk preflight, progress, cancellation, and safe failure.</p>
+              <h4>Completion bound</h4>
+              <p>50 MP, 51 MP, 100 MP, very wide, very tall, constrained-memory, low-disk, cancel, restart, and corrupt-dimension fixtures stay inside measured budgets or fail before rendering.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-111">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/111">#111 Contributor and editor roles, QR, and embed</a></h3><p>Stage 8</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Provide scoped contributor and editor roles, expiring and revocable invitations, QR links, and embeds for constrained review and contribution. A hosted service enforces every permission.</p>
+              <h4>Completion bound</h4>
+              <p>Every role is checked against view, comment, like, contribute, edit, and download plus revoke, expiry, cross-album access, malicious input, concurrent edit, audit, and offline recovery. Client hiding does not count.</p>
+            </div>
+          </article>
+
+          <article class="issue" id="issue-112">
+            <header><h3><a href="https://github.com/JoakimRosenfeldt/darkroom/issues/112">#112 Connections and print partners</a></h3><p>Stage 7</p></header>
+            <div class="issue-body">
+              <h4>Requested outcome</h4>
+              <p>Put portfolio, Blurb, WHCC, and comparable destinations behind a provider contract with visible capability, authentication, progress, recovery, credentials in the platform secret store, and a local fallback.</p>
+              <h4>Completion bound</h4>
+              <p>The fake adapter passes auth expiry, rate limits, duplicate submission, retry, cancellation, privacy, disconnect, and offline cases. At least one approved real provider passes its terms and contract. Orders and public posts require explicit confirmation.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="risks">
+        <h2>Risks, effort, and scope</h2>
+        <div class="table-wrap">
+          <table>
+            <caption>Delivery risks and gates</caption>
+            <thead><tr><th>Risk</th><th>Required response</th><th>Gate</th></tr></thead>
+            <tbody>
+              <tr><td>16-bit Develop fidelity</td><td>Use Stage 0 ramps and pixel inspection to select a real high-bit route.</td><td>Before the spool contract freezes.</td></tr>
+              <tr><td>HEVC and HEIF packaging or license</td><td>Record native libraries, codecs, redistribution terms, and clean-machine results.</td><td>Before #91 claims a platform.</td></tr>
+              <tr><td>Native dependency matrix</td><td>Pin checksums and test Sharp, LibRaw, HEIF, and C2PA in packaged artifacts.</td><td>Every native release.</td></tr>
+              <tr><td>Metadata writer gaps</td><td>Round-trip first. Add one isolated writer only for a measured gap.</td><td>Before #104 freezes.</td></tr>
+              <tr><td>Spool disk use</td><td>Estimate disk before render and clean private temp roots on startup.</td><td>Before #168 closes.</td></tr>
+              <tr><td>Catalog v3 migration</td><td>Use a temporary snapshot, validate references, and retain v2 until v3 opens.</td><td>Before Stage 6 merges.</td></tr>
+              <tr><td>C2PA API churn</td><td>Isolate the adapter, pin the version, and verify with an independent tool.</td><td>Before #109 closes.</td></tr>
+              <tr><td>Provider access</td><td>Approve API, terms, regions, idempotency, and support ownership before implementation.</td><td>Each real provider.</td></tr>
+              <tr><td>Hosted abuse and authorization</td><td>Require auth, permission, and data-model review plus server-side denial evidence.</td><td>Before Stage 8 implementation.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Effort bands</h3>
+        <div class="grid-3">
+          <article class="card"><h3>Program A</h3><p><strong>20 to 28 engineer-weeks</strong></p><p class="muted">Stages 0 to 5. High-bit rendering and HEIF packaging carry the largest uncertainty.</p></article>
+          <article class="card"><h3>Publish base</h3><p><strong>5 to 8 engineer-weeks</strong></p><p class="muted">Stage 6 plus the provider contract and fake adapter.</p></article>
+          <article class="card"><h3>Connected delivery</h3><p><strong>9 to 18 engineer-weeks</strong></p><p class="muted">Stages 7 and 8 before later real providers. Vendor approval can extend elapsed time.</p></article>
+        </div>
+
+        <h3>Out of scope</h3>
+        <ul>
+          <li>Video support. The issue group name mentions video, but the 19 linked issues specify still images and delivery.</li>
+          <li>New Develop tools and output sharpening.</li>
+          <li>A multi-root library, general import-copy flow, rename, relink, or broad file-management rewrite before publish state needs stable identity.</li>
+          <li>A provider promise before API access, terms, region, account, and support ownership exist.</li>
+          <li>Public collaboration served from the Electron static server.</li>
+        </ul>
+      </section>
+
+      <section id="sources">
+        <h2>Sources and first action</h2>
+        <p class="source-note">Issue contracts come from the 19 linked GitHub descriptions. Baseline facts come from repository commit <a href="https://github.com/JoakimRosenfeldt/darkroom/tree/f92f2d462d66c8b386f7e4f0611777b27ad8dfa4"><code>f92f2d4</code></a>. Technical gates use primary references from <a href="https://sharp.pixelplumbing.com/api-input/">Sharp input</a>, <a href="https://sharp.pixelplumbing.com/api-output/">Sharp output</a>, <a href="https://sharp.pixelplumbing.com/api-colour/">Sharp color</a>, <a href="https://sharp.pixelplumbing.com/install/">Sharp installation</a>, <a href="https://www.libraw.org/supported-cameras">LibRaw camera support</a>, <a href="https://spec.c2pa.org/">C2PA specifications</a>, and the current <a href="https://github.com/contentauth/c2pa-js/tree/main/packages/c2pa-node">CAI Node package</a>.</p>
+
+        <div class="callout good">
+          <p><strong>First action.</strong> Get explicit approval for focused tests, then execute pull request 0A. Open that pull request with <code>Refs #89 #90 #91 #92 #102 #109 #168</code> and the fixture-manifest evidence. Do not begin by adding DNG to <code>SUPPORTED_EXTENSIONS</code> or by adding fields to <code>ExportDialog</code>.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    Darkroom formats and delivery agent runbook. Stable source path: <code>docs/library-flow-formats-export-plan.html</code>.
+  </footer>
+</body>
+</html>
