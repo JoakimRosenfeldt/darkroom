@@ -133,3 +133,59 @@ Run the Electron manual checks with `DISPLAY=:1 ELECTRON_DISABLE_SANDBOX=1 npm r
 ## Gate 0 status
 
 Gate 0 is open. The code contracts assign one owner to each state class and semantic stage, and the capability matrix names unsupported paths. The gate remains open because v2 output fixtures are missing, the high-bit path is not proven end to end, profile and model sources remain unavailable, and no HDR or proof path has passed.
+
+## Implementation evidence
+
+The feature branch now contains the full code path described by the plan:
+
+- exact Library query and ordered-ID snapshots, including missing-entry handling and explicit refresh;
+- one version-aware Develop session and repository for v2, v3, XMP, catalog persistence, undo, redo, render, export, and batch work;
+- strict v3 documents, migration receipts, retained v2 rollback data, stale-source checks, semantic render plans, SDR RGBA8 preview, and tiled export;
+- input-profile and optics capability states, canonical geometry, global tone and color, live analysis, presence, detail, local masks, manual cleanup, generated-job contracts, HDR and proof capability blocks, and exact-result batch policy;
+- production UI for the v2-to-v3 comparison, v3 panels, Auto Tone, histogram and diagnostics, manual crop, masks, cleanup, white-balance and Point Color sampling, and per-photo batch selection.
+
+Unsupported high-bit, HDR, proof, licensed profile, depth, People, Reflection, and Dust paths remain visible and blocked. The implementation does not substitute data or silently reduce those claims.
+
+## Live Electron run
+
+The run used the seven bundled demo photos through the real Electron bridge and a temporary application profile.
+
+| Case | Observed result |
+| --- | --- |
+| Exact Library result | The Library showed all seven ordered demo entries and retained the selected first photo. |
+| Develop navigation | `city-night.jpg` opened as photo 1 of 7 with the saved filmstrip order. |
+| Viewer stability | The unstable repository snapshot loop was removed. `Try v3` returned in 34 ms and 83 ms on consecutive runs without sustained renderer CPU use. |
+| v2-to-v3 comparison | The session rendered both `Frozen v2 · fit` and `Candidate v3 · Texture +10 · fit`. It reported the reduced-source and RGBA8 capability notes. |
+| Source identity | A real fractional filesystem modification time passed unchanged through the v3 source, asset, and generated-job validators after their contracts were aligned with the catalog identity. |
+| Upgrade and persistence | Accepting the exact receipt applied Texture `+10`, changed the document to v3, and reached `Saved · SDR · 8-bit output`. |
+| Auto Tone | The accepted analysis wrote ordinary stored values: Exposure `+0.85 EV`, Contrast `-6`, Highlights `+40`, Shadows `+19`, Whites `+25`, and Blacks `-13`. Undo became available. |
+| Manual mask | A brush gesture created `Mask 1` in canonical v3 geometry and persisted it through the session. |
+| Batch scope | The dialog selected the exact seven-photo stored result and named the current semantic group. A catalog revision change blocked execution until the explicit `Refresh result` action, as required. |
+
+The screenshots under `docs/pr-screenshots/global-editing-library-flow/` record the Library, comparison, accepted v3 edit, manual mask, and exact batch selection.
+
+## Final command state
+
+| Command | Result |
+| --- | --- |
+| `npm test` | Passed, 241 of 241 tests. |
+| `npm run build` | Passed. The output retained the existing workspace-root warning and two circular chunk warnings. |
+| `npx tsc --noEmit --pretty false` | Passed after the production build completed. |
+| Scoped ESLint on changed TypeScript files | Passed during each correction pass. |
+| `git diff --check` | Passed on the final working tree. |
+| `npm run lint` | Matched the baseline: one existing error in `hooks/useScrollToSelectedRow.ts` and three existing TanStack incompatible-library warnings. |
+
+## Remaining gate status
+
+The implementation steps are present, but the evidence gates remain conservative:
+
+- Gate 1 has live exact-result navigation evidence. A complete hard-refresh, every-filter, missing-entry matrix is still absent.
+- Gate 2 remains open because the Step 0 v2 pixel fixtures were not available.
+- Gate 3 has a passing standard-image SDR RGBA8 comparison and accepted edit. It remains open for the required v2 hashes and decoded export metadata matrix.
+- Gates 4 through 7 have contracts, controls, render stages, persistence, and manual workflows. Their full camera, lens, geometry, color, detail, cleanup, and export fixture matrices are still absent.
+- Gates 8 and 9 remain open because the required licensed models, depth, HDR, and proof capabilities are unavailable.
+- Gate 10 has exact-selection and stale-result evidence. The full changed, skipped, and failed per-photo persistence matrix is still absent.
+- Gate 11 remains open because the plan's full fixture matrix was not supplied or run.
+- Gate 12 is evaluated from the created pull request.
+
+For the same reason, the pull request references the 23 issue contracts instead of claiming that unsupported or unverified outcomes are complete.
