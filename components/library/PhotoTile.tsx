@@ -56,6 +56,22 @@ export const PhotoTile = memo(function PhotoTile({
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
 
+  function openRecordedResult(selectedIds: readonly string[]) {
+    const result = getVisibleLibraryResult();
+    if (result.query === null || !result.entryIds.includes(entry.id)) return;
+    try {
+      const session = createViewerSession({
+        query: result.query,
+        orderedEntryIds: result.viewerEntryIds,
+        activeEntryId: entry.id,
+        selectedEntryIds: selectedIds,
+      });
+      router.push(viewerPhotoHref(entry.id, session.id));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "The Library result could not be saved.");
+    }
+  }
+
   useEffect(() => {
     return () => {
       if (objectUrlRef.current) {
@@ -268,16 +284,7 @@ export const PhotoTile = memo(function PhotoTile({
             toggle: event.metaKey || event.ctrlKey,
           })
         }
-        onDoubleClick={() => {
-          const result = getVisibleLibraryResult();
-          const session = createViewerSession({
-            queryRevision: result.revision,
-            orderedEntryIds: result.entryIds,
-            activeEntryId: entry.id,
-            selectedEntryIds,
-          });
-          router.push(viewerPhotoHref(entry.id, session.id));
-        }}
+        onDoubleClick={() => openRecordedResult(selectedEntryIds)}
         onContextMenu={(event) => onContextMenu?.(entry.id, event)}
       >
         {content}
@@ -306,9 +313,7 @@ export const PhotoTile = memo(function PhotoTile({
     <button
       type="button"
       className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
-      onClick={() =>
-        router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
-      }
+      onClick={() => openRecordedResult([entry.id])}
     >
       {content}
     </button>

@@ -5,12 +5,14 @@ import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { buildQueryIndex } from "@/lib/library/query";
 import { buildExactDuplicateGroups } from "@/lib/library/duplicates";
 import { resolveLibraryResult, type LibraryPrimaryScope } from "@/lib/library/result";
+import type { LibraryResultQuery } from "@/lib/library/result-contract";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function useLibraryResult(
   primaryScopeOverride?: LibraryPrimaryScope,
   recordSession = true,
+  queryOverride?: LibraryResultQuery | null,
 ) {
   const entries = useLibraryStore((state) => state.entries);
   const metadata = useLibraryStore((state) => state.entryMetadata);
@@ -18,7 +20,8 @@ export function useLibraryResult(
   const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const workspace = useLibraryStore((state) => state.libraryWorkspace);
   const catalogScope = useLibraryStore((state) => state.catalogView);
-  const primaryScope = primaryScopeOverride ?? catalogScope;
+  const catalogId = useLibraryStore((state) => state.catalogId);
+  const primaryScope = queryOverride?.primaryScope ?? primaryScopeOverride ?? catalogScope;
   const catalogRevision = useLibraryStore((state) => state.catalogRevision);
   const [settings] = useLibraryViewSettings();
   const queryIndex = useMemo(
@@ -38,12 +41,12 @@ export function useLibraryResult(
       archivedEntryIds,
       workspace,
       primaryScope,
-      textQuery: settings.textQuery,
-      facets: settings.facets,
-      curationFilter: settings.curationFilter,
-      formatFilter: settings.filter,
-      sort: settings.sort,
-      sortDirection: settings.sortDirection,
+      textQuery: queryOverride?.textQuery ?? settings.textQuery,
+      facets: queryOverride?.facets ?? settings.facets,
+      curationFilter: queryOverride?.curationFilter ?? settings.curationFilter,
+      formatFilter: queryOverride?.formatFilter ?? settings.filter,
+      sort: queryOverride?.sort ?? settings.sort,
+      sortDirection: queryOverride?.sortDirection ?? settings.sortDirection,
       expandedStackIds: new Set(settings.expandedStackIds),
       duplicateEntryIds,
       queryIndex,
@@ -65,10 +68,47 @@ export function useLibraryResult(
       settings.sortDirection,
       settings.textQuery,
       workspace,
+      queryOverride,
     ],
   );
+  const query = useMemo<LibraryResultQuery | null>(() => catalogId === null
+    ? null
+    : {
+        catalogId,
+        catalogRevision,
+        primaryScope,
+        archivePolicy: primaryScope.type === "archive" ? "only" : "exclude",
+        textQuery: queryOverride?.textQuery ?? settings.textQuery,
+        facets: queryOverride?.facets ?? settings.facets,
+        curationFilter: queryOverride?.curationFilter ?? settings.curationFilter,
+        formatFilter: queryOverride?.formatFilter ?? settings.filter,
+        sort: queryOverride?.sort ?? settings.sort,
+        sortDirection: queryOverride?.sortDirection ?? settings.sortDirection,
+      }, [
+        catalogId,
+        catalogRevision,
+        primaryScope,
+        queryOverride,
+        settings.curationFilter,
+        settings.facets,
+        settings.filter,
+        settings.sort,
+        settings.sortDirection,
+        settings.textQuery,
+      ]);
   useEffect(() => {
-    if (recordSession) recordVisibleLibraryResult(result.visibleEntryIds, result.revision);
-  }, [recordSession, result.revision, result.visibleEntryIds]);
-  return result;
+    if (recordSession) {
+      recordVisibleLibraryResult(
+        result.visibleEntryIds,
+        result.viewerEntryIds,
+        result.revision,
+        query,
+      );
+    }
+  }, [query, recordSession, result.revision, result.viewerEntryIds, result.visibleEntryIds]);
+  return { ...result, query };
+}
+
+export function useLibraryResultForQuery(query: LibraryResultQuery | null) {
+  return useLibraryResult(undefined, false, query);
 }

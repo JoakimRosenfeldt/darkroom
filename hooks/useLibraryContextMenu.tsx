@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -38,8 +37,8 @@ function getActionTargets(
 export function useLibraryContextMenu(
   visibleOrder: string[],
   onExport?: (entryIds: string[]) => void,
+  onOpenDevelop?: (entryId: string) => void,
 ) {
-  const router = useRouter();
   const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [diskDeleteTargets, setDiskDeleteTargets] = useState<string[] | null>(
@@ -212,9 +211,7 @@ export function useLibraryContextMenu(
               <>
             <ContextMenuItem
               onClick={() => {
-                router.push(
-                  `/photo?id=${encodeURIComponent(menu.entryId)}`,
-                );
+                onOpenDevelop?.(menu.entryId);
                 closeMenu();
               }}
             >

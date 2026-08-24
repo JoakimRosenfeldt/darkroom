@@ -11,6 +11,8 @@ import { IconChevronLeft, IconChevronRight } from "@/components/shell/icons";
 
 interface FilmstripProps {
   entries: LibraryEntry[];
+  orderedEntryIds: readonly string[];
+  missingEntryIds: readonly string[];
   activeId: string;
   selectedIds: string[];
   onSelect: (id: string, modifiers: SelectEntryModifiers) => void;
@@ -23,6 +25,8 @@ const THUMB_GAP = 8;
 
 export function Filmstrip({
   entries,
+  orderedEntryIds,
+  missingEntryIds,
   activeId,
   selectedIds,
   onSelect,
@@ -32,9 +36,14 @@ export function Filmstrip({
   const scrollRef = useRef<HTMLDivElement>(null);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const getScrollRoot = useCallback(() => scrollRef.current, []);
+  const entryById = useMemo(
+    () => new Map<string, LibraryEntry>(entries.map((entry) => [entry.id, entry])),
+    [entries],
+  );
+  const missing = useMemo(() => new Set(missingEntryIds), [missingEntryIds]);
   const activeIndex = useMemo(
-    () => entries.findIndex((entry) => entry.id === activeId),
-    [entries, activeId],
+    () => orderedEntryIds.indexOf(activeId),
+    [activeId, orderedEntryIds],
   );
   const pickedCount = useMemo(
     () => entries.reduce(
@@ -48,7 +57,7 @@ export function Filmstrip({
   );
   const virtualizer = useVirtualizer({
     horizontal: true,
-    count: entries.length,
+    count: orderedEntryIds.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => THUMB_SIZE + THUMB_GAP,
     overscan: 16,
@@ -76,9 +85,16 @@ export function Filmstrip({
     if (activeIndex < 0) {
       return;
     }
-    const next = entries[activeIndex + direction];
-    if (next) {
-      onSelect(next.id, {});
+    for (
+      let index = activeIndex + direction;
+      index >= 0 && index < orderedEntryIds.length;
+      index += direction
+    ) {
+      const next = entryById.get(orderedEntryIds[index]!);
+      if (next) {
+        onSelect(next.id, {});
+        return;
+      }
     }
   }
 
@@ -88,7 +104,7 @@ export function Filmstrip({
         <button
           type="button"
           onClick={() => selectRelative(-1)}
-          disabled={activeIndex <= 0}
+          disabled={!orderedEntryIds.slice(0, activeIndex).some((entryId) => entryById.has(entryId))}
           className="flex flex-1 items-center justify-center text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
           aria-label="Previous photo"
         >
@@ -97,7 +113,7 @@ export function Filmstrip({
         <button
           type="button"
           onClick={() => selectRelative(1)}
-          disabled={activeIndex < 0 || activeIndex >= entries.length - 1}
+          disabled={!orderedEntryIds.slice(activeIndex + 1).some((entryId) => entryById.has(entryId))}
           className="flex flex-1 items-center justify-center border-t border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-30"
           aria-label="Next photo"
         >
@@ -123,9 +139,29 @@ export function Filmstrip({
           style={{ width: `${virtualizer.getTotalSize()}px` }}
         >
           {virtualizer.getVirtualItems().map((virtualItem) => {
-            const entry = entries[virtualItem.index];
-            if (!entry) {
-              return null;
+            const entryId = orderedEntryIds[virtualItem.index];
+            if (!entryId) return null;
+            const entry = entryById.get(entryId);
+
+            if (!entry || missing.has(entryId)) {
+              return (
+                <div
+                  key={entryId}
+                  role="img"
+                  aria-label={`Missing photo ${virtualItem.index + 1}${selectedIds.includes(entryId) ? ", selected" : ""}`}
+                  className={[
+                    "absolute top-0 flex items-center justify-center rounded-md border border-dashed border-amber-300/30 bg-amber-950/20 px-2 text-center text-[9px] uppercase tracking-wider text-amber-100/60",
+                    selectedIds.includes(entryId) ? "ring-2 ring-inset ring-lr-accent" : "",
+                  ].join(" ")}
+                  style={{
+                    width: `${THUMB_SIZE}px`,
+                    height: `${THUMB_SIZE}px`,
+                    transform: `translateX(${virtualItem.start}px)`,
+                  }}
+                >
+                  Missing
+                </div>
+              );
             }
 
             return (
@@ -173,13 +209,15 @@ export function Filmstrip({
 
       <div className="flex w-24 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-lr-border-subtle">
         <span className="font-mono text-[13px] text-lr-text">
-          {activeIndex >= 0 ? `${activeIndex + 1} / ${entries.length}` : "—"}
+          {activeIndex >= 0 ? `${activeIndex + 1} / ${orderedEntryIds.length}` : "—"}
         </span>
         <span className="text-[10px] uppercase tracking-[0.08em] text-lr-text-muted">
           {selectedIds.length > 1
             ? `${selectedIds.length} selected`
-            : activeIndex >= 0
-              ? `${pickedCount} picked`
+            : missingEntryIds.length > 0
+              ? `${missingEntryIds.length} missing`
+              : activeIndex >= 0
+                ? `${pickedCount} picked`
               : "Photos"}
         </span>
       </div>

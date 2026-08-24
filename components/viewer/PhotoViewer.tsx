@@ -48,8 +48,11 @@ import { ViewerSurface, type ViewerSurfaceMode } from "./ViewerSurface";
 interface PhotoViewerProps {
   entry: LibraryEntry;
   entries: LibraryEntry[];
-  sessionId: string | null;
+  resultId: string;
+  resultEntryIds: readonly string[];
+  missingEntryIds: readonly string[];
   sessionMessage: string | null;
+  onRefreshResult: () => void;
 }
 
 const MASK_CANVAS_TOOLS: Array<{
@@ -154,9 +157,16 @@ function captureSummary(metadata: Record<string, unknown>): string[] {
   return summary;
 }
 
-export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: PhotoViewerProps) {
+export function PhotoViewer({
+  entry,
+  entries,
+  resultId,
+  resultEntryIds,
+  missingEntryIds,
+  sessionMessage,
+  onRefreshResult,
+}: PhotoViewerProps) {
   const router = useRouter();
-  const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const activeSelectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
@@ -190,10 +200,29 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
   const [linkedViewports, setLinkedViewports] = useState(true);
   const [referenceEntryId, setReferenceEntryId] = useState<string | null>(() => readReferenceEntryId(entry.catalogId));
   const activeIndex = useMemo(
+    () => resultEntryIds.indexOf(entry.id),
+    [entry.id, resultEntryIds],
+  );
+  const availableActiveIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
   );
   const visibleOrder = useMemo(() => entries.map((item) => item.id), [entries]);
+  const availableEntryById = useMemo(
+    () => new Map<string, LibraryEntry>(entries.map((item) => [item.id, item])),
+    [entries],
+  );
+  const adjacentEntry = useCallback((direction: -1 | 1) => {
+    for (
+      let index = activeIndex + direction;
+      index >= 0 && index < resultEntryIds.length;
+      index += direction
+    ) {
+      const candidate = availableEntryById.get(resultEntryIds[index]!);
+      if (candidate) return candidate;
+    }
+    return null;
+  }, [activeIndex, availableEntryById, resultEntryIds]);
   const selectionTargets = useMemo(
     () =>
       selectedEntryIds.length > 0 && selectedEntryIds.includes(entry.id)
@@ -287,14 +316,8 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
   }
 
   useEffect(() => {
-    if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
-      setSelectedEntryId(entry.id);
-    }
-  }, [entry.id, setSelectedEntryId]);
-
-  useEffect(() => {
-    if (sessionId) updateViewerSessionActive(sessionId, entry.id);
-  }, [entry.id, sessionId]);
+    updateViewerSessionActive(resultId, entry.id);
+  }, [entry.id, resultId]);
 
   useEffect(() => {
     if (
@@ -303,9 +326,9 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
       selectedEntryIds.includes(entry.id) &&
       entries.some((item) => item.id === activeSelectedEntryId)
     ) {
-      router.replace(sessionId ? viewerPhotoHref(activeSelectedEntryId, sessionId) : `/photo?id=${encodeURIComponent(activeSelectedEntryId)}`);
+      router.replace(viewerPhotoHref(activeSelectedEntryId, resultId));
     }
-  }, [activeSelectedEntryId, entries, entry.id, router, selectedEntryIds, sessionId]);
+  }, [activeSelectedEntryId, entries, entry.id, resultId, router, selectedEntryIds]);
 
   useEffect(() => {
     let active = true;
@@ -331,7 +354,7 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
           return;
         }
         setDecoded(result);
-        preloadDevelopImages(entries, activeIndex);
+        preloadDevelopImages(entries, availableActiveIndex);
       } catch (loadError) {
         if (active) {
           setError(
@@ -352,7 +375,7 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
     return () => {
       active = false;
     };
-  }, [entry, entries, activeIndex]);
+  }, [entry, entries, availableActiveIndex]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
@@ -489,7 +512,7 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
       const nextActiveId =
         removing && id === entry.id ? remaining.at(-1) : removing ? entry.id : id;
       if (nextActiveId && nextActiveId !== entry.id) {
-        router.push(sessionId ? viewerPhotoHref(nextActiveId, sessionId) : `/photo?id=${encodeURIComponent(nextActiveId)}`);
+        router.push(viewerPhotoHref(nextActiveId, resultId));
       }
     },
     [
@@ -498,7 +521,7 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
       router,
       selectEntry,
       selectedEntryIds,
-      sessionId,
+      resultId,
       visibleOrder,
     ],
   );
@@ -583,19 +606,19 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
         else undo();
         return;
       }
-      if (event.key === "ArrowLeft" && activeIndex > 0) {
+      if (event.key === "ArrowLeft") {
+        const previous = adjacentEntry(-1);
+        if (!previous) return;
         event.preventDefault();
-        selectPhoto(entries[activeIndex - 1].id, {
+        selectPhoto(previous.id, {
           shift: event.shiftKey,
         });
       }
-      if (
-        event.key === "ArrowRight" &&
-        activeIndex >= 0 &&
-        activeIndex < entries.length - 1
-      ) {
+      if (event.key === "ArrowRight") {
+        const next = adjacentEntry(1);
+        if (!next) return;
         event.preventDefault();
-        selectPhoto(entries[activeIndex + 1].id, {
+        selectPhoto(next.id, {
           shift: event.shiftKey,
         });
       }
@@ -612,7 +635,7 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    entries,
+    adjacentEntry,
     entry.id,
     activeIndex,
     router,
@@ -734,14 +757,21 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
                 </button>
                 <button
                   type="button"
-                  disabled={activeIndex < 0 || activeIndex >= entries.length - 1}
+                  disabled={adjacentEntry(1) === null}
                   onClick={() => {
-                    const candidate = entries[activeIndex + 1];
+                    const candidate = adjacentEntry(1);
                     if (candidate) router.push(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
                   }}
                   className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
                 >
                   Compare
+                </button>
+                <button
+                  type="button"
+                  onClick={onRefreshResult}
+                  className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+                >
+                  Refresh result
                 </button>
                 <button
                   type="button"
@@ -988,8 +1018,10 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
 
         <Filmstrip
           entries={entries}
+          orderedEntryIds={resultEntryIds}
+          missingEntryIds={missingEntryIds}
           activeId={entry.id}
-          selectedIds={selectionTargets}
+          selectedIds={selectedEntryIds}
           onSelect={selectPhoto}
           referenceId={referenceEntryId}
           onSetReference={setReference}

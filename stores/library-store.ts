@@ -128,6 +128,7 @@ interface LibraryStore {
   catalogManagerOpen: boolean;
   catalogView: CatalogView;
   importState: ImportState;
+  hasBootstrapped: boolean;
   importStatus: string | null;
   importError: string | null;
   metadataAnalysis: MetadataAnalysisState | null;
@@ -138,6 +139,11 @@ interface LibraryStore {
   selectionAnchorId: string | null;
   entryMetadata: Record<string, EntryMetadata>;
   setSelectedEntryId: (id: string | null) => void;
+  restoreViewerSelection: (
+    selectedEntryIds: readonly string[],
+    activeEntryId: string,
+    focusedEntryId: string | null,
+  ) => void;
   clearSelection: () => void;
   selectEntry: (
     id: string,
@@ -850,6 +856,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   catalogManagerOpen: false,
   catalogView: { type: "all" },
   importState: "idle",
+  hasBootstrapped: false,
   importStatus: null,
   importError: null,
   metadataAnalysis: null,
@@ -864,6 +871,21 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     selectedEntryId: id,
     selectedEntryIds: id ? [id] : [],
     selectionAnchorId: id,
+  }),
+
+  restoreViewerSelection: (selectedEntryIds, activeEntryId, focusedEntryId) => set((state) => {
+    const restoredEntryIds = [...new Set(selectedEntryIds)];
+    if (
+      state.selectedEntryId === activeEntryId &&
+      state.selectionAnchorId === focusedEntryId &&
+      state.selectedEntryIds.length === restoredEntryIds.length &&
+      state.selectedEntryIds.every((entryId, index) => entryId === restoredEntryIds[index])
+    ) return state;
+    return {
+      selectedEntryId: activeEntryId,
+      selectedEntryIds: restoredEntryIds,
+      selectionAnchorId: focusedEntryId,
+    };
   }),
 
   clearSelection: () => set({ selectedEntryIds: [], selectedEntryId: null, selectionAnchorId: null }),
@@ -2221,6 +2243,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   bootstrapLibrary: async () => {
     fsDebug("bootstrapLibrary: start");
+    set({ hasBootstrapped: false });
     try {
       const result = await bootstrapCatalog();
       if (!result.session) {
@@ -2259,6 +2282,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       await finishImport(generation, () => activateCatalog(activation), "restore", set, get);
     } catch (error) {
       set({ importError: formatPickerError(error), needsFolderAccess: true });
+    } finally {
+      set({ hasBootstrapped: true });
     }
   },
 }));

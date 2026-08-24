@@ -1,19 +1,29 @@
+import type { LibraryResultQuery } from "./result-contract";
+
 let visibleEntryIds: readonly string[] = [];
+let viewerEntryIds: readonly string[] = [];
 let revision = "";
+let query: LibraryResultQuery | null = null;
 
 export function recordVisibleLibraryResult(
   nextEntryIds: readonly string[],
+  nextViewerEntryIds: readonly string[],
   nextRevision: string,
+  nextQuery: LibraryResultQuery | null,
 ): void {
   visibleEntryIds = nextEntryIds;
+  viewerEntryIds = nextViewerEntryIds;
   revision = nextRevision;
+  query = nextQuery;
 }
 
 export function getVisibleLibraryResult(): {
   readonly entryIds: readonly string[];
+  readonly viewerEntryIds: readonly string[];
   readonly revision: string;
+  readonly query: LibraryResultQuery | null;
 } {
-  return { entryIds: visibleEntryIds, revision };
+  return { entryIds: visibleEntryIds, viewerEntryIds, revision, query };
 }
 
 export function readAutoAdvancePreference(): boolean {
