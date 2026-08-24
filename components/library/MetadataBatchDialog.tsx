@@ -101,6 +101,7 @@ function stateFromPreset(preset: MetadataPreset): BatchState {
 export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly string[]; onClose: () => void }) {
   const presets = useLibraryStore((state) => state.libraryWorkspace.metadataPresets);
   const applyOverrides = useLibraryStore((state) => state.applyMetadataOverrides);
+  const publishXmp = useLibraryStore((state) => state.publishMetadataXmp);
   const savePreset = useLibraryStore((state) => state.saveMetadataPreset);
   const deletePreset = useLibraryStore((state) => state.deleteMetadataPreset);
   const [fields, setFields] = useState<BatchState>(EMPTY_BATCH);
@@ -109,11 +110,13 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
   const [presetId, setPresetId] = useState("");
   const [presetName, setPresetName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [appliedCount, setAppliedCount] = useState<number | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [publishAfterSave, setPublishAfterSave] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   function updateField(field: keyof BatchState, patch: Partial<TextFieldState>) {
     setFields((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
-    setAppliedCount(null);
+    setStatus(null);
   }
 
   function loadPreset(id: string) {
@@ -151,16 +154,36 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
     }
   }
 
-  function apply(event: FormEvent<HTMLFormElement>) {
+  async function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setApplying(true);
     try {
       const overrides = overridesFromState(fields);
       if (Object.values(overrides).every((value) => value === undefined)) throw new Error("Choose at least one field to change.");
       applyOverrides(entryIds, overrides, { captionMode, keywordMode });
-      setAppliedCount(entryIds.length);
+      if (!publishAfterSave) {
+        setStatus(`Saved catalog metadata for ${entryIds.length} photos. XMP unchanged.`);
+      } else {
+        let published = 0;
+        let conflicts = 0;
+        let failed = 0;
+        for (const [index, entryId] of entryIds.entries()) {
+          setStatus(`Saved catalog metadata. Publishing XMP ${index + 1} of ${entryIds.length}…`);
+          try {
+            const result = await publishXmp(entryId);
+            if (result === "conflict") conflicts += 1;
+            else published += 1;
+          } catch {
+            failed += 1;
+          }
+        }
+        setStatus(`Saved ${entryIds.length} catalog records. Published ${published} XMP sidecars${conflicts > 0 ? `; ${conflicts} need conflict resolution` : ""}${failed > 0 ? `; ${failed} failed` : ""}.`);
+      }
       setError(null);
     } catch (applyError) {
       setError(applyError instanceof Error ? applyError.message : "Metadata could not be applied.");
+    } finally {
+      setApplying(false);
     }
   }
 
@@ -212,15 +235,22 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
               <BatchField label="Latitude" field={fields.latitude} onChange={(patch) => updateField("latitude", patch)} type="number" />
               <BatchField label="Longitude" field={fields.longitude} onChange={(patch) => updateField("longitude", patch)} type="number" />
             </div>
+            <label className="flex items-start gap-3 rounded-lg border border-lr-border-subtle p-3 text-xs text-lr-text-muted">
+              <input type="checkbox" checked={publishAfterSave} onChange={(event) => setPublishAfterSave(event.target.checked)} className="mt-0.5 accent-lr-accent" />
+              <span>
+                <strong className="block font-medium text-lr-text">Publish XMP after catalog save</strong>
+                <span className="mt-0.5 block text-[10px] leading-relaxed text-lr-text-faint">Writes sidecars one at a time with conflict checks and byte-exact backups.</span>
+              </span>
+            </label>
             {error ? <p role="alert" className="rounded-md border border-red-400/30 bg-red-950/30 px-3 py-2 text-xs text-red-200">{error}</p> : null}
-            {appliedCount !== null ? <p role="status" className="rounded-md border border-emerald-400/20 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-200">Saved catalog metadata for {appliedCount} photos. XMP unchanged.</p> : null}
+            {status ? <p role="status" className="rounded-md border border-emerald-400/20 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-200">{status}</p> : null}
           </div>
         </div>
 
         <footer className="flex items-center gap-2 border-t border-lr-border-subtle p-4">
-          <button type="button" onClick={() => { setFields(EMPTY_BATCH); setAppliedCount(null); }} className="mr-auto px-2 py-2 text-xs text-lr-text-muted hover:text-lr-text">Clear form</button>
+          <button type="button" onClick={() => { setFields(EMPTY_BATCH); setStatus(null); }} className="mr-auto px-2 py-2 text-xs text-lr-text-muted hover:text-lr-text">Clear form</button>
           <button type="button" onClick={onClose} className="rounded-md border border-lr-border-subtle px-4 py-2 text-xs text-lr-text-muted">Close</button>
-          <button type="submit" className="rounded-md bg-lr-accent px-4 py-2 text-xs font-medium text-[#14202a]">Apply to {entryIds.length}</button>
+          <button type="submit" disabled={applying} className="rounded-md bg-lr-accent px-4 py-2 text-xs font-medium text-[#14202a] disabled:opacity-50">{applying ? "Applying…" : `Apply to ${entryIds.length}`}</button>
         </footer>
       </form>
     </div>

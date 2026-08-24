@@ -47,15 +47,16 @@ export function ImageViewport({ image, document, sourceSignature, original, labe
     setError(null);
     const renderer = new DevelopRenderer(canvas);
     rendererRef.current = renderer;
-    void renderer.setImage(image).then(
-      async () => {
+    void (async () => {
+      try {
+        await renderer.setImage(image);
+        if (!active) return;
         await renderer.prepare(documentRef.current, stableSignature, "preview");
         if (active) setReady(true);
-      },
-      (loadError: unknown) => {
+      } catch (loadError: unknown) {
         if (active) setError(loadError instanceof Error ? loadError.message : "Preview could not be prepared.");
-      },
-    );
+      }
+    })();
     return () => {
       active = false;
       renderer.dispose();

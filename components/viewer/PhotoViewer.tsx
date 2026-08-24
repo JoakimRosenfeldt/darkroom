@@ -300,11 +300,12 @@ export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: Photo
     if (
       activeSelectedEntryId &&
       activeSelectedEntryId !== entry.id &&
+      selectedEntryIds.includes(entry.id) &&
       entries.some((item) => item.id === activeSelectedEntryId)
     ) {
       router.replace(sessionId ? viewerPhotoHref(activeSelectedEntryId, sessionId) : `/photo?id=${encodeURIComponent(activeSelectedEntryId)}`);
     }
-  }, [activeSelectedEntryId, entries, entry.id, router, sessionId]);
+  }, [activeSelectedEntryId, entries, entry.id, router, selectedEntryIds, sessionId]);
 
   useEffect(() => {
     let active = true;

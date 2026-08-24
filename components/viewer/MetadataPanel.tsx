@@ -32,6 +32,8 @@ interface MetadataDraft {
   readonly longitude: string;
 }
 
+const EMPTY_METADATA_OVERRIDES: MetadataOverrides = {};
+
 function display<T>(source: MetadataValue<T> | undefined, override: MetadataOverride<T> | undefined, catalog: T | null): T | null {
   if (override !== undefined) {
     return source === undefined
@@ -89,7 +91,7 @@ function formatShutter(value: number | null): string {
 
 export function MetadataPanel({ entry, decodedMetadata }: MetadataPanelProps) {
   const analysis = useLibraryStore((state) => state.libraryWorkspace.analysisByEntryId[entry.id]);
-  const overrides = useLibraryStore((state) => state.libraryWorkspace.metadataOverridesByEntryId[entry.id] ?? {});
+  const overrides = useLibraryStore((state) => state.libraryWorkspace.metadataOverridesByEntryId[entry.id] ?? EMPTY_METADATA_OVERRIDES);
   const sync = useLibraryStore((state) => state.libraryWorkspace.metadataSyncByEntryId[entry.id]);
   const catalog = useLibraryStore((state) => getEntryMetadata(state.entryMetadata, entry.id));
   const applyOverrides = useLibraryStore((state) => state.applyMetadataOverrides);

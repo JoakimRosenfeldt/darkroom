@@ -28,8 +28,8 @@ Source facts do not enter catalog durability. Catalog overrides and XMP sync sta
 | Capture time | EXIF | Set, clear, reset | `photoshop:DateCreated` | Capture sort and year facet | XMP |
 | Latitude | EXIF GPS | Set, clear, reset | `exif:GPSLatitude` | Location projection | XMP |
 | Longitude | EXIF GPS | Set, clear, reset | `exif:GPSLongitude` | Location projection | XMP |
-| Camera and lens | EXIF or catalog fallback | Read-only | Preserved | Text, camera facet, lens facet | Preserved when present in the generated packet |
-| ISO and focal length | EXIF | Read-only | Preserved | Range facets | Preserved when present in the generated packet |
+| Camera and lens | EXIF or catalog fallback | Read-only | Preserved | Text, camera facet, lens facet | Not projected |
+| ISO and focal length | EXIF | Read-only | Preserved | Range facets | Not projected |
 | Dimensions, orientation, bit depth, and color space | Container, EXIF, ICC | Read-only | Not owned | Metadata panel | Output encoder owns dimensions and color space |
 
 The XMP writer changes only owned nodes. It retains unknown namespaces, attributes, child nodes, and non-default language alternatives.
@@ -44,7 +44,7 @@ Extraction runs outside preview decode. A failed parser result stays typed as un
 
 The metadata panel groups File, Capture, Description, Location, Develop and sync, and Diagnostics. Edit mode uses explicit **Save**, **Cancel**, and **Reset to source** actions.
 
-The batch dialog applies one catalog operation to the selected IDs. Each field has Unchanged, Set value, and Clear modes. Caption and keyword fields support replace or append. Presets support create, update, duplicate, apply, and delete.
+The batch dialog applies one catalog operation to the selected IDs. Each field has Unchanged, Set value, and Clear modes. Caption and keyword fields support replace or append. Presets support create, update, duplicate, apply, and delete. An explicit XMP option publishes sidecars sequentially, reports progress, and counts conflicts and failures without hiding a completed catalog save.
 
 Catalog metadata saves never publish XMP without an explicit action.
 
