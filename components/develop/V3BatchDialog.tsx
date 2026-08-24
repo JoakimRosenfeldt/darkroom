@@ -139,10 +139,14 @@ export function V3BatchDialog({
         event.preventDefault();
         return;
       }
-      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+      const activeControl = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      const focusOutsideCycle = activeControl === null || !controls.includes(activeControl);
+      if (event.shiftKey && (activeControl === first || focusOutsideCycle)) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+      } else if (!event.shiftKey && (activeControl === last || focusOutsideCycle)) {
         event.preventDefault();
         first.focus();
       }

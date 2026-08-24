@@ -55,7 +55,10 @@ import {
 import type { CancellationProbe } from "@/lib/develop/v3/source";
 import type { RawExportRenderResult } from "@/lib/export/types";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
+import {
+  sourceSignatureForEntry,
+  sourceSignaturesEqual,
+} from "@/lib/develop/source-transform";
 import type { RenderPreparation } from "@/lib/develop/renderer";
 
 const HISTORY_LIMIT = 100;
@@ -312,6 +315,9 @@ export interface DevelopSession {
   render(request: FrozenV2ExportRequest): Promise<RawExportRenderResult>;
   render(request: V3SessionRenderRequest): Promise<CpuRenderResult>;
   render(request: V3UpgradeComparisonRequest): Promise<V3UpgradeComparisonResult>;
+  attachSourceSignatureProvider(
+    provider: (() => Readonly<SourceSignature> | null) | null,
+  ): () => void;
   save(): Promise<DevelopSaveResult>;
 }
 
@@ -483,6 +489,7 @@ export class DevelopSessionCore implements DevelopSession {
   #state: MutableDevelopSessionState;
   #repository: DevelopSessionRepository | null;
   #assetCopy: V3UpgradeAssetCopyAdapter | null = null;
+  #sourceSignatureProvider: (() => Readonly<SourceSignature> | null) | null = null;
 
   constructor(
     catalogId: string,
@@ -511,6 +518,17 @@ export class DevelopSessionCore implements DevelopSession {
 
   attachUpgradeAssetCopy(adapter: V3UpgradeAssetCopyAdapter | null): void {
     this.#assetCopy = adapter;
+  }
+
+  attachSourceSignatureProvider(
+    provider: (() => Readonly<SourceSignature> | null) | null,
+  ): () => void {
+    this.#sourceSignatureProvider = provider;
+    return () => {
+      if (this.#sourceSignatureProvider === provider) {
+        this.#sourceSignatureProvider = null;
+      }
+    };
   }
 
   snapshot(): DevelopSessionSnapshot {
@@ -703,14 +721,15 @@ export class DevelopSessionCore implements DevelopSession {
     const sourceDocumentRevision = this.#state.documentRevision;
     const candidate = createV3MigrationCandidate(sourceDocument);
     const acceptance = command.acceptance;
+    const currentSourceSignature = this.#sourceSignatureProvider?.() ?? null;
     if (
       acceptance.kind !== "same-quality-comparison-accepted" ||
       acceptance.sourceDocumentRevision !== sourceDocumentRevision ||
       acceptance.baselineVersion !== candidate.comparison.baselineVersion ||
       acceptance.candidateVersion !== candidate.comparison.candidateVersion ||
       acceptance.quality !== candidate.comparison.quality ||
-      acceptance.sourceSignature.catalogId !== this.catalogId ||
-      acceptance.sourceSignature.entryId !== this.entryId ||
+      currentSourceSignature === null ||
+      !sourceSignaturesEqual(acceptance.sourceSignature, currentSourceSignature) ||
       JSON.stringify(acceptance.firstEdit) !== JSON.stringify(command.edit) ||
       acceptance.acceptedGroups.length !== candidate.comparison.compareGroups.length ||
       candidate.comparison.compareGroups.some(
@@ -764,11 +783,14 @@ export class DevelopSessionCore implements DevelopSession {
         );
       }
     }
+    const latestSourceSignature = this.#sourceSignatureProvider?.() ?? null;
     if (
       this.#state.documentRevision !== sourceDocumentRevision ||
       this.#state.process.kind !== "editable" ||
       this.#state.process.document.version !== 2 ||
-      JSON.stringify(this.#state.process.document) !== JSON.stringify(sourceDocument)
+      JSON.stringify(this.#state.process.document) !== JSON.stringify(sourceDocument) ||
+      latestSourceSignature === null ||
+      !sourceSignaturesEqual(currentSourceSignature, latestSourceSignature)
     ) {
       throw new DevelopSessionCommandError(
         "upgrade-stale",

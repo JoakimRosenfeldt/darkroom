@@ -8,10 +8,12 @@ import {
   type SidecarMetadataPatch,
 } from "@/lib/develop/repository";
 import { getDevelopSession } from "@/lib/develop/session";
+import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import type { PersistedDevelopDocument } from "@/lib/develop/v3/document";
 import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-copy";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
+import { useLibraryStore } from "@/stores/library-store";
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
@@ -67,6 +69,15 @@ export function useDevelopSettingsSync({
     activateEntry(entry.catalogId, entry.id, catalogDocument);
     const session = getDevelopSession(entry.catalogId, entry.id);
     if (!session) return;
+    const detachSourceSignatureProvider = session.attachSourceSignatureProvider(() => {
+      const currentEntry = useLibraryStore.getState().entries.find(
+        (candidate) =>
+          candidate.catalogId === entry.catalogId && candidate.id === entry.id,
+      );
+      return currentEntry?.health === "present"
+        ? sourceSignatureForEntry(currentEntry)
+        : null;
+    });
     session.attachUpgradeAssetCopy(createV3UpgradeAssetCopyAdapter({
       entry,
       currentDocument: () => {
@@ -92,6 +103,7 @@ export function useDevelopSettingsSync({
     });
     void repository.open(metadataRef.current).catch(() => undefined);
     return () => {
+      detachSourceSignatureProvider();
       void repository.flush();
     };
   }, [
