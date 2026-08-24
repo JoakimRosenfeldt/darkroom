@@ -122,6 +122,9 @@ export function createV3MigrationCandidate(
   const crop = legacyV2.settings.crop;
   const effects = legacyV2.settings.effects;
   const copies = requiredAssetCopies(legacyV2);
+  const maskAssetRefs = [...new Map(
+    copies.map((copy) => [copy.expectedReference.assetId, copy.expectedReference]),
+  ).values()];
   const document: DevelopDocumentV3 = {
     ...defaults,
     tone: {
@@ -189,7 +192,7 @@ export function createV3MigrationCandidate(
     local: {
       geometryFrame: "legacy-oriented-v2",
       masks: migratedMasks(legacyV2, copies),
-      maskAssetRefs: copies.map((copy) => copy.expectedReference),
+      maskAssetRefs,
     },
     detail: {
       noiseReduction: {
