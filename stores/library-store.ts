@@ -102,6 +102,12 @@ export interface MetadataAnalysisState {
 
 type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
+interface DevelopCatalogPersistence {
+  readonly document?: EntryMetadata["develop"];
+  readonly sourceUpdatedAt: number;
+  readonly metadataPatch: SidecarMetadataPatch;
+}
+
 export type CatalogView =
   | { type: "all" }
   | { type: "folder"; path: string | null }
@@ -180,6 +186,11 @@ interface LibraryStore {
     sourceUpdatedAt?: number,
     metadataPatch?: SidecarMetadataPatch,
   ) => void;
+  persistDevelopState: (
+    catalogId: string,
+    entryId: string,
+    input: DevelopCatalogPersistence,
+  ) => Promise<void>;
   hydrateEntryMetadata: (
     entryId: string,
     patch: SidecarMetadataPatch,
@@ -437,44 +448,47 @@ function applyHydratedState(
   });
 }
 
+async function persistStateSync(
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): Promise<void> {
+  const catalogId = get().catalogId;
+  const sessionId = get().sessionId;
+  if (catalogId === null || sessionId === null) {
+    throw new Error("Open the original catalog before saving Develop settings.");
+  }
+  const { entryMetadata, albums, archivedEntryIds, libraryWorkspace } = get();
+  try {
+    const revision = await scheduleCatalogStateSync(
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+      libraryWorkspace,
+    );
+    if (get().catalogId === catalogId && get().sessionId === sessionId) {
+      set({ catalogRevision: revision });
+    }
+  } catch (error) {
+    if (get().catalogId === catalogId && get().sessionId === sessionId) {
+      try {
+        const state = await queryActiveCatalog();
+        if (get().catalogId === catalogId && get().sessionId === sessionId) {
+          applyHydratedState(state, set, get);
+        }
+      } catch {
+        // The original sync error remains the actionable failure.
+      }
+      set({ importError: formatPickerError(error) });
+    }
+    throw error;
+  }
+}
+
 function scheduleStateSync(
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
 ): void {
-  const catalogId = get().catalogId;
-  const sessionId = get().sessionId;
-  if (catalogId === null || sessionId === null) {
-    return;
-  }
-  const { entryMetadata, albums, archivedEntryIds, libraryWorkspace } = get();
-  void scheduleCatalogStateSync(
-    entryMetadata,
-    albums,
-    archivedEntryIds,
-    libraryWorkspace,
-  ).then(
-    (revision) => {
-      if (get().catalogId === catalogId && get().sessionId === sessionId) {
-        set({ catalogRevision: revision });
-      }
-    },
-    (error: unknown) => {
-      if (get().catalogId !== catalogId || get().sessionId !== sessionId) {
-        return;
-      }
-      void queryActiveCatalog().then(
-        (state) => {
-          if (get().catalogId === catalogId && get().sessionId === sessionId) {
-            applyHydratedState(state, set, get);
-          }
-          set({ importError: formatPickerError(error) });
-        },
-        () => {
-          set({ importError: formatPickerError(error) });
-        },
-      );
-    },
-  );
+  void persistStateSync(set, get).catch(() => undefined);
 }
 
 function applyLocalMetadata(
@@ -503,13 +517,17 @@ function applyLocalMetadata(
     history.push({ entryId, before, after });
   }
   set({ entryMetadata: updated });
-  for (const item of history) {
-    useDevelopStore.getState().recordMetadataEdit(
-      item.entryId,
-      item.before,
-      item.after,
-      item.before.develop ?? createDefaultDevelopDocument(),
-    );
+  const catalogId = get().catalogId;
+  if (catalogId) {
+    for (const item of history) {
+      useDevelopStore.getState().recordMetadataEdit(
+        catalogId,
+        item.entryId,
+        item.before,
+        item.after,
+        item.before.develop ?? createDefaultDevelopDocument(),
+      );
+    }
   }
   scheduleStateSync(set, get);
   if (shouldAutoAdvance) {
@@ -1134,6 +1152,40 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       },
     });
     scheduleStateSync(set, get);
+  },
+
+  persistDevelopState: async (catalogId, entryId, input) => {
+    if (get().catalogId !== catalogId) {
+      throw new Error("Reopen the original catalog before saving Develop settings.");
+    }
+    const { entryMetadata } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const metadataChanged =
+      (input.metadataPatch.rating !== undefined &&
+        input.metadataPatch.rating !== current.rating) ||
+      (input.metadataPatch.colorLabel !== undefined &&
+        input.metadataPatch.colorLabel !== current.colorLabel);
+    if (input.document || metadataChanged) {
+      const developUpdatedAt = input.document
+        ? Math.max(input.sourceUpdatedAt, current.developUpdatedAt + 1)
+        : current.developUpdatedAt;
+      const updatedAt = metadataChanged
+        ? Math.max(input.sourceUpdatedAt, current.updatedAt + 1)
+        : current.updatedAt;
+      set({
+        entryMetadata: {
+          ...entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...current,
+            ...input.metadataPatch,
+            ...(input.document ? { develop: input.document } : {}),
+            developUpdatedAt,
+            updatedAt,
+          }),
+        },
+      });
+    }
+    await persistStateSync(set, get);
   },
 
   hydrateEntryMetadata: (entryId, patch, sourceUpdatedAt) => {

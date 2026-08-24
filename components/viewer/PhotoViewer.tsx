@@ -230,23 +230,12 @@ export function PhotoViewer({
         : [entry.id],
     [entry.id, selectedEntryIds],
   );
-  const mirrorDevelopDocument = useLibraryStore((state) => state.mirrorDevelopDocument);
-  const hydrateEntryMetadata = useLibraryStore((state) => state.hydrateEntryMetadata);
+  const persistDevelopState = useLibraryStore((state) => state.persistDevelopState);
   const hydrateEntryKeywords = useLibraryStore((state) => state.hydrateEntryKeywords);
-  const mirrorDocument = useCallback(
-    (
-      document: Parameters<typeof mirrorDevelopDocument>[1],
-      sourceUpdatedAt?: Parameters<typeof mirrorDevelopDocument>[2],
-      metadataPatch?: Parameters<typeof mirrorDevelopDocument>[3],
-    ) => mirrorDevelopDocument(entry.id, document, sourceUpdatedAt, metadataPatch),
-    [entry.id, mirrorDevelopDocument],
-  );
-  const hydrateMetadata = useCallback(
-    (
-      patch: Parameters<typeof hydrateEntryMetadata>[1],
-      sourceUpdatedAt: Parameters<typeof hydrateEntryMetadata>[2],
-    ) => hydrateEntryMetadata(entry.id, patch, sourceUpdatedAt),
-    [entry.id, hydrateEntryMetadata],
+  const persistCatalog = useCallback(
+    (input: Parameters<typeof persistDevelopState>[2]) =>
+      persistDevelopState(entry.catalogId, entry.id, input),
+    [entry.catalogId, entry.id, persistDevelopState],
   );
   const hydrateKeywords = useCallback(
     (flat: readonly string[], hierarchical: readonly string[]) => {
@@ -258,8 +247,7 @@ export function PhotoViewer({
   useDevelopSettingsSync({
     entry,
     metadata,
-    mirrorDocument,
-    hydrateMetadata,
+    persistCatalog,
     hydrateKeywords,
   });
   const developSettings = useDevelopStore(

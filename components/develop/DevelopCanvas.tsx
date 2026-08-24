@@ -4,10 +4,11 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
-  DevelopRenderer,
+  FrozenV2Renderer,
   type MaskOverlayMode,
   type RenderDiagnostic,
-} from "@/lib/develop/renderer";
+} from "@/lib/develop/frozen-v2-backend";
+import { getDevelopSession } from "@/lib/develop/session";
 import { useDevelopStore } from "@/stores/develop-store";
 import { InteractiveCropOverlay } from "@/components/develop/InteractiveCropOverlay";
 import { MaskingOverlay } from "@/components/develop/MaskingOverlay";
@@ -87,7 +88,7 @@ export function DevelopCanvas({
 }: DevelopCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rendererRef = useRef<DevelopRenderer | null>(null);
+  const rendererRef = useRef<FrozenV2Renderer | null>(null);
   const cropDraftRef = useRef(cropDraft);
   const panRef = useRef<{
     pointerId: number;
@@ -163,14 +164,22 @@ export function DevelopCanvas({
     async function loadRenderer() {
       try {
         rendererRef.current?.dispose();
-        const renderer = new DevelopRenderer(currentCanvas);
+        const renderer = new FrozenV2Renderer(currentCanvas);
         rendererRef.current = renderer;
         await renderer.setImage(image);
-        const activeState = useDevelopStore.getState();
-        const activeDocument = activeState.activeEntryId
-          ? activeState.sessions[activeState.activeEntryId]?.document ?? EMPTY_DOCUMENT
-          : EMPTY_DOCUMENT;
-        const preparation = await renderer.prepare(activeDocument, stableSourceSignature, "preview");
+        const catalogId = stableSourceSignature.catalogId;
+        if (!catalogId) throw new Error("Develop source is missing its catalog identity.");
+        const session = getDevelopSession(
+          catalogId,
+          stableSourceSignature.entryId,
+        );
+        if (!session) throw new Error("Develop session is not ready.");
+        const preparation = await session.render({
+          kind: "prepare",
+          renderer,
+          sourceSignature: stableSourceSignature,
+          policy: "preview",
+        });
         if (!active) {
           renderer.dispose();
           return;
@@ -258,13 +267,22 @@ export function DevelopCanvas({
         ? { ...activeDocument, settings: { ...activeDocument.settings, crop: draft } }
         : activeDocument;
       const request = ++renderRequestRef.current;
-      void currentRenderer.render(
-        renderDocument,
-        stableSourceSignature,
-        state.showOriginal,
-        draft ? "source" : activeDocument.settings.crop.enabled ? "crop-preview" : "source",
-        { overlayMaskId, overlayMode },
-      ).then((preparation) => {
+      const catalogId = stableSourceSignature.catalogId;
+      if (!catalogId) return;
+      const session = getDevelopSession(
+        catalogId,
+        stableSourceSignature.entryId,
+      );
+      if (!session) return;
+      void session.render({
+        kind: "preview",
+        renderer: currentRenderer,
+        sourceSignature: stableSourceSignature,
+        showOriginal: state.showOriginal,
+        mode: draft ? "source" : activeDocument.settings.crop.enabled ? "crop-preview" : "source",
+        options: { overlayMaskId, overlayMode },
+        documentOverride: renderDocument,
+      }).then((preparation) => {
         if (active && request === renderRequestRef.current) {
           setRenderDiagnostics(preparation.diagnostics);
           onRenderDiagnostics?.(preparation.diagnostics);
@@ -305,14 +323,23 @@ export function DevelopCanvas({
       if (!renderer) {
         return;
       }
+      const catalogId = stableSourceSignature.catalogId;
+      if (!catalogId) return;
+      const session = getDevelopSession(
+        catalogId,
+        stableSourceSignature.entryId,
+      );
+      if (!session) return;
       const request = ++renderRequestRef.current;
-      void renderer.render(
-        previewSettings,
-        stableSourceSignature,
+      void session.render({
+        kind: "preview",
+        renderer,
+        sourceSignature: stableSourceSignature,
         showOriginal,
-        cropDraft ? "source" : settings.crop.enabled ? "crop-preview" : "source",
-        { overlayMaskId, overlayMode },
-      ).then((preparation) => {
+        mode: cropDraft ? "source" : settings.crop.enabled ? "crop-preview" : "source",
+        options: { overlayMaskId, overlayMode },
+        documentOverride: previewSettings,
+      }).then((preparation) => {
         if (request === renderRequestRef.current) {
           setRenderDiagnostics(preparation.diagnostics);
           onRenderDiagnostics?.(preparation.diagnostics);

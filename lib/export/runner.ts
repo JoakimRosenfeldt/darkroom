@@ -5,18 +5,18 @@ import {
   type DevelopImage,
 } from "@/lib/cache/develop-image-cache";
 import {
-  DevelopRenderer,
-  renderDevelopExport,
-} from "@/lib/develop/renderer";
-import { readDevelopSidecar } from "@/lib/develop/sidecar";
+  FrozenV2Renderer,
+} from "@/lib/develop/frozen-v2-backend";
+import { resolveDevelopDocumentFromRepository } from "@/lib/develop/repository";
+import {
+  getActiveDevelopSession,
+  V2DevelopSession,
+} from "@/lib/develop/session";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
-import type { DevelopDocument } from "@/lib/develop/types";
 import { serializeDevelopXmp, serializeMetadataXmp } from "@/lib/develop/xmp";
 import type { MetadataOverrides } from "@/lib/metadata/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { useDevelopStore } from "@/stores/develop-store";
-import { resolveDevelopDocument } from "./settings";
 import { DEFAULT_EXPORT_SUFFIX } from "./types";
 import type {
   ExportConflictBehavior,
@@ -115,18 +115,14 @@ function getMetadata(
   );
 }
 
-async function resolveDocument(
+async function resolveSession(
   entry: LibraryEntry,
   metadata: EntryMetadata,
-): Promise<DevelopDocument> {
-  const current = useDevelopStore.getState();
-  if (current.activeEntryId === entry.id) {
-    const session = current.sessions[entry.id];
-    if (session) return structuredClone(session.document);
-  }
-
-  const sidecar = await readDevelopSidecar(entry);
-  return resolveDevelopDocument(sidecar, metadata);
+): Promise<V2DevelopSession> {
+  const activeSession = getActiveDevelopSession(entry.catalogId, entry.id);
+  if (activeSession) return activeSession;
+  const document = await resolveDevelopDocumentFromRepository(entry, metadata);
+  return new V2DevelopSession(entry.catalogId, entry.id, document);
 }
 
 function asErrorMessage(error: unknown): string {
@@ -161,7 +157,7 @@ export async function runExportBatch(
   const api = getDarkroomAPI();
   const results: ExportFileResult[] = [];
   const warnings: string[] = [];
-  let renderer: DevelopRenderer | null = null;
+  let renderer: FrozenV2Renderer | null = null;
   let lastOutputPath: string | null = null;
   let cancelled = false;
   let revealCapability: ExportRevealCapability | null = null;
@@ -182,7 +178,8 @@ export async function runExportBatch(
       let pixels: RawExportRenderResult | null = null;
       try {
         const entryMetadata = getMetadata(metadata, entry);
-        const developDocument = await resolveDocument(entry, entryMetadata);
+        const developSession = await resolveSession(entry, entryMetadata);
+        const developDocument = developSession.snapshot().document;
         const descriptive: MetadataOverrides = {
           ...(entryMetadata.title === null ? {} : { title: { kind: "set", value: entryMetadata.title } }),
           ...(entryMetadata.caption === null ? {} : { caption: { kind: "set", value: entryMetadata.caption } }),
@@ -195,14 +192,14 @@ export async function runExportBatch(
         exportImage = await loadDevelopExportImage(entry);
 
         progress("rendering");
-        renderer ??= new DevelopRenderer(document.createElement("canvas"), true);
-        pixels = await renderDevelopExport(
-          exportImage,
-          developDocument,
-          sourceSignatureForEntry(entry),
-          toEncodeSize(options.size),
+        renderer ??= new FrozenV2Renderer(document.createElement("canvas"), true);
+        pixels = await developSession.render({
+          kind: "export",
+          image: exportImage,
+          sourceSignature: sourceSignatureForEntry(entry),
+          size: toEncodeSize(options.size),
           renderer,
-        );
+        });
 
         progress("encoding");
         const encoded = await api.encodeAndSaveExport(
