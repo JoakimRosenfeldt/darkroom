@@ -163,7 +163,9 @@ function validSourceSignature(signature: V3SourceSignature): boolean {
     signature.relativePath.length > 0 && signature.relativePath.length <= 4_096 &&
     Number.isSafeInteger(signature.assetRevision) && signature.assetRevision >= 0 &&
     Number.isSafeInteger(signature.size) && signature.size >= 0 &&
-    Number.isSafeInteger(signature.lastModified) && signature.lastModified >= 0;
+    Number.isFinite(signature.lastModified) &&
+    signature.lastModified >= 0 &&
+    signature.lastModified <= Number.MAX_SAFE_INTEGER;
 }
 
 function validateInput(input: GeneratedInputFingerprint): string | null {

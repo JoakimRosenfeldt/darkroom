@@ -126,6 +126,22 @@ function positiveFinite(value: unknown, path: string): number {
   return value;
 }
 
+function nonNegativeFinite(
+  value: unknown,
+  path: string,
+  maximum: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    throw new Error(`${path} is invalid.`);
+  }
+  return value;
+}
+
 function dimensions(value: unknown, path: string): PixelDimensions {
   const input = strictRecord(value, path, ["width", "height"]);
   const parsed = {
@@ -153,7 +169,11 @@ function sourceSignature(value: unknown, path: string): V3SourceSignature {
     assetRevision: integer(input.assetRevision, `${path}.assetRevision`, 0, Number.MAX_SAFE_INTEGER),
     relativePath: text(input.relativePath, `${path}.relativePath`),
     size: integer(input.size, `${path}.size`, 0, Number.MAX_SAFE_INTEGER),
-    lastModified: integer(input.lastModified, `${path}.lastModified`, 0, Number.MAX_SAFE_INTEGER),
+    lastModified: nonNegativeFinite(
+      input.lastModified,
+      `${path}.lastModified`,
+      Number.MAX_SAFE_INTEGER,
+    ),
   };
 }
 

@@ -104,6 +104,23 @@ function boundedInteger(
   return value;
 }
 
+function boundedNumber(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return value;
+}
+
 function parseAssetKind(value: unknown): AcceptedAssetKind {
   switch (value) {
     case "mask-matte":
@@ -197,7 +214,7 @@ export function parseDevelopAssetSourceSignature(
     ),
     relativePath: boundedText(value.relativePath, "Source relative path", 4_096),
     size: boundedInteger(value.size, "Source size", 0, Number.MAX_SAFE_INTEGER),
-    lastModified: boundedInteger(
+    lastModified: boundedNumber(
       value.lastModified,
       "Source modified time",
       0,
