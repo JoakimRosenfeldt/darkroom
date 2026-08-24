@@ -27,6 +27,7 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { resolveStoredDevelopDocument } from "@/lib/export/settings";
 
 const PERSIST_DEBOUNCE_MS = 500;
+const MAX_WRITE_ATTEMPTS_PER_REVISION = 3;
 const JOURNAL_VERSION = 1;
 const MAX_JOURNAL_BYTES = MAX_V3_PAYLOAD_BYTES + MAX_DEVELOP_XMP_PAYLOAD_BYTES + 256 * 1024;
 const MAX_JOURNAL_ENTRIES = 32;
@@ -44,12 +45,18 @@ export type SidecarMetadataPatch = Partial<
   Pick<EntryMetadata, "rating" | "colorLabel">
 >;
 
+export interface DevelopSaveOptions {
+  readonly forceRetry?: boolean;
+}
+
 export type DevelopRepositoryErrorCode =
   | "journal-invalid"
   | "journal-too-large"
   | "journal-unavailable"
   | "recovery-conflict"
   | "recovery-adapter-unavailable"
+  | "retry-exhausted"
+  | "retry-required"
   | "sidecar-state-unavailable"
   | "unsupported-process";
 
@@ -84,6 +91,12 @@ interface PendingWrite {
   readonly snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v2" | "v3" }>;
   readonly metadata: Pick<EntryMetadata, "rating" | "colorLabel">;
   readonly ready: Promise<void>;
+}
+
+interface FailedWrite {
+  readonly documentRevision: number;
+  readonly metadataRevision: number;
+  readonly attempts: number;
 }
 
 interface RecoveryJournal {
@@ -284,7 +297,7 @@ export class DevelopRepository {
   #sidecarContents: string | null = null;
   #sidecarLastModified: number | null = null;
   #sidecarContentsKnown = false;
-  #failedWrite: Pick<DevelopSessionSnapshot, "documentRevision" | "metadataRevision"> | null = null;
+  #failedWrite: FailedWrite | null = null;
 
   constructor(entry: LibraryEntry) {
     this.#entry = entry;
@@ -471,7 +484,10 @@ export class DevelopRepository {
     clearJournal(this.#entry);
   }
 
-  save(snapshot: DevelopSessionSnapshot): Promise<DevelopSaveResult> {
+  save(
+    snapshot: DevelopSessionSnapshot,
+    options: DevelopSaveOptions = {},
+  ): Promise<DevelopSaveResult> {
     const metadata = this.#metadata;
     if (!metadata) {
       return Promise.reject(
@@ -486,15 +502,28 @@ export class DevelopRepository {
         new DevelopRepositoryError("unsupported-process", snapshot.readOnly.message),
       );
     }
+    const failedWrite = this.#failedWrite;
+    const retriesFailedRevision =
+      failedWrite?.documentRevision === snapshot.documentRevision &&
+      failedWrite.metadataRevision === snapshot.metadataRevision;
+    if (retriesFailedRevision && !options.forceRetry) {
+      return Promise.reject(
+        new DevelopRepositoryError(
+          "retry-required",
+          "The previous save failed. Retry this Develop revision explicitly.",
+        ),
+      );
+    }
     if (
-      this.#failedWrite?.documentRevision === snapshot.documentRevision &&
-      this.#failedWrite.metadataRevision === snapshot.metadataRevision
+      retriesFailedRevision &&
+      failedWrite.attempts >= MAX_WRITE_ATTEMPTS_PER_REVISION
     ) {
-      return Promise.resolve({
-        status: "scheduled",
-        documentRevision: snapshot.documentRevision,
-        metadataRevision: snapshot.metadataRevision,
-      });
+      return Promise.reject(
+        new DevelopRepositoryError(
+          "retry-exhausted",
+          "Develop save failed three times. Check catalog and XMP access, then make another edit or reopen the photo.",
+        ),
+      );
     }
     this.#pending = {
       snapshot: structuredClone(snapshot),
@@ -527,9 +556,16 @@ export class DevelopRepository {
     if (!pending) return this.#queue;
     const write = () => this.#writeCaptured(pending);
     this.#queue = this.#queue.then(write, write).catch((error: unknown) => {
+      const previousFailure = this.#failedWrite;
+      const attempts =
+        previousFailure?.documentRevision === pending.snapshot.documentRevision &&
+        previousFailure.metadataRevision === pending.snapshot.metadataRevision
+          ? previousFailure.attempts + 1
+          : 1;
       this.#failedWrite = {
         documentRevision: pending.snapshot.documentRevision,
         metadataRevision: pending.snapshot.metadataRevision,
+        attempts,
       };
       this.#adapters?.setStatus(
         "error",

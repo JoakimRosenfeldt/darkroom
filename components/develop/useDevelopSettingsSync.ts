@@ -42,6 +42,12 @@ export function useDevelopSettingsSync({
   const synchronizeSession = useDevelopStore((state) => state.synchronizeSession);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
   const metadataRef = useRef(metadata);
+  const scheduledRevisionRef = useRef<{
+    readonly catalogId: string;
+    readonly entryId: string;
+    readonly document: number;
+    readonly metadata: number;
+  } | null>(null);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -92,11 +98,17 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
+    const alreadyScheduled =
+      scheduledRevisionRef.current?.catalogId === entry.catalogId &&
+      scheduledRevisionRef.current.entryId === entry.id &&
+      scheduledRevisionRef.current.document === documentRevision &&
+      scheduledRevisionRef.current.metadata === metadataRevision;
     if (
       documentRevision === undefined ||
       metadataRevision === undefined ||
       sidecarStatus === "idle" ||
       sidecarStatus === "loading" ||
+      (sidecarStatus === "saving" && alreadyScheduled) ||
       (
         documentRevision === persistedDocumentRevision &&
         metadataRevision === persistedMetadataRevision
@@ -106,7 +118,17 @@ export function useDevelopSettingsSync({
     }
     const session = getDevelopSession(entry.catalogId, entry.id);
     if (!session) return;
-    void session.save().catch((error: unknown) => {
+    scheduledRevisionRef.current = {
+      catalogId: entry.catalogId,
+      entryId: entry.id,
+      document: documentRevision,
+      metadata: metadataRevision,
+    };
+    const repository = getDevelopRepository(entry);
+    void repository.save(
+      session.snapshot(),
+      { forceRetry: sidecarStatus === "error" },
+    ).catch((error: unknown) => {
       const state = useDevelopStore.getState();
       if (
         state.activeCatalogId === entry.catalogId &&
@@ -120,8 +142,7 @@ export function useDevelopSettingsSync({
     });
   }, [
     documentRevision,
-    entry.catalogId,
-    entry.id,
+    entry,
     metadataRevision,
     persistedDocumentRevision,
     persistedMetadataRevision,
