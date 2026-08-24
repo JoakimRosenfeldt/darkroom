@@ -1,5 +1,5 @@
 import { ASPECT_RATIO_PRESETS } from "../crop-geometry";
-import { parseDevelopDocument } from "../document";
+import { parseDevelopDocument, parseDevelopLocalMasks } from "../document";
 import {
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_ID,
@@ -27,6 +27,7 @@ import {
   type DevelopDocumentV3,
   type HdrEdits,
   type InputProfileSelection,
+  type NewerDevelopDocument,
   type JsonValue,
   type LensProfileSelection,
   type PersistedDevelopDocument,
@@ -73,7 +74,7 @@ export type PersistedDocumentDecodeResult =
   | {
       readonly kind: "read-only-newer";
       readonly foundVersion: number;
-      readonly raw: JsonValue;
+      readonly raw: NewerDevelopDocument;
       readonly diagnostic: Extract<DevelopDiagnostic, { readonly kind: "newer-process-read-only" }>;
     }
   | { readonly kind: "invalid"; readonly message: string };
@@ -674,20 +675,23 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
   };
   const local = record(input.local, "local", ["geometryFrame", "masks", "maskAssetRefs"], state);
   if (!Array.isArray(local.masks)) invalid("local.masks must be an array.");
-  const legacyMasks = parsedCompatibility.legacyV2?.settings.masking.masks ?? [];
-  if (JSON.stringify(local.masks) !== JSON.stringify(legacyMasks)) {
-    invalid("local.masks must match the retained canonical v2 mask payload in this schema revision.");
-  }
+  const localMasks = parseDevelopLocalMasks(local.masks);
   const maskAssetRefs = assetReferences(local.maskAssetRefs, "local.maskAssetRefs", state);
   if (maskAssetRefs.some((asset) => asset.kind !== "mask-matte")) {
     invalid("local.maskAssetRefs can contain only mask mattes.");
   }
-  const legacyAssetIds = new Set(Object.keys(parsedCompatibility.legacyV2?.maskAssets ?? {}));
+  const referencedMaskAssets = new Set(
+    localMasks.flatMap((mask) =>
+      mask.components.flatMap((component) =>
+        component.kind === "ai" ? [component.assetId] : []
+      )
+    ),
+  );
   if (
-    legacyAssetIds.size !== maskAssetRefs.length ||
-    maskAssetRefs.some((asset) => !legacyAssetIds.has(asset.assetId))
+    referencedMaskAssets.size !== maskAssetRefs.length ||
+    maskAssetRefs.some((asset) => !referencedMaskAssets.has(asset.assetId))
   ) {
-    invalid("local.maskAssetRefs must cover every retained inline v2 mask asset.");
+    invalid("local.maskAssetRefs must cover every referenced mask matte.");
   }
   const presence = record(input.presence, "presence", ["texture", "clarity", "dehaze"], state);
   const detail = record(input.detail, "detail", ["noiseReduction", "sharpening"], state);
@@ -752,7 +756,7 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
         "canonical-v3",
         "legacy-oriented-v2",
       ]),
-      masks: structuredClone(legacyMasks),
+      masks: localMasks,
       maskAssetRefs,
     },
     cleanup: (() => {
@@ -821,10 +825,15 @@ export function decodePersistedDevelopDocument(
       return { kind: "editable", document: parseV3DevelopDocument(value) };
     }
     if (value.version > DEVELOP_PROCESS_VERSION) {
+      const parsedRaw = jsonValue(value, "develop document");
+      if (!isRecord(parsedRaw)) {
+        return { kind: "invalid", message: "Develop document must be an object." };
+      }
+      const raw = { ...parsedRaw, version: value.version } satisfies NewerDevelopDocument;
       return {
         kind: "read-only-newer",
         foundVersion: value.version,
-        raw: jsonValue(value, "develop document"),
+        raw,
         diagnostic: {
           kind: "newer-process-read-only",
           category: "compatibility",

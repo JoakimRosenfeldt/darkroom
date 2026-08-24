@@ -1,8 +1,8 @@
 import {
   migrateLegacyDevelopSettings,
-  parseDevelopDocument,
 } from "@/lib/develop/document";
-import type { DevelopDocument } from "@/lib/develop/types";
+import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
+import type { StoredDevelopDocument } from "@/lib/develop/v3/document";
 
 export type PickStatus = "none" | "pick" | "reject";
 export type StarRating = 0 | 1 | 2 | 3 | 4 | 5;
@@ -16,7 +16,7 @@ export interface EntryMetadata {
   caption: string | null;
   copyright: string | null;
   keywords: readonly string[];
-  develop?: DevelopDocument;
+  develop?: StoredDevelopDocument;
   developUpdatedAt: number;
   updatedAt: number;
 }
@@ -94,11 +94,18 @@ function parseEntryMetadata(value: unknown, version: 1 | 2, path: string): Entry
   const colorLabel = value.colorLabel === null || value.colorLabel === "red" || value.colorLabel === "yellow" || value.colorLabel === "green" || value.colorLabel === "blue" || value.colorLabel === "purple"
     ? value.colorLabel
     : fail(`${path}.colorLabel is invalid.`);
-  const develop = value.develop === undefined
-    ? undefined
-    : version === 1
-      ? migrateLegacyDevelopSettings(value.develop)
-      : parseDevelopDocument(value.develop);
+  let develop: StoredDevelopDocument | undefined;
+  if (value.develop !== undefined) {
+    if (version === 1) {
+      develop = migrateLegacyDevelopSettings(value.develop);
+    } else {
+      const decoded = decodePersistedDevelopDocument(value.develop);
+      if (decoded.kind === "invalid") {
+        fail(`${path}.develop is invalid: ${decoded.message}`);
+      }
+      develop = decoded.kind === "editable" ? decoded.document : decoded.raw;
+    }
+  }
   const updatedAt = finite(value.updatedAt, `${path}.updatedAt`);
   const developUpdatedAt = value.developUpdatedAt === undefined
     ? develop ? updatedAt : 0

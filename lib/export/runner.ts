@@ -9,8 +9,8 @@ import {
 } from "@/lib/develop/frozen-v2-backend";
 import { resolveDevelopDocumentFromRepository } from "@/lib/develop/repository";
 import {
+  DevelopSessionCore,
   getActiveDevelopSession,
-  V2DevelopSession,
 } from "@/lib/develop/session";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { serializeDevelopXmp, serializeMetadataXmp } from "@/lib/develop/xmp";
@@ -118,11 +118,11 @@ function getMetadata(
 async function resolveSession(
   entry: LibraryEntry,
   metadata: EntryMetadata,
-): Promise<V2DevelopSession> {
+): Promise<DevelopSessionCore> {
   const activeSession = getActiveDevelopSession(entry.catalogId, entry.id);
   if (activeSession) return activeSession;
-  const document = await resolveDevelopDocumentFromRepository(entry, metadata);
-  return new V2DevelopSession(entry.catalogId, entry.id, document);
+  const process = await resolveDevelopDocumentFromRepository(entry, metadata);
+  return new DevelopSessionCore(entry.catalogId, entry.id, process);
 }
 
 function asErrorMessage(error: unknown): string {
@@ -179,7 +179,11 @@ export async function runExportBatch(
       try {
         const entryMetadata = getMetadata(metadata, entry);
         const developSession = await resolveSession(entry, entryMetadata);
-        const developDocument = developSession.snapshot().document;
+        const developSnapshot = developSession.snapshot();
+        if (developSnapshot.processKind === "read-only-newer") {
+          throw new Error(developSnapshot.readOnly.message);
+        }
+        const developDocument = developSnapshot.document;
         const descriptive: MetadataOverrides = {
           ...(entryMetadata.title === null ? {} : { title: { kind: "set", value: entryMetadata.title } }),
           ...(entryMetadata.caption === null ? {} : { caption: { kind: "set", value: entryMetadata.caption } }),

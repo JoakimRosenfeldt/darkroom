@@ -156,7 +156,11 @@ export type JsonValue =
   | number
   | string
   | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
+  | JsonObject;
+
+export interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
 
 export interface QuarantinedV3Field {
   readonly path: string;
@@ -203,6 +207,14 @@ export interface DevelopDocumentV3 {
 }
 
 export type PersistedDevelopDocument = DevelopDocument | DevelopDocumentV3;
+
+export type NewerDevelopDocument = JsonObject & {
+  readonly version: number;
+};
+
+export type StoredDevelopDocument =
+  | PersistedDevelopDocument
+  | NewerDevelopDocument;
 
 const LINEAR_CURVE = [
   { x: 0, y: 0 },

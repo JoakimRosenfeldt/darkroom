@@ -1,7 +1,11 @@
-import { parseDevelopDocument } from "../document";
+import { canonicalDevelopDocument, parseDevelopDocument } from "../document";
 import { COORDINATE_FRAME_REVISION } from "../process";
 import { parseSha256Digest } from "../render-contract";
-import type { DevelopDocument, MaskRasterAsset } from "../types";
+import type {
+  DevelopDocument,
+  MaskComponent,
+  MaskRasterAsset,
+} from "../types";
 import type { DevelopAssetRef } from "./assets";
 import {
   V2_TO_V3_MAPPING_REVISION,
@@ -86,10 +90,33 @@ function requiredAssetCopies(
     }));
 }
 
+function migratedMasks(
+  document: DevelopDocument,
+  copies: readonly RequiredV2AssetCopy[],
+): DevelopDocument["settings"]["masking"]["masks"] {
+  const copiedAssetIds = new Map(
+    copies.map((copy) => [copy.sourceAssetId, copy.expectedReference.assetId]),
+  );
+  const migrateComponent = (component: MaskComponent): MaskComponent =>
+    component.kind === "ai"
+      ? {
+          ...structuredClone(component),
+          assetId: copiedAssetIds.get(component.assetId) ?? component.assetId,
+        }
+      : structuredClone(component);
+  return document.settings.masking.masks.map((mask) => {
+    const [first, ...rest] = mask.components;
+    return {
+      ...structuredClone(mask),
+      components: [migrateComponent(first), ...rest.map(migrateComponent)],
+    };
+  });
+}
+
 export function createV3MigrationCandidate(
   value: DevelopDocument,
 ): V3MigrationCandidate {
-  const legacyV2 = parseDevelopDocument(value);
+  const legacyV2 = canonicalDevelopDocument(parseDevelopDocument(value));
   const defaults = createDefaultV3DevelopDocument();
   const basic = legacyV2.settings.basic;
   const crop = legacyV2.settings.crop;
@@ -161,7 +188,7 @@ export function createV3MigrationCandidate(
     },
     local: {
       geometryFrame: "legacy-oriented-v2",
-      masks: structuredClone(legacyV2.settings.masking.masks),
+      masks: migratedMasks(legacyV2, copies),
       maskAssetRefs: copies.map((copy) => copy.expectedReference),
     },
     detail: {

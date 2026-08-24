@@ -5,7 +5,7 @@ import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { loadDevelopImage } from "@/lib/cache/develop-image-cache";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { resolveDevelopDocument } from "@/lib/export/settings";
+import { resolveV2DevelopProjection } from "@/lib/export/settings";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import type { DevelopDocument } from "@/lib/develop/types";
 import { useLibraryStore } from "@/stores/library-store";
@@ -34,7 +34,9 @@ export function ViewerSurface({ mode, entry, image, document, referenceEntry, li
   } | null>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   const primarySignature = useMemo(() => sourceSignatureForEntry(entry), [entry]);
-  const referenceDocument = referenceEntry ? resolveDevelopDocument(null, getEntryMetadata(entryMetadata, referenceEntry.id)) : null;
+  const referenceDocument = referenceEntry
+    ? resolveV2DevelopProjection(getEntryMetadata(entryMetadata, referenceEntry.id))
+    : null;
   const referenceSignature = useMemo(() => referenceEntry ? sourceSignatureForEntry(referenceEntry) : null, [referenceEntry]);
 
   useEffect(() => {

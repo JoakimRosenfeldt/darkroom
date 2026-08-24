@@ -7,7 +7,7 @@ import {
   type SidecarMetadataPatch,
 } from "@/lib/develop/repository";
 import { getDevelopSession } from "@/lib/develop/session";
-import type { DevelopDocument } from "@/lib/develop/types";
+import type { PersistedDevelopDocument } from "@/lib/develop/v3/document";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -15,7 +15,7 @@ interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
   metadata: EntryMetadata;
   persistCatalog: (input: {
-    readonly document?: DevelopDocument;
+    readonly document?: PersistedDevelopDocument;
     readonly sourceUpdatedAt: number;
     readonly metadataPatch: SidecarMetadataPatch;
   }) => Promise<void>;

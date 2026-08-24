@@ -1,26 +1,34 @@
 import { COLOR_LABELS, type EntryMetadata } from "@/lib/catalog/types";
-import {
-  MAX_DEVELOP_PAYLOAD_BYTES,
-  parseDevelopDocument,
-} from "@/lib/develop/document";
+import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import type {
   DevelopSaveResult,
+  DevelopSessionOpenDocument,
   DevelopSessionSnapshot,
-  V2DevelopSession,
+  DevelopSessionCore,
 } from "@/lib/develop/session";
+import { openDevelopSessionDocument } from "@/lib/develop/session";
 import {
   readDevelopSidecar,
   writeDevelopSidecar,
   type DevelopSidecar,
 } from "@/lib/develop/sidecar";
-import type { DevelopDocument } from "@/lib/develop/types";
-import { serializeDevelopXmp } from "@/lib/develop/xmp";
+import {
+  decodePersistedDevelopDocument,
+  MAX_V3_PAYLOAD_BYTES,
+} from "@/lib/develop/v3/codec";
+import type {
+  PersistedDevelopDocument,
+} from "@/lib/develop/v3/document";
+import {
+  MAX_DEVELOP_XMP_PAYLOAD_BYTES,
+  serializeDevelopXmp,
+} from "@/lib/develop/xmp";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { resolveDevelopDocument } from "@/lib/export/settings";
+import { resolveStoredDevelopDocument } from "@/lib/export/settings";
 
 const PERSIST_DEBOUNCE_MS = 500;
 const JOURNAL_VERSION = 1;
-const MAX_JOURNAL_BYTES = MAX_DEVELOP_PAYLOAD_BYTES * 2 + 64 * 1024;
+const MAX_JOURNAL_BYTES = MAX_V3_PAYLOAD_BYTES + MAX_DEVELOP_XMP_PAYLOAD_BYTES + 256 * 1024;
 const MAX_JOURNAL_ENTRIES = 32;
 const MAX_TOTAL_JOURNAL_BYTES = MAX_JOURNAL_BYTES * 2;
 const JOURNAL_PREFIX = "darkroom:develop-recovery:v1:";
@@ -42,7 +50,8 @@ export type DevelopRepositoryErrorCode =
   | "journal-unavailable"
   | "recovery-conflict"
   | "recovery-adapter-unavailable"
-  | "sidecar-state-unavailable";
+  | "sidecar-state-unavailable"
+  | "unsupported-process";
 
 export class DevelopRepositoryError extends Error {
   readonly code: DevelopRepositoryErrorCode;
@@ -56,7 +65,7 @@ export class DevelopRepositoryError extends Error {
 
 export interface DevelopRepositoryAdapters {
   readonly mirrorCatalog: (input: {
-    readonly document?: DevelopDocument;
+    readonly document?: PersistedDevelopDocument;
     readonly sourceUpdatedAt: number;
     readonly metadataPatch: SidecarMetadataPatch;
   }) => Promise<void>;
@@ -72,7 +81,7 @@ export interface DevelopRepositoryAdapters {
 }
 
 interface PendingWrite {
-  readonly snapshot: DevelopSessionSnapshot;
+  readonly snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v2" | "v3" }>;
   readonly metadata: Pick<EntryMetadata, "rating" | "colorLabel">;
   readonly ready: Promise<void>;
 }
@@ -86,7 +95,7 @@ interface RecoveryJournal {
   readonly phase: "prepared" | "catalog-written";
   readonly documentDirty: boolean;
   readonly metadataDirty: boolean;
-  readonly document: DevelopDocument;
+  readonly document: PersistedDevelopDocument;
   readonly metadata: Pick<EntryMetadata, "rating" | "colorLabel">;
   readonly existingContents: string | null;
   readonly expectedLastModified: number | null;
@@ -162,13 +171,13 @@ function parseJournal(value: string, entry: LibraryEntry): RecoveryJournal {
   ) {
     throw new DevelopRepositoryError("journal-invalid", "Develop recovery data is invalid.");
   }
-  let document: DevelopDocument;
-  try {
-    document = parseDevelopDocument(candidate.document);
-  } catch (error) {
+  const decoded = decodePersistedDevelopDocument(candidate.document);
+  if (decoded.kind !== "editable") {
     throw new DevelopRepositoryError(
       "journal-invalid",
-      errorMessage(error, "Develop recovery document is invalid."),
+      decoded.kind === "invalid"
+        ? decoded.message
+        : "Develop recovery cannot rewrite a newer process document.",
     );
   }
   return {
@@ -180,7 +189,7 @@ function parseJournal(value: string, entry: LibraryEntry): RecoveryJournal {
     phase: candidate.phase,
     documentDirty: candidate.documentDirty,
     metadataDirty: candidate.metadataDirty,
-    document,
+    document: decoded.document,
     metadata: candidate.metadata,
     existingContents: candidate.existingContents,
     expectedLastModified: candidate.expectedLastModified,
@@ -266,7 +275,7 @@ function sameSidecarContents(
 export class DevelopRepository {
   readonly #entry: LibraryEntry;
   #adapters: DevelopRepositoryAdapters | null = null;
-  #session: V2DevelopSession | null = null;
+  #session: DevelopSessionCore | null = null;
   #metadata: EntryMetadata | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #pending: PendingWrite | null = null;
@@ -282,7 +291,7 @@ export class DevelopRepository {
   }
 
   configure(
-    session: V2DevelopSession,
+    session: DevelopSessionCore,
     metadata: EntryMetadata,
     adapters: DevelopRepositoryAdapters,
   ): void {
@@ -302,8 +311,10 @@ export class DevelopRepository {
     this.#metadata = metadata;
   }
 
-  catalogDocument(metadata: EntryMetadata): DevelopDocument {
-    return resolveDevelopDocument(null, metadata);
+  catalogDocument(metadata: EntryMetadata): DevelopSessionOpenDocument {
+    return openDevelopSessionDocument(
+      metadata.develop ?? createDefaultDevelopDocument(),
+    );
   }
 
   open(metadata: EntryMetadata): Promise<void> {
@@ -345,11 +356,11 @@ export class DevelopRepository {
       );
     }
     const sidecarLastModified = sidecar?.lastModified ?? 0;
-    const documentIsNewer = sidecar !== null &&
+    const sidecarDocumentIsNewer = sidecar !== null &&
       sidecarLastModified > metadata.developUpdatedAt;
-    const metadataIsNewer = sidecar !== null &&
+    const sidecarMetadataIsNewer = sidecar !== null &&
       sidecarLastModified > metadata.updatedAt;
-    const metadataPatch: SidecarMetadataPatch = metadataIsNewer && sidecar
+    const metadataPatch: SidecarMetadataPatch = sidecarMetadataIsNewer && sidecar
       ? {
           ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
           ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
@@ -358,15 +369,21 @@ export class DevelopRepository {
     const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
     const snapshot = session.snapshot();
     const canHydrateDocument =
-      documentIsNewer &&
+      sidecarDocumentIsNewer &&
       snapshot.documentRevision === snapshot.persistedDocumentRevision;
+    const sidecarProcess = sidecar
+      ? openDevelopSessionDocument(sidecar.document)
+      : null;
     if (canHydrateDocument && sidecar) {
-      const hydrated = session.hydrate(sidecar.document);
+      const hydrated = session.hydrate(sidecarProcess!);
       adapters.onSessionChanged(hydrated);
     }
-    if ((canHydrateDocument && sidecar) || hasMetadataPatch) {
+    const mirroredDocument = canHydrateDocument && sidecarProcess?.kind === "editable"
+      ? sidecarProcess.document
+      : null;
+    if (mirroredDocument || hasMetadataPatch) {
       await adapters.mirrorCatalog({
-        ...(canHydrateDocument && sidecar ? { document: sidecar.document } : {}),
+        ...(mirroredDocument ? { document: mirroredDocument } : {}),
         sourceUpdatedAt: sidecarLastModified,
         metadataPatch,
       });
@@ -386,10 +403,17 @@ export class DevelopRepository {
     ) {
       return;
     }
-    const resolvedDocument = documentIsNewer && sidecar
-      ? sidecar.document
-      : resolveDevelopDocument(null, metadata);
-    const resolvedMetadata = metadataIsNewer && sidecar
+    const catalogProcess = this.catalogDocument(metadata);
+    if (
+      catalogProcess.kind === "read-only-newer" ||
+      sidecarProcess?.kind === "read-only-newer"
+    ) {
+      return;
+    }
+    const resolvedDocument = sidecarDocumentIsNewer && sidecarProcess
+      ? sidecarProcess.document
+      : catalogProcess.document;
+    const resolvedMetadata = sidecarMetadataIsNewer && sidecar
       ? {
           rating: sidecar.rating ?? metadata.rating,
           colorLabel: sidecar.colorLabel === undefined
@@ -409,7 +433,7 @@ export class DevelopRepository {
   }
 
   async #writeReconciledSidecar(
-    document: DevelopDocument,
+    document: PersistedDevelopDocument,
     metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
     sidecar: DevelopSidecar | null,
     sourceUpdatedAt: number,
@@ -457,6 +481,11 @@ export class DevelopRepository {
         ),
       );
     }
+    if (snapshot.processKind === "read-only-newer") {
+      return Promise.reject(
+        new DevelopRepositoryError("unsupported-process", snapshot.readOnly.message),
+      );
+    }
     if (
       this.#failedWrite?.documentRevision === snapshot.documentRevision &&
       this.#failedWrite.metadataRevision === snapshot.metadataRevision
@@ -468,10 +497,7 @@ export class DevelopRepository {
       });
     }
     this.#pending = {
-      snapshot: {
-        ...snapshot,
-        document: structuredClone(snapshot.document),
-      },
+      snapshot: structuredClone(snapshot),
       metadata: {
         rating: metadata.rating,
         colorLabel: metadata.colorLabel,
@@ -635,7 +661,7 @@ export class DevelopRepository {
     clearJournal(this.#entry);
   }
 
-  async resolveDocument(metadata: EntryMetadata): Promise<DevelopDocument> {
+  async resolveDocument(metadata: EntryMetadata): Promise<DevelopSessionOpenDocument> {
     await this.flush();
     const journal = readJournal(this.#entry);
     if (journal) {
@@ -651,7 +677,9 @@ export class DevelopRepository {
     this.#sidecarContents = sidecar?.contents ?? null;
     this.#sidecarLastModified = sidecar?.lastModified ?? null;
     this.#sidecarContentsKnown = true;
-    return resolveDevelopDocument(sidecar, metadata);
+    return openDevelopSessionDocument(
+      resolveStoredDevelopDocument(sidecar, metadata),
+    );
   }
 
   #requireAdapters(): DevelopRepositoryAdapters {
@@ -664,7 +692,7 @@ export class DevelopRepository {
     return this.#adapters;
   }
 
-  #requireSession(): V2DevelopSession {
+  #requireSession(): DevelopSessionCore {
     if (!this.#session) {
       throw new DevelopRepositoryError(
         "recovery-adapter-unavailable",
@@ -689,6 +717,6 @@ export function getDevelopRepository(entry: LibraryEntry): DevelopRepository {
 export async function resolveDevelopDocumentFromRepository(
   entry: LibraryEntry,
   metadata: EntryMetadata,
-): Promise<DevelopDocument> {
+): Promise<DevelopSessionOpenDocument> {
   return getDevelopRepository(entry).resolveDocument(metadata);
 }

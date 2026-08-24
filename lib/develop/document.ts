@@ -410,6 +410,10 @@ function parseMasking(value: unknown): LocalMask[] {
   return input.masks.map((mask, index) => localMask(mask, `settings.masking.masks[${index}]`));
 }
 
+export function parseDevelopLocalMasks(value: unknown): readonly LocalMask[] {
+  return parseMasking({ masks: value });
+}
+
 export function createDefaultDevelopDocument(): DevelopDocument {
   return { version: 2, settings: createDevelopSettings(), maskAssets: {} };
 }
