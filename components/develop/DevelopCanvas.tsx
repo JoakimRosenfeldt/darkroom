@@ -149,18 +149,22 @@ function centeredImageRect(
   };
 }
 
-function beforeDocument(document: DevelopDocumentV3): DevelopDocumentV3 {
+function beforeDocument(input: {
+  readonly geometry: DevelopDocumentV3["geometry"];
+  readonly geometryFrame: DevelopDocumentV3["local"]["geometryFrame"];
+  readonly manualDistortion: DevelopDocumentV3["optics"]["manualDistortion"];
+}): DevelopDocumentV3 {
   const neutral = createDefaultV3DevelopDocument();
   return {
     ...neutral,
     optics: {
       ...neutral.optics,
-      manualDistortion: document.optics.manualDistortion,
+      manualDistortion: input.manualDistortion,
     },
-    geometry: document.geometry,
+    geometry: input.geometry,
     local: {
       ...neutral.local,
-      geometryFrame: document.local.geometryFrame,
+      geometryFrame: input.geometryFrame,
     },
   };
 }
@@ -217,6 +221,9 @@ export function DevelopCanvas({
       : undefined;
     return session?.ui.tool ?? "none";
   });
+  const beforeGeometry = document?.geometry ?? null;
+  const beforeGeometryFrame = document?.local.geometryFrame ?? null;
+  const beforeManualDistortion = document?.optics.manualDistortion ?? null;
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 1, height: 1 });
   const [viewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
@@ -252,7 +259,6 @@ export function DevelopCanvas({
     const render = () => {
       if (activeCancellation) activeCancellation.cancelled = true;
       pointColorInputRef.current = null;
-      setBeforeReady(false);
       setShowBefore(false);
       clearActiveAnalysis(entry.catalogId, entry.id);
       analysisCallbackRef.current?.([]);
@@ -356,36 +362,6 @@ export function DevelopCanvas({
           analysisCallbackRef.current?.(result.analysis);
         }
         setPreview({ kind: "rendered" });
-        const sourceCanvas = sourceCanvasRef.current;
-        const sourceContext = sourceCanvas?.getContext("2d") ?? null;
-        if (!sourceCanvas || !sourceContext) return;
-        void renderV3Runtime(beforeDocument(renderDocument), request).then((before) => {
-          if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
-          const latestSnapshot = session.snapshot();
-          if (
-            before.kind !== "rendered" ||
-            latestSnapshot.processKind !== "v3" ||
-            latestSnapshot.documentRevision !== renderSnapshot.documentRevision ||
-            before.dimensions.width !== dimensions.width ||
-            before.dimensions.height !== dimensions.height
-          ) return;
-          sourceCanvas.width = before.dimensions.width;
-          sourceCanvas.height = before.dimensions.height;
-          sourceContext.putImageData(
-            new ImageData(
-              new Uint8ClampedArray(before.pixels.pixels),
-              before.dimensions.width,
-              before.dimensions.height,
-            ),
-            0,
-            0,
-          );
-          setBeforeReady(true);
-        }).catch(() => {
-          if (!disposed && !cancellation.cancelled && requestId === requestRef.current) {
-            setBeforeReady(false);
-          }
-        });
       }).catch((error: unknown) => {
         if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
         diagnosticsCallbackRef.current?.([]);
@@ -408,6 +384,84 @@ export function DevelopCanvas({
       observer.disconnect();
     };
   }, [cropActive, document, documentRevision, entry, image]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const sourceCanvas = sourceCanvasRef.current;
+    const sourceContext = sourceCanvas?.getContext("2d") ?? null;
+    if (
+      !container ||
+      !sourceCanvas ||
+      !sourceContext ||
+      !beforeGeometry ||
+      !beforeGeometryFrame ||
+      beforeManualDistortion === null
+    ) return;
+
+    let disposed = false;
+    const cancellation = {
+      isCancelled: () => disposed,
+      reason: () => disposed ? "The Before preview was replaced." : null,
+    };
+    const width = Math.max(1, Math.round(container.clientWidth));
+    const height = Math.max(1, Math.round(container.clientHeight));
+    const neutralDocument = beforeDocument({
+      geometry: beforeGeometry,
+      geometryFrame: beforeGeometryFrame,
+      manualDistortion: beforeManualDistortion,
+    });
+    const renderDocument = cropActive
+      ? {
+          ...neutralDocument,
+          geometry: {
+            ...neutralDocument.geometry,
+            constrainCrop: false,
+            crop: { ...neutralDocument.geometry.crop, enabled: false },
+          },
+        }
+      : neutralDocument;
+    setBeforeReady(false);
+    setShowBefore(false);
+
+    const timeout = window.setTimeout(() => {
+      void renderV3Runtime(renderDocument, {
+        kind: "v3-preview",
+        entry,
+        image,
+        viewportDimensions: { width, height },
+        devicePixelRatio: window.devicePixelRatio || 1,
+        cancellation,
+      }).then((before) => {
+        if (disposed || before.kind !== "rendered") return;
+        sourceCanvas.width = before.dimensions.width;
+        sourceCanvas.height = before.dimensions.height;
+        sourceContext.putImageData(
+          new ImageData(
+            new Uint8ClampedArray(before.pixels.pixels),
+            before.dimensions.width,
+            before.dimensions.height,
+          ),
+          0,
+          0,
+        );
+        setBeforeReady(true);
+      }).catch(() => {
+        if (!disposed) setBeforeReady(false);
+      });
+    }, 250);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+    };
+  }, [
+    cropActive,
+    beforeGeometry,
+    beforeGeometryFrame,
+    beforeManualDistortion,
+    entry,
+    image,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;

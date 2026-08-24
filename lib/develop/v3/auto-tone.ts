@@ -156,13 +156,13 @@ export function proposeAutoTone(input: AutoToneInput): AutoToneProposal {
   const adjustedWhite = statistics.whitePoint * exposureGain;
   const contrast = clamp(
     (0.55 - (statistics.highlightPoint - statistics.shadowPoint) * exposureGain) * 50,
-    -15,
+    0,
     15,
   );
   const shadows = clamp(
-    (0.06 - adjustedShadow) * 200 + statistics.clippedShadowFraction * 25,
-    -20,
-    25,
+    (0.035 - adjustedShadow) * 160 + statistics.clippedShadowFraction * 20,
+    -12,
+    15,
   );
   const highlights = clamp(
     (TARGET_HIGHLIGHT - adjustedHighlight) * 100 -
@@ -176,11 +176,11 @@ export function proposeAutoTone(input: AutoToneInput): AutoToneProposal {
     15,
   );
   const whites = clamp(
-    (0.92 - adjustedWhite) * 160 - statistics.clippedHighlightFraction * 50,
-    -12,
-    12,
+    (1 - adjustedWhite) * 80 - statistics.clippedHighlightFraction * 30,
+    -8,
+    8,
   );
-  const vibrance = clamp((0.28 - statistics.meanSaturation) * 35, -8, 12);
+  const vibrance = clamp((0.28 - statistics.meanSaturation) * 35, 0, 10);
   return {
     kind: "proposal",
     values: {

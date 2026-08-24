@@ -445,7 +445,7 @@ function previewQuality(
   ) {
     return null;
   }
-  const devicePixelRatio = Math.min(8, Math.max(0.5, request.devicePixelRatio));
+  const devicePixelRatio = Math.min(1, Math.max(0.5, request.devicePixelRatio));
   const bounds = {
     width: Math.max(1, Math.round(viewport.width * devicePixelRatio)),
     height: Math.max(1, Math.round(viewport.height * devicePixelRatio)),
