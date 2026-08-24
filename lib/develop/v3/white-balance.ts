@@ -57,6 +57,25 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, finiteOr(value, 0)));
 }
 
+export function resolveManualWhiteBalance(adjustment: {
+  readonly temperature: number;
+  readonly tint: number;
+}): WhiteBalanceValues {
+  const temperature = clamp(adjustment.temperature, -3_000, 3_000);
+  const tint = clamp(adjustment.tint, -150, 150);
+  const warmth = temperature / 3_000;
+  const tintScale = Math.pow(2, -tint / 150);
+  return {
+    temperatureKelvin: Math.round(clamp(5_500 + temperature, 2_000, 50_000)),
+    tint,
+    gains: [
+      clamp(Math.pow(2, warmth), 0.25, 4),
+      clamp(tintScale, 0.25, 4),
+      clamp(Math.pow(2, -warmth), 0.25, 4),
+    ],
+  };
+}
+
 function normalizedGains(red: number, green: number, blue: number): Rgb {
   if (red <= 0 || green <= 0 || blue <= 0) return [1, 1, 1];
   return [

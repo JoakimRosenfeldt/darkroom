@@ -66,6 +66,7 @@ interface EditPanelProps {
 
 export function EditPanel({ onResetAll }: EditPanelProps) {
   const [activeTab, setActiveTab] = useState<EditTab>("light");
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const sidecarError = useDevelopStore((state) => {
     const session = state.activeEntryId
       ? state.sessions[state.activeEntryId]
@@ -77,9 +78,14 @@ export function EditPanel({ onResetAll }: EditPanelProps) {
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="flex min-h-[49px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-            Develop
-          </h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+              Develop
+            </h2>
+            <span className="rounded border border-lr-border-subtle px-1.5 py-0.5 font-mono text-[9px] text-lr-text-faint">
+              v2
+            </span>
+          </div>
           {sidecarError ? (
             <p
               className="mt-0.5 break-words text-[10px] leading-4 text-lr-danger"
@@ -92,12 +98,22 @@ export function EditPanel({ onResetAll }: EditPanelProps) {
         <div className="flex-1" />
         <button
           type="button"
+          aria-expanded={showUpgrade}
+          onClick={() => setShowUpgrade((value) => !value)}
+          className="rounded-[7px] border border-lr-border-subtle px-2.5 py-1.5 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+        >
+          Try v3
+        </button>
+        <button
+          type="button"
           onClick={onResetAll}
           className="rounded-[7px] border border-lr-border-subtle px-2.5 py-1.5 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
         >
           Reset all
         </button>
       </div>
+
+      {showUpgrade ? <V3UpgradeComparisonBlocked /> : null}
 
       <div
         className="flex gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
@@ -139,6 +155,41 @@ export function EditPanel({ onResetAll }: EditPanelProps) {
         {activeTab === "detail" ? <EffectsSection /> : null}
       </div>
     </aside>
+  );
+}
+
+function V3UpgradeComparisonBlocked() {
+  return (
+    <section className="border-b border-lr-border-subtle bg-lr-panel-raised/35 px-3 py-3">
+      <div className="flex items-center gap-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+          v2 → v3 comparison
+        </h3>
+        <span className="ml-auto rounded bg-[#3c2925] px-1.5 py-0.5 text-[9px] text-lr-danger">
+          Blocked
+        </span>
+      </div>
+      <p className="mt-1.5 text-[10px] leading-4 text-lr-text-faint">
+        Upgrade acceptance requires frozen v2 and candidate v3 fit renders for this exact document revision. The v3 comparison renderer is not connected, so no acceptance receipt can be created.
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-1.5" aria-label="Migration comparison status">
+        <div className="rounded-md border border-lr-border-subtle p-2">
+          <p className="text-[9px] font-semibold text-lr-text-muted">v2 · fit</p>
+          <p className="mt-1 text-[9px] leading-3 text-lr-text-faint">Not captured in comparison</p>
+        </div>
+        <div className="rounded-md border border-lr-border-subtle p-2">
+          <p className="text-[9px] font-semibold text-lr-text-muted">v3 · fit</p>
+          <p className="mt-1 text-[9px] leading-3 text-lr-text-faint">Renderer unavailable</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        disabled
+        className="mt-2 w-full rounded-[7px] border border-lr-border-subtle px-2.5 py-1.5 text-[10px] text-lr-text-faint opacity-45"
+      >
+        Accept comparison and upgrade
+      </button>
+    </section>
   );
 }
 

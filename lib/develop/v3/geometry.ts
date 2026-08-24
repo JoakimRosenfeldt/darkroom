@@ -66,6 +66,25 @@ export const IDENTITY_HOMOGRAPHY: Homography = [
   0, 0, 1,
 ];
 
+export function manualPerspectiveHomography(
+  horizontal: number,
+  vertical: number,
+): Homography {
+  const horizontalScale = clamp(horizontal, -100, 100) * 0.002;
+  const verticalScale = clamp(vertical, -100, 100) * 0.002;
+  return [
+    1,
+    horizontalScale,
+    -horizontalScale * 0.5,
+    verticalScale,
+    1,
+    -verticalScale * 0.5,
+    0,
+    0,
+    1,
+  ];
+}
+
 export type GeometryMapResult =
   | {
       readonly kind: "mapped";

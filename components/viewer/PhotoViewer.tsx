@@ -256,6 +256,9 @@ export function PhotoViewer({
   const developDocument = useDevelopStore(
     (state) => state.sessions[entry.id]?.document ?? DEFAULT_DEVELOP_DOCUMENT,
   );
+  const developProcessKind = useDevelopStore(
+    (state) => state.sessions[entry.id]?.processKind ?? "v2",
+  );
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const resetAll = useDevelopStore((state) => state.resetAll);
   const undo = useDevelopStore((state) => state.undo);
@@ -445,6 +448,13 @@ export function PhotoViewer({
   }
 
   function selectDevelopPanel(panel: DevelopPanelId) {
+    if (developProcessKind !== "v2") {
+      cropDraftRef.current = null;
+      setCropDraft(null);
+      setMaskTool("none");
+      setActivePanel((current) => current === panel ? "edit" : panel);
+      return;
+    }
     if (activePanel === "crop") {
       discardCrop(panel === "crop" ? "edit" : panel);
       return;
@@ -527,7 +537,7 @@ export function PhotoViewer({
       const interactiveTarget =
         event.target instanceof HTMLElement &&
         Boolean(event.target.closest("button, a[href], [role='button']"));
-      if (activePanel === "crop" && cropDraftRef.current) {
+      if (developProcessKind === "v2" && activePanel === "crop" && cropDraftRef.current) {
         if (event.key === "Escape") {
           event.preventDefault();
           discardCrop("edit");
@@ -558,7 +568,7 @@ export function PhotoViewer({
         setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false));
         return;
       }
-      if (activePanel === "masking" && plainKey) {
+      if (developProcessKind === "v2" && activePanel === "masking" && plainKey) {
         if (event.key === "Enter") {
           event.preventDefault();
           setMaskTool("none");
@@ -640,6 +650,7 @@ export function PhotoViewer({
     setMaskTool,
     selectSurfaceMode,
     surfaceMode,
+    developProcessKind,
   ]);
 
   return (
@@ -774,9 +785,9 @@ export function PhotoViewer({
 
           <div className={[
             "relative min-h-0 flex-1",
-            activePanel === "crop"
+            developProcessKind === "v2" && activePanel === "crop"
               ? "p-[34px]"
-              : activePanel === "masking"
+              : developProcessKind === "v2" && activePanel === "masking"
                 ? "p-7"
                 : surfaceMode === "single" ? "p-8" : "p-0",
           ].join(" ")}>
@@ -797,23 +808,23 @@ export function PhotoViewer({
                 image={decoded}
                 alt={entry.name}
                 sourceSignature={sourceSignature}
-                cropActive={activePanel === "crop"}
-                cropDraft={cropDraft}
+                cropActive={developProcessKind === "v2" && activePanel === "crop"}
+                cropDraft={developProcessKind === "v2" ? cropDraft : null}
                 cropImageOffset={cropImageOffset}
                 previewTransform={cropPreviewTransform}
                 onCropChange={changeCrop}
                 onPreviewTransformChange={setCropPreviewTransform}
-                overlayMaskId={activePanel === "masking" && maskUi?.overlayVisible ? maskUi.selectedMaskId : null}
+                overlayMaskId={developProcessKind === "v2" && activePanel === "masking" && maskUi?.overlayVisible ? maskUi.selectedMaskId : null}
                 overlayMode={maskOverlayMode}
                 onRenderDiagnostics={onRenderDiagnostics}
-                maskingActive={activePanel === "masking"}
+                maskingActive={developProcessKind === "v2" && activePanel === "masking"}
                 brushSettings={maskBrushSettings}
                 onBrushSettingsChange={setMaskBrushSettings}
               /> : <ViewerSurface mode={surfaceMode} entry={entry} image={decoded} document={developDocument} referenceEntry={referenceEntry} linked={linkedViewports} />
             ) : null}
           </div>
 
-          {activePanel === "crop" && cropDraft ? (
+          {developProcessKind === "v2" && activePanel === "crop" && cropDraft ? (
             <div className="flex h-[76px] shrink-0 items-center gap-4 border-t border-lr-border-subtle bg-lr-toolbar px-4">
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <div className="flex items-baseline gap-2">
@@ -860,7 +871,7 @@ export function PhotoViewer({
                 Done · ↵
               </button>
             </div>
-          ) : activePanel === "masking" ? (
+          ) : developProcessKind === "v2" && activePanel === "masking" ? (
             <div className={[
               "shrink-0 border-t border-lr-border-subtle bg-lr-toolbar px-4",
               showBrushSettings
