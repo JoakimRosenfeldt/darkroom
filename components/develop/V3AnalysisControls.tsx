@@ -138,32 +138,27 @@ export function V3AutoToneControl({
   };
 
   let status = "Tone analysis has not been requested.";
-  let tone: "neutral" | "warning" | "danger" = "neutral";
   if (currentTap?.state.kind === "loading") status = "Analyzing the full-frame tone input…";
   if (currentTap?.state.kind === "unavailable") {
     status = currentTap.state.reason;
-    tone = "warning";
   }
   if (currentTap?.state.kind === "error") {
     status = currentTap.state.message;
-    tone = "danger";
   }
   if (currentTap?.state.kind === "ready") {
     status = currentTap.state.value.autoTone.kind === "proposal"
       ? "A deterministic full-frame proposal is ready. It runs only when applied."
       : noResultMessage(currentTap.state.value.autoTone.reason);
-    if (currentTap.state.value.autoTone.kind === "no-result") tone = "warning";
   }
 
   return (
-    <div className="space-y-2" aria-live="polite">
-      <ActionButton onClick={apply} disabled={disabled || !proposal}>
-        Apply Auto Tone
-      </ActionButton>
-      <StatusCard title={proposal ? "Auto Tone ready" : "Auto Tone unavailable"} tone={tone}>
-        {status}
-      </StatusCard>
-    </div>
+    <ActionButton
+      onClick={apply}
+      disabled={disabled || !proposal}
+      title={status}
+    >
+      Auto
+    </ActionButton>
   );
 }
 

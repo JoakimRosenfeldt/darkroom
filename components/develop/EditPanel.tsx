@@ -272,10 +272,11 @@ function LightTab({
 
   return (
     <>
-      <PanelSection title="Tone" onReset={() => reset("tone")}>
-        <div className="mb-3">
-          <V3AutoToneControl analysis={analysis} document={document} />
-        </div>
+      <PanelSection
+        title="Tone"
+        headerActions={<V3AutoToneControl analysis={analysis} document={document} />}
+        onReset={() => reset("tone")}
+      >
         <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} suffix=" EV" onChange={(value) => updateBasic("exposure", value)} />
         <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(value) => updateBasic("contrast", value)} />
         <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(value) => updateBasic("highlights", value)} />

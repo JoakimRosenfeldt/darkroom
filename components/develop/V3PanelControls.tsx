@@ -4,10 +4,12 @@ import type { ReactNode } from "react";
 
 export function PanelSection({
   title,
+  headerActions,
   onReset,
   children,
 }: {
   title: string;
+  headerActions?: ReactNode;
   onReset?: () => void;
   children: ReactNode;
 }) {
@@ -18,6 +20,7 @@ export function PanelSection({
           {title}
         </h3>
         <div className="flex-1" />
+        {headerActions}
         {onReset ? (
           <button
             type="button"
