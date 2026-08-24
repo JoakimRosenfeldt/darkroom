@@ -21,6 +21,7 @@ import type { EntryMetadata } from "@/lib/catalog/types";
 import { COLOR_LABELS } from "@/lib/catalog/types";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { MetadataBatchDialog } from "@/components/library/MetadataBatchDialog";
+import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
 
 export default function HomePage() {
   const router = useRouter();
@@ -104,7 +105,15 @@ export default function HomePage() {
     visibleOrder,
     selectedEntryId,
     selectedEntryIds,
-    onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
+    onOpen: (id) => {
+      const session = createViewerSession({
+        queryRevision: libraryResult.revision,
+        orderedEntryIds: libraryResult.viewerEntryIds,
+        activeEntryId: id,
+        selectedEntryIds,
+      });
+      router.push(viewerPhotoHref(id, session.id));
+    },
     disabled: overlayOpen || actionOverlayOpen || exportEntryIds !== null,
     metadataShortcutsDisabled: catalogView.type === "archive",
   });

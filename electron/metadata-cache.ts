@@ -39,7 +39,11 @@ function stored(value: unknown): StoredMetadataAnalysis {
 }
 
 export class MetadataCache {
-  constructor(private readonly rootPath: string) {}
+  private readonly rootPath: string;
+
+  constructor(rootPath: string) {
+    this.rootPath = rootPath;
+  }
 
   async read(input: {
     readonly catalogId: CatalogId;

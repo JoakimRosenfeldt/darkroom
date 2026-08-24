@@ -32,7 +32,7 @@ import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { DEFAULT_CROP_SETTINGS } from "@/lib/develop/plugins/crop";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
-import { captureBrushStrokeSettings } from "@/lib/develop/document";
+import { captureBrushStrokeSettings, createDefaultDevelopDocument } from "@/lib/develop/document";
 import type { CropSettings } from "@/lib/develop/types";
 import { fitCropWithinRotation } from "@/lib/develop/crop-geometry";
 import { estimateStraightenAngle } from "@/lib/develop/auto-straighten";
@@ -41,10 +41,15 @@ import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { isEditableTarget } from "@/hooks/is-editable-target";
+import { updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
+import { readReferenceEntryId, writeReferenceEntryId } from "@/lib/viewer/reference";
+import { ViewerSurface, type ViewerSurfaceMode } from "./ViewerSurface";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
   entries: LibraryEntry[];
+  sessionId: string | null;
+  sessionMessage: string | null;
 }
 
 const MASK_CANVAS_TOOLS: Array<{
@@ -78,6 +83,7 @@ const RANGE_ADJUSTMENT_KEYS = new Set([
   "PageDown",
   "PageUp",
 ]);
+const DEFAULT_DEVELOP_DOCUMENT = createDefaultDevelopDocument();
 
 function MaskBrushSlider({
   label,
@@ -148,7 +154,7 @@ function captureSummary(metadata: Record<string, unknown>): string[] {
   return summary;
 }
 
-export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
+export function PhotoViewer({ entry, entries, sessionId, sessionMessage }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const activeSelectedEntryId = useLibraryStore((state) => state.selectedEntryId);
@@ -180,6 +186,9 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     density: 1,
   });
   const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
+  const [surfaceMode, setSurfaceMode] = useState<"single" | ViewerSurfaceMode>("single");
+  const [linkedViewports, setLinkedViewports] = useState(true);
+  const [referenceEntryId, setReferenceEntryId] = useState<string | null>(() => readReferenceEntryId(entry.catalogId));
   const activeIndex = useMemo(
     () => entries.findIndex((item) => item.id === entry.id),
     [entries, entry.id],
@@ -227,6 +236,9 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const developSettings = useDevelopStore(
     (state) => state.sessions[entry.id]?.document.settings ?? DEFAULT_DEVELOP_SETTINGS,
   );
+  const developDocument = useDevelopStore(
+    (state) => state.sessions[entry.id]?.document ?? DEFAULT_DEVELOP_DOCUMENT,
+  );
   const updatePlugin = useDevelopStore((state) => state.updatePlugin);
   const resetAll = useDevelopStore((state) => state.resetAll);
   const undo = useDevelopStore((state) => state.undo);
@@ -267,6 +279,12 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     : null;
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
+  const referenceEntry = entries.find((item) => item.id === referenceEntryId) ?? null;
+
+  function setReference(id: string | null) {
+    setReferenceEntryId(id);
+    writeReferenceEntryId(entry.catalogId, id);
+  }
 
   useEffect(() => {
     if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
@@ -275,14 +293,18 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   }, [entry.id, setSelectedEntryId]);
 
   useEffect(() => {
+    if (sessionId) updateViewerSessionActive(sessionId, entry.id);
+  }, [entry.id, sessionId]);
+
+  useEffect(() => {
     if (
       activeSelectedEntryId &&
       activeSelectedEntryId !== entry.id &&
       entries.some((item) => item.id === activeSelectedEntryId)
     ) {
-      router.replace(`/photo?id=${encodeURIComponent(activeSelectedEntryId)}`);
+      router.replace(sessionId ? viewerPhotoHref(activeSelectedEntryId, sessionId) : `/photo?id=${encodeURIComponent(activeSelectedEntryId)}`);
     }
-  }, [activeSelectedEntryId, entries, entry.id, router]);
+  }, [activeSelectedEntryId, entries, entry.id, router, sessionId]);
 
   useEffect(() => {
     let active = true;
@@ -340,6 +362,14 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     setCropPreviewTransform({ scale: 1, x: 0, y: 0 });
     setActivePanel(nextPanel);
   }, []);
+
+  const selectSurfaceMode = useCallback((mode: "single" | ViewerSurfaceMode) => {
+    setSurfaceMode(mode);
+    if (mode !== "single") {
+      discardCrop("edit");
+      setMaskTool("none");
+    }
+  }, [discardCrop, setMaskTool]);
 
   const applyCrop = useCallback(() => {
     const draft = cropDraftRef.current;
@@ -458,7 +488,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       const nextActiveId =
         removing && id === entry.id ? remaining.at(-1) : removing ? entry.id : id;
       if (nextActiveId && nextActiveId !== entry.id) {
-        router.push(`/photo?id=${encodeURIComponent(nextActiveId)}`);
+        router.push(sessionId ? viewerPhotoHref(nextActiveId, sessionId) : `/photo?id=${encodeURIComponent(nextActiveId)}`);
       }
     },
     [
@@ -467,6 +497,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       router,
       selectEntry,
       selectedEntryIds,
+      sessionId,
       visibleOrder,
     ],
   );
@@ -500,6 +531,16 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
         return;
       }
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
+      if (plainKey && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        selectSurfaceMode(surfaceMode === "before-side" ? "single" : "before-side");
+        return;
+      }
+      if (plainKey && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        selectSurfaceMode(surfaceMode === "reference" ? "single" : "reference");
+        return;
+      }
       if (plainKey && event.key.toLowerCase() === "o") {
         event.preventDefault();
         setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false));
@@ -585,6 +626,8 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     setMaskOverlayVisible,
     maskUi?.tool,
     setMaskTool,
+    selectSurfaceMode,
+    surfaceMode,
   ]);
 
   return (
@@ -594,6 +637,9 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1">
           <div className="relative flex min-w-0 flex-1 flex-col bg-[#131110]">
+          {sessionMessage ? (
+            <div role="status" className="border-b border-amber-300/20 bg-amber-950/25 px-4 py-1.5 text-[11px] text-amber-100/80">{sessionMessage}</div>
+          ) : null}
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-toolbar px-4">
             <span className="font-mono text-xs text-lr-text">{entry.name}</span>
             <span className={[
@@ -620,6 +666,23 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
+            {activePanel !== "crop" && activePanel !== "masking" ? (
+              <div className="flex items-center gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+                <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "before-side" ? "single" : "before-side")} aria-pressed={surfaceMode === "before-side"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "before-side" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>B/A · Y</button>
+                <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "before-split" ? "single" : "before-split")} aria-pressed={surfaceMode === "before-split"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "before-split" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>Split</button>
+                <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "reference" ? "single" : "reference")} aria-pressed={surfaceMode === "reference"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "reference" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>Reference · R</button>
+              </div>
+            ) : null}
+            {surfaceMode !== "single" ? (
+              <button type="button" onClick={() => setLinkedViewports((value) => !value)} aria-pressed={linkedViewports} className={`h-8 rounded-md border px-2 text-[10px] ${linkedViewports ? "border-lr-accent/40 text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}>{linkedViewports ? "Linked" : "Independent"}</button>
+            ) : null}
+            {surfaceMode === "reference" ? (
+              <>
+                <button type="button" onClick={() => setReference(entry.id)} className="h-8 rounded-md border border-lr-border-subtle px-2 text-[10px] text-lr-text-muted">Set active as reference</button>
+                {referenceEntry ? <button type="button" onClick={() => { const previous = entry.id; selectPhoto(referenceEntry.id); setReference(previous); }} className="h-8 rounded-md border border-lr-border-subtle px-2 text-[10px] text-lr-text-muted">Make reference active</button> : null}
+                {referenceEntryId ? <button type="button" onClick={() => setReference(null)} className="h-8 rounded-md border border-lr-border-subtle px-2 text-[10px] text-lr-text-muted">Clear</button> : null}
+              </>
+            ) : null}
             {activePanel === "masking" ? (
               <>
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
@@ -696,7 +759,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
               ? "p-[34px]"
               : activePanel === "masking"
                 ? "p-7"
-                : "p-8",
+                : surfaceMode === "single" ? "p-8" : "p-0",
           ].join(" ")}>
             {loading ? (
               <div className="flex h-full items-center justify-center text-xs uppercase tracking-wider text-lr-text-faint">
@@ -711,7 +774,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
             ) : null}
 
             {decoded ? (
-              <DevelopCanvas
+              surfaceMode === "single" ? <DevelopCanvas
                 image={decoded}
                 alt={entry.name}
                 sourceSignature={sourceSignature}
@@ -727,7 +790,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                 maskingActive={activePanel === "masking"}
                 brushSettings={maskBrushSettings}
                 onBrushSettingsChange={setMaskBrushSettings}
-              />
+              /> : <ViewerSurface mode={surfaceMode} entry={entry} image={decoded} document={developDocument} referenceEntry={referenceEntry} linked={linkedViewports} />
             ) : null}
           </div>
 
@@ -927,6 +990,8 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
           activeId={entry.id}
           selectedIds={selectionTargets}
           onSelect={selectPhoto}
+          referenceId={referenceEntryId}
+          onSetReference={setReference}
         />
       </div>
       {exportOpen ? (

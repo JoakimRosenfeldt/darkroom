@@ -196,6 +196,7 @@ function safeSuggestedFilename(
 
 export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const metadata = useLibraryStore((state) => state.entryMetadata);
+  const metadataOverrides = useLibraryStore((state) => state.libraryWorkspace.metadataOverridesByEntryId);
   const [formats, setFormats] = useState<ExportFormatDescriptor[]>([]);
   const [format, setFormat] = useState<ExportFormatId>(DEFAULT_PREFERENCES.format);
   const [quality, setQuality] = useState(DEFAULT_PREFERENCES.quality);
@@ -336,6 +337,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       const result = await runExportBatch({
         entries,
         metadata,
+        metadataOverrides,
         destinationToken: destination.token,
         options: {
           format,
@@ -364,6 +366,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     format,
     lossless,
     metadata,
+    metadataOverrides,
     quality,
     selectedFormat,
     size,

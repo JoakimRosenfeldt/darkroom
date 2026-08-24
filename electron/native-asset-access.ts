@@ -149,7 +149,11 @@ async function withHandle<T>(
 }
 
 export class NativeAssetAccess {
-  constructor(private readonly sidecarBackupRootPath?: string) {}
+  private readonly sidecarBackupRootPath: string | undefined;
+
+  constructor(sidecarBackupRootPath?: string) {
+    this.sidecarBackupRootPath = sidecarBackupRootPath;
+  }
 
   async read(location: NativeAssetLocation): Promise<Uint8Array> {
     return withHandle(location, async (handle) => {

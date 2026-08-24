@@ -17,6 +17,7 @@ import type {
   MetadataOverrides,
 } from "@/lib/metadata/types";
 import { parseMetadataOverrides } from "@/lib/metadata/types";
+import { serializeLightroomMaskInterchangeManifest } from "@/lib/develop/lightroom-mask-adapter";
 
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
@@ -28,6 +29,7 @@ const EXIF_NS = "http://ns.adobe.com/exif/1.0/";
 const PHOTOSHOP_NS = "http://ns.adobe.com/photoshop/1.0/";
 export const DARKROOM_NS = "http://darkroom.app/ns/1.0/";
 const MASKING_LOCAL_NAME = "MaskingData";
+const LIGHTROOM_MASK_MANIFEST_LOCAL_NAME = "LightroomMaskInterchange";
 
 export interface ParsedDevelopXmp {
   document: DevelopDocument;
@@ -393,6 +395,11 @@ export function serializeDevelopXmp(
     description.removeAttribute("xmp:Label");
   }
   description.setAttributeNS(DARKROOM_NS, "darkroom:MaskingData", maskingPayload(document));
+  description.setAttributeNS(
+    DARKROOM_NS,
+    `darkroom:${LIGHTROOM_MASK_MANIFEST_LOCAL_NAME}`,
+    utf8ToBase64(serializeLightroomMaskInterchangeManifest(document)),
+  );
   const serialized = new XMLSerializer().serializeToString(doc);
   if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
     throw new Error("XMP sidecar exceeds the 16 MiB size limit.");

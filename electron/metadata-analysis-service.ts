@@ -42,6 +42,17 @@ function normalizedError(error: unknown): string {
   return "Embedded metadata could not be read.";
 }
 
+const RAW_METADATA_EXTENSIONS = new Set([
+  ".3fr", ".arw", ".cr2", ".cr3", ".dng", ".erf", ".fff", ".iiq", ".kdc",
+  ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef", ".raf", ".raw",
+  ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f",
+]);
+
+function adapterVersion(filePath: string): string {
+  const extension = filePath.slice(filePath.lastIndexOf(".")).toLocaleLowerCase();
+  return `${SOURCE_METADATA_ADAPTER_VERSION}-${RAW_METADATA_EXTENSIONS.has(extension) ? "raw" : "standard"}`;
+}
+
 async function sha256(filePath: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) hash.update(chunk);
@@ -59,6 +70,7 @@ function analysisFromSnapshot(input: {
   readonly sourceSha256: string;
   readonly extractedAt: number;
   readonly parsed: unknown;
+  readonly adapterVersion: string;
 }): EntryAnalysis {
   const source = normalizeSourceMetadata({
     parsed: input.parsed,
@@ -66,6 +78,7 @@ function analysisFromSnapshot(input: {
     byteLength: input.target.size,
     modifiedAt: input.target.modifiedAt,
     extractedAt: input.extractedAt,
+    adapterVersion: input.adapterVersion,
     fallback: input.target.fallback,
   });
   const captured = metadataValue(source.capture.time);
@@ -77,7 +90,7 @@ function analysisFromSnapshot(input: {
     modifiedAt: input.target.modifiedAt,
     sourceSha256: input.sourceSha256,
     parserVersion: SOURCE_METADATA_PARSER_VERSION,
-    adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+    adapterVersion: input.adapterVersion,
     cacheHit: false,
     source,
     captureTimeKey: captured?.sortKey ?? null,
@@ -128,13 +141,14 @@ async function analyzeTarget(
   cache: MetadataCache | undefined,
 ): Promise<{ readonly item: MetadataAnalysisItem; readonly failed: boolean }> {
   const digest = await sha256(target.filePath);
+  const targetAdapterVersion = adapterVersion(target.filePath);
   if (!request.force && cache) {
     const cached = await cache.read({
       catalogId: request.catalogId,
       entryId: target.entryId,
       sourceSha256: digest,
       parserVersion: SOURCE_METADATA_PARSER_VERSION,
-      adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+      adapterVersion: targetAdapterVersion,
     });
     if (cached) {
       return {
@@ -166,6 +180,7 @@ async function analyzeTarget(
       sourceSha256: digest,
       extractedAt: now(),
       parsed,
+      adapterVersion: targetAdapterVersion,
     });
     await cache?.write({ catalogId: request.catalogId, entryId: target.entryId, analysis });
     return { item: { entryId: target.entryId, analysis }, failed: false };
@@ -176,7 +191,7 @@ async function analyzeTarget(
       modifiedAt: target.modifiedAt,
       sourceSha256: digest,
       parserVersion: SOURCE_METADATA_PARSER_VERSION,
-      adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+      adapterVersion: targetAdapterVersion,
       cacheHit: false,
       source: null,
       captureTimeKey: null,

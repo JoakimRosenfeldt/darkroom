@@ -156,6 +156,8 @@ export interface ExportEncodeOptions {
   width?: number;
   height?: number;
   neverUpscale?: boolean;
+  /** Fully rendered XMP packet for the output file. */
+  xmp?: string;
 }
 
 export interface ExportPixelPayload {

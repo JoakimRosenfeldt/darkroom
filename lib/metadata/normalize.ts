@@ -24,6 +24,7 @@ export interface NormalizeSourceMetadataInput {
   readonly byteLength: number;
   readonly modifiedAt: number;
   readonly extractedAt: number;
+  readonly adapterVersion?: string;
   readonly fallback?: SourceMetadataFallback;
 }
 
@@ -261,7 +262,7 @@ export function normalizeSourceMetadata(
   return {
     version: SOURCE_METADATA_VERSION,
     parserVersion: SOURCE_METADATA_PARSER_VERSION,
-    adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+    adapterVersion: input.adapterVersion ?? SOURCE_METADATA_ADAPTER_VERSION,
     sourceSha256: input.sourceSha256,
     extractedAt: input.extractedAt,
     file: {
