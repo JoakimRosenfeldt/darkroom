@@ -113,6 +113,7 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
   const [status, setStatus] = useState<string | null>(null);
   const [publishAfterSave, setPublishAfterSave] = useState(false);
   const [applying, setApplying] = useState(false);
+  const photoLabel = entryIds.length === 1 ? "photo" : "photos";
 
   function updateField(field: keyof BatchState, patch: Partial<TextFieldState>) {
     setFields((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
@@ -162,7 +163,7 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
       if (Object.values(overrides).every((value) => value === undefined)) throw new Error("Choose at least one field to change.");
       applyOverrides(entryIds, overrides, { captionMode, keywordMode });
       if (!publishAfterSave) {
-        setStatus(`Saved catalog metadata for ${entryIds.length} photos. XMP unchanged.`);
+        setStatus(`Saved catalog metadata for ${entryIds.length} ${photoLabel}. XMP unchanged.`);
       } else {
         let published = 0;
         let conflicts = 0;
@@ -192,7 +193,7 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
       <form onSubmit={apply} role="dialog" aria-modal="true" aria-labelledby="batch-metadata-title" className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-lr-border bg-lr-panel shadow-2xl">
         <header className="flex items-start gap-4 border-b border-lr-border-subtle p-5">
           <div>
-            <h2 id="batch-metadata-title" className="text-base font-semibold text-lr-text">Edit metadata for {entryIds.length} photos</h2>
+            <h2 id="batch-metadata-title" className="text-base font-semibold text-lr-text">Edit metadata for {entryIds.length} {photoLabel}</h2>
             <p className="mt-1 text-xs text-lr-text-faint">Unchanged fields stay untouched. Catalog saves are atomic; XMP is never written implicitly.</p>
           </div>
           <button type="button" onClick={onClose} className="ml-auto text-xl leading-none text-lr-text-muted hover:text-lr-text" aria-label="Close">×</button>
@@ -216,7 +217,7 @@ export function MetadataBatchDialog({ entryIds, onClose }: { entryIds: readonly 
             </div>
             <div className="rounded-lg border border-lr-border-subtle bg-lr-panel p-3 text-[11px] leading-relaxed text-lr-text-faint">
               Preview
-              <strong className="mt-1 block text-xs font-medium text-lr-text">{Object.values(fields).filter((field) => field.mode !== "unchanged").length} fields × {entryIds.length} photos</strong>
+              <strong className="mt-1 block text-xs font-medium text-lr-text">{Object.values(fields).filter((field) => field.mode !== "unchanged").length} fields × {entryIds.length} {photoLabel}</strong>
               <span className="mt-1 block">Append modes combine with each photo’s effective catalog value.</span>
             </div>
           </aside>
