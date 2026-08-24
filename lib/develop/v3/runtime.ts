@@ -67,8 +67,7 @@ const PREVIEW_ANALYSIS_TAPS = [
 ] as const;
 const EXPORT_ANALYSIS_TAPS = ["display-output", "scene-headroom"] as const;
 const EXPORT_TILE_EDGE = 1_024;
-const INTERACTIVE_PREVIEW_MAX_PIXELS = 32_000;
-const SETTLED_PREVIEW_MAX_PIXELS = 112_000;
+const INTERACTIVE_PREVIEW_MAX_PIXELS = 16_000;
 
 export type V3SourcePurpose = "preview" | "export";
 
@@ -379,6 +378,34 @@ export async function loadV3MaskCoverageAssets(
   };
 }
 
+export interface V3PreviewMaskMatte {
+  readonly assetId: string;
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: Uint8Array;
+}
+
+export async function loadV3PreviewMaskMattes(
+  document: DevelopDocumentV3,
+  entry: LibraryEntry,
+  image: DevelopImage,
+): Promise<readonly V3PreviewMaskMatte[]> {
+  const sourceResult = buildV3SourceRecord(entry, image, "preview");
+  if (sourceResult.kind === "blocked") return [];
+  const assets = await runtimeAssets(document, sourceResult.source, undefined);
+  if (!assets?.maskMatte) return [];
+  const requiredIds = new Set<string>();
+  for (const mask of document.local.masks) {
+    for (const component of mask.components) {
+      if (component.kind === "ai") requiredIds.add(component.assetId);
+    }
+  }
+  return [...requiredIds].flatMap((assetId) => {
+    const matte = assets.maskMatte?.(assetId);
+    return matte ? [{ assetId, ...matte }] : [];
+  });
+}
+
 function geometrySourceDimensions(source: SourceRecord): PixelDimensions {
   return source.orientation >= 5
     ? { width: source.dimensions.height, height: source.dimensions.width }
@@ -458,10 +485,9 @@ function previewQuality(
     bounds,
     false,
   );
-  const previewMaxPixels = request.previewMode === "interactive"
+  const maximumPixels = request.previewMode === "interactive"
     ? INTERACTIVE_PREVIEW_MAX_PIXELS
-    : SETTLED_PREVIEW_MAX_PIXELS;
-  const maximumPixels = Math.min(MAX_CPU_RENDER_PIXELS, previewMaxPixels);
+    : MAX_CPU_RENDER_PIXELS;
   const pixelCount = outputDimensions.width * outputDimensions.height;
   if (pixelCount > maximumPixels) {
     const scale = Math.sqrt(maximumPixels / pixelCount);

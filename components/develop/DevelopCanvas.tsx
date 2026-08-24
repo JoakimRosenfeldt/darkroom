@@ -24,9 +24,9 @@ import {
 import type { Rgb } from "@/lib/develop/v3/profiles";
 import {
   buildV3SourceRecord,
-  renderV3Runtime,
-  type V3PreviewSessionRenderRequest,
+  loadV3PreviewMaskMattes,
 } from "@/lib/develop/v3/runtime";
+import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
 import type {
   CpuAnalysisTapResult,
   CpuBackendBlockingDiagnostic,
@@ -183,6 +183,12 @@ function resultMessage(result: Exclude<CpuRenderResult, { readonly kind: "render
     : `Preview request is invalid: ${issue.kind}.`;
 }
 
+function imageDataPixels(pixels: Uint8Array): Uint8ClampedArray<ArrayBuffer> {
+  return pixels.buffer instanceof ArrayBuffer
+    ? new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength)
+    : new Uint8ClampedArray(pixels);
+}
+
 export function DevelopCanvas({
   entry,
   image,
@@ -200,6 +206,11 @@ export function DevelopCanvas({
   const pointColorInputRef = useRef<CpuPointColorInput | null>(null);
   const panRef = useRef<PanGesture | null>(null);
   const requestRef = useRef(0);
+  const quickWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const detailWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const hasRenderedRef = useRef(false);
+  const drawnRequestRef = useRef(0);
   const diagnosticsCallbackRef = useRef(onRenderDiagnostics);
   const analysisCallbackRef = useRef(onAnalysis);
   const documentRevision = useDevelopStore((state) =>
@@ -250,6 +261,33 @@ export function DevelopCanvas({
   }, [onAnalysis]);
 
   useEffect(() => {
+    hasRenderedRef.current = false;
+    drawnRequestRef.current = 0;
+    let worker: V3PreviewWorkerClient;
+    try {
+      worker = new V3PreviewWorkerClient(entry, image);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Could not start the preview worker.";
+      const timeout = window.setTimeout(() => {
+        setPreview({ kind: "invalid", message });
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+    quickWorkerRef.current = worker;
+
+    return () => {
+      worker.dispose();
+      detailWorkerRef.current?.dispose();
+      beforeWorkerRef.current?.dispose();
+      quickWorkerRef.current = null;
+      detailWorkerRef.current = null;
+      beforeWorkerRef.current = null;
+    };
+  }, [entry, image]);
+
+  useEffect(() => {
     const container = containerRef.current;
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
@@ -260,40 +298,25 @@ export function DevelopCanvas({
     }
 
     let disposed = false;
-    let activeCancellation: { cancelled: boolean } | null = null;
 
     const render = () => {
-      if (activeCancellation) activeCancellation.cancelled = true;
       pointColorInputRef.current = null;
       setShowBefore(false);
       clearActiveAnalysis(entry.catalogId, entry.id);
       analysisCallbackRef.current?.([]);
-      const cancellation = { cancelled: false };
-      activeCancellation = cancellation;
       const requestId = ++requestRef.current;
       const width = Math.max(1, Math.round(container.clientWidth));
       const height = Math.max(1, Math.round(container.clientHeight));
       const session = getDevelopSession(entry.catalogId, entry.id);
-      setPreview({ kind: "loading" });
-      if (!session || !document) {
+      if (!hasRenderedRef.current) setPreview({ kind: "loading" });
+      const quickWorker = quickWorkerRef.current;
+      detailWorkerRef.current?.dispose();
+      detailWorkerRef.current = null;
+      if (!session || !document || !quickWorker) {
         setPreview({ kind: "invalid", message: "Develop session is not ready." });
         return;
       }
       const renderSnapshot = session.snapshot();
-      const request = {
-        kind: "v3-preview",
-        entry,
-        image,
-        viewportDimensions: { width, height },
-        devicePixelRatio: window.devicePixelRatio || 1,
-        previewMode,
-        cancellation: {
-          isCancelled: () => disposed || cancellation.cancelled,
-          reason: () => disposed || cancellation.cancelled
-            ? "A newer preview request replaced this render."
-            : null,
-        },
-      } satisfies V3PreviewSessionRenderRequest;
       const renderDocument = cropActive
         ? {
             ...document,
@@ -304,11 +327,16 @@ export function DevelopCanvas({
             },
           }
         : document;
-      const resultPromise = cropActive
-        ? renderV3Runtime(renderDocument, request)
-        : session.render(request);
-      void resultPromise.then((result) => {
-        if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
+
+      const applyResult = (
+        result: CpuRenderResult,
+        allowStaleDraft = false,
+      ): boolean => {
+        const staleDraft = allowStaleDraft &&
+          result.kind === "rendered" &&
+          quickWorkerRef.current === quickWorker &&
+          requestId > drawnRequestRef.current;
+        if ((disposed || requestId !== requestRef.current) && !staleDraft) return false;
         if (result.kind !== "rendered") {
           pointColorInputRef.current = null;
           if (result.kind === "blocked") {
@@ -319,12 +347,8 @@ export function DevelopCanvas({
             diagnosticsCallbackRef.current?.([]);
             analysisCallbackRef.current?.([]);
             setPreview({ kind: "invalid", message: resultMessage(result) });
-          } else {
-            diagnosticsCallbackRef.current?.([]);
-            analysisCallbackRef.current?.([]);
-            setPreview({ kind: "cancelled", message: resultMessage(result) });
           }
-          return;
+          return false;
         }
         const currentSnapshot = session.snapshot();
         if (
@@ -332,12 +356,35 @@ export function DevelopCanvas({
           currentSnapshot.processKind !== "v3" ||
           currentSnapshot.documentRevision !== renderSnapshot.documentRevision
         ) {
+          if (staleDraft) {
+            const dimensions = result.dimensions;
+            canvas.width = dimensions.width;
+            canvas.height = dimensions.height;
+            context.putImageData(
+              new ImageData(
+                imageDataPixels(result.pixels.pixels),
+                dimensions.width,
+                dimensions.height,
+              ),
+              0,
+              0,
+            );
+            const scale = Math.min(width / dimensions.width, height / dimensions.height);
+            setDisplayDimensions({
+              width: Math.max(1, Math.round(dimensions.width * scale)),
+              height: Math.max(1, Math.round(dimensions.height * scale)),
+            });
+            drawnRequestRef.current = requestId;
+            hasRenderedRef.current = true;
+            setPreview({ kind: "rendered" });
+            return true;
+          }
           analysisCallbackRef.current?.([]);
           setPreview({
             kind: "cancelled",
             message: "The Develop document changed during this render.",
           });
-          return;
+          return false;
         }
         const dimensions = result.dimensions;
         pointColorInputRef.current = result.pointColorInput;
@@ -345,7 +392,7 @@ export function DevelopCanvas({
         canvas.height = dimensions.height;
         context.putImageData(
           new ImageData(
-            new Uint8ClampedArray(result.pixels.pixels),
+            imageDataPixels(result.pixels.pixels),
             dimensions.width,
             dimensions.height,
           ),
@@ -368,15 +415,45 @@ export function DevelopCanvas({
           });
           analysisCallbackRef.current?.(result.analysis);
         }
+        drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
+        hasRenderedRef.current = true;
         setPreview({ kind: "rendered" });
-      }).catch((error: unknown) => {
-        if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
+        return true;
+      };
+
+      const renderPreview = async (): Promise<void> => {
+        const maskMattes = await loadV3PreviewMaskMattes(renderDocument, entry, image);
+        if (disposed || requestId !== requestRef.current) return;
+        const options = {
+          viewportDimensions: { width, height },
+          devicePixelRatio: window.devicePixelRatio || 1,
+          maskMattes,
+        } as const;
+        const quick = await quickWorker.render(renderDocument, {
+          ...options,
+          previewMode: "interactive",
+        });
+        if (!applyResult(quick, true) || previewMode === "interactive") return;
+
+        const detailWorker = new V3PreviewWorkerClient(entry, image);
+        detailWorkerRef.current = detailWorker;
+        const detailed = await detailWorker.render(renderDocument, {
+          ...options,
+          previewMode: "settled",
+        });
+        applyResult(detailed);
+      };
+
+      void renderPreview().catch((error: unknown) => {
+        if (disposed || requestId !== requestRef.current) return;
         diagnosticsCallbackRef.current?.([]);
         analysisCallbackRef.current?.([]);
-        setPreview({
-          kind: "invalid",
-          message: error instanceof Error ? error.message : "Could not render the preview.",
-        });
+        if (!hasRenderedRef.current) {
+          setPreview({
+            kind: "invalid",
+            message: error instanceof Error ? error.message : "Could not render the preview.",
+          });
+        }
       });
     };
 
@@ -385,7 +462,8 @@ export function DevelopCanvas({
     observer.observe(container);
     return () => {
       disposed = true;
-      if (activeCancellation) activeCancellation.cancelled = true;
+      detailWorkerRef.current?.dispose();
+      detailWorkerRef.current = null;
       pointColorInputRef.current = null;
       clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
@@ -406,10 +484,6 @@ export function DevelopCanvas({
     ) return;
 
     let disposed = false;
-    const cancellation = {
-      isCancelled: () => disposed,
-      reason: () => disposed ? "The Before preview was replaced." : null,
-    };
     const width = Math.max(1, Math.round(container.clientWidth));
     const height = Math.max(1, Math.round(container.clientHeight));
     const neutralDocument = beforeDocument({
@@ -431,21 +505,26 @@ export function DevelopCanvas({
     setShowBefore(false);
 
     const timeout = window.setTimeout(() => {
-      void renderV3Runtime(renderDocument, {
-        kind: "v3-preview",
-        entry,
-        image,
+      beforeWorkerRef.current?.dispose();
+      let beforeWorker: V3PreviewWorkerClient;
+      try {
+        beforeWorker = new V3PreviewWorkerClient(entry, image);
+      } catch {
+        if (!disposed) setBeforeReady(false);
+        return;
+      }
+      beforeWorkerRef.current = beforeWorker;
+      void beforeWorker.render(renderDocument, {
         viewportDimensions: { width, height },
         devicePixelRatio: window.devicePixelRatio || 1,
         previewMode: "settled",
-        cancellation,
       }).then((before) => {
         if (disposed || before.kind !== "rendered") return;
         sourceCanvas.width = before.dimensions.width;
         sourceCanvas.height = before.dimensions.height;
         sourceContext.putImageData(
           new ImageData(
-            new Uint8ClampedArray(before.pixels.pixels),
+            imageDataPixels(before.pixels.pixels),
             before.dimensions.width,
             before.dimensions.height,
           ),
@@ -461,6 +540,8 @@ export function DevelopCanvas({
     return () => {
       disposed = true;
       window.clearTimeout(timeout);
+      beforeWorkerRef.current?.dispose();
+      beforeWorkerRef.current = null;
     };
   }, [
     cropActive,
