@@ -1190,7 +1190,7 @@ function CleanupTab({
   );
 
   return (
-    <PanelSection title="Cleanup" onReset={() => reset("cleanup")}>
+    <PanelSection title="Manual cleanup" onReset={() => reset("cleanup")}>
       <div className="mb-2 flex flex-wrap gap-1.5">
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("heal") }, "Add heal repair")}>Add heal</ActionButton>
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("clone") }, "Add clone repair")}>Add clone</ActionButton>
