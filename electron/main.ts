@@ -135,6 +135,7 @@ import {
   analyzeMetadataTargets,
   type MetadataAnalysisTarget,
 } from "./metadata-analysis-service.ts";
+import { MetadataCache } from "./metadata-cache.ts";
 import { fingerprintNoFollowFile } from "./catalog-fingerprint-service.ts";
 import {
   parseExactDuplicateTrashRequest,
@@ -699,7 +700,8 @@ function registerIpcHandlers(): void {
     upsert: (value) => catalogRegistryStore.upsert(value),
     remove: (catalogId) => catalogRegistryStore.remove(catalogId),
   };
-  const nativeAssetAccess = new NativeAssetAccess();
+  const nativeAssetAccess = new NativeAssetAccess(path.join(app.getPath("userData"), "xmp-backups"));
+  const metadataCache = new MetadataCache(path.join(app.getPath("userData"), "metadata-cache"));
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),
     writeSidecar: (location, contents, expectedLastModified) => nativeAssetAccess.writeSidecar(location, contents, expectedLastModified),
@@ -758,6 +760,11 @@ function registerIpcHandlers(): void {
       cacheSignature: entryAnalysisCacheSignature(size, modifiedAt),
       size,
       modifiedAt,
+      sourceSha256: null,
+      parserVersion: null,
+      adapterVersion: null,
+      cacheHit: false,
+      source: null,
       captureTimeKey: null,
       captureTimeDisplay: null,
       captureTimeProvenance: null,
@@ -810,7 +817,17 @@ function registerIpcHandlers(): void {
           canonicalRootPath: root.nativePath,
           relativePath: asset.relativePath,
         });
-        targets.push({ entryId, filePath, size, modifiedAt });
+        targets.push({
+          entryId,
+          filePath,
+          size,
+          modifiedAt,
+          fallback: {
+            cameraMake: asset.cameraMake,
+            cameraModel: asset.cameraModel,
+            lens: asset.lensModel,
+          },
+        });
       } catch {
         resolutionFailures.push(metadataFailure(entryId, size, modifiedAt));
       }
@@ -829,6 +846,7 @@ function registerIpcHandlers(): void {
       targets,
       signal,
       (current) => sendMetadataProgress(progress(current)),
+      { cache: metadataCache },
     );
     const finalProgress = progress(analyzed);
     return {

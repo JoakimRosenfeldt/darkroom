@@ -12,6 +12,10 @@ export interface EntryMetadata {
   pick: PickStatus;
   rating: StarRating;
   colorLabel: ColorLabel;
+  title: string | null;
+  caption: string | null;
+  copyright: string | null;
+  keywords: readonly string[];
   develop?: DevelopDocument;
   developUpdatedAt: number;
   updatedAt: number;
@@ -65,6 +69,20 @@ function finite(value: unknown, path: string): number {
     : fail(`${path} must be a finite number.`);
 }
 
+function optionalText(value: unknown, path: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return fail(`${path} must be a string or null.`);
+  return value;
+}
+
+function optionalKeywords(value: unknown, path: string): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return fail(`${path} must be an array.`);
+  return [...new Set(value.map((item, index) => (
+    typeof item === "string" ? item : fail(`${path}[${index}] must be a string.`)
+  )))];
+}
+
 function parseEntryMetadata(value: unknown, version: 1 | 2, path: string): EntryMetadata {
   if (!isRecord(value)) return fail(`${path} must be an object.`);
   const pick = value.pick === "none" || value.pick === "pick" || value.pick === "reject"
@@ -89,6 +107,10 @@ function parseEntryMetadata(value: unknown, version: 1 | 2, path: string): Entry
     pick,
     rating,
     colorLabel,
+    title: optionalText(value.title, `${path}.title`),
+    caption: optionalText(value.caption, `${path}.caption`),
+    copyright: optionalText(value.copyright, `${path}.copyright`),
+    keywords: optionalKeywords(value.keywords, `${path}.keywords`),
     ...(develop ? { develop } : {}),
     developUpdatedAt,
     updatedAt,

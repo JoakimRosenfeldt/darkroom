@@ -234,7 +234,10 @@ export function LibraryToolbar({
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
 
-  function toggleFacet(key: "cameras" | "lenses" | "locations" | "edited" | "albums" | "keywords", value: string) {
+  function toggleFacet(
+    key: "cameras" | "lenses" | "locations" | "captureYears" | "metadataAvailability" | "metadataSync" | "edited" | "albums" | "keywords",
+    value: string,
+  ) {
     const current: readonly string[] = facets[key];
     onFacetsChange({
       ...facets,
@@ -533,6 +536,24 @@ export function LibraryToolbar({
                 values={facetCounts.locations}
                 selected={facets.locations}
                 onToggle={(value) => toggleFacet("locations", value)}
+              />
+              <FacetValues
+                label="Capture year"
+                values={facetCounts.captureYears}
+                selected={facets.captureYears}
+                onToggle={(value) => toggleFacet("captureYears", value)}
+              />
+              <FacetValues
+                label="Metadata"
+                values={facetCounts.metadataAvailability}
+                selected={facets.metadataAvailability}
+                onToggle={(value) => toggleFacet("metadataAvailability", value)}
+              />
+              <FacetValues
+                label="XMP sync"
+                values={facetCounts.metadataSync}
+                selected={facets.metadataSync}
+                onToggle={(value) => toggleFacet("metadataSync", value)}
               />
               <FilterSection label="ISO range">
                 <NumericFacetInputs

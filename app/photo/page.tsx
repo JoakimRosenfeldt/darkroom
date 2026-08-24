@@ -6,27 +6,37 @@ import { PhotoViewer } from "@/components/viewer/PhotoViewer";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import { useLibraryResult } from "@/hooks/useLibraryResult";
 import { getEntryById, useLibraryStore } from "@/stores/library-store";
+import { resolveViewerSession } from "@/lib/viewer/session";
 
 function PhotoPageContent() {
   const searchParams = useSearchParams();
   const entries = useLibraryStore((state) => state.entries);
   const photoId = searchParams.get("id");
+  const sessionId = searchParams.get("session");
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const libraryResult = useLibraryResult();
+  const resolvedSession = useMemo(() => photoId ? resolveViewerSession({
+    sessionId,
+    requestedEntryId: photoId,
+    liveEntryIds: libraryResult.viewerEntryIds,
+    liveRevision: libraryResult.revision,
+    selectedEntryIds,
+  }) : null, [libraryResult.revision, libraryResult.viewerEntryIds, photoId, selectedEntryIds, sessionId]);
   const resultEntries = useMemo(() => {
     const byId = new Map<string, (typeof entries)[number]>(
       entries.map((entry) => [entry.id, entry]),
     );
-    return libraryResult.viewerEntryIds
+    return (resolvedSession?.session.orderedEntryIds ?? libraryResult.viewerEntryIds)
       .map((id) => byId.get(id))
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
-  }, [entries, libraryResult.viewerEntryIds]);
+  }, [entries, libraryResult.viewerEntryIds, resolvedSession?.session.orderedEntryIds]);
 
   const entry = useMemo(() => {
     if (!photoId) {
       return undefined;
     }
-    return getEntryById(resultEntries, photoId);
-  }, [resultEntries, photoId]);
+    return getEntryById(resultEntries, resolvedSession?.session.activeEntryId ?? photoId);
+  }, [resultEntries, photoId, resolvedSession?.session.activeEntryId]);
 
   if (!photoId) {
     return (
@@ -55,7 +65,14 @@ function PhotoPageContent() {
     );
   }
 
-  return <PhotoViewer entry={entry} entries={resultEntries} />;
+  return (
+    <PhotoViewer
+      entry={entry}
+      entries={resultEntries}
+      sessionId={resolvedSession?.session.id ?? null}
+      sessionMessage={resolvedSession?.message ?? null}
+    />
+  );
 }
 
 export default function PhotoPage() {

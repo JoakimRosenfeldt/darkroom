@@ -1,4 +1,14 @@
 import type { Album } from "../catalog/types";
+import {
+  parseMetadataOverrides,
+  parseMetadataPreset,
+  parseMetadataSyncState,
+  parseSourceMetadataSnapshot,
+  type MetadataOverrides,
+  type MetadataPreset,
+  type MetadataSyncState,
+  type SourceMetadataSnapshot,
+} from "../metadata/types";
 
 export const LIBRARY_WORKSPACE_VERSION = 1 as const;
 
@@ -120,6 +130,11 @@ export interface EntryAnalysis {
   readonly cacheSignature: string;
   readonly size: number;
   readonly modifiedAt: number;
+  readonly sourceSha256: string | null;
+  readonly parserVersion: string | null;
+  readonly adapterVersion: string | null;
+  readonly cacheHit: boolean;
+  readonly source: SourceMetadataSnapshot | null;
   readonly captureTimeKey: number | null;
   readonly captureTimeDisplay: string | null;
   readonly captureTimeProvenance: CaptureTimeProvenance | null;
@@ -149,6 +164,9 @@ export interface LibraryWorkspaceState {
   readonly archiveMemberships: readonly ArchiveMembershipSnapshot[];
   readonly excludedEntryIds: readonly string[];
   readonly analysisByEntryId: Readonly<Record<string, EntryAnalysis>>;
+  readonly metadataOverridesByEntryId: Readonly<Record<string, MetadataOverrides>>;
+  readonly metadataPresets: readonly MetadataPreset[];
+  readonly metadataSyncByEntryId: Readonly<Record<string, MetadataSyncState>>;
 }
 
 type RecordValue = Record<string, unknown>;
@@ -392,10 +410,26 @@ export function parseEntryAnalysis(value: unknown, path = "analysis"): EntryAnal
   if (value.hasGps !== null && typeof value.hasGps !== "boolean") {
     throw new Error(`${path}.hasGps is invalid.`);
   }
+  if (value.cacheHit !== undefined && typeof value.cacheHit !== "boolean") {
+    throw new Error(`${path}.cacheHit is invalid.`);
+  }
   return {
     cacheSignature: stringValue(value.cacheSignature, `${path}.cacheSignature`),
     size: nonnegativeInteger(value.size, `${path}.size`),
     modifiedAt: finiteNumber(value.modifiedAt, `${path}.modifiedAt`),
+    sourceSha256: value.sourceSha256 === undefined
+      ? null
+      : nullableString(value.sourceSha256, `${path}.sourceSha256`),
+    parserVersion: value.parserVersion === undefined
+      ? null
+      : nullableString(value.parserVersion, `${path}.parserVersion`),
+    adapterVersion: value.adapterVersion === undefined
+      ? null
+      : nullableString(value.adapterVersion, `${path}.adapterVersion`),
+    cacheHit: value.cacheHit === true,
+    source: value.source === undefined || value.source === null
+      ? null
+      : parseSourceMetadataSnapshot(value.source, `${path}.source`),
     captureTimeKey: value.captureTimeKey === null
       ? null
       : finiteNumber(value.captureTimeKey, `${path}.captureTimeKey`),
@@ -469,6 +503,9 @@ export function createLibraryWorkspaceState(albums: readonly Album[]): LibraryWo
     archiveMemberships: [],
     excludedEntryIds: [],
     analysisByEntryId: {},
+    metadataOverridesByEntryId: {},
+    metadataPresets: [],
+    metadataSyncByEntryId: {},
   };
 }
 
@@ -487,7 +524,10 @@ export function parseLibraryWorkspaceState(
     !Array.isArray(value.stacks) ||
     !Array.isArray(value.archiveMemberships) ||
     !isRecord(value.entryKeywordIds) ||
-    !isRecord(value.analysisByEntryId)
+    !isRecord(value.analysisByEntryId) ||
+    (value.metadataOverridesByEntryId !== undefined && !isRecord(value.metadataOverridesByEntryId)) ||
+    (value.metadataPresets !== undefined && !Array.isArray(value.metadataPresets)) ||
+    (value.metadataSyncByEntryId !== undefined && !isRecord(value.metadataSyncByEntryId))
   ) {
     throw new Error("Library workspace is malformed.");
   }
@@ -565,6 +605,29 @@ export function parseLibraryWorkspaceState(
     }
   }
 
+  const metadataOverridesByEntryId: Record<string, MetadataOverrides> = {};
+  for (const [entryId, overrides] of Object.entries(value.metadataOverridesByEntryId ?? {})) {
+    if (validEntryIds.has(entryId)) {
+      metadataOverridesByEntryId[entryId] = parseMetadataOverrides(
+        overrides,
+        `metadataOverridesByEntryId.${entryId}`,
+      );
+    }
+  }
+  const metadataPresets = (value.metadataPresets ?? []).map((preset, index) =>
+    parseMetadataPreset(preset, `metadataPresets[${index}]`),
+  );
+  assertUniqueIds(metadataPresets, "metadataPresets");
+  const metadataSyncByEntryId: Record<string, MetadataSyncState> = {};
+  for (const [entryId, sync] of Object.entries(value.metadataSyncByEntryId ?? {})) {
+    if (validEntryIds.has(entryId)) {
+      metadataSyncByEntryId[entryId] = parseMetadataSyncState(
+        sync,
+        `metadataSyncByEntryId.${entryId}`,
+      );
+    }
+  }
+
   const quickEntryIds = unique(stringArray(value.quickEntryIds, "quickEntryIds"))
     .filter((id) => validEntryIds.has(id));
   const targetAlbumId = nullableString(value.targetAlbumId, "targetAlbumId");
@@ -584,6 +647,9 @@ export function parseLibraryWorkspaceState(
     archiveMemberships,
     excludedEntryIds,
     analysisByEntryId,
+    metadataOverridesByEntryId,
+    metadataPresets,
+    metadataSyncByEntryId,
   };
 }
 

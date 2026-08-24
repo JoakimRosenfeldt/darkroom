@@ -256,6 +256,15 @@ function metadataFromAsset(
   asset: CatalogLiveStateView["assets"][number],
 ): EntryMetadata {
   const source = asset.metadata;
+  let keywords: readonly string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(source.keywordsJson);
+    if (Array.isArray(parsed)) {
+      keywords = [...new Set(parsed.filter((item): item is string => typeof item === "string"))];
+    }
+  } catch {
+    keywords = [];
+  }
   let develop: EntryMetadata["develop"];
   if (source.developJson !== null) {
     try {
@@ -269,6 +278,10 @@ function metadataFromAsset(
     pick: source.pick,
     rating: source.rating,
     colorLabel: source.colorLabel,
+    title: source.title,
+    caption: source.caption,
+    copyright: source.copyright,
+    keywords,
     ...(develop ? { develop } : {}),
     developUpdatedAt: source.developUpdatedAt,
     updatedAt: source.updatedAt,
@@ -1032,6 +1045,10 @@ function metadataPatchFor(
     ...(current.archive === desiredArchive ? {} : { archive: desiredArchive }),
     ...(current.developUpdatedAt === desired.developUpdatedAt ? {} : { developUpdatedAt: desired.developUpdatedAt }),
     ...(current.updatedAt === desired.updatedAt ? {} : { updatedAt: desired.updatedAt }),
+    ...(current.title === desired.title ? {} : { title: desired.title }),
+    ...(current.caption === desired.caption ? {} : { caption: desired.caption }),
+    ...(current.copyright === desired.copyright ? {} : { copyright: desired.copyright }),
+    ...(current.keywordsJson === JSON.stringify(desired.keywords) ? {} : { keywordsJson: JSON.stringify(desired.keywords) }),
   };
   if (desired.develop !== undefined) {
     const developJson = JSON.stringify(desired.develop);
@@ -1116,7 +1133,10 @@ async function syncCatalogStateForBinding(
       });
     }
   }
-  const libraryStateJson = JSON.stringify(libraryWorkspace);
+  const libraryStateJson = JSON.stringify({
+    ...libraryWorkspace,
+    analysisByEntryId: {},
+  });
   if (view.libraryStateJson !== libraryStateJson) {
     mutations.push({ kind: "library-state-replace", stateJson: libraryStateJson });
   }

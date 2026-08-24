@@ -647,6 +647,12 @@ async function encodePixels(
   let image = sharp(raw.buffer, {
     raw: { width: raw.width, height: raw.height, channels: 4 },
   }).removeAlpha();
+  if (options.xmp !== undefined) {
+    if (typeof options.xmp !== "string" || Buffer.byteLength(options.xmp, "utf8") > 16 * 1024 * 1024) {
+      throw new Error("Export XMP is invalid or too large.");
+    }
+    image = image.withXmp(options.xmp);
+  }
   if (normalized.resize) {
     image = image.resize({
       ...normalized.resize,

@@ -7,6 +7,7 @@ import type { LibraryWorkspaceState, StackRecord } from "./model";
 import {
   buildQueryIndex,
   computeFacetCounts,
+  effectiveCaptureTimeKey,
   evaluateSmartRule,
   matchesFacets,
   matchesTextQuery,
@@ -159,8 +160,8 @@ function compareEntries(
   input: ResolveLibraryResultInput,
 ): number {
   if (input.sort === "date") {
-    const leftTime = input.workspace.analysisByEntryId[left.id]?.captureTimeKey ?? null;
-    const rightTime = input.workspace.analysisByEntryId[right.id]?.captureTimeKey ?? null;
+    const leftTime = effectiveCaptureTimeKey(input.workspace, left.id);
+    const rightTime = effectiveCaptureTimeKey(input.workspace, right.id);
     if (leftTime === null && rightTime !== null) return 1;
     if (leftTime !== null && rightTime === null) return -1;
     if (leftTime !== null && rightTime !== null && leftTime !== rightTime) {
@@ -189,8 +190,8 @@ function sortedEntries(
   return [...entries].sort((left, right) => {
     const compared = compareEntries(left, right, input);
     if (input.sort === "date") {
-      const leftMissing = input.workspace.analysisByEntryId[left.id]?.captureTimeKey == null;
-      const rightMissing = input.workspace.analysisByEntryId[right.id]?.captureTimeKey == null;
+      const leftMissing = effectiveCaptureTimeKey(input.workspace, left.id) === null;
+      const rightMissing = effectiveCaptureTimeKey(input.workspace, right.id) === null;
       if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
     }
     return input.sortDirection === "ascending" ? compared : -compared;

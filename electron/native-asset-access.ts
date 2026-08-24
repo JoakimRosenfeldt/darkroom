@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseRelativePath } from "../lib/catalog/runtime.ts";
@@ -149,6 +149,12 @@ async function withHandle<T>(
 }
 
 export class NativeAssetAccess {
+  private readonly sidecarBackupRootPath: string | undefined;
+
+  constructor(sidecarBackupRootPath?: string) {
+    this.sidecarBackupRootPath = sidecarBackupRootPath;
+  }
+
   async read(location: NativeAssetLocation): Promise<Uint8Array> {
     return withHandle(location, async (handle) => {
       const buffer = await handle.readFile();
@@ -231,6 +237,7 @@ export class NativeAssetAccess {
     if (parentPath !== rootPath) await assertNoSymlinkPath(rootPath, parentPath);
     await assertSidecarVersion(absolutePath, expectedLastModified);
     if (contents === null) {
+      await this.backupSidecar(absolutePath, "delete");
       await fs.unlink(absolutePath).catch((error: unknown) => {
         if (!isNotFound(error)) throw new NativeAssetAccessError("Could not remove sidecar.");
       });
@@ -246,6 +253,7 @@ export class NativeAssetAccess {
       handle = null;
       await verifiedRootPath(location.canonicalRootPath);
       await assertSidecarVersion(absolutePath, expectedLastModified);
+      await this.backupSidecar(absolutePath, "replace");
       await fs.rename(temporaryPath, absolutePath);
     } catch (error) {
       await handle?.close().catch(() => undefined);
@@ -254,6 +262,41 @@ export class NativeAssetAccess {
     } finally {
       await fs.unlink(temporaryPath).catch(() => undefined);
     }
+  }
+
+  private async backupSidecar(absolutePath: string, operation: "replace" | "delete"): Promise<void> {
+    if (!this.sidecarBackupRootPath) return;
+    let contents: Buffer;
+    try {
+      const stat = await fs.lstat(absolutePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new NativeAssetAccessError("Sidecar is not a regular file.");
+      contents = await fs.readFile(absolutePath);
+      const after = await fs.lstat(absolutePath);
+      if (!sameFile(stat, after) || stat.mtimeMs !== after.mtimeMs || stat.size !== after.size) {
+        throw new NativeAssetAccessError("Sidecar changed while its recovery backup was created.");
+      }
+    } catch (error) {
+      if (isNotFound(error)) return;
+      if (error instanceof NativeAssetAccessError) throw error;
+      throw new NativeAssetAccessError("Could not create the sidecar recovery backup.");
+    }
+    const digest = createHash("sha256").update(contents).digest("hex");
+    const objectDirectory = path.join(this.sidecarBackupRootPath, "objects", digest.slice(0, 2));
+    const objectPath = path.join(objectDirectory, `${digest}.xmp`);
+    const receiptDirectory = path.join(this.sidecarBackupRootPath, "receipts");
+    await fs.mkdir(objectDirectory, { recursive: true, mode: 0o700 });
+    await fs.mkdir(receiptDirectory, { recursive: true, mode: 0o700 });
+    await fs.writeFile(objectPath, contents, { flag: "wx", mode: 0o600 }).catch((error: unknown) => {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")) throw error;
+    });
+    const receiptPath = path.join(receiptDirectory, `${Date.now()}-${randomUUID()}.json`);
+    await fs.writeFile(receiptPath, JSON.stringify({
+      version: 1,
+      operation,
+      sha256: digest,
+      byteLength: contents.byteLength,
+      createdAt: Date.now(),
+    }), { flag: "wx", mode: 0o600 });
   }
 }
 

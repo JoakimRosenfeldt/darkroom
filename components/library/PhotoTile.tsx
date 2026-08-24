@@ -13,6 +13,8 @@ import {
 import { EntryMetadataBadges } from "./EntryMetadataBar";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { useLibraryStore } from "@/stores/library-store";
+import { getVisibleLibraryResult } from "@/lib/library/result-session";
+import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -45,6 +47,7 @@ export const PhotoTile = memo(function PhotoTile({
 }: PhotoTileProps) {
   const router = useRouter();
   const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
+  const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const [viewSettings, updateViewSettings] = useLibraryViewSettings();
   const tileRef = useRef<HTMLDivElement>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -265,9 +268,16 @@ export const PhotoTile = memo(function PhotoTile({
             toggle: event.metaKey || event.ctrlKey,
           })
         }
-        onDoubleClick={() =>
-          router.push(`/photo?id=${encodeURIComponent(entry.id)}`)
-        }
+        onDoubleClick={() => {
+          const result = getVisibleLibraryResult();
+          const session = createViewerSession({
+            queryRevision: result.revision,
+            orderedEntryIds: result.entryIds,
+            activeEntryId: entry.id,
+            selectedEntryIds,
+          });
+          router.push(viewerPhotoHref(entry.id, session.id));
+        }}
         onContextMenu={(event) => onContextMenu?.(entry.id, event)}
       >
         {content}

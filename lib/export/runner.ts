@@ -11,6 +11,8 @@ import {
 import { readDevelopSidecar } from "@/lib/develop/sidecar";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import type { DevelopDocument } from "@/lib/develop/types";
+import { serializeDevelopXmp, serializeMetadataXmp } from "@/lib/develop/xmp";
+import type { MetadataOverrides } from "@/lib/metadata/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -49,6 +51,7 @@ export interface ExportBatchSummary {
 export interface ExportRunnerOptions {
   entries: LibraryEntry[];
   metadata: Record<string, EntryMetadata>;
+  metadataOverrides: Readonly<Record<string, MetadataOverrides>>;
   destinationToken: string;
   options: Omit<ExportJobOptions, "destinationToken">;
   onProgress?: (progress: ExportProgress) => void;
@@ -149,6 +152,7 @@ export async function runExportBatch(
   const {
     entries,
     metadata,
+    metadataOverrides,
     destinationToken,
     options,
     onProgress,
@@ -179,6 +183,15 @@ export async function runExportBatch(
       try {
         const entryMetadata = getMetadata(metadata, entry);
         const developDocument = await resolveDocument(entry, entryMetadata);
+        const descriptive: MetadataOverrides = {
+          ...(entryMetadata.title === null ? {} : { title: { kind: "set", value: entryMetadata.title } }),
+          ...(entryMetadata.caption === null ? {} : { caption: { kind: "set", value: entryMetadata.caption } }),
+          ...(entryMetadata.copyright === null ? {} : { copyright: { kind: "set", value: entryMetadata.copyright } }),
+          ...(entryMetadata.keywords.length === 0 ? {} : { keywords: { kind: "set", value: entryMetadata.keywords } }),
+          ...metadataOverrides[entry.id],
+        };
+        const developXmp = serializeDevelopXmp(developDocument, entryMetadata, null);
+        const outputXmp = serializeMetadataXmp(developXmp, descriptive);
         exportImage = await loadDevelopExportImage(entry);
 
         progress("rendering");
@@ -200,7 +213,7 @@ export async function runExportBatch(
             width: pixels.width,
             height: pixels.height,
           },
-          { ...toEncodeOptions(options), size: { mode: "original" } },
+          { ...toEncodeOptions(options), size: { mode: "original" }, xmp: outputXmp },
         );
         if (encoded.status === "exported") {
           lastOutputPath = encoded.path ?? lastOutputPath;

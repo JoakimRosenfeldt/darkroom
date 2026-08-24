@@ -11,6 +11,13 @@ import {
   isDefaultDevelopSettings,
 } from "@/lib/develop/registry";
 import type { DevelopDocument, DevelopSettings, XmpProps, XmpValue } from "@/lib/develop/types";
+import type {
+  MetadataEditableField,
+  MetadataFieldConflict,
+  MetadataOverrides,
+} from "@/lib/metadata/types";
+import { parseMetadataOverrides } from "@/lib/metadata/types";
+import { serializeLightroomMaskInterchangeManifest } from "@/lib/develop/lightroom-mask-adapter";
 
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
@@ -18,8 +25,11 @@ const CRS_NS = "http://ns.adobe.com/camera-raw-settings/1.0/";
 const XMP_NS = "http://ns.adobe.com/xap/1.0/";
 const DC_NS = "http://purl.org/dc/elements/1.1/";
 const LR_NS = "http://ns.adobe.com/lightroom/1.0/";
+const EXIF_NS = "http://ns.adobe.com/exif/1.0/";
+const PHOTOSHOP_NS = "http://ns.adobe.com/photoshop/1.0/";
 export const DARKROOM_NS = "http://darkroom.app/ns/1.0/";
 const MASKING_LOCAL_NAME = "MaskingData";
+const LIGHTROOM_MASK_MANIFEST_LOCAL_NAME = "LightroomMaskInterchange";
 
 export interface ParsedDevelopXmp {
   document: DevelopDocument;
@@ -116,6 +126,167 @@ function arrayProperty(description: Element, namespace: string, localName: strin
 export interface ParsedKeywordXmp {
   readonly flat: readonly string[];
   readonly hierarchical: readonly string[];
+}
+
+function propertyElement(description: Element, namespace: string, localName: string): Element | null {
+  return Array.from(description.children).find(
+    (child) => child.namespaceURI === namespace && child.localName === localName,
+  ) ?? null;
+}
+
+function languageAlternative(description: Element, namespace: string, localName: string): string | null {
+  const property = propertyElement(description, namespace, localName);
+  if (!property) return null;
+  const alternative = Array.from(property.children).find(
+    (child) => child.namespaceURI === RDF_NS && child.localName === "Alt",
+  );
+  if (!alternative) return property.textContent?.trim() || null;
+  const items = Array.from(alternative.children).filter(
+    (child) => child.namespaceURI === RDF_NS && child.localName === "li",
+  );
+  const preferred = items.find((item) => item.getAttribute("xml:lang") === "x-default") ?? items[0];
+  return preferred?.textContent?.trim() || null;
+}
+
+function setLanguageAlternative(
+  doc: XMLDocument,
+  description: Element,
+  qualifiedName: string,
+  value: string | null,
+): void {
+  const localName = qualifiedName.slice(qualifiedName.indexOf(":") + 1);
+  let property = propertyElement(description, DC_NS, localName);
+  if (!property && value === null) return;
+  if (!property) {
+    property = doc.createElementNS(DC_NS, qualifiedName);
+    description.append(property);
+  }
+  let alternative = Array.from(property.children).find(
+    (child) => child.namespaceURI === RDF_NS && child.localName === "Alt",
+  );
+  if (!alternative) {
+    property.replaceChildren();
+    alternative = doc.createElementNS(RDF_NS, "rdf:Alt");
+    property.append(alternative);
+  }
+  const existingDefault = Array.from(alternative.children).find(
+    (child) => child.namespaceURI === RDF_NS && child.localName === "li" && child.getAttribute("xml:lang") === "x-default",
+  );
+  if (value === null) {
+    existingDefault?.remove();
+    if (alternative.children.length === 0) property.remove();
+    return;
+  }
+  const item = existingDefault ?? doc.createElementNS(RDF_NS, "rdf:li");
+  item.setAttribute("xml:lang", "x-default");
+  item.textContent = value;
+  if (!existingDefault) alternative.prepend(item);
+}
+
+function attributeValue(description: Element, namespace: string, localName: string): string | null {
+  const attribute = description.getAttributeNS(namespace, localName)?.trim();
+  if (attribute) return attribute;
+  return propertyElement(description, namespace, localName)?.textContent?.trim() || null;
+}
+
+function removeProperty(description: Element, namespace: string, localName: string): void {
+  description.removeAttributeNS(namespace, localName);
+  description.removeAttribute(`${namespace === PHOTOSHOP_NS ? "photoshop" : "exif"}:${localName}`);
+  propertyElement(description, namespace, localName)?.remove();
+}
+
+function setAttributeProperty(description: Element, namespace: string, qualifiedName: string, value: string | null): void {
+  const localName = qualifiedName.slice(qualifiedName.indexOf(":") + 1);
+  removeProperty(description, namespace, localName);
+  if (value !== null) description.setAttributeNS(namespace, qualifiedName, value);
+}
+
+function numericText(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function parseMetadataXmp(xml: string): MetadataOverrides {
+  const description = descriptionFor(parseXmpDocument(xml));
+  const title = languageAlternative(description, DC_NS, "title");
+  const caption = languageAlternative(description, DC_NS, "description");
+  const copyright = languageAlternative(description, DC_NS, "rights");
+  const keywords = arrayProperty(description, DC_NS, "subject");
+  const capture = attributeValue(description, PHOTOSHOP_NS, "DateCreated");
+  const captureKey = capture === null ? null : Date.parse(capture);
+  const latitude = numericText(attributeValue(description, EXIF_NS, "GPSLatitude"));
+  const longitude = numericText(attributeValue(description, EXIF_NS, "GPSLongitude"));
+  return {
+    ...(title === null ? {} : { title: { kind: "set", value: title } }),
+    ...(caption === null ? {} : { caption: { kind: "set", value: caption } }),
+    ...(copyright === null ? {} : { copyright: { kind: "set", value: copyright } }),
+    ...(keywords.length === 0 ? {} : { keywords: { kind: "set", value: keywords } }),
+    ...(capture === null || captureKey === null || !Number.isFinite(captureKey)
+      ? {}
+      : { captureTime: { kind: "set", value: { value: capture.replace(/Z$/u, "").slice(0, 19), offset: capture.endsWith("Z") ? "Z" : null, sortKey: captureKey } } }),
+    ...(latitude === null ? {} : { latitude: { kind: "set", value: latitude } }),
+    ...(longitude === null ? {} : { longitude: { kind: "set", value: longitude } }),
+  };
+}
+
+export function serializeMetadataXmp(existingContents: string | null, overrides: MetadataOverrides): string {
+  const doc = existingContents ? parseXmpDocument(existingContents) : createXmpDocument();
+  const description = descriptionFor(doc);
+  description.setAttributeNS(XMLNS_NS, "xmlns:dc", DC_NS);
+  description.setAttributeNS(XMLNS_NS, "xmlns:photoshop", PHOTOSHOP_NS);
+  description.setAttributeNS(XMLNS_NS, "xmlns:exif", EXIF_NS);
+  if (overrides.title) setLanguageAlternative(doc, description, "dc:title", overrides.title.kind === "set" ? overrides.title.value : null);
+  if (overrides.caption) setLanguageAlternative(doc, description, "dc:description", overrides.caption.kind === "set" ? overrides.caption.value : null);
+  if (overrides.copyright) setLanguageAlternative(doc, description, "dc:rights", overrides.copyright.kind === "set" ? overrides.copyright.value : null);
+  if (overrides.keywords) setArrayProperty(doc, description, DC_NS, "dc:subject", overrides.keywords.kind === "set" ? overrides.keywords.value : []);
+  if (overrides.captureTime) {
+    setAttributeProperty(
+      description,
+      PHOTOSHOP_NS,
+      "photoshop:DateCreated",
+      overrides.captureTime.kind === "set"
+        ? `${overrides.captureTime.value.value}${overrides.captureTime.value.offset ?? ""}`
+        : null,
+    );
+  }
+  if (overrides.latitude) setAttributeProperty(description, EXIF_NS, "exif:GPSLatitude", overrides.latitude.kind === "set" ? String(overrides.latitude.value) : null);
+  if (overrides.longitude) setAttributeProperty(description, EXIF_NS, "exif:GPSLongitude", overrides.longitude.kind === "set" ? String(overrides.longitude.value) : null);
+  const serialized = new XMLSerializer().serializeToString(doc);
+  if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  return serialized;
+}
+
+const EDITABLE_FIELDS: readonly MetadataEditableField[] = [
+  "title", "caption", "copyright", "keywords", "captureTime", "latitude", "longitude",
+];
+
+function semantic(value: unknown, field: MetadataEditableField): string {
+  if (field === "keywords" && typeof value === "object" && value !== null && "kind" in value && value.kind === "set" && "value" in value && Array.isArray(value.value)) {
+    return JSON.stringify({ kind: "set", value: [...value.value].map(String).sort((left, right) => left.localeCompare(right)) });
+  }
+  return JSON.stringify(value ?? null);
+}
+
+export function reconcileMetadataXmp(
+  baseline: MetadataOverrides,
+  catalog: MetadataOverrides,
+  sidecar: MetadataOverrides,
+): { readonly merged: MetadataOverrides; readonly conflicts: readonly MetadataFieldConflict[] } {
+  const merged: Record<string, unknown> = {};
+  const conflicts: MetadataFieldConflict[] = [];
+  for (const field of EDITABLE_FIELDS) {
+    const baseValue = baseline[field];
+    const catalogValue = catalog[field];
+    const sidecarValue = sidecar[field];
+    const baseSemantic = semantic(baseValue, field);
+    const catalogSemantic = semantic(catalogValue, field);
+    const sidecarSemantic = semantic(sidecarValue, field);
+    if (catalogSemantic === sidecarSemantic || sidecarSemantic === baseSemantic) merged[field] = catalogValue;
+    else if (catalogSemantic === baseSemantic) merged[field] = sidecarValue;
+    else conflicts.push({ field, base: baseValue, catalog: catalogValue, sidecar: sidecarValue });
+  }
+  return { merged: parseMetadataOverrides(merged), conflicts };
 }
 
 export function parseKeywordXmp(xml: string): ParsedKeywordXmp {
@@ -224,6 +395,11 @@ export function serializeDevelopXmp(
     description.removeAttribute("xmp:Label");
   }
   description.setAttributeNS(DARKROOM_NS, "darkroom:MaskingData", maskingPayload(document));
+  description.setAttributeNS(
+    DARKROOM_NS,
+    `darkroom:${LIGHTROOM_MASK_MANIFEST_LOCAL_NAME}`,
+    utf8ToBase64(serializeLightroomMaskInterchangeManifest(document)),
+  );
   const serialized = new XMLSerializer().serializeToString(doc);
   if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
     throw new Error("XMP sidecar exceeds the 16 MiB size limit.");

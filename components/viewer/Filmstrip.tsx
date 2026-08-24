@@ -14,6 +14,8 @@ interface FilmstripProps {
   activeId: string;
   selectedIds: string[];
   onSelect: (id: string, modifiers: SelectEntryModifiers) => void;
+  referenceId?: string | null;
+  onSetReference?: (id: string) => void;
 }
 
 const THUMB_SIZE = 76;
@@ -24,6 +26,8 @@ export function Filmstrip({
   activeId,
   selectedIds,
   onSelect,
+  referenceId = null,
+  onSetReference,
 }: FilmstripProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
@@ -125,20 +129,10 @@ export function Filmstrip({
             }
 
             return (
-              <button
+              <div
                 key={entry.id}
-                type="button"
-                aria-current={entry.id === activeId ? "true" : undefined}
-                aria-pressed={selectedIds.includes(entry.id)}
-                aria-label={`Select ${entry.name}`}
-                onClick={(event) =>
-                  onSelect(entry.id, {
-                    shift: event.shiftKey,
-                    toggle: event.metaKey || event.ctrlKey,
-                  })
-                }
                 className={[
-                  "absolute top-0 shrink-0 overflow-hidden rounded-md",
+                  "group absolute top-0 shrink-0 overflow-hidden rounded-md",
                   entry.id === activeId
                     ? "ring-2 ring-inset ring-lr-accent"
                     : "",
@@ -149,16 +143,20 @@ export function Filmstrip({
                   transform: `translateX(${virtualItem.start}px)`,
                 }}
               >
-                <PhotoTile
-                  entry={entry}
-                  width={THUMB_SIZE}
-                  height={THUMB_SIZE}
-                  selected={selectedIds.includes(entry.id)}
-                  metadata={getEntryMetadata(entryMetadata, entry.id)}
-                  compact
-                  getScrollRoot={getScrollRoot}
-                />
-              </button>
+                <button
+                  type="button"
+                  aria-current={entry.id === activeId ? "true" : undefined}
+                  aria-pressed={selectedIds.includes(entry.id)}
+                  aria-label={`Select ${entry.name}`}
+                  onClick={(event) => onSelect(entry.id, { shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey })}
+                  className="block h-full w-full"
+                >
+                  <PhotoTile entry={entry} width={THUMB_SIZE} height={THUMB_SIZE} selected={selectedIds.includes(entry.id)} metadata={getEntryMetadata(entryMetadata, entry.id)} compact getScrollRoot={getScrollRoot} />
+                </button>
+                {onSetReference ? (
+                  <button type="button" onClick={() => onSetReference(entry.id)} aria-label={`Use ${entry.name} as reference`} title="Set as reference" className={`absolute bottom-1 right-1 z-40 rounded border px-1 py-0.5 font-mono text-[8px] ${referenceId === entry.id ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-white/15 bg-black/70 text-white/60 opacity-0 hover:text-white group-hover:opacity-100"}`}>REF</button>
+                ) : null}
+              </div>
             );
           })}
         </div>

@@ -20,6 +20,8 @@ import { COLOR_LABEL_HEX, getEntryMetadata } from "@/lib/catalog/defaults";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import { COLOR_LABELS } from "@/lib/catalog/types";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
+import { MetadataBatchDialog } from "@/components/library/MetadataBatchDialog";
+import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
 
 export default function HomePage() {
   const router = useRouter();
@@ -65,6 +67,7 @@ export default function HomePage() {
   } = viewSettings;
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
+  const [metadataEntryIds, setMetadataEntryIds] = useState<string[] | null>(null);
 
   const libraryResult = useLibraryResult();
   const visibleEntries = useMemo(() => {
@@ -102,7 +105,15 @@ export default function HomePage() {
     visibleOrder,
     selectedEntryId,
     selectedEntryIds,
-    onOpen: (id) => router.push(`/photo?id=${encodeURIComponent(id)}`),
+    onOpen: (id) => {
+      const session = createViewerSession({
+        queryRevision: libraryResult.revision,
+        orderedEntryIds: libraryResult.viewerEntryIds,
+        activeEntryId: id,
+        selectedEntryIds,
+      });
+      router.push(viewerPhotoHref(id, session.id));
+    },
     disabled: overlayOpen || actionOverlayOpen || exportEntryIds !== null,
     metadataShortcutsDisabled: catalogView.type === "archive",
   });
@@ -300,6 +311,7 @@ export default function HomePage() {
               onApply={applyMetadataToEntries}
               onAddToAlbum={openAlbumPicker}
               onRemove={openRemovePopup}
+              onEditMetadata={() => setMetadataEntryIds(selectedEntryIds)}
             />
           )}
         </div>
@@ -309,6 +321,9 @@ export default function HomePage() {
           entries={entries.filter((entry) => exportEntryIds.includes(entry.id))}
           onClose={() => setExportEntryIds(null)}
         />
+      ) : null}
+      {metadataEntryIds ? (
+        <MetadataBatchDialog entryIds={metadataEntryIds} onClose={() => setMetadataEntryIds(null)} />
       ) : null}
     </div>
   );
@@ -320,6 +335,7 @@ function LibraryCurationBar({
   onApply,
   onAddToAlbum,
   onRemove,
+  onEditMetadata,
 }: {
   selectedEntryIds: string[];
   entryMetadata: Record<string, EntryMetadata>;
@@ -329,6 +345,7 @@ function LibraryCurationBar({
   ) => void;
   onAddToAlbum: () => void;
   onRemove: () => void;
+  onEditMetadata: () => void;
 }) {
   const selectedMetadata = getEntryMetadata(
     entryMetadata,
@@ -418,6 +435,13 @@ function LibraryCurationBar({
             ))}
           </div>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={onEditMetadata}
+            className="h-8 shrink-0 rounded-lg border border-lr-border-subtle px-3 text-xs text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text"
+          >
+            Edit metadata…
+          </button>
           <button
             type="button"
             disabled={selectedEntryIds.length === 0}
