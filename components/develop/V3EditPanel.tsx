@@ -25,6 +25,13 @@ import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
+import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
+import type { V3CanvasDiagnostic } from "@/components/develop/V3DevelopCanvas";
+import {
+  V3AutoToneControl,
+  V3HistogramPanel,
+} from "@/components/develop/V3AnalysisControls";
+import { V3CleanupComponentEditor } from "@/components/develop/V3CleanupComponentEditor";
 import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
 import {
@@ -120,9 +127,13 @@ function saveLabel(input: {
 export function V3EditPanel({
   activePanel,
   batch,
+  analysis,
+  diagnostics,
 }: {
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly diagnostics: readonly V3CanvasDiagnostic[];
 }) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -198,12 +209,12 @@ export function V3EditPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {activeTab === "light" ? <LightTab document={document} /> : null}
+        {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
         {activeTab === "color" ? <ColorTab document={document} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
         {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
         {activeTab === "cleanup" ? <CleanupTab document={document} /> : null}
-        {activeTab === "output" ? <OutputTab document={document} /> : null}
+        {activeTab === "output" ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
       </div>
       </aside>
       {batchOpen ? (
@@ -223,7 +234,13 @@ export function V3EditPanel({
   );
 }
 
-function LightTab({ document }: { document: DevelopDocumentV3 }) {
+function LightTab({
+  document,
+  analysis,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+}) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
   const basic = document.tone.basic;
@@ -240,6 +257,9 @@ function LightTab({ document }: { document: DevelopDocumentV3 }) {
   return (
     <>
       <PanelSection title="Tone" onReset={() => reset("tone")}>
+        <div className="mb-3">
+          <V3AutoToneControl analysis={analysis} document={document} />
+        </div>
         <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} suffix=" EV" onChange={(value) => updateBasic("exposure", value)} />
         <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(value) => updateBasic("contrast", value)} />
         <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(value) => updateBasic("highlights", value)} />
@@ -748,7 +768,7 @@ function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("red-eye") }, "Add red eye")}>Add red eye</ActionButton>
       </div>
       <p className="mb-2 text-[10px] leading-4 text-lr-text-faint">
-        New components use valid normalized default geometry. Canvas placement and cleanup pixel callbacks are not connected yet.
+        New components use normalized defaults. Edit their source, target, and strength below; canvas placement is not available yet.
       </p>
       {message ? <p role="alert" className="mb-2 text-[10px] text-lr-danger">{message}</p> : null}
       {document.cleanup.components.length === 0 ? (
@@ -766,6 +786,14 @@ function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
                 <button type="button" disabled={index === document.cleanup.components.length - 1} aria-label={`Move ${cleanupLabel(component)} down`} onClick={() => commit({ kind: "move", componentId: component.id, targetIndex: index + 1 }, `Move ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-text disabled:opacity-25">↓</button>
                 <button type="button" aria-label={`Remove ${cleanupLabel(component)}`} onClick={() => commit({ kind: "delete", componentId: component.id }, `Remove ${cleanupLabel(component)}`)} className="px-1 text-[10px] text-lr-text-faint hover:text-lr-danger">Remove</button>
               </div>
+              <V3CleanupComponentEditor
+                component={component}
+                onReplace={(replacement) => commit({
+                  kind: "replace",
+                  componentId: component.id,
+                  component: replacement,
+                }, `Adjust ${cleanupLabel(component)}`)}
+              />
             </li>
           ))}
         </ol>
@@ -784,8 +812,21 @@ function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
   );
 }
 
-function OutputTab({ document }: { document: DevelopDocumentV3 }) {
-  const [showClipping, setShowClipping] = useState(false);
+function diagnosticMessage(diagnostic: V3CanvasDiagnostic): string {
+  return "reason" in diagnostic
+    ? diagnostic.reason
+    : diagnostic.kind.replaceAll("-", " ");
+}
+
+function OutputTab({
+  document,
+  analysis,
+  diagnostics,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly diagnostics: readonly V3CanvasDiagnostic[];
+}) {
   const depth = currentGeneratedJobCapability("depth");
   const lensState = document.lensBlur.kind === "enabled"
     ? `A depth reference is stored (${document.lensBlur.depthAsset.assetId}), but this build cannot generate or validate a live depth result.`
@@ -796,10 +837,16 @@ function OutputTab({ document }: { document: DevelopDocumentV3 }) {
   return (
     <>
       <PanelSection title="Histogram & headroom">
-        <ToggleRow label="Clipping overlay" checked={showClipping} detail="View only" onChange={setShowClipping} />
-        <StatusCard title="Analysis awaiting renderer">
-          Histogram, clipping samples, and scene headroom have no live data until the active v3 renderer publishes analysis. No values are estimated.
-        </StatusCard>
+        <V3HistogramPanel analysis={analysis} />
+        {diagnostics.length > 0 ? (
+          <StatusCard title="Preview notes" tone="warning">
+            <ul className="space-y-1">
+              {diagnostics.map((diagnostic, index) => (
+                <li key={`${diagnostic.kind}-${index}`}>{diagnosticMessage(diagnostic)}</li>
+              ))}
+            </ul>
+          </StatusCard>
+        ) : null}
       </PanelSection>
       <PanelSection title="Lens Blur">
         <ToggleRow label="Enable Lens Blur" checked={document.lensBlur.kind === "enabled"} disabled detail="Unavailable" onChange={() => undefined} />

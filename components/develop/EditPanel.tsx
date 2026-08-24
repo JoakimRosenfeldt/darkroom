@@ -10,6 +10,9 @@ import {
   SliderRow,
 } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
+import { V3UpgradeComparison } from "@/components/develop/V3UpgradeComparison";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import type { LibraryEntry } from "@/lib/fs/types";
 
 const MIXER_LABELS: Record<MixerColor, string> = {
   red: "Red",
@@ -61,10 +64,12 @@ const HUE_TRACKS: Record<MixerColor, string> = {
 };
 
 interface EditPanelProps {
+  entry: LibraryEntry;
+  image: DevelopImage;
   onResetAll: () => void;
 }
 
-export function EditPanel({ onResetAll }: EditPanelProps) {
+export function EditPanel({ entry, image, onResetAll }: EditPanelProps) {
   const [activeTab, setActiveTab] = useState<EditTab>("light");
   const [showUpgrade, setShowUpgrade] = useState(false);
   const sidecarError = useDevelopStore((state) => {
@@ -113,7 +118,11 @@ export function EditPanel({ onResetAll }: EditPanelProps) {
         </button>
       </div>
 
-      {showUpgrade ? <V3UpgradeComparisonBlocked /> : null}
+      {showUpgrade ? (
+        <div className="max-h-[65vh] overflow-auto border-b border-lr-border-subtle p-3">
+          <V3UpgradeComparison entry={entry} image={image} />
+        </div>
+      ) : null}
 
       <div
         className="flex gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
@@ -155,41 +164,6 @@ export function EditPanel({ onResetAll }: EditPanelProps) {
         {activeTab === "detail" ? <EffectsSection /> : null}
       </div>
     </aside>
-  );
-}
-
-function V3UpgradeComparisonBlocked() {
-  return (
-    <section className="border-b border-lr-border-subtle bg-lr-panel-raised/35 px-3 py-3">
-      <div className="flex items-center gap-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-          v2 → v3 comparison
-        </h3>
-        <span className="ml-auto rounded bg-[#3c2925] px-1.5 py-0.5 text-[9px] text-lr-danger">
-          Blocked
-        </span>
-      </div>
-      <p className="mt-1.5 text-[10px] leading-4 text-lr-text-faint">
-        Upgrade acceptance requires frozen v2 and candidate v3 fit renders for this exact document revision. The v3 comparison renderer is not connected, so no acceptance receipt can be created.
-      </p>
-      <div className="mt-2 grid grid-cols-2 gap-1.5" aria-label="Migration comparison status">
-        <div className="rounded-md border border-lr-border-subtle p-2">
-          <p className="text-[9px] font-semibold text-lr-text-muted">v2 · fit</p>
-          <p className="mt-1 text-[9px] leading-3 text-lr-text-faint">Not captured in comparison</p>
-        </div>
-        <div className="rounded-md border border-lr-border-subtle p-2">
-          <p className="text-[9px] font-semibold text-lr-text-muted">v3 · fit</p>
-          <p className="mt-1 text-[9px] leading-3 text-lr-text-faint">Renderer unavailable</p>
-        </div>
-      </div>
-      <button
-        type="button"
-        disabled
-        className="mt-2 w-full rounded-[7px] border border-lr-border-subtle px-2.5 py-1.5 text-[10px] text-lr-text-faint opacity-45"
-      >
-        Accept comparison and upgrade
-      </button>
-    </section>
   );
 }
 

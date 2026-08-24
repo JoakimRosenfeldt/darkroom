@@ -17,6 +17,8 @@ import {
 import { MetadataPanel } from "@/components/viewer/MetadataPanel";
 import type { CropSettings } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
+import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
+import type { V3CanvasDiagnostic } from "@/components/develop/V3DevelopCanvas";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -33,6 +35,8 @@ interface DevelopSidePanelsProps {
   resultEntryIds: readonly string[];
   missingEntryIds: readonly string[];
   resultEntries: readonly LibraryEntry[];
+  v3Analysis: readonly CpuAnalysisTapResult[];
+  v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
 }
 
 export function DevelopSidePanels({
@@ -50,6 +54,8 @@ export function DevelopSidePanels({
   resultEntryIds,
   missingEntryIds,
   resultEntries,
+  v3Analysis,
+  v3RenderDiagnostics,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -65,6 +71,8 @@ export function DevelopSidePanels({
     <V3EditPanel
       key={activePanel ?? "edit"}
       activePanel={activePanel}
+      analysis={v3Analysis}
+      diagnostics={v3RenderDiagnostics}
       batch={{
         sourceEntry: entry,
         entries: resultEntries,
@@ -97,7 +105,7 @@ export function DevelopSidePanels({
       onDone={() => onSelect("edit")}
     />
   ) : (
-    <EditPanel onResetAll={onResetAll} />
+    <EditPanel entry={entry} image={decoded} onResetAll={onResetAll} />
   );
 
   return (

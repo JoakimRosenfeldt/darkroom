@@ -203,8 +203,8 @@ export function PhotoViewer({
     density: 1,
   });
   const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
-  const [, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
-  const [, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
+  const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
+  const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [surfaceMode, setSurfaceMode] = useState<"single" | ViewerSurfaceMode>("single");
   const [linkedViewports, setLinkedViewports] = useState(true);
   const [referenceEntryId, setReferenceEntryId] = useState<string | null>(() => readReferenceEntryId(entry.catalogId));
@@ -562,12 +562,12 @@ export function PhotoViewer({
         return;
       }
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
-      if (plainKey && event.key.toLowerCase() === "y") {
+      if (developProcessKind === "v2" && plainKey && event.key.toLowerCase() === "y") {
         event.preventDefault();
         selectSurfaceMode(surfaceMode === "before-side" ? "single" : "before-side");
         return;
       }
-      if (plainKey && event.key.toLowerCase() === "r") {
+      if (developProcessKind === "v2" && plainKey && event.key.toLowerCase() === "r") {
         event.preventDefault();
         selectSurfaceMode(surfaceMode === "reference" ? "single" : "reference");
         return;
@@ -698,17 +698,17 @@ export function PhotoViewer({
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
-            {activePanel !== "crop" && activePanel !== "masking" ? (
+            {developProcessKind === "v2" && activePanel !== "crop" && activePanel !== "masking" ? (
               <div className="flex items-center gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
                 <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "before-side" ? "single" : "before-side")} aria-pressed={surfaceMode === "before-side"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "before-side" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>B/A · Y</button>
                 <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "before-split" ? "single" : "before-split")} aria-pressed={surfaceMode === "before-split"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "before-split" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>Split</button>
                 <button type="button" onClick={() => selectSurfaceMode(surfaceMode === "reference" ? "single" : "reference")} aria-pressed={surfaceMode === "reference"} className={`rounded-md px-2 py-1.5 text-[10px] ${surfaceMode === "reference" ? "bg-lr-selection text-lr-accent" : "text-lr-text-muted hover:text-lr-text"}`}>Reference · R</button>
               </div>
             ) : null}
-            {surfaceMode !== "single" ? (
+            {developProcessKind === "v2" && surfaceMode !== "single" ? (
               <button type="button" onClick={() => setLinkedViewports((value) => !value)} aria-pressed={linkedViewports} className={`h-8 rounded-md border px-2 text-[10px] ${linkedViewports ? "border-lr-accent/40 text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}>{linkedViewports ? "Linked" : "Independent"}</button>
             ) : null}
-            {surfaceMode === "reference" ? (
+            {developProcessKind === "v2" && surfaceMode === "reference" ? (
               <>
                 <button type="button" onClick={() => setReference(entry.id)} className="h-8 rounded-md border border-lr-border-subtle px-2 text-[10px] text-lr-text-muted">Set active as reference</button>
                 {referenceEntry ? <button type="button" onClick={() => { const previous = entry.id; selectPhoto(referenceEntry.id); setReference(previous); }} className="h-8 rounded-md border border-lr-border-subtle px-2 text-[10px] text-lr-text-muted">Make reference active</button> : null}
@@ -798,7 +798,7 @@ export function PhotoViewer({
               ? "p-[34px]"
               : developProcessKind === "v2" && activePanel === "masking"
                 ? "p-7"
-                : surfaceMode === "single" ? "p-8" : "p-0",
+                : developProcessKind === "v3" || surfaceMode === "single" ? "p-8" : "p-0",
           ].join(" ")}>
             {loading ? (
               <div className="flex h-full items-center justify-center text-xs uppercase tracking-wider text-lr-text-faint">
@@ -813,7 +813,7 @@ export function PhotoViewer({
             ) : null}
 
             {decoded ? (
-              surfaceMode === "single" ? developProcessKind === "v3" ? (
+              developProcessKind === "v3" ? (
                 <V3DevelopCanvas
                   entry={entry}
                   image={decoded}
@@ -821,7 +821,7 @@ export function PhotoViewer({
                   onRenderDiagnostics={setV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
                 />
-              ) : <DevelopCanvas
+              ) : surfaceMode === "single" ? <DevelopCanvas
                 image={decoded}
                 alt={entry.name}
                 sourceSignature={sourceSignature}
@@ -1001,6 +1001,8 @@ export function PhotoViewer({
               resultEntryIds={resultEntryIds}
               missingEntryIds={missingEntryIds}
               resultEntries={entries}
+              v3Analysis={v3Analysis}
+              v3RenderDiagnostics={v3RenderDiagnostics}
               activePanel={activePanel}
               cropDraft={cropDraft}
               onSelect={selectDevelopPanel}
