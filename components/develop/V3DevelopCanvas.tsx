@@ -9,12 +9,61 @@ import type {
   CpuBackendDiagnostic,
   CpuRenderResult,
 } from "@/lib/develop/v3/cpu-backend";
+import type { Sha256Digest } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 
 export type V3CanvasDiagnostic =
   | CpuBackendDiagnostic
   | CpuBackendBlockingDiagnostic;
+
+export interface V3AnalysisBinding {
+  readonly catalogId: string;
+  readonly entryId: string;
+  readonly assetRevision: number;
+  readonly documentRevision: number;
+  readonly planFingerprint: Sha256Digest;
+}
+
+const analysisBindings = new WeakMap<
+  readonly CpuAnalysisTapResult[],
+  V3AnalysisBinding
+>();
+const activeAnalysis = new Map<
+  string,
+  {
+    readonly analysis: readonly CpuAnalysisTapResult[];
+    readonly binding: V3AnalysisBinding;
+  }
+>();
+
+function analysisKey(catalogId: string, entryId: string): string {
+  return JSON.stringify([catalogId, entryId]);
+}
+
+function clearActiveAnalysis(catalogId: string, entryId: string): void {
+  activeAnalysis.delete(analysisKey(catalogId, entryId));
+}
+
+function bindActiveAnalysis(
+  analysis: readonly CpuAnalysisTapResult[],
+  binding: V3AnalysisBinding,
+): void {
+  analysisBindings.set(analysis, binding);
+  activeAnalysis.set(analysisKey(binding.catalogId, binding.entryId), {
+    analysis,
+    binding,
+  });
+}
+
+export function currentV3AnalysisBinding(
+  analysis: readonly CpuAnalysisTapResult[],
+): V3AnalysisBinding | null {
+  const binding = analysisBindings.get(analysis);
+  if (!binding) return null;
+  const current = activeAnalysis.get(analysisKey(binding.catalogId, binding.entryId));
+  return current?.analysis === analysis ? binding : null;
+}
 
 interface V3DevelopCanvasProps {
   readonly entry: LibraryEntry;
@@ -94,6 +143,8 @@ export function V3DevelopCanvas({
 
     const render = () => {
       if (activeCancellation) activeCancellation.cancelled = true;
+      clearActiveAnalysis(entry.catalogId, entry.id);
+      analysisCallbackRef.current?.([]);
       const cancellation = { cancelled: false };
       activeCancellation = cancellation;
       const requestId = ++requestRef.current;
@@ -105,6 +156,7 @@ export function V3DevelopCanvas({
         setPreview({ kind: "invalid", message: "Develop session is not ready." });
         return;
       }
+      const renderSnapshot = session.snapshot();
       void session.render({
         kind: "v3-preview",
         entry,
@@ -135,6 +187,19 @@ export function V3DevelopCanvas({
           }
           return;
         }
+        const currentSnapshot = session.snapshot();
+        if (
+          renderSnapshot.processKind !== "v3" ||
+          currentSnapshot.processKind !== "v3" ||
+          currentSnapshot.documentRevision !== renderSnapshot.documentRevision
+        ) {
+          analysisCallbackRef.current?.([]);
+          setPreview({
+            kind: "cancelled",
+            message: "The Develop document changed during this render.",
+          });
+          return;
+        }
         const dimensions = result.dimensions;
         canvas.width = dimensions.width;
         canvas.height = dimensions.height;
@@ -153,6 +218,13 @@ export function V3DevelopCanvas({
           height: Math.max(1, Math.round(dimensions.height * scale)),
         });
         diagnosticsCallbackRef.current?.(result.diagnostics);
+        bindActiveAnalysis(result.analysis, {
+          catalogId: entry.catalogId,
+          entryId: entry.id,
+          assetRevision: entry.assetRevision,
+          documentRevision: renderSnapshot.documentRevision,
+          planFingerprint: result.planFingerprint,
+        });
         analysisCallbackRef.current?.(result.analysis);
         setPreview({ kind: "rendered" });
       }).catch((error: unknown) => {
@@ -172,6 +244,7 @@ export function V3DevelopCanvas({
     return () => {
       disposed = true;
       if (activeCancellation) activeCancellation.cancelled = true;
+      clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
     };
   }, [documentRevision, entry, image]);

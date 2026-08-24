@@ -1,6 +1,8 @@
 "use client";
 
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
+import { currentV3AnalysisBinding } from "@/components/develop/V3DevelopCanvas";
+import { getDevelopSession } from "@/lib/develop/session";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -59,13 +61,48 @@ export function V3AutoToneControl({
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const activeCatalogId = useDevelopStore((state) => state.activeCatalogId);
+  const activeEntryId = useDevelopStore((state) => state.activeEntryId);
+  const activeSession = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId] : undefined;
+  });
   const tap = toneInputTap(analysis);
-  const proposal = tap?.state.kind === "ready" && tap.state.value.autoTone.kind === "proposal"
-    ? tap.state.value.autoTone
+  const binding = currentV3AnalysisBinding(analysis);
+  const analysisIsCurrent = Boolean(
+    binding &&
+    binding.catalogId === activeCatalogId &&
+    binding.entryId === activeEntryId &&
+    binding.documentRevision === activeSession?.documentRevision &&
+    activeSession.persistedDocument === document,
+  );
+  const currentTap = analysisIsCurrent ? tap : null;
+  const proposal = currentTap?.state.kind === "ready" &&
+    currentTap.state.value.autoTone.kind === "proposal"
+    ? currentTap.state.value.autoTone
     : null;
 
   const apply = () => {
     if (!proposal || disabled) return;
+    const currentBinding = currentV3AnalysisBinding(analysis);
+    const state = useDevelopStore.getState();
+    const currentEntryId = state.activeEntryId;
+    const storeSession = currentEntryId ? state.sessions[currentEntryId] : undefined;
+    const coreSession = state.activeCatalogId && currentEntryId
+      ? getDevelopSession(state.activeCatalogId, currentEntryId)
+      : null;
+    const coreSnapshot = coreSession?.snapshot() ?? null;
+    if (
+      !currentBinding ||
+      currentBinding.catalogId !== state.activeCatalogId ||
+      currentBinding.entryId !== currentEntryId ||
+      currentBinding.documentRevision !== storeSession?.documentRevision ||
+      currentBinding.documentRevision !== coreSnapshot?.documentRevision ||
+      coreSnapshot.processKind !== "v3" ||
+      storeSession?.persistedDocument !== document
+    ) {
+      return;
+    }
     const values = proposal.values;
     beginEditGroup("Auto Tone");
     try {
@@ -102,20 +139,20 @@ export function V3AutoToneControl({
 
   let status = "Tone analysis has not been requested.";
   let tone: "neutral" | "warning" | "danger" = "neutral";
-  if (tap?.state.kind === "loading") status = "Analyzing the full-frame tone input…";
-  if (tap?.state.kind === "unavailable") {
-    status = tap.state.reason;
+  if (currentTap?.state.kind === "loading") status = "Analyzing the full-frame tone input…";
+  if (currentTap?.state.kind === "unavailable") {
+    status = currentTap.state.reason;
     tone = "warning";
   }
-  if (tap?.state.kind === "error") {
-    status = tap.state.message;
+  if (currentTap?.state.kind === "error") {
+    status = currentTap.state.message;
     tone = "danger";
   }
-  if (tap?.state.kind === "ready") {
-    status = tap.state.value.autoTone.kind === "proposal"
+  if (currentTap?.state.kind === "ready") {
+    status = currentTap.state.value.autoTone.kind === "proposal"
       ? "A deterministic full-frame proposal is ready. It runs only when applied."
-      : noResultMessage(tap.state.value.autoTone.reason);
-    if (tap.state.value.autoTone.kind === "no-result") tone = "warning";
+      : noResultMessage(currentTap.state.value.autoTone.reason);
+    if (currentTap.state.value.autoTone.kind === "no-result") tone = "warning";
   }
 
   return (
