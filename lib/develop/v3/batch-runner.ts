@@ -487,6 +487,19 @@ async function copyCrop(input: {
   readonly target: Extract<BatchReconciledPhoto, { readonly kind: "v3" }>;
   readonly current: DevelopDocumentV3;
 }): Promise<GroupCopyResult> {
+  if (
+    input.source.document.local.geometryFrame !== input.current.local.geometryFrame
+    && input.current.local.masks.length > 0
+  ) {
+    return {
+      kind: "skipped",
+      skip: groupSkip(
+        "geometry-and-crop",
+        "source-specific-policy",
+        "Geometry cannot be copied across coordinate frames while the target has masks.",
+      ),
+    };
+  }
   const validation = await input.adapter.validate({
     kind: "crop",
     source: input.source,
@@ -549,6 +562,16 @@ function copyWhiteBalance(
 }
 
 function copyLocal(source: DevelopDocumentV3, current: DevelopDocumentV3): GroupCopyResult {
+  if (source.local.geometryFrame !== current.local.geometryFrame) {
+    return {
+      kind: "skipped",
+      skip: groupSkip(
+        "local-adjustments",
+        "source-specific-policy",
+        "Masks cannot be copied across coordinate frames.",
+      ),
+    };
+  }
   const portable = portableLocal(source);
   if (!portable.value) {
     return {
