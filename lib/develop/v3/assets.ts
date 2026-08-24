@@ -180,7 +180,9 @@ function parseDimensions(value: unknown): PixelDimensions {
   };
 }
 
-function parseSourceSignature(value: unknown): V3SourceSignature {
+export function parseDevelopAssetSourceSignature(
+  value: unknown,
+): V3SourceSignature {
   if (!isRecord(value)) {
     throw new Error("Develop asset source signature is invalid.");
   }
@@ -216,7 +218,7 @@ export function parseDevelopAssetDescriptor(value: unknown): DevelopAssetDescrip
   return {
     kind,
     sha256: parseSha256Digest(value.sha256),
-    sourceSignature: parseSourceSignature(value.sourceSignature),
+    sourceSignature: parseDevelopAssetSourceSignature(value.sourceSignature),
     coordinateFrameRevision: parseCoordinateFrameRevision(
       value.coordinateFrameRevision,
     ),

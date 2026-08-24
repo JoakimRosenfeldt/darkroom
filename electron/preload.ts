@@ -130,6 +130,24 @@ import {
   type ExactDuplicateTrashRequest,
   type ExactDuplicateTrashResult,
 } from "../lib/library/duplicate-actions.ts";
+import {
+  parseDevelopAssetGcRequest,
+  parseDevelopAssetGcResult,
+  parseDevelopAssetPutRequest,
+  parseDevelopAssetPutResult,
+  parseDevelopAssetReadRequest,
+  parseDevelopAssetReadResult,
+  parseDevelopAssetTransitionRequest,
+  parseDevelopAssetTransitionResult,
+  type DevelopAssetGcRequest,
+  type DevelopAssetGcResult,
+  type DevelopAssetPutRequest,
+  type DevelopAssetPutResult,
+  type DevelopAssetReadRequest,
+  type DevelopAssetReadResult,
+  type DevelopAssetTransitionRequest,
+  type DevelopAssetTransitionResult,
+} from "../lib/develop/v3/asset-store.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -323,6 +341,46 @@ const darkroom = {
 
   catalogReadAsset(request: CatalogAssetRequest): Promise<ArrayBuffer> {
     return ipcRenderer.invoke("darkroom:catalog-read-asset", parseCatalogAssetRequest(request));
+  },
+
+  async developAssetPut(
+    request: DevelopAssetPutRequest,
+  ): Promise<DevelopAssetPutResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-asset-put",
+      parseDevelopAssetPutRequest(request),
+    );
+    return parseDevelopAssetPutResult(result);
+  },
+
+  async developAssetTransition(
+    request: DevelopAssetTransitionRequest,
+  ): Promise<DevelopAssetTransitionResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-asset-transition",
+      parseDevelopAssetTransitionRequest(request),
+    );
+    return parseDevelopAssetTransitionResult(result);
+  },
+
+  async developAssetRead(
+    request: DevelopAssetReadRequest,
+  ): Promise<DevelopAssetReadResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-asset-read",
+      parseDevelopAssetReadRequest(request),
+    );
+    return parseDevelopAssetReadResult(result);
+  },
+
+  async developAssetCollectGarbage(
+    request: DevelopAssetGcRequest,
+  ): Promise<DevelopAssetGcResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-asset-gc",
+      parseDevelopAssetGcRequest(request),
+    );
+    return parseDevelopAssetGcResult(result);
   },
 
   catalogReadAssetHead(request: CatalogAssetHeadRequest): Promise<ArrayBuffer> {
