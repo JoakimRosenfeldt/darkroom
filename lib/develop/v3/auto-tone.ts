@@ -1,8 +1,8 @@
 export const MAX_AUTO_TONE_HISTOGRAM_BINS = 4_096;
 
-const TARGET_MEDIAN = 0.18;
-const TARGET_HIGHLIGHT = 0.72;
-const TARGET_WHITE = 0.95;
+const TARGET_MEDIAN = 0.21;
+const TARGET_HIGHLIGHT = 0.76;
+const TARGET_WHITE = 0.97;
 
 export interface ToneStatistics {
   readonly blackPoint: number;
@@ -141,7 +141,7 @@ export function proposeAutoTone(input: AutoToneInput): AutoToneProposal {
   );
   const upperExposure = Math.min(
     highlightExposure + 0.25,
-    whiteExposure + 0.15,
+    whiteExposure + 0.2,
   );
   const lowerExposure = Math.min(highlightExposure - 0.5, upperExposure);
   const exposure = clamp(
@@ -155,9 +155,12 @@ export function proposeAutoTone(input: AutoToneInput): AutoToneProposal {
   const adjustedBlack = statistics.blackPoint * exposureGain;
   const adjustedWhite = statistics.whitePoint * exposureGain;
   const contrast = clamp(
-    (0.55 - (statistics.highlightPoint - statistics.shadowPoint) * exposureGain) * 50,
-    0,
-    15,
+    4 + Math.max(
+      0,
+      (0.55 - (statistics.highlightPoint - statistics.shadowPoint) * exposureGain) * 50,
+    ),
+    4,
+    18,
   );
   const shadows = clamp(
     (0.035 - adjustedShadow) * 160 + statistics.clippedShadowFraction * 20,

@@ -215,6 +215,12 @@ export function DevelopCanvas({
       ? session.persistedDocument
       : null;
   });
+  const previewMode = useDevelopStore((state) => {
+    const session = state.activeCatalogId === entry.catalogId
+      ? state.sessions[entry.id]
+      : undefined;
+    return session?.transientEdit ? "interactive" : "settled";
+  });
   const maskTool = useDevelopStore((state) => {
     const session = state.activeCatalogId === entry.catalogId
       ? state.sessions[entry.id]
@@ -280,6 +286,7 @@ export function DevelopCanvas({
         image,
         viewportDimensions: { width, height },
         devicePixelRatio: window.devicePixelRatio || 1,
+        previewMode,
         cancellation: {
           isCancelled: () => disposed || cancellation.cancelled,
           reason: () => disposed || cancellation.cancelled
@@ -383,7 +390,7 @@ export function DevelopCanvas({
       clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
     };
-  }, [cropActive, document, documentRevision, entry, image]);
+  }, [cropActive, document, documentRevision, entry, image, previewMode]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -430,6 +437,7 @@ export function DevelopCanvas({
         image,
         viewportDimensions: { width, height },
         devicePixelRatio: window.devicePixelRatio || 1,
+        previewMode: "settled",
         cancellation,
       }).then((before) => {
         if (disposed || before.kind !== "rendered") return;
