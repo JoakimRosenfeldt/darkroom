@@ -361,7 +361,7 @@ export function PhotoViewer({
           setMaskTool("none");
           return;
         }
-        if (activePanel === "crop" || activePanel === "masking") {
+        if (activePanel === "crop" || activePanel === "masking" || activePanel === "cleanup") {
           event.preventDefault();
           closeEditingTools();
           return;
@@ -404,7 +404,7 @@ export function PhotoViewer({
             <span className="font-mono text-xs text-lr-text">{entry.name}</span>
             <span className={[
               "rounded-md px-1.5 py-0.5 font-mono text-[10px] text-lr-accent",
-              activePanel === "crop" || activePanel === "masking"
+              activePanel === "crop" || activePanel === "masking" || activePanel === "cleanup"
                 ? "bg-lr-selection"
                 : "border border-lr-border-subtle",
             ].join(" ")}>
@@ -412,6 +412,8 @@ export function PhotoViewer({
                 ? "CROP"
                 : activePanel === "masking"
                   ? "MASKING"
+                  : activePanel === "cleanup"
+                    ? "CLEANUP"
                   : fileType(entry.name)}
             </span>
             <span className="truncate font-mono text-[11px] text-lr-text-muted">
@@ -419,6 +421,8 @@ export function PhotoViewer({
                 ? "Adjust framing on the photo"
                 : activePanel === "masking"
                   ? `${headerMasks.length} ${headerMasks.length === 1 ? "mask" : "masks"}${headerSelectedMask ? ` · ${headerSelectedMask.name}` : ""}`
+                  : activePanel === "cleanup"
+                    ? "Remove spots and distractions"
                   : decoded
                     ? [`${decoded.width} × ${decoded.height}`, ...captureDetails].join(" · ")
                 : loading

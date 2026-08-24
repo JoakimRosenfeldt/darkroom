@@ -63,7 +63,6 @@ const TABS: readonly { readonly id: V3Tab; readonly label: string }[] = [
   { id: "light", label: "Light" },
   { id: "color", label: "Color" },
   { id: "detail", label: "Detail" },
-  { id: "cleanup", label: "Cleanup" },
   { id: "output", label: "Output" },
 ];
 
@@ -92,6 +91,7 @@ const HUE_TRACKS: Record<MixerColor, string> = {
 function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
   if (panel === "crop") return "geometry";
   if (panel === "masking") return "masking";
+  if (panel === "cleanup") return "cleanup";
   return null;
 }
 
@@ -172,6 +172,7 @@ export function EditPanel({
     metadataRevision: session.metadataRevision,
     persistedMetadataRevision: session.persistedMetadataRevision,
   });
+  const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
 
   return (
     <>
@@ -179,7 +180,7 @@ export function EditPanel({
       <div className="flex min-h-[58px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-            Develop
+            {panelTitle}
           </h2>
           <p className="mt-0.5 text-[10px] text-lr-text-faint">
             {status} · SDR · 8-bit output
@@ -195,9 +196,9 @@ export function EditPanel({
         <ActionButton onClick={resetAll}>Reset all</ActionButton>
       </div>
 
-      {activePanel !== "crop" && activePanel !== "masking" ? (
+      {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
-          className="grid grid-cols-3 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
+          className="grid grid-cols-4 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
           role="tablist"
           aria-label="Develop sections"
         >
@@ -281,7 +282,15 @@ function LightTab({
         <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(value) => updateBasic("shadows", value)} />
         <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={(value) => updateBasic("whites", value)} />
         <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(value) => updateBasic("blacks", value)} />
-        <SectionLabel>Point curve</SectionLabel>
+      </PanelSection>
+
+      <PanelSection title="Presence" onReset={() => reset("presence")}>
+        <SliderRow label="Texture" value={document.presence.texture} min={-100} max={100} onChange={(texture) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, texture } }, "Adjust texture")} />
+        <SliderRow label="Clarity" value={document.presence.clarity} min={-100} max={100} onChange={(clarity) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, clarity } }, "Adjust clarity")} />
+        <SliderRow label="Dehaze" value={document.presence.dehaze} min={-100} max={100} onChange={(dehaze) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, dehaze } }, "Adjust dehaze")} />
+      </PanelSection>
+
+      <PanelSection title="Tone curve">
         <ToneCurveEditor
           settings={document.tone.curves}
           onChange={(curves) => dispatch({
@@ -290,12 +299,6 @@ function LightTab({
             value: { ...document.tone, curves },
           }, "Adjust tone curve")}
         />
-      </PanelSection>
-
-      <PanelSection title="Presence" onReset={() => reset("presence")}>
-        <SliderRow label="Texture" value={document.presence.texture} min={-100} max={100} onChange={(texture) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, texture } }, "Adjust texture")} />
-        <SliderRow label="Clarity" value={document.presence.clarity} min={-100} max={100} onChange={(clarity) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, clarity } }, "Adjust clarity")} />
-        <SliderRow label="Dehaze" value={document.presence.dehaze} min={-100} max={100} onChange={(dehaze) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, dehaze } }, "Adjust dehaze")} />
       </PanelSection>
     </>
   );
