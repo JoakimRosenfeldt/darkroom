@@ -192,6 +192,11 @@ export interface CpuFrameIdentity {
   readonly quality: RenderQualityRequest;
 }
 
+export interface CpuPointColorInput {
+  readonly dimensions: PixelDimensions;
+  readonly pixels: Float32Array;
+}
+
 export type CpuRenderResult =
   | {
       readonly kind: "rendered";
@@ -199,6 +204,7 @@ export type CpuRenderResult =
       readonly frameIdentity: CpuFrameIdentity;
       readonly dimensions: PixelDimensions;
       readonly pixels: { readonly kind: "rgba8"; readonly pixels: Uint8Array };
+      readonly pointColorInput: CpuPointColorInput | null;
       readonly diagnostics: readonly CpuBackendDiagnostic[];
       readonly analysis: readonly CpuAnalysisTapResult[];
     }
@@ -1396,9 +1402,11 @@ function applyMixer(rgb: Rgb, document: DevelopDocumentV3): Rgb {
   });
 }
 
-function applyCurveAndColor(rgb: Rgb, document: DevelopDocumentV3): Rgb {
-  let result = applyCurves(rgb, document);
-  result = applyPointColor(result, document.color.pointColor);
+function applyColorAfterPointColorInput(
+  pointColorInput: Rgb,
+  document: DevelopDocumentV3,
+): Rgb {
+  let result = applyPointColor(pointColorInput, document.color.pointColor);
   result = applyMixer(result, document);
   result = applyMonochrome(
     result,
@@ -1411,6 +1419,7 @@ function applyCurveAndColor(rgb: Rgb, document: DevelopDocumentV3): Rgb {
 function applyPointwiseStages(
   input: CpuRenderInput,
   image: FloatRgbImage,
+  pointColorInputPixels: Float32Array | null,
 ): boolean {
   for (let y = 0; y < image.height; y += 1) {
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
@@ -1422,11 +1431,12 @@ function applyPointwiseStages(
         image.data[offset + 1] ?? 0,
         image.data[offset + 2] ?? 0,
       ];
-      writeRgb(
-        image.data,
-        pixel,
-        applyCurveAndColor(applyBasicTone(source, input.document), input.document),
+      const pointColorInput = applyCurves(
+        applyBasicTone(source, input.document),
+        input.document,
       );
+      if (pointColorInputPixels) writeRgb(pointColorInputPixels, pixel, pointColorInput);
+      writeRgb(image.data, pixel, applyColorAfterPointColorInput(pointColorInput, input.document));
     }
   }
   return true;
@@ -1658,6 +1668,7 @@ function encodeRgba8(
 interface ExecutedRegion {
   readonly scene: FloatRgbImage;
   readonly pixels: Uint8Array;
+  readonly pointColorInput: CpuPointColorInput | null;
 }
 
 function executeRegion(
@@ -1670,7 +1681,10 @@ function executeRegion(
   if (!geometry) return null;
   if (!applyManualCleanup(input, geometry, region, transfer)) return null;
   beforeTone?.(geometry.image);
-  if (!applyPointwiseStages(input, geometry.image)) return null;
+  const pointColorInputPixels = outputIsExport(
+    input.request.plan.qualityAndDimensions,
+  ) ? null : new Float32Array(region.width * region.height * 3);
+  if (!applyPointwiseStages(input, geometry.image, pointColorInputPixels)) return null;
   if (!applyManualLocalAdjustments(input, geometry, region)) return null;
   const presence = applyPresence(input, geometry.image);
   if (!presence) return null;
@@ -1678,7 +1692,16 @@ function executeRegion(
   if (!sharpened) return null;
   if (!applyPostCrop(input, sharpened, region)) return null;
   const pixels = encodeRgba8(input, sharpened, geometry.alpha);
-  return pixels ? { scene: sharpened, pixels } : null;
+  return pixels ? {
+    scene: sharpened,
+    pixels,
+    pointColorInput: pointColorInputPixels
+      ? {
+          dimensions: { width: region.width, height: region.height },
+          pixels: pointColorInputPixels,
+        }
+      : null,
+  } : null;
 }
 
 interface ToneAccumulator {
@@ -2011,6 +2034,7 @@ function requestedAnalysis(
 
 interface RenderedPixelsAndAnalysis {
   readonly pixels: Uint8Array;
+  readonly pointColorInput: CpuPointColorInput | null;
   readonly analysis: readonly CpuAnalysisTapResult[];
 }
 
@@ -2032,6 +2056,7 @@ function renderFullFrame(
   if (!executed) return null;
   return {
     pixels: executed.pixels,
+    pointColorInput: executed.pointColorInput,
     analysis: requestedAnalysis(input, toneInput, executed.scene, executed.pixels),
   };
 }
@@ -2098,7 +2123,7 @@ function renderTiledExport(
       }
     }
   }
-  return { pixels, analysis };
+  return { pixels, pointColorInput: null, analysis };
 }
 
 export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResult> {
@@ -2178,6 +2203,7 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
     },
     dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
     pixels: { kind: "rgba8", pixels: rendered.pixels },
+    pointColorInput: rendered.pointColorInput,
     diagnostics: preflightResult.notices,
     analysis: rendered.analysis,
   };

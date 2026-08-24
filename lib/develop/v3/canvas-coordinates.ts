@@ -6,14 +6,17 @@ import type {
 } from "../process";
 import type { DevelopDocumentV3 } from "./document";
 import {
-  mapCanonicalToOutput,
   mapCanonicalToStored,
-  mapOutputToCanonical,
+  mapOutputToStored,
+  mapStoredToOutput,
+  resolveConstrainedCrop,
   type CanonicalGeometry,
   type GeometryMapResult,
   type GeometryPoint,
 } from "./geometry";
 import {
+  invertDistortedUv,
+  mapDistortedUv,
   NEUTRAL_LENS_CALIBRATION,
   type LensCalibration,
 } from "./optics";
@@ -47,18 +50,19 @@ export function v3OrientedDimensions(source: SourceRecord): PixelDimensions {
     : source.dimensions;
 }
 
-export function createV3CanvasGeometry(
+function createV3CanvasUserGeometry(
   document: DevelopDocumentV3,
   source: SourceRecord,
 ): CanonicalGeometry {
+  const dimensions = v3OrientedDimensions(source);
   return {
-    sourceWidth: source.dimensions.width,
-    sourceHeight: source.dimensions.height,
-    exifOrientation: source.orientation,
+    sourceWidth: dimensions.width,
+    sourceHeight: dimensions.height,
+    exifOrientation: 1,
     optics: {
-      calibration: manualLensCalibration(document),
+      calibration: NEUTRAL_LENS_CALIBRATION,
       amounts: {
-        distortion: document.optics.manualDistortion === 0 ? 0 : 1,
+        distortion: 0,
         illumination: 0,
         lateralChromaticAberration: 0,
       },
@@ -76,7 +80,20 @@ export function mapV3CanvasOutputToCanonical(
   document: DevelopDocumentV3,
   source: SourceRecord,
 ): GeometryMapResult {
-  return mapOutputToCanonical(output, createV3CanvasGeometry(document, source));
+  const user = createV3CanvasUserGeometry(document, source);
+  const postOptics = mapOutputToStored(output, user, resolveConstrainedCrop(user));
+  if (postOptics.kind !== "mapped") return postOptics;
+  const calibration = manualLensCalibration(document);
+  const point = mapDistortedUv(
+    postOptics.point,
+    calibration.distortion,
+    document.optics.manualDistortion === 0 ? 0 : 1,
+  );
+  return {
+    kind: "mapped",
+    point,
+    insideDestination: point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1,
+  };
 }
 
 export function mapV3CanonicalToCanvasOutput(
@@ -84,7 +101,14 @@ export function mapV3CanonicalToCanvasOutput(
   document: DevelopDocumentV3,
   source: SourceRecord,
 ): GeometryMapResult {
-  return mapCanonicalToOutput(canonical, createV3CanvasGeometry(document, source));
+  const calibration = manualLensCalibration(document);
+  const postOptics = invertDistortedUv(
+    canonical,
+    calibration.distortion,
+    document.optics.manualDistortion === 0 ? 0 : 1,
+  );
+  const user = createV3CanvasUserGeometry(document, source);
+  return mapStoredToOutput(postOptics, user, resolveConstrainedCrop(user));
 }
 
 function sourceTransfer(source: SourceRecord): TransferFunction | null {

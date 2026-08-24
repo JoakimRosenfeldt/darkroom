@@ -18,6 +18,7 @@ import type {
   CpuAnalysisTapResult,
   CpuBackendBlockingDiagnostic,
   CpuBackendDiagnostic,
+  CpuPointColorInput,
   CpuRenderResult,
 } from "@/lib/develop/v3/cpu-backend";
 import type { Sha256Digest } from "@/lib/develop/render-contract";
@@ -126,6 +127,7 @@ export function V3DevelopCanvas({
 }: V3DevelopCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointColorInputRef = useRef<CpuPointColorInput | null>(null);
   const requestRef = useRef(0);
   const diagnosticsCallbackRef = useRef(onRenderDiagnostics);
   const analysisCallbackRef = useRef(onAnalysis);
@@ -168,6 +170,7 @@ export function V3DevelopCanvas({
 
     const render = () => {
       if (activeCancellation) activeCancellation.cancelled = true;
+      pointColorInputRef.current = null;
       clearActiveAnalysis(entry.catalogId, entry.id);
       analysisCallbackRef.current?.([]);
       const cancellation = { cancelled: false };
@@ -211,6 +214,7 @@ export function V3DevelopCanvas({
       void resultPromise.then((result) => {
         if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
         if (result.kind !== "rendered") {
+          pointColorInputRef.current = null;
           if (result.kind === "blocked") {
             diagnosticsCallbackRef.current?.(result.diagnostics);
             analysisCallbackRef.current?.([]);
@@ -240,6 +244,7 @@ export function V3DevelopCanvas({
           return;
         }
         const dimensions = result.dimensions;
+        pointColorInputRef.current = result.pointColorInput;
         canvas.width = dimensions.width;
         canvas.height = dimensions.height;
         context.putImageData(
@@ -285,20 +290,30 @@ export function V3DevelopCanvas({
     return () => {
       disposed = true;
       if (activeCancellation) activeCancellation.cancelled = true;
+      pointColorInputRef.current = null;
       clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
     };
   }, [cropActive, document, documentRevision, entry, image]);
 
   const sourceResult = buildV3SourceRecord(entry, image, "preview");
-  const sampleDisplayRgb = useCallback((output: GeometryPoint): Rgb | null => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context || canvas.width < 1 || canvas.height < 1) return null;
-    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(output.x * canvas.width)));
-    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((1 - output.y) * canvas.height)));
-    const pixel = context.getImageData(x, y, 1, 1).data;
-    return [pixel[0] / 255, pixel[1] / 255, pixel[2] / 255];
+  const samplePointColorInput = useCallback((output: GeometryPoint): Rgb | null => {
+    const input = pointColorInputRef.current;
+    if (!input || input.dimensions.width < 1 || input.dimensions.height < 1) return null;
+    const x = Math.max(0, Math.min(
+      input.dimensions.width - 1,
+      Math.floor(output.x * input.dimensions.width),
+    ));
+    const y = Math.max(0, Math.min(
+      input.dimensions.height - 1,
+      Math.floor((1 - output.y) * input.dimensions.height),
+    ));
+    const offset = (y * input.dimensions.width + x) * 3;
+    return [
+      input.pixels[offset] ?? 0,
+      input.pixels[offset + 1] ?? 0,
+      input.pixels[offset + 2] ?? 0,
+    ];
   }, []);
 
   return (
@@ -328,7 +343,7 @@ export function V3DevelopCanvas({
             maskingActive={maskingActive}
             canvasTool={canvasTool}
             onCanvasToolChange={onCanvasToolChange}
-            sampleDisplayRgb={sampleDisplayRgb}
+            samplePointColorInput={samplePointColorInput}
           />
         ) : null}
       </div>

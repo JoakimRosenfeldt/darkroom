@@ -7,7 +7,13 @@ import {
   resolveAspectRatio,
   type CropHandle,
 } from "@/lib/develop/crop-geometry";
-import { MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
+import {
+  MAX_BRUSH_POINTS,
+  MAX_BRUSH_STROKES,
+  MAX_COMPONENTS_PER_MASK,
+  MAX_MASKS,
+  MAX_POINTS_PER_STROKE,
+} from "@/lib/develop/document";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 import type {
   BrushStroke,
@@ -25,6 +31,7 @@ import {
   mapV3CanonicalToCanvasOutput,
   mapV3CanvasOutputToCanonical,
   sampleV3SourceLinear,
+  v3OrientedDimensions,
 } from "@/lib/develop/v3/canvas-coordinates";
 import type {
   DevelopDocumentV3,
@@ -57,7 +64,7 @@ interface V3CanvasOverlayProps {
   readonly maskingActive: boolean;
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
-  readonly sampleDisplayRgb: (output: GeometryPoint) => Rgb | null;
+  readonly samplePointColorInput: (output: GeometryPoint) => Rgb | null;
 }
 
 type MaskTarget =
@@ -76,6 +83,8 @@ type MaskGesture =
       baseStrokes: readonly BrushStroke[];
       points: NormalizedPoint[];
       lastOutput: GeometryPoint;
+      maximumPoints: number;
+      rejectedReason: string | null;
     }
   | {
       pointerId: number;
@@ -235,6 +244,20 @@ function ellipseContains(ellipse: CleanupEllipse, point: GeometryPoint): boolean
   return (localX / ellipse.radiusX) ** 2 + (localY / ellipse.radiusY) ** 2 <= 1;
 }
 
+function ellipseLocalDelta(
+  point: GeometryPoint,
+  center: GeometryPoint,
+  rotationDegrees: number,
+): GeometryPoint {
+  const angle = rotationDegrees * Math.PI / 180;
+  const deltaX = point.x - center.x;
+  const deltaY = point.y - center.y;
+  return {
+    x: Math.cos(angle) * deltaX + Math.sin(angle) * deltaY,
+    y: -Math.sin(angle) * deltaX + Math.cos(angle) * deltaY,
+  };
+}
+
 function toTopCrop(crop: PersistedCrop): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
   return { x: crop.x, y: 1 - crop.y - crop.height, width: crop.width, height: crop.height };
 }
@@ -253,13 +276,6 @@ function fromTopCrop(
   };
 }
 
-function srgbToLinear(value: number): number {
-  const bounded = clampUnit(value);
-  return bounded <= 0.04045
-    ? bounded / 12.92
-    : ((bounded + 0.055) / 1.055) ** 2.4;
-}
-
 export function V3CanvasOverlay({
   document,
   source,
@@ -270,7 +286,7 @@ export function V3CanvasOverlay({
   maskingActive,
   canvasTool,
   onCanvasToolChange,
-  sampleDisplayRgb,
+  samplePointColorInput,
 }: V3CanvasOverlayProps) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const sessionUi = useDevelopStore((state) => {
@@ -280,6 +296,10 @@ export function V3CanvasOverlay({
   const maskGestureRef = useRef<MaskGesture | null>(null);
   const cleanupGestureRef = useRef<CleanupGesture | null>(null);
   const cropGestureRef = useRef<CropGesture | null>(null);
+  const pointerCaptureRef = useRef<{
+    readonly pointerId: number;
+    readonly element: HTMLElement;
+  } | null>(null);
   const [maskPreview, setMaskPreview] = useState<ManualMaskComponent | null>(null);
   const [cleanupPreview, setCleanupPreview] = useState<CleanupComponent | null>(null);
   const [cropPreview, setCropPreview] = useState<PersistedCrop | null>(null);
@@ -296,14 +316,31 @@ export function V3CanvasOverlay({
 
   useEffect(() => {
     function cancelTool(event: KeyboardEvent): void {
-      if (event.key !== "Escape" || canvasTool.kind === "none") return;
+      const hasGesture = maskGestureRef.current !== null ||
+        cleanupGestureRef.current !== null || cropGestureRef.current !== null;
+      if (
+        event.key !== "Escape" ||
+        (!hasGesture && canvasTool.kind === "none" && maskTool === "none")
+      ) return;
       event.preventDefault();
-      onCanvasToolChange({ kind: "none" });
-      setStatus("Canvas tool cancelled.");
+      const capture = pointerCaptureRef.current;
+      if (capture?.element.hasPointerCapture(capture.pointerId)) {
+        capture.element.releasePointerCapture(capture.pointerId);
+      }
+      pointerCaptureRef.current = null;
+      maskGestureRef.current = null;
+      cleanupGestureRef.current = null;
+      cropGestureRef.current = null;
+      setMaskPreview(null);
+      setCleanupPreview(null);
+      setCropPreview(null);
+      if (canvasTool.kind !== "none") onCanvasToolChange({ kind: "none" });
+      if (maskTool !== "none") useDevelopStore.getState().setMaskTool("none");
+      setStatus(hasGesture ? "Canvas gesture cancelled." : "Canvas tool cancelled.");
     }
-    window.addEventListener("keydown", cancelTool);
-    return () => window.removeEventListener("keydown", cancelTool);
-  }, [canvasTool.kind, onCanvasToolChange]);
+    window.addEventListener("keydown", cancelTool, true);
+    return () => window.removeEventListener("keydown", cancelTool, true);
+  }, [canvasTool.kind, maskTool, onCanvasToolChange]);
 
   function outputFromEvent(event: ReactPointerEvent<HTMLDivElement>): GeometryPoint {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -326,6 +363,7 @@ export function V3CanvasOverlay({
   function maskGestureComponent(gesture: MaskGesture): ManualMaskComponent | null {
     switch (gesture.kind) {
       case "brush": {
+        if (gesture.rejectedReason) return null;
         const points = nonEmpty(gesture.points);
         if (!points) return null;
         const strokes = nonEmpty([
@@ -346,16 +384,21 @@ export function V3CanvasOverlay({
           : { ...gesture.component, end: gesture.point };
       case "radial-gradient": {
         if (gesture.handle === "center") return { ...gesture.component, center: gesture.point };
+        const local = ellipseLocalDelta(
+          gesture.point,
+          gesture.component.center,
+          gesture.component.rotation,
+        );
         if (gesture.handle === "radius-x") {
-          return { ...gesture.component, radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.component.center.x)) };
+          return { ...gesture.component, radiusX: Math.max(0.005, Math.abs(local.x)) };
         }
         if (gesture.handle === "radius-y") {
-          return { ...gesture.component, radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.component.center.y)) };
+          return { ...gesture.component, radiusY: Math.max(0.005, Math.abs(local.y)) };
         }
         return {
           ...gesture.component,
-          radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.component.center.x)),
-          radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.component.center.y)),
+          radiusX: Math.max(0.005, Math.abs(local.x)),
+          radiusY: Math.max(0.005, Math.abs(local.y)),
         };
       }
       default: {
@@ -416,7 +459,24 @@ export function V3CanvasOverlay({
     }
     const component = existing ?? componentWithOperation(maskTool, crypto.randomUUID(), point);
     switch (component.kind) {
-      case "brush":
+      case "brush": {
+        let strokeCount = 0;
+        let pointCount = 0;
+        for (const mask of document.local.masks) {
+          for (const item of mask.components) {
+            if (item.kind !== "brush") continue;
+            strokeCount += item.strokes.length;
+            for (const stroke of item.strokes) pointCount += stroke.points.length;
+          }
+        }
+        if (strokeCount >= MAX_BRUSH_STROKES) {
+          setStatus(`Brush masks cannot exceed ${MAX_BRUSH_STROKES} strokes.`);
+          return true;
+        }
+        if (pointCount >= MAX_BRUSH_POINTS) {
+          setStatus(`Brush masks cannot exceed ${MAX_BRUSH_POINTS} points.`);
+          return true;
+        }
         maskGestureRef.current = {
           pointerId: event.pointerId,
           kind: "brush",
@@ -425,8 +485,11 @@ export function V3CanvasOverlay({
           baseStrokes: existing?.kind === "brush" ? existing.strokes : [],
           points: [point],
           lastOutput: output,
+          maximumPoints: Math.min(MAX_POINTS_PER_STROKE, MAX_BRUSH_POINTS - pointCount),
+          rejectedReason: null,
         };
         break;
+      }
       case "linear-gradient": {
         const startOutput = outputFromCanonical(component.start);
         const handle = existing?.kind === "linear-gradient" &&
@@ -448,8 +511,15 @@ export function V3CanvasOverlay({
       }
       case "radial-gradient": {
         const centerOutput = outputFromCanonical(component.center);
-        const radiusXOutput = outputFromCanonical({ x: component.center.x + component.radiusX, y: component.center.y });
-        const radiusYOutput = outputFromCanonical({ x: component.center.x, y: component.center.y + component.radiusY });
+        const angle = component.rotation * Math.PI / 180;
+        const radiusXOutput = outputFromCanonical({
+          x: component.center.x + Math.cos(angle) * component.radiusX,
+          y: component.center.y + Math.sin(angle) * component.radiusX,
+        });
+        const radiusYOutput = outputFromCanonical({
+          x: component.center.x - Math.sin(angle) * component.radiusY,
+          y: component.center.y + Math.cos(angle) * component.radiusY,
+        });
         const handle = existing?.kind !== "radial-gradient"
           ? "create"
           : centerOutput && distancePixels(centerOutput, output, width, height) <= 18
@@ -475,6 +545,10 @@ export function V3CanvasOverlay({
       }
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    pointerCaptureRef.current = {
+      pointerId: event.pointerId,
+      element: event.currentTarget,
+    };
     const gesture = maskGestureRef.current;
     setMaskPreview(gesture ? maskGestureComponent(gesture) : null);
     return true;
@@ -483,6 +557,11 @@ export function V3CanvasOverlay({
   function cleanupGestureComponent(gesture: CleanupGesture): CleanupComponent {
     const base = ellipseForComponent(gesture.component, gesture.region);
     if (!base) return gesture.component;
+    const local = ellipseLocalDelta(
+      gesture.point,
+      gesture.start,
+      base.rotationDegrees,
+    );
     const ellipse = gesture.mode === "move"
       ? {
           ...base,
@@ -494,8 +573,8 @@ export function V3CanvasOverlay({
       : {
           ...base,
           center: gesture.start,
-          radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.start.x)),
-          radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.start.y)),
+          radiusX: Math.max(0.005, Math.abs(local.x)),
+          radiusY: Math.max(0.005, Math.abs(local.y)),
         };
     return replaceCleanupEllipse(gesture.component, gesture.region, ellipse);
   }
@@ -526,6 +605,10 @@ export function V3CanvasOverlay({
       point,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
+    pointerCaptureRef.current = {
+      pointerId: event.pointerId,
+      element: event.currentTarget,
+    };
     setCleanupPreview(cleanupGestureComponent(cleanupGestureRef.current));
     return true;
   }
@@ -569,16 +652,12 @@ export function V3CanvasOverlay({
         setStatus("Point Color already has eight samples.");
         return true;
       }
-      const display = sampleDisplayRgb(output);
-      if (!display) {
-        setStatus("The displayed pixel could not be sampled.");
+      const pointColorInput = samplePointColorInput(output);
+      if (!pointColorInput) {
+        setStatus("The Point Color input pixel could not be sampled.");
         return true;
       }
-      const color = rgbToHsl([
-        srgbToLinear(display[0]),
-        srgbToLinear(display[1]),
-        srgbToLinear(display[2]),
-      ]);
+      const color = rgbToHsl(pointColorInput);
       dispatch({
         kind: "replace-v3-semantic-group",
         group: "color",
@@ -602,7 +681,7 @@ export function V3CanvasOverlay({
           },
         },
       }, "Sample Point Color");
-      setStatus("Point Color sample added from the displayed SDR pixel.");
+      setStatus("Point Color sample added from its linear input stage.");
       onCanvasToolChange({ kind: "none" });
       return true;
     }
@@ -636,6 +715,14 @@ export function V3CanvasOverlay({
     if (maskGesture?.pointerId === event.pointerId) {
       if (maskGesture.kind === "brush") {
         if (distancePixels(maskGesture.lastOutput, output, width, height) >= 2) {
+          if (maskGesture.points.length >= maskGesture.maximumPoints) {
+            maskGesture.rejectedReason = maskGesture.maximumPoints === MAX_POINTS_PER_STROKE
+              ? `A brush stroke cannot exceed ${MAX_POINTS_PER_STROKE} points.`
+              : `Brush masks cannot exceed ${MAX_BRUSH_POINTS} points.`;
+            setMaskPreview(null);
+            setStatus(maskGesture.rejectedReason);
+            return;
+          }
           maskGesture.points.push(point);
           maskGesture.lastOutput = output;
         }
@@ -660,8 +747,13 @@ export function V3CanvasOverlay({
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
       maskGestureRef.current = null;
+      pointerCaptureRef.current = null;
       setMaskPreview(null);
-      if (commit && component) commitMask(maskGesture.target, component);
+      if (commit && component) {
+        commitMask(maskGesture.target, component);
+      } else if (commit && maskGesture.kind === "brush" && maskGesture.rejectedReason) {
+        setStatus(maskGesture.rejectedReason);
+      }
       return;
     }
     const cleanupGesture = cleanupGestureRef.current;
@@ -671,6 +763,7 @@ export function V3CanvasOverlay({
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
       cleanupGestureRef.current = null;
+      pointerCaptureRef.current = null;
       setCleanupPreview(null);
       if (commit) {
         const result = applyCleanupCommand(document.cleanup, {
@@ -692,6 +785,10 @@ export function V3CanvasOverlay({
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    pointerCaptureRef.current = {
+      pointerId: event.pointerId,
+      element: event.currentTarget,
+    };
     cropGestureRef.current = {
       pointerId: event.pointerId,
       handle,
@@ -727,6 +824,7 @@ export function V3CanvasOverlay({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     cropGestureRef.current = null;
+    pointerCaptureRef.current = null;
     if (commit) {
       dispatch({ kind: "commit-v3-crop-draft", crop: cropDraft }, "Adjust crop");
       setCropPreview(null);
@@ -748,6 +846,67 @@ export function V3CanvasOverlay({
 
   function ellipsePath(ellipse: CleanupEllipse): string | null {
     return svgPath(Array.from({ length: 49 }, (_, index) => ellipsePoint(ellipse, index / 48 * Math.PI * 2)));
+  }
+
+  function closedSvgPath(points: readonly GeometryPoint[]): string | null {
+    const mapped: string[] = [];
+    for (const point of points) {
+      const output = outputFromCanonical(point);
+      if (!output) return null;
+      mapped.push(`${output.x * width},${(1 - output.y) * height}`);
+    }
+    return mapped.length >= 3 ? `M ${mapped.join(" L ")} Z` : null;
+  }
+
+  function brushGuidePath(stroke: BrushStroke): string | null {
+    const dimensions = v3OrientedDimensions(source);
+    const pixelWidth = Math.max(1, dimensions.width - 1);
+    const pixelHeight = Math.max(1, dimensions.height - 1);
+    const radius = Math.max(
+      0.5,
+      stroke.size * Math.max(dimensions.width, dimensions.height) * 0.5,
+    );
+    const paths: string[] = [];
+    const circle = (point: GeometryPoint): string | null => closedSvgPath(
+      Array.from({ length: 32 }, (_, index) => {
+        const angle = index / 32 * Math.PI * 2;
+        return {
+          x: point.x + Math.cos(angle) * radius / pixelWidth,
+          y: point.y + Math.sin(angle) * radius / pixelHeight,
+        };
+      }),
+    );
+    for (let index = 0; index < stroke.points.length; index += 1) {
+      const current = stroke.points[index];
+      if (!current) continue;
+      const cap = circle(current);
+      if (cap) paths.push(cap);
+      const next = stroke.points[index + 1];
+      if (!next) continue;
+      const startX = current.x * pixelWidth;
+      const startY = current.y * pixelHeight;
+      const endX = next.x * pixelWidth;
+      const endY = next.y * pixelHeight;
+      const deltaX = endX - startX;
+      const deltaY = endY - startY;
+      const length = Math.hypot(deltaX, deltaY);
+      if (length <= Number.EPSILON) continue;
+      const normalX = -deltaY / length * radius;
+      const normalY = deltaX / length * radius;
+      const steps = Math.min(32, Math.max(1, Math.ceil(length / 16)));
+      const left: GeometryPoint[] = [];
+      const right: GeometryPoint[] = [];
+      for (let step = 0; step <= steps; step += 1) {
+        const amount = step / steps;
+        const x = startX + deltaX * amount;
+        const y = startY + deltaY * amount;
+        left.push({ x: (x + normalX) / pixelWidth, y: (y + normalY) / pixelHeight });
+        right.push({ x: (x - normalX) / pixelWidth, y: (y - normalY) / pixelHeight });
+      }
+      const segment = closedSvgPath([...left, ...right.reverse()]);
+      if (segment) paths.push(segment);
+    }
+    return paths.length > 0 ? paths.join(" ") : null;
   }
 
   const guideComponent = maskPreview ?? (selectedComponent?.kind === "ai" ? null : selectedComponent);
@@ -802,16 +961,12 @@ export function V3CanvasOverlay({
       {maskingActive && overlayVisible && guideComponent ? (
         <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
           {guideComponent.kind === "brush" ? guideComponent.strokes.map((stroke, index) => {
-            const points = svgPath(stroke.points);
-            return points ? (
-              <polyline
+            const path = brushGuidePath(stroke);
+            return path ? (
+              <path
                 key={index}
-                points={points}
-                fill="none"
-                stroke={guideComponent.operation === "add" ? "#70d7ff" : "#ff857d"}
-                strokeWidth={Math.max(2, stroke.size * Math.max(width, height))}
-                strokeLinecap="round"
-                strokeLinejoin="round"
+                d={path}
+                fill={guideComponent.operation === "add" ? "#70d7ff" : "#ff857d"}
                 opacity={0.35 + stroke.flow * 0.45}
               />
             ) : null;
@@ -856,7 +1011,11 @@ export function V3CanvasOverlay({
       ) : null}
 
       {canvasTool.kind !== "none" || status ? (
-        <div className="pointer-events-auto absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border border-white/15 bg-[#11191f]/95 px-3 py-2 text-[11px] text-white shadow-xl">
+        <div
+          className="pointer-events-auto absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border border-white/15 bg-[#11191f]/95 px-3 py-2 text-[11px] text-white shadow-xl"
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerUp={(event) => event.stopPropagation()}
+        >
           <span>{status ?? (canvasTool.kind === "white-balance" ? "Click a neutral source area" : canvasTool.kind === "point-color" ? "Click a color to sample" : "Drag to place; drag the center to move")}</span>
           {canvasTool.kind !== "none" ? (
             <button type="button" onClick={() => onCanvasToolChange({ kind: "none" })} className="text-white/65 hover:text-white">Cancel</button>

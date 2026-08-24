@@ -846,7 +846,9 @@ export function PhotoViewer({
                   onRenderDiagnostics={setV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
                   cropActive={activePanel === "crop"}
-                  maskingActive={activePanel === "masking"}
+                  maskingActive={
+                    activePanel === "masking" || (maskUi?.tool ?? "none") !== "none"
+                  }
                   canvasTool={v3CanvasTool}
                   onCanvasToolChange={setV3CanvasTool}
                 />
