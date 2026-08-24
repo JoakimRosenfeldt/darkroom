@@ -367,6 +367,43 @@ export function mapOutputToStored(
   return mapOutputToStoredWithCrop(output, geometry, cropRect(effectiveCrop));
 }
 
+export function mapStoredToCanonical(
+  stored: GeometryPoint,
+  orientation: ExifOrientation,
+): GeometryPoint {
+  return storedToExifOriented(stored, orientation);
+}
+
+export function mapCanonicalToStored(
+  canonical: GeometryPoint,
+  orientation: ExifOrientation,
+): GeometryPoint {
+  return exifOrientedToStored(canonical, orientation);
+}
+
+export function mapOutputToCanonical(
+  output: GeometryPoint,
+  geometry: CanonicalGeometry,
+  effectiveCrop = resolveConstrainedCrop(geometry),
+): GeometryMapResult {
+  const result = mapOutputToStored(output, geometry, effectiveCrop);
+  return result.kind === "mapped"
+    ? mapped(mapStoredToCanonical(result.point, geometry.exifOrientation))
+    : result;
+}
+
+export function mapCanonicalToOutput(
+  canonical: GeometryPoint,
+  geometry: CanonicalGeometry,
+  effectiveCrop = resolveConstrainedCrop(geometry),
+): GeometryMapResult {
+  return mapStoredToOutput(
+    mapCanonicalToStored(canonical, geometry.exifOrientation),
+    geometry,
+    effectiveCrop,
+  );
+}
+
 export function mapStoredToOutput(
   stored: GeometryPoint,
   geometry: CanonicalGeometry,

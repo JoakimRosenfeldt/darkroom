@@ -49,6 +49,7 @@ import {
   applyRedEye,
   manualMaskCoverage,
   mapRepairSourcePoint,
+  pointInLocalGeometryFrame,
   repairCoverage,
 } from "./manual-edits";
 import { applyMonochrome, NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
@@ -1250,7 +1251,11 @@ function applyManualLocalAdjustments(
       if (!mapped) continue;
       let result = readRgb(geometry.image, pixel);
       for (const mask of masks) {
-        const coverage = manualMaskCoverage(mask, mapped.canonical, dimensions);
+        const coverage = manualMaskCoverage(
+          mask,
+          pointInLocalGeometryFrame(input.document.local.geometryFrame, mapped.canonical),
+          dimensions,
+        );
         if (coverage <= 0) continue;
         result = blendRgb(
           result,

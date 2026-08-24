@@ -1,0 +1,868 @@
+"use client";
+
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import {
+  applyCropDrag,
+  resolveAspectRatio,
+  type CropHandle,
+} from "@/lib/develop/crop-geometry";
+import { MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
+import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import type {
+  BrushStroke,
+  LocalMask,
+  MaskComponent,
+  NonEmpty,
+  NormalizedPoint,
+} from "@/lib/develop/types";
+import {
+  applyCleanupCommand,
+  type CleanupComponent,
+  type CleanupEllipse,
+} from "@/lib/develop/v3/cleanup";
+import {
+  mapV3CanonicalToCanvasOutput,
+  mapV3CanvasOutputToCanonical,
+  sampleV3SourceLinear,
+} from "@/lib/develop/v3/canvas-coordinates";
+import type {
+  DevelopDocumentV3,
+  PersistedCrop,
+} from "@/lib/develop/v3/document";
+import type { GeometryPoint } from "@/lib/develop/v3/geometry";
+import { rgbToHsl } from "@/lib/develop/v3/point-color";
+import type { Rgb } from "@/lib/develop/v3/profiles";
+import type { SourceRecord } from "@/lib/develop/process";
+import { proposeSampledWhiteBalance } from "@/lib/develop/v3/white-balance";
+import { useDevelopStore } from "@/stores/develop-store";
+
+export type V3CanvasTool =
+  | { readonly kind: "none" }
+  | { readonly kind: "white-balance" }
+  | { readonly kind: "point-color" }
+  | {
+      readonly kind: "cleanup";
+      readonly componentId: string;
+      readonly region: "target" | "source";
+    };
+
+interface V3CanvasOverlayProps {
+  readonly document: DevelopDocumentV3;
+  readonly source: SourceRecord;
+  readonly image: DevelopImage;
+  readonly width: number;
+  readonly height: number;
+  readonly cropActive: boolean;
+  readonly maskingActive: boolean;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+  readonly sampleDisplayRgb: (output: GeometryPoint) => Rgb | null;
+}
+
+type MaskTarget =
+  | { readonly kind: "replace"; readonly maskId: string }
+  | { readonly kind: "insert"; readonly maskId: string }
+  | { readonly kind: "new-mask"; readonly maskId: string; readonly name: string };
+
+type ManualMaskComponent = Exclude<MaskComponent, { readonly kind: "ai" }>;
+
+type MaskGesture =
+  | {
+      pointerId: number;
+      kind: "brush";
+      target: MaskTarget;
+      component: Extract<ManualMaskComponent, { readonly kind: "brush" }>;
+      baseStrokes: readonly BrushStroke[];
+      points: NormalizedPoint[];
+      lastOutput: GeometryPoint;
+    }
+  | {
+      pointerId: number;
+      kind: "linear-gradient";
+      target: MaskTarget;
+      component: Extract<ManualMaskComponent, { readonly kind: "linear-gradient" }>;
+      handle: "start" | "end";
+      point: NormalizedPoint;
+    }
+  | {
+      pointerId: number;
+      kind: "radial-gradient";
+      target: MaskTarget;
+      component: Extract<ManualMaskComponent, { readonly kind: "radial-gradient" }>;
+      handle: "center" | "radius-x" | "radius-y" | "create";
+      point: NormalizedPoint;
+    };
+
+interface CleanupGesture {
+  pointerId: number;
+  component: CleanupComponent;
+  region: "target" | "source";
+  mode: "move" | "draw";
+  start: GeometryPoint;
+  point: GeometryPoint;
+}
+
+interface CropGesture {
+  readonly pointerId: number;
+  readonly handle: CropHandle;
+  readonly startClient: GeometryPoint;
+  readonly startTopRect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+}
+
+const CROP_HANDLES: readonly { readonly handle: CropHandle; readonly className: string }[] = [
+  { handle: "nw", className: "-left-1 -top-1 cursor-nwse-resize" },
+  { handle: "n", className: "left-1/2 -top-1 -translate-x-1/2 cursor-ns-resize" },
+  { handle: "ne", className: "-right-1 -top-1 cursor-nesw-resize" },
+  { handle: "e", className: "-right-1 top-1/2 -translate-y-1/2 cursor-ew-resize" },
+  { handle: "se", className: "-bottom-1 -right-1 cursor-nwse-resize" },
+  { handle: "s", className: "-bottom-1 left-1/2 -translate-x-1/2 cursor-ns-resize" },
+  { handle: "sw", className: "-bottom-1 -left-1 cursor-nesw-resize" },
+  { handle: "w", className: "-left-1 top-1/2 -translate-y-1/2 cursor-ew-resize" },
+];
+
+function clampUnit(value: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+function nonEmpty<T>(items: readonly T[]): NonEmpty<T> | null {
+  const first = items[0];
+  return first === undefined ? null : [first, ...items.slice(1)];
+}
+
+function distancePixels(
+  left: GeometryPoint,
+  right: GeometryPoint,
+  width: number,
+  height: number,
+): number {
+  return Math.hypot((left.x - right.x) * width, (left.y - right.y) * height);
+}
+
+function nextMaskName(masks: readonly LocalMask[]): string {
+  const names = new Set(masks.map((mask) => mask.name));
+  let index = 1;
+  while (names.has(`Mask ${index}`)) index += 1;
+  return `Mask ${index}`;
+}
+
+function componentWithOperation(
+  kind: "brush" | "linear-gradient" | "radial-gradient",
+  id: string,
+  point: GeometryPoint,
+): ManualMaskComponent {
+  switch (kind) {
+    case "brush": {
+      const settings = { size: 0.08, feather: 0.5, flow: 1, density: 1 };
+      return {
+        kind,
+        id,
+        operation: "add",
+        strokes: [{ points: [point], ...settings }],
+        ...settings,
+      };
+    }
+    case "linear-gradient":
+      return { kind, id, operation: "add", start: point, end: point };
+    case "radial-gradient":
+      return {
+        kind,
+        id,
+        operation: "add",
+        center: point,
+        radiusX: 0.01,
+        radiusY: 0.01,
+        rotation: 0,
+        feather: 0.5,
+      };
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+function createMask(id: string, name: string, component: MaskComponent): LocalMask {
+  return {
+    id,
+    name,
+    enabled: true,
+    inverted: false,
+    components: [component],
+    adjustments: structuredClone(DEFAULT_DEVELOP_SETTINGS.basic),
+  };
+}
+
+function ellipseForComponent(
+  component: CleanupComponent,
+  region: "target" | "source",
+): CleanupEllipse | null {
+  if (component.kind === "red-eye") return region === "target" ? component.bounds : null;
+  if (region === "target") return component.target;
+  return component.source.kind === "sampled" ? component.source.region : null;
+}
+
+function replaceCleanupEllipse(
+  component: CleanupComponent,
+  region: "target" | "source",
+  ellipse: CleanupEllipse,
+): CleanupComponent {
+  if (component.kind === "red-eye") {
+    return region === "target" ? { ...component, bounds: ellipse } : component;
+  }
+  if (region === "target") return { ...component, target: ellipse };
+  return component.source.kind === "sampled"
+    ? { ...component, source: { kind: "sampled", region: ellipse } }
+    : component;
+}
+
+function ellipsePoint(ellipse: CleanupEllipse, parameter: number): GeometryPoint {
+  const angle = ellipse.rotationDegrees * Math.PI / 180;
+  const localX = Math.cos(parameter) * ellipse.radiusX;
+  const localY = Math.sin(parameter) * ellipse.radiusY;
+  return {
+    x: ellipse.center.x + Math.cos(angle) * localX - Math.sin(angle) * localY,
+    y: ellipse.center.y + Math.sin(angle) * localX + Math.cos(angle) * localY,
+  };
+}
+
+function ellipseContains(ellipse: CleanupEllipse, point: GeometryPoint): boolean {
+  const angle = -ellipse.rotationDegrees * Math.PI / 180;
+  const deltaX = point.x - ellipse.center.x;
+  const deltaY = point.y - ellipse.center.y;
+  const localX = Math.cos(angle) * deltaX - Math.sin(angle) * deltaY;
+  const localY = Math.sin(angle) * deltaX + Math.cos(angle) * deltaY;
+  return (localX / ellipse.radiusX) ** 2 + (localY / ellipse.radiusY) ** 2 <= 1;
+}
+
+function toTopCrop(crop: PersistedCrop): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
+  return { x: crop.x, y: 1 - crop.y - crop.height, width: crop.width, height: crop.height };
+}
+
+function fromTopCrop(
+  crop: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+  base: PersistedCrop,
+): PersistedCrop {
+  return {
+    ...base,
+    enabled: true,
+    x: crop.x,
+    y: 1 - crop.y - crop.height,
+    width: crop.width,
+    height: crop.height,
+  };
+}
+
+function srgbToLinear(value: number): number {
+  const bounded = clampUnit(value);
+  return bounded <= 0.04045
+    ? bounded / 12.92
+    : ((bounded + 0.055) / 1.055) ** 2.4;
+}
+
+export function V3CanvasOverlay({
+  document,
+  source,
+  image,
+  width,
+  height,
+  cropActive,
+  maskingActive,
+  canvasTool,
+  onCanvasToolChange,
+  sampleDisplayRgb,
+}: V3CanvasOverlayProps) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const sessionUi = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId]?.ui ?? null : null;
+  });
+  const maskGestureRef = useRef<MaskGesture | null>(null);
+  const cleanupGestureRef = useRef<CleanupGesture | null>(null);
+  const cropGestureRef = useRef<CropGesture | null>(null);
+  const [maskPreview, setMaskPreview] = useState<ManualMaskComponent | null>(null);
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupComponent | null>(null);
+  const [cropPreview, setCropPreview] = useState<PersistedCrop | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const selectedMask = document.local.masks.find((mask) => mask.id === sessionUi?.selectedMaskId) ?? null;
+  const selectedComponent = selectedMask?.components.find(
+    (component) => component.id === sessionUi?.selectedComponentId,
+  ) ?? null;
+  const maskTool = sessionUi?.tool ?? "none";
+  const overlayVisible = sessionUi?.overlayVisible ?? true;
+
+  const cropDraft = cropPreview ?? document.geometry.crop;
+
+  useEffect(() => {
+    function cancelTool(event: KeyboardEvent): void {
+      if (event.key !== "Escape" || canvasTool.kind === "none") return;
+      event.preventDefault();
+      onCanvasToolChange({ kind: "none" });
+      setStatus("Canvas tool cancelled.");
+    }
+    window.addEventListener("keydown", cancelTool);
+    return () => window.removeEventListener("keydown", cancelTool);
+  }, [canvasTool.kind, onCanvasToolChange]);
+
+  function outputFromEvent(event: ReactPointerEvent<HTMLDivElement>): GeometryPoint {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: clampUnit((event.clientX - bounds.left) / Math.max(1, bounds.width)),
+      y: clampUnit(1 - (event.clientY - bounds.top) / Math.max(1, bounds.height)),
+    };
+  }
+
+  function canonicalFromOutput(output: GeometryPoint): GeometryPoint | null {
+    const mapped = mapV3CanvasOutputToCanonical(output, document, source);
+    return mapped.kind === "mapped" && mapped.insideDestination ? mapped.point : null;
+  }
+
+  function outputFromCanonical(point: GeometryPoint): GeometryPoint | null {
+    const mapped = mapV3CanonicalToCanvasOutput(point, document, source);
+    return mapped.kind === "mapped" ? mapped.point : null;
+  }
+
+  function maskGestureComponent(gesture: MaskGesture): ManualMaskComponent | null {
+    switch (gesture.kind) {
+      case "brush": {
+        const points = nonEmpty(gesture.points);
+        if (!points) return null;
+        const strokes = nonEmpty([
+          ...gesture.baseStrokes,
+          {
+            points,
+            size: gesture.component.size,
+            feather: gesture.component.feather,
+            flow: gesture.component.flow,
+            density: gesture.component.density,
+          },
+        ]);
+        return strokes ? { ...gesture.component, strokes } : null;
+      }
+      case "linear-gradient":
+        return gesture.handle === "start"
+          ? { ...gesture.component, start: gesture.point }
+          : { ...gesture.component, end: gesture.point };
+      case "radial-gradient": {
+        if (gesture.handle === "center") return { ...gesture.component, center: gesture.point };
+        if (gesture.handle === "radius-x") {
+          return { ...gesture.component, radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.component.center.x)) };
+        }
+        if (gesture.handle === "radius-y") {
+          return { ...gesture.component, radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.component.center.y)) };
+        }
+        return {
+          ...gesture.component,
+          radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.component.center.x)),
+          radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.component.center.y)),
+        };
+      }
+      default: {
+        const exhaustive: never = gesture;
+        return exhaustive;
+      }
+    }
+  }
+
+  function commitMask(target: MaskTarget, component: ManualMaskComponent): void {
+    let masks: readonly LocalMask[];
+    switch (target.kind) {
+      case "replace":
+        masks = document.local.masks.map((mask) => mask.id === target.maskId
+          ? { ...mask, components: nonEmpty(mask.components.map((item) => item.id === component.id ? component : item)) ?? mask.components }
+          : mask);
+        break;
+      case "insert":
+        masks = document.local.masks.map((mask) => mask.id === target.maskId
+          ? { ...mask, components: nonEmpty([...mask.components, component]) ?? mask.components }
+          : mask);
+        break;
+      case "new-mask":
+        masks = [...document.local.masks, createMask(target.maskId, target.name, component)];
+        break;
+      default: {
+        const exhaustive: never = target;
+        return exhaustive;
+      }
+    }
+    dispatch({
+      kind: "replace-v3-semantic-group",
+      group: "local",
+      value: { ...document.local, geometryFrame: "canonical-v3", masks },
+    }, component.kind === "brush" ? "Paint mask" : `Draw ${component.kind}`);
+    useDevelopStore.getState().setSelectedMask(target.maskId);
+    useDevelopStore.getState().setSelectedComponent(component.id);
+    useDevelopStore.getState().setMaskOverlayVisible(true);
+  }
+
+  function beginMaskGesture(
+    event: ReactPointerEvent<HTMLDivElement>,
+    point: GeometryPoint,
+    output: GeometryPoint,
+  ): boolean {
+    if (!maskingActive || maskTool === "none") return false;
+    const existing = selectedComponent?.kind === maskTool ? selectedComponent : null;
+    const target: MaskTarget | null = existing && selectedMask
+      ? { kind: "replace", maskId: selectedMask.id }
+      : selectedMask && selectedMask.components.length < MAX_COMPONENTS_PER_MASK
+        ? { kind: "insert", maskId: selectedMask.id }
+        : !selectedMask && document.local.masks.length < MAX_MASKS
+          ? { kind: "new-mask", maskId: crypto.randomUUID(), name: nextMaskName(document.local.masks) }
+          : null;
+    if (!target) {
+      setStatus("The selected mask cannot accept another component.");
+      return true;
+    }
+    const component = existing ?? componentWithOperation(maskTool, crypto.randomUUID(), point);
+    switch (component.kind) {
+      case "brush":
+        maskGestureRef.current = {
+          pointerId: event.pointerId,
+          kind: "brush",
+          target,
+          component,
+          baseStrokes: existing?.kind === "brush" ? existing.strokes : [],
+          points: [point],
+          lastOutput: output,
+        };
+        break;
+      case "linear-gradient": {
+        const startOutput = outputFromCanonical(component.start);
+        const handle = existing?.kind === "linear-gradient" &&
+          startOutput && distancePixels(startOutput, output, width, height) <= 18
+          ? "start"
+          : "end";
+        const base = existing?.kind === "linear-gradient"
+          ? component
+          : { ...component, start: point, end: point };
+        maskGestureRef.current = {
+          pointerId: event.pointerId,
+          kind: "linear-gradient",
+          target,
+          component: base,
+          handle,
+          point,
+        };
+        break;
+      }
+      case "radial-gradient": {
+        const centerOutput = outputFromCanonical(component.center);
+        const radiusXOutput = outputFromCanonical({ x: component.center.x + component.radiusX, y: component.center.y });
+        const radiusYOutput = outputFromCanonical({ x: component.center.x, y: component.center.y + component.radiusY });
+        const handle = existing?.kind !== "radial-gradient"
+          ? "create"
+          : centerOutput && distancePixels(centerOutput, output, width, height) <= 18
+          ? "center"
+          : radiusXOutput && distancePixels(radiusXOutput, output, width, height) <= 18
+            ? "radius-x"
+            : radiusYOutput && distancePixels(radiusYOutput, output, width, height) <= 18
+              ? "radius-y"
+              : "create";
+        maskGestureRef.current = {
+          pointerId: event.pointerId,
+          kind: "radial-gradient",
+          target,
+          component: handle === "create" ? { ...component, center: point } : component,
+          handle,
+          point,
+        };
+        break;
+      }
+      default: {
+        const exhaustive: never = component;
+        return exhaustive;
+      }
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const gesture = maskGestureRef.current;
+    setMaskPreview(gesture ? maskGestureComponent(gesture) : null);
+    return true;
+  }
+
+  function cleanupGestureComponent(gesture: CleanupGesture): CleanupComponent {
+    const base = ellipseForComponent(gesture.component, gesture.region);
+    if (!base) return gesture.component;
+    const ellipse = gesture.mode === "move"
+      ? {
+          ...base,
+          center: {
+            x: clampUnit(base.center.x + gesture.point.x - gesture.start.x),
+            y: clampUnit(base.center.y + gesture.point.y - gesture.start.y),
+          },
+        }
+      : {
+          ...base,
+          center: gesture.start,
+          radiusX: Math.max(0.005, Math.abs(gesture.point.x - gesture.start.x)),
+          radiusY: Math.max(0.005, Math.abs(gesture.point.y - gesture.start.y)),
+        };
+    return replaceCleanupEllipse(gesture.component, gesture.region, ellipse);
+  }
+
+  function beginCleanupGesture(
+    event: ReactPointerEvent<HTMLDivElement>,
+    point: GeometryPoint,
+  ): boolean {
+    if (canvasTool.kind !== "cleanup") return false;
+    const component = document.cleanup.components.find((item) => item.id === canvasTool.componentId);
+    if (!component) {
+      setStatus("The cleanup component is no longer available.");
+      onCanvasToolChange({ kind: "none" });
+      return true;
+    }
+    const ellipse = ellipseForComponent(component, canvasTool.region);
+    if (!ellipse) {
+      setStatus("This cleanup component has no sampled source region.");
+      onCanvasToolChange({ kind: "none" });
+      return true;
+    }
+    cleanupGestureRef.current = {
+      pointerId: event.pointerId,
+      component,
+      region: canvasTool.region,
+      mode: ellipseContains(ellipse, point) ? "move" : "draw",
+      start: point,
+      point,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCleanupPreview(cleanupGestureComponent(cleanupGestureRef.current));
+    return true;
+  }
+
+  function sampleCanvas(output: GeometryPoint, canonical: GeometryPoint): boolean {
+    if (canvasTool.kind === "white-balance") {
+      const sampled = sampleV3SourceLinear(image, source, canonical);
+      if (sampled.kind === "unavailable") {
+        setStatus(sampled.reason);
+        return true;
+      }
+      const proposal = proposeSampledWhiteBalance({ kind: "source-linear", samples: sampled.samples });
+      if (proposal.kind !== "proposal") {
+        setStatus(`White-balance sample rejected: ${proposal.reason}.`);
+        return true;
+      }
+      dispatch({
+        kind: "replace-v3-semantic-group",
+        group: "color",
+        value: {
+          ...document.color,
+          whiteBalance: {
+            mode: "sampled",
+            adjustment: {
+              temperature: Math.max(
+                -3_000,
+                Math.min(3_000, proposal.values.temperatureKelvin - 5_500),
+              ),
+              tint: proposal.values.tint,
+            },
+            resolved: proposal.values,
+          },
+        },
+      }, "Sample white balance");
+      setStatus(`White balance sampled from ${proposal.sampleCount} source pixels.`);
+      onCanvasToolChange({ kind: "none" });
+      return true;
+    }
+    if (canvasTool.kind === "point-color") {
+      if (document.color.pointColor.adjustments.length >= 8) {
+        setStatus("Point Color already has eight samples.");
+        return true;
+      }
+      const display = sampleDisplayRgb(output);
+      if (!display) {
+        setStatus("The displayed pixel could not be sampled.");
+        return true;
+      }
+      const color = rgbToHsl([
+        srgbToLinear(display[0]),
+        srgbToLinear(display[1]),
+        srgbToLinear(display[2]),
+      ]);
+      dispatch({
+        kind: "replace-v3-semantic-group",
+        group: "color",
+        value: {
+          ...document.color,
+          pointColor: {
+            adjustments: [...document.color.pointColor.adjustments, {
+              id: crypto.randomUUID(),
+              enabled: true,
+              sourceHueDegrees: color.hueDegrees,
+              sourceSaturation: color.saturation,
+              sourceLuminance: color.luminance,
+              hueRangeDegrees: 30,
+              saturationRange: 0.25,
+              luminanceRange: 0.25,
+              falloff: 0.5,
+              hueShiftDegrees: 0,
+              saturationShift: 0,
+              luminanceShift: 0,
+            }],
+          },
+        },
+      }, "Sample Point Color");
+      setStatus("Point Color sample added from the displayed SDR pixel.");
+      onCanvasToolChange({ kind: "none" });
+      return true;
+    }
+    return false;
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (cropActive) return;
+    const output = outputFromEvent(event);
+    const canonical = canonicalFromOutput(output);
+    if (!canonical) {
+      setStatus("That point is outside the transformed source.");
+      return;
+    }
+    if (sampleCanvas(output, canonical)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (beginCleanupGesture(event, canonical) || beginMaskGesture(event, canonical, output)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const output = outputFromEvent(event);
+    const point = canonicalFromOutput(output);
+    if (!point) return;
+    const maskGesture = maskGestureRef.current;
+    if (maskGesture?.pointerId === event.pointerId) {
+      if (maskGesture.kind === "brush") {
+        if (distancePixels(maskGesture.lastOutput, output, width, height) >= 2) {
+          maskGesture.points.push(point);
+          maskGesture.lastOutput = output;
+        }
+      } else {
+        maskGesture.point = point;
+      }
+      setMaskPreview(maskGestureComponent(maskGesture));
+      return;
+    }
+    const cleanupGesture = cleanupGestureRef.current;
+    if (cleanupGesture?.pointerId === event.pointerId) {
+      cleanupGesture.point = point;
+      setCleanupPreview(cleanupGestureComponent(cleanupGesture));
+    }
+  }
+
+  function finishPointer(event: ReactPointerEvent<HTMLDivElement>, commit: boolean): void {
+    const maskGesture = maskGestureRef.current;
+    if (maskGesture?.pointerId === event.pointerId) {
+      const component = maskGestureComponent(maskGesture);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      maskGestureRef.current = null;
+      setMaskPreview(null);
+      if (commit && component) commitMask(maskGesture.target, component);
+      return;
+    }
+    const cleanupGesture = cleanupGestureRef.current;
+    if (cleanupGesture?.pointerId === event.pointerId) {
+      const component = cleanupGestureComponent(cleanupGesture);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      cleanupGestureRef.current = null;
+      setCleanupPreview(null);
+      if (commit) {
+        const result = applyCleanupCommand(document.cleanup, {
+          kind: "replace",
+          componentId: component.id,
+          component,
+        });
+        if (result.kind === "changed") {
+          dispatch({ kind: "replace-v3-semantic-group", group: "cleanup", value: result.layer }, "Place cleanup region");
+          setStatus("Cleanup region placed.");
+        } else if (result.kind === "invalid") {
+          setStatus(result.reason);
+        }
+      }
+    }
+  }
+
+  function beginCrop(handle: CropHandle, event: ReactPointerEvent<HTMLElement>): void {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    cropGestureRef.current = {
+      pointerId: event.pointerId,
+      handle,
+      startClient: { x: event.clientX, y: event.clientY },
+      startTopRect: toTopCrop(cropDraft),
+    };
+  }
+
+  function moveCrop(event: ReactPointerEvent<HTMLElement>): void {
+    const gesture = cropGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const aspect = resolveAspectRatio(
+      cropDraft.aspectPreset,
+      width,
+      height,
+      cropDraft.customAspectWidth,
+      cropDraft.customAspectHeight,
+    );
+    const next = applyCropDrag(
+      gesture.startTopRect,
+      gesture.handle,
+      (event.clientX - gesture.startClient.x) / Math.max(1, width),
+      (event.clientY - gesture.startClient.y) / Math.max(1, height),
+      aspect,
+    );
+    setCropPreview(fromTopCrop(next, cropDraft));
+  }
+
+  function finishCrop(event: ReactPointerEvent<HTMLElement>, commit: boolean): void {
+    const gesture = cropGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    cropGestureRef.current = null;
+    if (commit) {
+      dispatch({ kind: "commit-v3-crop-draft", crop: cropDraft }, "Adjust crop");
+      setCropPreview(null);
+      setStatus("Crop committed.");
+    } else {
+      setCropPreview(null);
+    }
+  }
+
+  function svgPoint(point: GeometryPoint): string | null {
+    const output = outputFromCanonical(point);
+    return output ? `${output.x * width},${(1 - output.y) * height}` : null;
+  }
+
+  function svgPath(points: readonly GeometryPoint[]): string | null {
+    const mapped = points.map(svgPoint).filter((point) => point !== null);
+    return mapped.length > 0 ? mapped.join(" ") : null;
+  }
+
+  function ellipsePath(ellipse: CleanupEllipse): string | null {
+    return svgPath(Array.from({ length: 49 }, (_, index) => ellipsePoint(ellipse, index / 48 * Math.PI * 2)));
+  }
+
+  const guideComponent = maskPreview ?? (selectedComponent?.kind === "ai" ? null : selectedComponent);
+  const cleanupGuide = cleanupPreview ?? (canvasTool.kind === "cleanup"
+    ? document.cleanup.components.find((component) => component.id === canvasTool.componentId) ?? null
+    : null);
+  const active = cropActive || maskingActive || canvasTool.kind !== "none";
+  const topCrop = toTopCrop(cropDraft);
+
+  return (
+    <div
+      className={`absolute inset-0 touch-none select-none ${active ? "pointer-events-auto" : "pointer-events-none"} ${canvasTool.kind !== "none" || (maskingActive && maskTool !== "none") ? "cursor-crosshair" : ""}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={(event) => finishPointer(event, true)}
+      onPointerCancel={(event) => finishPointer(event, false)}
+    >
+      {cropActive ? (
+        <div className="absolute inset-0 bg-black/35">
+          <div
+            className="absolute cursor-grab border border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.48)] active:cursor-grabbing"
+            style={{
+              left: `${topCrop.x * 100}%`,
+              top: `${topCrop.y * 100}%`,
+              width: `${topCrop.width * 100}%`,
+              height: `${topCrop.height * 100}%`,
+            }}
+            onPointerDown={(event) => beginCrop("move", event)}
+            onPointerMove={moveCrop}
+            onPointerUp={(event) => finishCrop(event, true)}
+            onPointerCancel={(event) => finishCrop(event, false)}
+          >
+            <div className="pointer-events-none grid h-full grid-cols-3 grid-rows-3">
+              {Array.from({ length: 9 }, (_, index) => <span key={index} className="border border-white/20" />)}
+            </div>
+            {CROP_HANDLES.map(({ handle, className }) => (
+              <button
+                key={handle}
+                type="button"
+                aria-label={`Drag crop ${handle}`}
+                className={`absolute z-10 size-3 rounded-full border border-black/70 bg-white shadow ${className}`}
+                onPointerDown={(event) => beginCrop(handle, event)}
+                onPointerMove={moveCrop}
+                onPointerUp={(event) => finishCrop(event, true)}
+                onPointerCancel={(event) => finishCrop(event, false)}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {maskingActive && overlayVisible && guideComponent ? (
+        <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
+          {guideComponent.kind === "brush" ? guideComponent.strokes.map((stroke, index) => {
+            const points = svgPath(stroke.points);
+            return points ? (
+              <polyline
+                key={index}
+                points={points}
+                fill="none"
+                stroke={guideComponent.operation === "add" ? "#70d7ff" : "#ff857d"}
+                strokeWidth={Math.max(2, stroke.size * Math.max(width, height))}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={0.35 + stroke.flow * 0.45}
+              />
+            ) : null;
+          }) : null}
+          {guideComponent.kind === "linear-gradient" ? (() => {
+            const start = svgPoint(guideComponent.start);
+            const end = svgPoint(guideComponent.end);
+            return start && end ? (
+              <>
+                <polyline points={`${start} ${end}`} fill="none" stroke="#70d7ff" strokeWidth="2" />
+                {[start, end].map((point) => <circle key={point} cx={Number(point.split(",")[0])} cy={Number(point.split(",")[1])} r="5" fill="#70d7ff" stroke="#10202b" />)}
+              </>
+            ) : null;
+          })() : null}
+          {guideComponent.kind === "radial-gradient" ? (() => {
+            const path = svgPath(Array.from({ length: 49 }, (_, index) => {
+              const angle = guideComponent.rotation * Math.PI / 180;
+              const parameter = index / 48 * Math.PI * 2;
+              const x = Math.cos(parameter) * guideComponent.radiusX;
+              const y = Math.sin(parameter) * guideComponent.radiusY;
+              return {
+                x: guideComponent.center.x + Math.cos(angle) * x - Math.sin(angle) * y,
+                y: guideComponent.center.y + Math.sin(angle) * x + Math.cos(angle) * y,
+              };
+            }));
+            return path ? <polygon points={path} fill="#70d7ff" fillOpacity="0.12" stroke="#70d7ff" strokeWidth="2" /> : null;
+          })() : null}
+        </svg>
+      ) : null}
+
+      {cleanupGuide ? (
+        <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">
+          {cleanupGuide.kind === "repair" ? (
+            <>
+              {ellipsePath(cleanupGuide.target) ? <polygon points={ellipsePath(cleanupGuide.target) ?? ""} fill="#ffbf69" fillOpacity="0.1" stroke="#ffbf69" strokeWidth="2" /> : null}
+              {cleanupGuide.source.kind === "sampled" && ellipsePath(cleanupGuide.source.region) ? <polygon points={ellipsePath(cleanupGuide.source.region) ?? ""} fill="#70d7ff" fillOpacity="0.08" stroke="#70d7ff" strokeWidth="2" strokeDasharray="5 4" /> : null}
+            </>
+          ) : ellipsePath(cleanupGuide.bounds) ? (
+            <polygon points={ellipsePath(cleanupGuide.bounds) ?? ""} fill="#ff796c" fillOpacity="0.12" stroke="#ff796c" strokeWidth="2" />
+          ) : null}
+        </svg>
+      ) : null}
+
+      {canvasTool.kind !== "none" || status ? (
+        <div className="pointer-events-auto absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border border-white/15 bg-[#11191f]/95 px-3 py-2 text-[11px] text-white shadow-xl">
+          <span>{status ?? (canvasTool.kind === "white-balance" ? "Click a neutral source area" : canvasTool.kind === "point-color" ? "Click a color to sample" : "Drag to place; drag the center to move")}</span>
+          {canvasTool.kind !== "none" ? (
+            <button type="button" onClick={() => onCanvasToolChange({ kind: "none" })} className="text-white/65 hover:text-white">Cancel</button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}

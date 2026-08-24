@@ -8,9 +8,30 @@ import type { CleanupEllipse, RedEyeComponent } from "./cleanup";
 import type { GeometryPoint } from "./geometry";
 import type { Rgb } from "./profiles";
 
+export type LocalGeometryFrame = "canonical-v3" | "legacy-oriented-v2";
+
 export interface MaskRasterDimensions {
   readonly width: number;
   readonly height: number;
+}
+
+export function pointInLocalGeometryFrame(
+  frame: LocalGeometryFrame,
+  canonical: GeometryPoint,
+): GeometryPoint {
+  switch (frame) {
+    case "canonical-v3":
+      return canonical;
+    case "legacy-oriented-v2":
+      // Frozen v2 stored manual masks in normalized EXIF-oriented source
+      // coordinates with a bottom-left origin. That basis is the v3 canonical
+      // basis; only the transform implementation around it changed.
+      return { x: canonical.x, y: canonical.y };
+    default: {
+      const exhaustive: never = frame;
+      return exhaustive;
+    }
+  }
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

@@ -2,8 +2,15 @@
 
 import { useState } from "react";
 import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
+import { MAX_MASKS } from "@/lib/develop/document";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
-import type { MixerColor } from "@/lib/develop/types";
+import type {
+  BasicSettings,
+  LocalMask,
+  MaskComponent,
+  MixerColor,
+  NonEmpty,
+} from "@/lib/develop/types";
 import {
   applyCleanupCommand,
   type CleanupCommand,
@@ -26,7 +33,10 @@ import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
-import type { V3CanvasDiagnostic } from "@/components/develop/V3DevelopCanvas";
+import type {
+  V3CanvasDiagnostic,
+  V3CanvasTool,
+} from "@/components/develop/V3DevelopCanvas";
 import {
   V3AutoToneControl,
   V3HistogramPanel,
@@ -44,7 +54,7 @@ import {
 } from "@/components/develop/V3PanelControls";
 import { useDevelopStore } from "@/stores/develop-store";
 
-type V3Tab = "light" | "color" | "detail" | "geometry" | "cleanup" | "output";
+type V3Tab = "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
 type MixerMode = "hue" | "saturation" | "luminance";
 type GradingRange = "shadows" | "midtones" | "highlights";
 
@@ -53,6 +63,7 @@ const TABS: readonly { readonly id: V3Tab; readonly label: string }[] = [
   { id: "color", label: "Color" },
   { id: "detail", label: "Detail" },
   { id: "geometry", label: "Geometry" },
+  { id: "masking", label: "Masks" },
   { id: "cleanup", label: "Cleanup" },
   { id: "output", label: "Output" },
 ];
@@ -81,7 +92,7 @@ const HUE_TRACKS: Record<MixerColor, string> = {
 
 function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
   if (panel === "crop") return "geometry";
-  if (panel === "masking") return "cleanup";
+  if (panel === "masking") return "masking";
   return null;
 }
 
@@ -91,6 +102,7 @@ function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
     case "color": return "curve-and-color";
     case "detail": return "detail";
     case "geometry": return "geometry-and-crop";
+    case "masking": return "local-adjustments";
     case "cleanup": return "cleanup";
     case "output": return "output-intent";
     default: {
@@ -129,11 +141,15 @@ export function V3EditPanel({
   batch,
   analysis,
   diagnostics,
+  canvasTool,
+  onCanvasToolChange,
 }: {
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
   readonly analysis: readonly CpuAnalysisTapResult[];
   readonly diagnostics: readonly V3CanvasDiagnostic[];
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -210,10 +226,11 @@ export function V3EditPanel({
 
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
-        {activeTab === "color" ? <ColorTab document={document} /> : null}
+        {activeTab === "color" ? <ColorTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
         {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
-        {activeTab === "cleanup" ? <CleanupTab document={document} /> : null}
+        {activeTab === "masking" ? <MaskingTab document={document} /> : null}
+        {activeTab === "cleanup" ? <CleanupTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "output" ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
       </div>
       </aside>
@@ -309,7 +326,15 @@ function profileDescription(document: DevelopDocumentV3): string {
   return `${selection.profileId} · revision ${selection.profileRevision}. Stored calibration only; no registry lookup is available.`;
 }
 
-function ColorTab({ document }: { document: DevelopDocumentV3 }) {
+function ColorTab({
+  document,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
   const [mixerMode, setMixerMode] = useState<MixerMode>("hue");
@@ -324,6 +349,13 @@ function ColorTab({ document }: { document: DevelopDocumentV3 }) {
     if (!mode) return;
     if (mode === "auto") {
       setAutoStatus("Auto WB is unavailable until renderer analysis is connected. The document was not changed.");
+      return;
+    }
+    if (mode === "sampled") {
+      setAutoStatus("Click a neutral source area in the canvas. Press Escape to cancel.");
+      onCanvasToolChange(canvasTool.kind === "white-balance"
+        ? { kind: "none" }
+        : { kind: "white-balance" });
       return;
     }
     setAutoStatus(null);
@@ -357,13 +389,16 @@ function ColorTab({ document }: { document: DevelopDocumentV3 }) {
         <option value="current">Current</option>
         <option value="camera">As shot</option>
         <option value="custom">Custom</option>
-        <option value="sampled">Sampled</option>
+        <option value="sampled">Sample from canvas</option>
         <option value="auto" disabled>Auto requested · unavailable</option>
         <option value="legacy-custom">Legacy custom</option>
       </SelectRow>
       <SliderRow label="Temperature" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000} suffix=" K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(value) => updateWhiteBalance("temperature", value)} />
       <SliderRow label="Tint" value={color.whiteBalance.adjustment.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(value) => updateWhiteBalance("tint", value)} />
       <div className="mt-2 flex items-center gap-2">
+        <ActionButton onClick={() => onCanvasToolChange(canvasTool.kind === "white-balance" ? { kind: "none" } : { kind: "white-balance" })}>
+          {canvasTool.kind === "white-balance" ? "Cancel sampler" : "Sample neutral"}
+        </ActionButton>
         <ActionButton onClick={requestAutoWhiteBalance}>Request Auto</ActionButton>
         <p className="text-[9px] leading-3 text-lr-text-faint">
           Resolved: {color.whiteBalance.resolved.temperatureKelvin} K
@@ -378,7 +413,12 @@ function ColorTab({ document }: { document: DevelopDocumentV3 }) {
       <SectionLabel>Input profile</SectionLabel>
       <StatusCard title="Profile status">{profileDescription(document)}</StatusCard>
 
-      <PointColorControls document={document} replaceColor={replaceColor} />
+      <PointColorControls
+        document={document}
+        replaceColor={replaceColor}
+        canvasTool={canvasTool}
+        onCanvasToolChange={onCanvasToolChange}
+      />
       <MixerControls document={document} mode={mixerMode} setMode={setMixerMode} replaceColor={replaceColor} />
       <MonochromeControls document={document} replaceColor={replaceColor} />
       <ColorGradingControls document={document} replaceColor={replaceColor} />
@@ -389,9 +429,13 @@ function ColorTab({ document }: { document: DevelopDocumentV3 }) {
 function PointColorControls({
   document,
   replaceColor,
+  canvasTool,
+  onCanvasToolChange,
 }: {
   document: DevelopDocumentV3;
   replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
+  canvasTool: V3CanvasTool;
+  onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
   const settings = document.color.pointColor;
   const update = (id: string, patch: Partial<(typeof settings.adjustments)[number]>) =>
@@ -409,6 +453,14 @@ function PointColorControls({
       <div className="mb-1.5 mt-3 flex items-center gap-2">
         <SectionLabel>Point Color</SectionLabel>
         <div className="flex-1" />
+        <ActionButton
+          disabled={settings.adjustments.length >= MAX_POINT_COLOR_SAMPLES}
+          onClick={() => onCanvasToolChange(canvasTool.kind === "point-color"
+            ? { kind: "none" }
+            : { kind: "point-color" })}
+        >
+          {canvasTool.kind === "point-color" ? "Cancel sample" : "Sample canvas"}
+        </ActionButton>
         <ActionButton
           disabled={settings.adjustments.length >= MAX_POINT_COLOR_SAMPLES}
           onClick={() => replaceColor({
@@ -435,7 +487,7 @@ function PointColorControls({
         </ActionButton>
       </div>
       <p className="mb-1.5 text-[10px] leading-4 text-lr-text-faint">
-        Canvas color sampling is unavailable. Numeric points start from neutral mid-color values.
+        Canvas sampling records the clicked SDR color. Numeric points start from neutral mid-color values.
       </p>
       {settings.adjustments.length === 0 ? (
         <p className="text-[10px] leading-4 text-lr-text-faint">No Point Color samples.</p>
@@ -633,6 +685,232 @@ function rotateQuarterTurns(value: QuarterTurns, direction: "left" | "right"): Q
   }
 }
 
+function nonEmptyComponents(items: readonly MaskComponent[]): NonEmpty<MaskComponent> | null {
+  const first = items[0];
+  return first === undefined ? null : [first, ...items.slice(1)];
+}
+
+function maskComponentLabel(component: MaskComponent): string {
+  switch (component.kind) {
+    case "brush": return "Brush";
+    case "linear-gradient": return "Linear gradient";
+    case "radial-gradient": return "Radial gradient";
+    case "ai": return component.selector === "subject" ? "Subject matte" : "Sky matte";
+    default: {
+      const exhaustive: never = component;
+      return exhaustive;
+    }
+  }
+}
+
+function MaskingTab({ document }: { readonly document: DevelopDocumentV3 }) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const sessionUi = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId]?.ui ?? null : null;
+  });
+  const setSelectedMask = useDevelopStore((state) => state.setSelectedMask);
+  const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
+  const setTool = useDevelopStore((state) => state.setMaskTool);
+  const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
+  const masks = document.local.masks;
+  const selectedMask = masks.find((mask) => mask.id === sessionUi?.selectedMaskId) ?? null;
+  const selectedComponent = selectedMask?.components.find(
+    (component) => component.id === sessionUi?.selectedComponentId,
+  ) ?? null;
+  const activeTool = sessionUi?.tool ?? "none";
+
+  function replaceMasks(nextMasks: readonly LocalMask[], label: string): void {
+    dispatch({
+      kind: "replace-v3-semantic-group",
+      group: "local",
+      value: {
+        ...document.local,
+        geometryFrame: "canonical-v3",
+        masks: nextMasks,
+      },
+    }, label);
+  }
+
+  function replaceMask(next: LocalMask, label: string): void {
+    replaceMasks(masks.map((mask) => mask.id === next.id ? next : mask), label);
+  }
+
+  function selectMask(mask: LocalMask): void {
+    setSelectedMask(mask.id);
+    setSelectedComponent(mask.components[0]?.id ?? null);
+    setOverlayVisible(true);
+    setTool("none");
+  }
+
+  function activateTool(tool: "brush" | "linear-gradient" | "radial-gradient"): void {
+    const reuse = selectedComponent?.kind === tool;
+    if (!reuse) setSelectedComponent(null);
+    setTool(activeTool === tool && reuse ? "none" : tool);
+    setOverlayVisible(true);
+  }
+
+  function removeComponent(component: MaskComponent): void {
+    if (!selectedMask) return;
+    const remaining = nonEmptyComponents(
+      selectedMask.components.filter((item) => item.id !== component.id),
+    );
+    if (!remaining) {
+      const index = masks.findIndex((mask) => mask.id === selectedMask.id);
+      const next = masks[index + 1] ?? masks[index - 1] ?? null;
+      replaceMasks(masks.filter((mask) => mask.id !== selectedMask.id), "Delete mask");
+      setSelectedMask(next?.id ?? null);
+      setSelectedComponent(next?.components[0]?.id ?? null);
+      setTool("none");
+      return;
+    }
+    replaceMask({ ...selectedMask, components: remaining }, "Delete mask component");
+    setSelectedComponent(remaining[0].id);
+  }
+
+  function updateAdjustment(field: keyof BasicSettings, value: number): void {
+    if (!selectedMask) return;
+    replaceMask({
+      ...selectedMask,
+      adjustments: { ...selectedMask.adjustments, [field]: value },
+    }, `Adjust mask ${field}`);
+  }
+
+  const adjustmentRows: readonly {
+    readonly field: keyof BasicSettings;
+    readonly label: string;
+    readonly minimum: number;
+    readonly maximum: number;
+    readonly step?: number;
+    readonly suffix?: string;
+  }[] = [
+    { field: "exposure", label: "Exposure", minimum: -5, maximum: 5, step: 0.05, suffix: " EV" },
+    { field: "contrast", label: "Contrast", minimum: -100, maximum: 100 },
+    { field: "highlights", label: "Highlights", minimum: -100, maximum: 100 },
+    { field: "shadows", label: "Shadows", minimum: -100, maximum: 100 },
+    { field: "whites", label: "Whites", minimum: -100, maximum: 100 },
+    { field: "blacks", label: "Blacks", minimum: -100, maximum: 100 },
+    { field: "temperature", label: "Temperature", minimum: -100, maximum: 100 },
+    { field: "tint", label: "Tint", minimum: -100, maximum: 100 },
+    { field: "vibrance", label: "Vibrance", minimum: -100, maximum: 100 },
+    { field: "saturation", label: "Saturation", minimum: -100, maximum: 100 },
+  ];
+
+  return (
+    <PanelSection title="Masks" onReset={() => reset("local")}>
+      <div className="mb-2 flex items-center gap-1.5">
+        <ActionButton
+          disabled={masks.length >= MAX_MASKS}
+          onClick={() => {
+            setSelectedMask(null);
+            setSelectedComponent(null);
+            setOverlayVisible(true);
+            setTool("brush");
+          }}
+        >
+          New mask
+        </ActionButton>
+        <ActionButton onClick={() => setOverlayVisible(!(sessionUi?.overlayVisible ?? false))}>
+          {sessionUi?.overlayVisible ? "Hide overlay" : "Show overlay"}
+        </ActionButton>
+        <span className="ml-auto font-mono text-[9px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
+      </div>
+      <div className="mb-3 grid grid-cols-3 gap-1">
+        {(["brush", "linear-gradient", "radial-gradient"] as const).map((tool) => (
+          <button
+            key={tool}
+            type="button"
+            aria-pressed={activeTool === tool}
+            onClick={() => activateTool(tool)}
+            className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === tool ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised"}`}
+          >
+            {tool === "brush" ? "Brush" : tool === "linear-gradient" ? "Linear" : "Radial"}
+          </button>
+        ))}
+      </div>
+      {document.local.geometryFrame === "legacy-oriented-v2" ? (
+        <StatusCard title="Migrated mask geometry">
+          Frozen v2 mask points use the same normalized EXIF-oriented source basis. The first manual edit records them as canonical v3.
+        </StatusCard>
+      ) : null}
+      {masks.length === 0 ? (
+        <StatusCard title="No masks">Choose a tool, then draw on the photo.</StatusCard>
+      ) : (
+        <ol className="mb-3 space-y-1.5">
+          {masks.map((mask, index) => (
+            <li key={mask.id} className={`rounded-md border p-2 ${mask.id === selectedMask?.id ? "border-lr-accent/60 bg-lr-selection/40" : "border-lr-border-subtle"}`}>
+              <div className="flex items-center gap-1.5">
+                <button type="button" onClick={() => selectMask(mask)} className="min-w-0 flex-1 truncate text-left text-[11px] text-lr-text">
+                  {index + 1}. {mask.name}
+                </button>
+                <input
+                  type="checkbox"
+                  aria-label={`Enable ${mask.name}`}
+                  checked={mask.enabled}
+                  onChange={(event) => replaceMask({ ...mask, enabled: event.target.checked }, "Toggle mask")}
+                  className="size-3 accent-lr-accent"
+                />
+              </div>
+              {mask.id === selectedMask?.id ? (
+                <div className="mt-2 space-y-1">
+                  <ToggleRow label="Invert" checked={mask.inverted} onChange={(inverted) => replaceMask({ ...mask, inverted }, "Invert mask")} />
+                  {mask.components.map((component, componentIndex) => (
+                    <div key={component.id} className="flex items-center gap-1 rounded bg-lr-panel/60 px-2 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedComponent(component.id);
+                          setTool(component.kind === "ai" ? "none" : component.kind);
+                          setOverlayVisible(true);
+                        }}
+                        className={`min-w-0 flex-1 truncate text-left text-[10px] ${component.id === selectedComponent?.id ? "text-lr-accent" : "text-lr-text-muted"}`}
+                      >
+                        {componentIndex + 1}. {maskComponentLabel(component)}
+                      </button>
+                      {component.kind !== "ai" ? (
+                        <button
+                          type="button"
+                          disabled={componentIndex === 0}
+                          onClick={() => replaceMask({
+                            ...mask,
+                            components: nonEmptyComponents(mask.components.map((item) => item.id === component.id ? { ...item, operation: item.operation === "add" ? "subtract" : "add" } : item)) ?? mask.components,
+                          }, "Change mask operation")}
+                          className="text-[9px] uppercase text-lr-text-faint disabled:opacity-30"
+                        >
+                          {component.operation}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => removeComponent(component)} className="text-[9px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+      {selectedMask ? (
+        <>
+          <SectionLabel>Local adjustments</SectionLabel>
+          {adjustmentRows.map(({ field, label, minimum, maximum, step, suffix }) => (
+            <SliderRow
+              key={field}
+              label={label}
+              value={selectedMask.adjustments[field]}
+              min={minimum}
+              max={maximum}
+              step={step}
+              suffix={suffix}
+              onChange={(value) => updateAdjustment(field, value)}
+            />
+          ))}
+        </>
+      ) : null}
+    </PanelSection>
+  );
+}
+
 function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
@@ -684,13 +962,13 @@ function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
         </>
       ) : null}
       <p className="mt-2 text-[10px] leading-4 text-lr-text-faint">
-        Crop overlay editing is not connected for v3. These normalized document values remain editable here.
+        Open Crop from the Develop rail to drag the frame and handles on the photo. Each completed drag commits one crop command.
       </p>
     </PanelSection>
   );
 }
 
-function defaultCleanupComponent(kind: "heal" | "clone" | "red-eye"): CleanupComponent {
+function defaultCleanupComponent(kind: "heal" | "clone" | "remove" | "red-eye"): CleanupComponent {
   const id = crypto.randomUUID();
   if (kind === "red-eye") {
     return {
@@ -738,10 +1016,18 @@ function cleanupLabel(component: CleanupComponent): string {
   if (component.kind === "red-eye") return "Red eye";
   if (component.mode === "heal") return "Heal";
   if (component.mode === "clone") return "Clone";
-  return "Accepted removal patch";
+  return component.source.kind === "sampled" ? "Remove" : "Accepted removal patch";
 }
 
-function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
+function CleanupTab({
+  document,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
   const [message, setMessage] = useState<string | null>(null);
@@ -765,10 +1051,11 @@ function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
       <div className="mb-2 flex flex-wrap gap-1.5">
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("heal") }, "Add heal repair")}>Add heal</ActionButton>
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("clone") }, "Add clone repair")}>Add clone</ActionButton>
+        <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("remove") }, "Add sampled removal")}>Add remove</ActionButton>
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("red-eye") }, "Add red eye")}>Add red eye</ActionButton>
       </div>
       <p className="mb-2 text-[10px] leading-4 text-lr-text-faint">
-        New components use normalized defaults. Edit their source, target, and strength below; canvas placement is not available yet.
+        Add a component, then place its target and sampled source on the canvas. Numeric controls remain available below.
       </p>
       {message ? <p role="alert" className="mb-2 text-[10px] text-lr-danger">{message}</p> : null}
       {document.cleanup.components.length === 0 ? (
@@ -794,6 +1081,24 @@ function CleanupTab({ document }: { document: DevelopDocumentV3 }) {
                   component: replacement,
                 }, `Adjust ${cleanupLabel(component)}`)}
               />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <ActionButton onClick={() => onCanvasToolChange(
+                  canvasTool.kind === "cleanup" && canvasTool.componentId === component.id && canvasTool.region === "target"
+                    ? { kind: "none" }
+                    : { kind: "cleanup", componentId: component.id, region: "target" },
+                )}>
+                  {component.kind === "red-eye" ? "Place eye" : "Place target"}
+                </ActionButton>
+                {component.kind === "repair" && component.source.kind === "sampled" ? (
+                  <ActionButton onClick={() => onCanvasToolChange(
+                    canvasTool.kind === "cleanup" && canvasTool.componentId === component.id && canvasTool.region === "source"
+                      ? { kind: "none" }
+                      : { kind: "cleanup", componentId: component.id, region: "source" },
+                  )}>
+                    Place source
+                  </ActionButton>
+                ) : null}
+              </div>
             </li>
           ))}
         </ol>

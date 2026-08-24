@@ -1,8 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  V3CanvasOverlay,
+  type V3CanvasTool,
+} from "@/components/develop/V3CanvasOverlay";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { getDevelopSession } from "@/lib/develop/session";
+import type { GeometryPoint } from "@/lib/develop/v3/geometry";
+import type { Rgb } from "@/lib/develop/v3/profiles";
+import {
+  buildV3SourceRecord,
+  renderV3Runtime,
+  type V3PreviewSessionRenderRequest,
+} from "@/lib/develop/v3/runtime";
 import type {
   CpuAnalysisTapResult,
   CpuBackendBlockingDiagnostic,
@@ -12,6 +23,8 @@ import type {
 import type { Sha256Digest } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
+
+export type { V3CanvasTool } from "@/components/develop/V3CanvasOverlay";
 
 export type V3CanvasDiagnostic =
   | CpuBackendDiagnostic
@@ -71,6 +84,8 @@ interface V3DevelopCanvasProps {
   readonly alt: string;
   readonly cropActive?: boolean;
   readonly maskingActive?: boolean;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
   readonly onRenderDiagnostics?: (
     diagnostics: readonly V3CanvasDiagnostic[],
   ) => void;
@@ -104,6 +119,8 @@ export function V3DevelopCanvas({
   alt,
   cropActive = false,
   maskingActive = false,
+  canvasTool,
+  onCanvasToolChange,
   onRenderDiagnostics,
   onAnalysis,
 }: V3DevelopCanvasProps) {
@@ -117,6 +134,14 @@ export function V3DevelopCanvas({
       ? state.sessions[entry.id]?.documentRevision ?? 0
       : 0,
   );
+  const document = useDevelopStore((state) => {
+    const session = state.activeCatalogId === entry.catalogId
+      ? state.sessions[entry.id]
+      : undefined;
+    return session?.processKind === "v3" && session.persistedDocument?.version === 3
+      ? session.persistedDocument
+      : null;
+  });
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 1, height: 1 });
 
@@ -152,12 +177,12 @@ export function V3DevelopCanvas({
       const height = Math.max(1, Math.round(container.clientHeight));
       const session = getDevelopSession(entry.catalogId, entry.id);
       setPreview({ kind: "loading" });
-      if (!session) {
+      if (!session || !document) {
         setPreview({ kind: "invalid", message: "Develop session is not ready." });
         return;
       }
       const renderSnapshot = session.snapshot();
-      void session.render({
+      const request = {
         kind: "v3-preview",
         entry,
         image,
@@ -169,7 +194,21 @@ export function V3DevelopCanvas({
             ? "A newer preview request replaced this render."
             : null,
         },
-      }).then((result) => {
+      } satisfies V3PreviewSessionRenderRequest;
+      const renderDocument = cropActive
+        ? {
+            ...document,
+            geometry: {
+              ...document.geometry,
+              constrainCrop: false,
+              crop: { ...document.geometry.crop, enabled: false },
+            },
+          }
+        : document;
+      const resultPromise = cropActive
+        ? renderV3Runtime(renderDocument, request)
+        : session.render(request);
+      void resultPromise.then((result) => {
         if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
         if (result.kind !== "rendered") {
           if (result.kind === "blocked") {
@@ -218,14 +257,16 @@ export function V3DevelopCanvas({
           height: Math.max(1, Math.round(dimensions.height * scale)),
         });
         diagnosticsCallbackRef.current?.(result.diagnostics);
-        bindActiveAnalysis(result.analysis, {
-          catalogId: entry.catalogId,
-          entryId: entry.id,
-          assetRevision: entry.assetRevision,
-          documentRevision: renderSnapshot.documentRevision,
-          planFingerprint: result.planFingerprint,
-        });
-        analysisCallbackRef.current?.(result.analysis);
+        if (!cropActive) {
+          bindActiveAnalysis(result.analysis, {
+            catalogId: entry.catalogId,
+            entryId: entry.id,
+            assetRevision: entry.assetRevision,
+            documentRevision: renderSnapshot.documentRevision,
+            planFingerprint: result.planFingerprint,
+          });
+          analysisCallbackRef.current?.(result.analysis);
+        }
         setPreview({ kind: "rendered" });
       }).catch((error: unknown) => {
         if (disposed || cancellation.cancelled || requestId !== requestRef.current) return;
@@ -247,11 +288,18 @@ export function V3DevelopCanvas({
       clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
     };
-  }, [documentRevision, entry, image]);
+  }, [cropActive, document, documentRevision, entry, image]);
 
-  const limitation = cropActive || maskingActive
-    ? "Crop and mask overlays are not available in the v3 preview yet."
-    : null;
+  const sourceResult = buildV3SourceRecord(entry, image, "preview");
+  const sampleDisplayRgb = useCallback((output: GeometryPoint): Rgb | null => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context || canvas.width < 1 || canvas.height < 1) return null;
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(output.x * canvas.width)));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((1 - output.y) * canvas.height)));
+    const pixel = context.getImageData(x, y, 1, 1).data;
+    return [pixel[0] / 255, pixel[1] / 255, pixel[2] / 255];
+  }, []);
 
   return (
     <div
@@ -259,24 +307,37 @@ export function V3DevelopCanvas({
       className="relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-black"
       aria-busy={preview.kind === "loading"}
     >
-      <canvas
-        ref={canvasRef}
-        role="img"
-        aria-label={alt}
-        className={preview.kind === "rendered" ? "block" : "invisible"}
+      <div
+        className={preview.kind === "rendered" ? "relative" : "invisible relative"}
         style={{ width: displayDimensions.width, height: displayDimensions.height }}
-      />
+      >
+        <canvas
+          ref={canvasRef}
+          role="img"
+          aria-label={alt}
+          className="block h-full w-full"
+        />
+        {document && sourceResult.kind === "source" ? (
+          <V3CanvasOverlay
+            document={document}
+            source={sourceResult.source}
+            image={image}
+            width={displayDimensions.width}
+            height={displayDimensions.height}
+            cropActive={cropActive}
+            maskingActive={maskingActive}
+            canvasTool={canvasTool}
+            onCanvasToolChange={onCanvasToolChange}
+            sampleDisplayRgb={sampleDisplayRgb}
+          />
+        ) : null}
+      </div>
       {preview.kind !== "rendered" ? (
         <div
           role={preview.kind === "loading" ? "status" : "alert"}
           className="absolute max-w-sm rounded border border-lr-border-subtle bg-lr-panel/95 px-4 py-3 text-center text-xs text-lr-text-muted"
         >
           {preview.kind === "loading" ? "Rendering v3 preview…" : preview.message}
-        </div>
-      ) : null}
-      {limitation ? (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-lr-panel/90 px-3 py-1.5 text-[11px] text-lr-text-muted">
-          {limitation}
         </div>
       ) : null}
     </div>

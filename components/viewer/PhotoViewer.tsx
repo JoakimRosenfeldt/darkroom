@@ -24,6 +24,7 @@ import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
 import {
   V3DevelopCanvas,
+  type V3CanvasTool,
   type V3CanvasDiagnostic,
 } from "@/components/develop/V3DevelopCanvas";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
@@ -205,9 +206,20 @@ export function PhotoViewer({
   const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
   const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
   const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
+  const [v3CanvasState, setV3CanvasState] = useState<{
+    readonly entryId: string;
+    readonly tool: V3CanvasTool;
+  }>({ entryId: entry.id, tool: { kind: "none" } });
+  const v3CanvasTool = v3CanvasState.entryId === entry.id
+    ? v3CanvasState.tool
+    : { kind: "none" } satisfies V3CanvasTool;
+  const setV3CanvasTool = useCallback((tool: V3CanvasTool) => {
+    setV3CanvasState({ entryId: entry.id, tool });
+  }, [entry.id]);
   const [surfaceMode, setSurfaceMode] = useState<"single" | ViewerSurfaceMode>("single");
   const [linkedViewports, setLinkedViewports] = useState(true);
   const [referenceEntryId, setReferenceEntryId] = useState<string | null>(() => readReferenceEntryId(entry.catalogId));
+
   const activeIndex = useMemo(
     () => resultEntryIds.indexOf(entry.id),
     [entry.id, resultEntryIds],
@@ -265,6 +277,12 @@ export function PhotoViewer({
   const developDocument = useDevelopStore(
     (state) => state.sessions[entry.id]?.document ?? DEFAULT_DEVELOP_DOCUMENT,
   );
+  const persistedV3Document = useDevelopStore((state) => {
+    const session = state.sessions[entry.id];
+    return session?.processKind === "v3" && session.persistedDocument?.version === 3
+      ? session.persistedDocument
+      : null;
+  });
   const developProcessKind = useDevelopStore(
     (state) => state.sessions[entry.id]?.processKind ?? "v2",
   );
@@ -299,6 +317,8 @@ export function PhotoViewer({
     ? selectedMaskComponent
     : null;
   const footerBrushSettings = selectedBrush ?? maskBrushSettings;
+  const headerMasks = persistedV3Document?.local.masks ?? developSettings.masking.masks;
+  const headerSelectedMask = headerMasks.find((mask) => mask.id === maskUi?.selectedMaskId);
   const showBrushSettings = maskUi?.tool === "brush" || selectedBrush !== null;
   const cropWidth = decoded && cropDraft
     ? Math.max(1, Math.round(decoded.width * cropDraft.width))
@@ -461,6 +481,7 @@ export function PhotoViewer({
       cropDraftRef.current = null;
       setCropDraft(null);
       setMaskTool("none");
+      setV3CanvasTool({ kind: "none" });
       setActivePanel((current) => current === panel ? "edit" : panel);
       return;
     }
@@ -690,7 +711,7 @@ export function PhotoViewer({
               {activePanel === "crop" && cropWidth && cropHeight && decoded
                 ? `${cropWidth} × ${cropHeight} · from ${decoded.width} × ${decoded.height}`
                 : activePanel === "masking"
-                  ? `${developSettings.masking.masks.length} ${developSettings.masking.masks.length === 1 ? "mask" : "masks"}${selectedMask ? ` · ${selectedMask.name}` : ""}`
+                  ? `${headerMasks.length} ${headerMasks.length === 1 ? "mask" : "masks"}${headerSelectedMask ? ` · ${headerSelectedMask.name}` : ""}`
                   : decoded
                     ? [`${decoded.width} × ${decoded.height}`, ...captureDetails].join(" · ")
                 : loading
@@ -720,27 +741,31 @@ export function PhotoViewer({
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
                   Overlay
                 </span>
-                <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
-                  {(["color", "white", "image"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => {
-                        setMaskOverlayMode(mode);
-                        setMaskOverlayVisible(true);
-                      }}
-                      aria-pressed={maskOverlayMode === mode}
-                      className={[
-                        "rounded-md px-2.5 py-1.5 text-[11px] capitalize",
-                        maskOverlayMode === mode
-                          ? "bg-lr-selection text-lr-accent"
-                          : "text-lr-text-muted hover:text-lr-text",
-                      ].join(" ")}
-                    >
-                      {mode}
-                    </button>
-                  ))}
-                </div>
+                {developProcessKind === "v2" ? (
+                  <div className="flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-panel-raised p-0.5">
+                    {(["color", "white", "image"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          setMaskOverlayMode(mode);
+                          setMaskOverlayVisible(true);
+                        }}
+                        aria-pressed={maskOverlayMode === mode}
+                        className={[
+                          "rounded-md px-2.5 py-1.5 text-[11px] capitalize",
+                          maskOverlayMode === mode
+                            ? "bg-lr-selection text-lr-accent"
+                            : "text-lr-text-muted hover:text-lr-text",
+                        ].join(" ")}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="rounded-md border border-lr-border-subtle px-2 py-1 text-[10px] text-lr-text-muted">Canonical geometry</span>
+                )}
                 <button
                   type="button"
                   onClick={() => setMaskOverlayVisible(!(maskUi?.overlayVisible ?? false))}
@@ -820,6 +845,10 @@ export function PhotoViewer({
                   alt={entry.name}
                   onRenderDiagnostics={setV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
+                  cropActive={activePanel === "crop"}
+                  maskingActive={activePanel === "masking"}
+                  canvasTool={v3CanvasTool}
+                  onCanvasToolChange={setV3CanvasTool}
                 />
               ) : surfaceMode === "single" ? <DevelopCanvas
                 image={decoded}
@@ -1003,6 +1032,8 @@ export function PhotoViewer({
               resultEntries={entries}
               v3Analysis={v3Analysis}
               v3RenderDiagnostics={v3RenderDiagnostics}
+              v3CanvasTool={v3CanvasTool}
+              onV3CanvasToolChange={setV3CanvasTool}
               activePanel={activePanel}
               cropDraft={cropDraft}
               onSelect={selectDevelopPanel}

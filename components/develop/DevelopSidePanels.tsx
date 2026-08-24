@@ -18,7 +18,10 @@ import { MetadataPanel } from "@/components/viewer/MetadataPanel";
 import type { CropSettings } from "@/lib/develop/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
-import type { V3CanvasDiagnostic } from "@/components/develop/V3DevelopCanvas";
+import type {
+  V3CanvasDiagnostic,
+  V3CanvasTool,
+} from "@/components/develop/V3DevelopCanvas";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -37,6 +40,8 @@ interface DevelopSidePanelsProps {
   resultEntries: readonly LibraryEntry[];
   v3Analysis: readonly CpuAnalysisTapResult[];
   v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
+  v3CanvasTool: V3CanvasTool;
+  onV3CanvasToolChange: (tool: V3CanvasTool) => void;
 }
 
 export function DevelopSidePanels({
@@ -56,6 +61,8 @@ export function DevelopSidePanels({
   resultEntries,
   v3Analysis,
   v3RenderDiagnostics,
+  v3CanvasTool,
+  onV3CanvasToolChange,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -73,6 +80,8 @@ export function DevelopSidePanels({
       activePanel={activePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
+      canvasTool={v3CanvasTool}
+      onCanvasToolChange={onV3CanvasToolChange}
       batch={{
         sourceEntry: entry,
         entries: resultEntries,
