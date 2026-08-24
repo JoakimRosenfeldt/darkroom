@@ -208,6 +208,18 @@ export interface CpuFrameIdentity {
   readonly quality: RenderQualityRequest;
 }
 
+export interface CpuRenderPreparation {
+  readonly kind: "ready";
+  readonly planFingerprint: Sha256Digest;
+  readonly frameIdentity: CpuFrameIdentity;
+  readonly diagnostics: readonly CpuBackendDiagnostic[];
+  readonly transfer: TransferFunction;
+}
+
+export type CpuRenderPreparationResult =
+  | CpuRenderPreparation
+  | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
+
 export interface CpuPointColorInput {
   readonly dimensions: PixelDimensions;
   readonly pixels: Float32Array;
@@ -1969,11 +1981,11 @@ function applyPostCrop(
   return true;
 }
 
-function meanSaturation(image: FloatRgbImage): number {
+function meanSaturation(image: ReadonlyRgbImage): number {
   let sum = 0;
   const pixelCount = image.width * image.height;
   for (let pixel = 0; pixel < pixelCount; pixel += 1) {
-    const offset = pixel * 3;
+    const offset = pixel * image.channels;
     sum += rgbToHsl([
       image.data[offset] ?? 0,
       image.data[offset + 1] ?? 0,
@@ -1983,7 +1995,7 @@ function meanSaturation(image: FloatRgbImage): number {
   return pixelCount === 0 ? 0 : sum / pixelCount;
 }
 
-function toneInputAnalysis(image: FloatRgbImage): CpuAnalysisTapResult {
+export function analyzeV3ToneInput(image: ReadonlyRgbImage): CpuAnalysisTapResult {
   const state = analyzeDisplayOutput({
     width: image.width,
     height: image.height,
@@ -2009,11 +2021,11 @@ function toneInputAnalysis(image: FloatRgbImage): CpuAnalysisTapResult {
   };
 }
 
-function sceneHeadroomAnalysis(image: FloatRgbImage): CpuAnalysisTapResult {
+export function analyzeV3SceneHeadroom(image: ReadonlyRgbImage): CpuAnalysisTapResult {
   const pixelCount = image.width * image.height;
   const values = new Float32Array(pixelCount);
   for (let pixel = 0; pixel < pixelCount; pixel += 1) {
-    const offset = pixel * 3;
+    const offset = pixel * image.channels;
     values[pixel] = Math.max(0, luminance([
       image.data[offset] ?? 0,
       image.data[offset + 1] ?? 0,
@@ -2310,7 +2322,10 @@ function copyCorePixels(
   }
 }
 
-function displayAnalysis(pixels: Uint8Array, dimensions: PixelDimensions): CpuAnalysisTapResult {
+export function analyzeV3DisplayOutput(
+  pixels: Uint8Array,
+  dimensions: PixelDimensions,
+): CpuAnalysisTapResult {
   return {
     tap: "display-output",
     state: analyzeDisplayOutput({
@@ -2403,13 +2418,13 @@ function requestedAnalysis(
         if (toneInput) results.push(toneInput);
         break;
       case "display-output":
-        results.push(displayAnalysis(
+        results.push(analyzeV3DisplayOutput(
           outputPixels,
           input.request.plan.qualityAndDimensions.outputDimensions,
         ));
         break;
       case "scene-headroom":
-        results.push(sceneHeadroomAnalysis(sceneImage));
+        results.push(analyzeV3SceneHeadroom(sceneImage));
         break;
       case "wb-sample":
       case "proof-output":
@@ -2442,7 +2457,7 @@ function renderFullFrame(
     transfer,
     region,
     input.request.requestedTaps.includes("tone-input")
-      ? (image) => { toneInput = toneInputAnalysis(image); }
+      ? (image) => { toneInput = analyzeV3ToneInput(image); }
       : undefined,
   );
   if (!executed) return null;
@@ -2500,7 +2515,7 @@ function renderTiledExport(
         if (toneResult) analysis.push(toneResult);
         break;
       case "display-output":
-        analysis.push(displayAnalysis(pixels, dimensions));
+        analysis.push(analyzeV3DisplayOutput(pixels, dimensions));
         break;
       case "scene-headroom":
         if (headroomResult) analysis.push(headroomResult);
@@ -2518,7 +2533,9 @@ function renderTiledExport(
   return { pixels, pointColorInput: null, analysis };
 }
 
-export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResult> {
+export async function prepareV3CpuRender(
+  input: CpuRenderInput,
+): Promise<CpuRenderPreparationResult> {
   if (cancelled(input.cancellation)) return { kind: "cancelled" };
   const identityIssue = backendIdentityIssue(input.request);
   if (identityIssue) return { kind: "invalid", issues: [identityIssue] };
@@ -2569,11 +2586,6 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
       }],
     };
   }
-  const rendered = outputIsExport(input.request.plan.qualityAndDimensions)
-    ? renderTiledExport(input, transfer)
-    : renderFullFrame(input, transfer);
-  if (!rendered) return { kind: "cancelled" };
-  if (cancelled(input.cancellation)) return { kind: "cancelled" };
   const planFingerprint = await sha256(key.material);
   if (!planFingerprint) {
     return {
@@ -2587,16 +2599,33 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
   }
   if (cancelled(input.cancellation)) return { kind: "cancelled" };
   return {
-    kind: "rendered",
+    kind: "ready",
     planFingerprint,
     frameIdentity: {
       frameClass: frameClassForPlan(input.request.plan),
       quality: input.request.plan.qualityAndDimensions,
     },
+    diagnostics: preflightResult.notices,
+    transfer,
+  };
+}
+
+export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResult> {
+  const preparation = await prepareV3CpuRender(input);
+  if (preparation.kind !== "ready") return preparation;
+  const rendered = outputIsExport(input.request.plan.qualityAndDimensions)
+    ? renderTiledExport(input, preparation.transfer)
+    : renderFullFrame(input, preparation.transfer);
+  if (!rendered) return { kind: "cancelled" };
+  if (cancelled(input.cancellation)) return { kind: "cancelled" };
+  return {
+    kind: "rendered",
+    planFingerprint: preparation.planFingerprint,
+    frameIdentity: preparation.frameIdentity,
     dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
     pixels: { kind: "rgba8", pixels: rendered.pixels },
     pointColorInput: rendered.pointColorInput,
-    diagnostics: preflightResult.notices,
+    diagnostics: preparation.diagnostics,
     analysis: rendered.analysis,
   };
 }

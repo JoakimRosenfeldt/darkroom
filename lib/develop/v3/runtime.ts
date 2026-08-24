@@ -40,6 +40,7 @@ import {
   renderV3Cpu,
   type CpuAssetAvailability,
   type CpuBackendBlockingDiagnostic,
+  type CpuRenderInput,
   type CpuRenderResult,
 } from "./cpu-backend";
 import {
@@ -105,6 +106,10 @@ export type V3SessionRenderRequest =
   | V3ExportSessionRenderRequest;
 
 type V3RuntimeRenderRequest = V3SessionRenderRequest;
+
+export type V3RuntimePreparationResult =
+  | { readonly kind: "prepared"; readonly input: CpuRenderInput }
+  | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
 
 type RuntimeSourceColorEncoding = Extract<
   SourceColorEncoding,
@@ -591,14 +596,23 @@ async function documentHash(
   return parseSha256Digest(hexDigest(digest));
 }
 
-function invalidResult(reason: string): CpuRenderResult {
+type RuntimeRequestResult =
+  | RenderRequest
+  | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
+
+function invalidResult(
+  reason: string,
+): Exclude<CpuRenderResult, { readonly kind: "rendered" }> {
   return {
     kind: "invalid",
     issues: [{ kind: "request-mismatch", reason }],
   };
 }
 
-function fingerprintBlocked(): CpuRenderResult {
+function fingerprintBlocked(): Exclude<
+  CpuRenderResult,
+  { readonly kind: "rendered" }
+> {
   return {
     kind: "blocked",
     diagnostics: [{
@@ -613,7 +627,7 @@ async function renderRequest(
   document: DevelopDocumentV3,
   source: SourceRecord,
   request: V3RuntimeRenderRequest,
-): Promise<RenderRequest | CpuRenderResult> {
+): Promise<RuntimeRequestResult> {
   const canonicalDocumentHash = await documentHash(document);
   if (!canonicalDocumentHash) return fingerprintBlocked();
   try {
@@ -682,10 +696,10 @@ async function renderRequest(
   }
 }
 
-export async function renderV3Runtime(
+export async function prepareV3RuntimeRender(
   document: DevelopDocumentV3,
   request: V3RuntimeRenderRequest,
-): Promise<CpuRenderResult> {
+): Promise<V3RuntimePreparationResult> {
   if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
   const sourceResult = buildV3SourceRecord(
     request.entry,
@@ -700,13 +714,26 @@ export async function renderV3Runtime(
   if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
   const assets = await runtimeAssets(document, sourceResult.source, request.assets);
   if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
-  return renderV3Cpu({
-    image: request.image,
-    document,
-    source: sourceResult.source,
-    request: prepared,
-    capabilities: BASELINE_CAPABILITY_REPORT,
-    cancellation: request.cancellation,
-    assets,
-  });
+  return {
+    kind: "prepared",
+    input: {
+      image: request.image,
+      document,
+      source: sourceResult.source,
+      request: prepared,
+      capabilities: BASELINE_CAPABILITY_REPORT,
+      cancellation: request.cancellation,
+      assets,
+    },
+  };
+}
+
+export async function renderV3Runtime(
+  document: DevelopDocumentV3,
+  request: V3RuntimeRenderRequest,
+): Promise<CpuRenderResult> {
+  const preparation = await prepareV3RuntimeRender(document, request);
+  return preparation.kind === "prepared"
+    ? renderV3Cpu(preparation.input)
+    : preparation;
 }
