@@ -340,6 +340,14 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
         sourceCatalogId,
       );
     }
+    const libraryStateTable = cloned.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'library_state'",
+    ).get();
+    if (libraryStateTable !== undefined) {
+      cloned.prepare(
+        "UPDATE library_state SET catalog_id = ? WHERE catalog_id = ?",
+      ).run(request.catalogId, sourceCatalogId);
+    }
     // A package carries historical locations for display only. Never let a clone
     // inherit native authority or an enabled ingress rule.
     cloned.prepare(`

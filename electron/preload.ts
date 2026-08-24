@@ -114,6 +114,16 @@ import {
   type AutoImportControlRequest,
   type AutoImportStatus,
 } from "../lib/import/auto-import-api.ts";
+import {
+  parseMetadataAnalysisOperationRequest,
+  parseMetadataAnalysisProgress,
+  parseMetadataAnalysisRequest,
+  parseMetadataAnalysisResult,
+  type MetadataAnalysisOperationRequest,
+  type MetadataAnalysisProgress,
+  type MetadataAnalysisRequest,
+  type MetadataAnalysisResult,
+} from "../lib/library/metadata-analysis.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -335,6 +345,36 @@ const darkroom = {
 
   catalogTrashAsset(request: CatalogAssetRequest): Promise<void> {
     return ipcRenderer.invoke("darkroom:catalog-trash-asset", parseCatalogAssetRequest(request));
+  },
+
+  async catalogAnalyzeMetadata(request: MetadataAnalysisRequest): Promise<MetadataAnalysisResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:catalog-analyze-metadata",
+      parseMetadataAnalysisRequest(request),
+    );
+    return parseMetadataAnalysisResult(result);
+  },
+
+  catalogCancelMetadataAnalysis(request: MetadataAnalysisOperationRequest): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:catalog-cancel-metadata-analysis",
+      parseMetadataAnalysisOperationRequest(request),
+    );
+  },
+
+  onCatalogMetadataAnalysisProgress(
+    listener: (progress: MetadataAnalysisProgress) => void,
+  ): Unsubscribe {
+    if (typeof listener !== "function") throw new Error("Metadata progress listener must be a function.");
+    const wrapped = (_event: IpcRendererEvent, value: unknown) => {
+      try {
+        listener(parseMetadataAnalysisProgress(value));
+      } catch {
+        // Malformed or stale progress is ignored at the renderer boundary.
+      }
+    };
+    ipcRenderer.on("darkroom:catalog-metadata-analysis-progress", wrapped);
+    return () => ipcRenderer.removeListener("darkroom:catalog-metadata-analysis-progress", wrapped);
   },
 
   onCatalogEvent(listener: (event: CatalogEvent) => void): Unsubscribe {

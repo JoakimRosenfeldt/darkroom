@@ -26,8 +26,14 @@ import type {
   CatalogPresetView,
   CatalogSummary,
 } from "@/lib/catalog/api";
-import type { CatalogId, RootId } from "@/lib/catalog/ids";
+import {
+  createOperationId,
+  type CatalogId,
+  type OperationId,
+  type RootId,
+} from "@/lib/catalog/ids";
 import type { CatalogV3FingerprintCoverage } from "@/lib/catalog/v3";
+import type { SessionId } from "@/lib/catalog/runtime";
 import {
   getEntryMetadata,
   createEntryMetadata,
@@ -39,6 +45,13 @@ import type {
 import { filterArchivedEntries, filterOnlyArchivedEntries } from "@/lib/library/archive";
 import { pruneMetadataForEntries } from "@/lib/library/curation";
 import { pruneAlbumsForEntries } from "@/lib/library/folders";
+import {
+  createLibraryWorkspaceState,
+  entryAnalysisCacheSignature,
+  type LibraryWorkspaceState,
+} from "@/lib/library/model";
+import type { MetadataAnalysisProgress } from "@/lib/library/metadata-analysis";
+import { reconcileSelectionToResult } from "@/lib/library/result";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -56,6 +69,14 @@ export interface SelectEntryModifiers {
   toggle?: boolean;
 }
 
+export interface MetadataAnalysisState {
+  operationId: OperationId;
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: boolean;
+}
+
 type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
 export type CatalogView =
@@ -66,7 +87,7 @@ export type CatalogView =
 
 interface LibraryStore {
   catalogId: CatalogId | null;
-  sessionId: string | null;
+  sessionId: SessionId | null;
   catalogRevision: number;
   folderName: string | null;
   entries: LibraryEntry[];
@@ -75,6 +96,7 @@ interface LibraryStore {
   importPresets: readonly CatalogPresetView[];
   albums: Album[];
   archivedEntryIds: string[];
+  libraryWorkspace: LibraryWorkspaceState;
   catalogs: readonly CatalogSummary[];
   catalogRoots: readonly CatalogRootState[];
   catalogManagerOpen: boolean;
@@ -82,6 +104,7 @@ interface LibraryStore {
   importState: ImportState;
   importStatus: string | null;
   importError: string | null;
+  metadataAnalysis: MetadataAnalysisState | null;
   catalogRecovery: string | null;
   needsFolderAccess: boolean;
   selectedEntryId: string | null;
@@ -95,6 +118,7 @@ interface LibraryStore {
     modifiers: SelectEntryModifiers,
     visibleOrder: string[],
   ) => void;
+  reconcileSelection: (visibleEntryIds: readonly string[]) => void;
   setEntryMetadata: (entryId: string, patch: Partial<EntryMetadata>) => void;
   applyMetadataToEntries: (
     entryIds: string[],
@@ -136,11 +160,14 @@ interface LibraryStore {
   closeCatalogManager: () => void;
   refreshCatalogs: () => Promise<void>;
   cancelFolderOperation: () => void;
+  refreshMetadataAnalysis: () => void;
+  cancelMetadataAnalysis: () => void;
   clearLibrary: () => Promise<void>;
   bootstrapLibrary: () => Promise<void>;
 }
 
 let folderOperationGeneration = 0;
+let metadataProgressUnsubscribe: (() => void) | null = null;
 
 const EMPTY_FINGERPRINT_COVERAGE: CatalogV3FingerprintCoverage = {
   total: 0,
@@ -187,6 +214,7 @@ function applyHydratedState(
   get: () => LibraryStore,
 ): void {
   const catalogChanged = get().catalogId !== state.catalogId;
+  const sessionChanged = catalogChanged || get().sessionId !== state.sessionId;
   if (catalogChanged) {
     useDevelopStore.getState().clearLibrarySessions();
   }
@@ -204,10 +232,12 @@ function applyHydratedState(
     entryMetadata: state.entryMetadata,
     albums: state.albums,
     archivedEntryIds: state.archivedEntryIds,
+    libraryWorkspace: state.libraryWorkspace,
     ...restoreSelection(activeEntries, get().selectedEntryIds, get().selectionAnchorId),
     needsFolderAccess: false,
     importError: null,
     catalogRecovery: null,
+    metadataAnalysis: sessionChanged ? null : get().metadataAnalysis,
   });
 }
 
@@ -220,8 +250,13 @@ function scheduleStateSync(
   if (catalogId === null || sessionId === null) {
     return;
   }
-  const { entryMetadata, albums, archivedEntryIds } = get();
-  void scheduleCatalogStateSync(entryMetadata, albums, archivedEntryIds).then(
+  const { entryMetadata, albums, archivedEntryIds, libraryWorkspace } = get();
+  void scheduleCatalogStateSync(
+    entryMetadata,
+    albums,
+    archivedEntryIds,
+    libraryWorkspace,
+  ).then(
     (revision) => {
       if (get().catalogId === catalogId && get().sessionId === sessionId) {
         set({ catalogRevision: revision });
@@ -275,6 +310,110 @@ function applyLocalMetadata(
   scheduleStateSync(set, get);
 }
 
+function receiveMetadataProgress(
+  progress: MetadataAnalysisProgress,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  const current = get();
+  if (
+    current.catalogId !== progress.catalogId ||
+    current.sessionId !== progress.sessionId ||
+    current.metadataAnalysis?.operationId !== progress.operationId
+  ) {
+    return;
+  }
+  set({
+    metadataAnalysis: {
+      operationId: progress.operationId,
+      total: progress.total,
+      completed: progress.completed,
+      failed: progress.failed,
+      cancelled: progress.cancelled,
+    },
+  });
+}
+
+function startMetadataAnalysis(
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  const current = get();
+  if (
+    current.catalogId === null ||
+    current.sessionId === null ||
+    current.metadataAnalysis !== null
+  ) {
+    return;
+  }
+  const entryIds = current.entries
+    .filter((entry) => (
+      current.libraryWorkspace.analysisByEntryId[entry.id]?.cacheSignature !==
+      entryAnalysisCacheSignature(entry.size, entry.lastModified)
+    ))
+    .map((entry) => entry.id);
+  if (entryIds.length === 0) return;
+
+  let api: ReturnType<typeof getDarkroomAPI>;
+  try {
+    api = getDarkroomAPI();
+  } catch {
+    return;
+  }
+
+  if (metadataProgressUnsubscribe === null) {
+    metadataProgressUnsubscribe = api.onCatalogMetadataAnalysisProgress((progress) => {
+      receiveMetadataProgress(progress, set, get);
+    });
+  }
+
+  const operationId = createOperationId();
+  const catalogId = current.catalogId;
+  const sessionId = current.sessionId;
+  set({
+    metadataAnalysis: {
+      operationId,
+      total: entryIds.length,
+      completed: 0,
+      failed: 0,
+      cancelled: false,
+    },
+  });
+
+  void api.catalogAnalyzeMetadata({ catalogId, sessionId, operationId, entryIds }).then(
+    (result) => {
+      const latest = get();
+      if (
+        latest.catalogId !== catalogId ||
+        latest.sessionId !== sessionId ||
+        latest.metadataAnalysis?.operationId !== operationId
+      ) {
+        return;
+      }
+      const analysisByEntryId = { ...latest.libraryWorkspace.analysisByEntryId };
+      for (const item of result.items) {
+        analysisByEntryId[item.entryId] = item.analysis;
+      }
+      set({
+        libraryWorkspace: { ...latest.libraryWorkspace, analysisByEntryId },
+        metadataAnalysis: null,
+      });
+      scheduleStateSync(set, get);
+    },
+    (error: unknown) => {
+      const latest = get();
+      if (
+        latest.catalogId !== catalogId ||
+        latest.sessionId !== sessionId ||
+        latest.metadataAnalysis?.operationId !== operationId
+      ) {
+        return;
+      }
+      set({ metadataAnalysis: null, importError: formatPickerError(error) });
+    },
+  );
+}
+
 async function scanRoots(
   generation: number,
   set: (partial: Partial<LibraryStore>) => void,
@@ -318,6 +457,7 @@ async function finishImport(
     await scanRoots(generation, set, get);
     if (!isActiveFolderOperation(generation)) return;
     set({ importState: "idle", importStatus: null, needsFolderAccess: false });
+    startMetadataAnalysis(set, get);
   } catch (error) {
     if (!isActiveFolderOperation(generation)) return;
     fsDebugError("catalog import failed", error);
@@ -351,6 +491,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   importPresets: [],
   albums: [],
   archivedEntryIds: [],
+  libraryWorkspace: createLibraryWorkspaceState([]),
   catalogs: [],
   catalogRoots: [],
   catalogManagerOpen: false,
@@ -358,6 +499,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   importState: "idle",
   importStatus: null,
   importError: null,
+  metadataAnalysis: null,
   catalogRecovery: null,
   needsFolderAccess: false,
   selectedEntryId: null,
@@ -400,6 +542,25 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       }
     }
     set({ selectedEntryIds: [id], selectedEntryId: id, selectionAnchorId: id });
+  },
+
+  reconcileSelection: (visibleEntryIds) => {
+    const current = get();
+    const next = reconcileSelectionToResult(
+      current.selectedEntryIds,
+      current.selectedEntryId,
+      visibleEntryIds,
+    );
+    if (
+      next.selectedEntryId === current.selectedEntryId &&
+      next.selectedEntryIds.join("\u001f") === current.selectedEntryIds.join("\u001f")
+    ) return;
+    set({
+      ...next,
+      selectionAnchorId: next.selectedEntryIds.includes(current.selectionAnchorId ?? "")
+        ? current.selectionAnchorId
+        : next.selectedEntryIds[0] ?? null,
+    });
   },
 
   setEntryMetadata: (entryId, patch) => applyLocalMetadata([entryId], patch, set, get),
@@ -662,11 +823,13 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           entryMetadata: {},
           albums: [],
           archivedEntryIds: [],
+          libraryWorkspace: createLibraryWorkspaceState([]),
           catalogView: { type: "all" },
           selectedEntryId: null,
           selectedEntryIds: [],
           selectionAnchorId: null,
           needsFolderAccess: true,
+          metadataAnalysis: null,
         });
       }
       await refreshCatalogSummaries(set);
@@ -697,6 +860,31 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     set({ importState: "idle", importStatus: null, needsFolderAccess: get().entries.length === 0 });
   },
 
+  refreshMetadataAnalysis: () => startMetadataAnalysis(set, get),
+
+  cancelMetadataAnalysis: () => {
+    const current = get();
+    if (
+      current.catalogId === null ||
+      current.sessionId === null ||
+      current.metadataAnalysis === null ||
+      current.metadataAnalysis.cancelled
+    ) {
+      return;
+    }
+    const operationId = current.metadataAnalysis.operationId;
+    set({ metadataAnalysis: { ...current.metadataAnalysis, cancelled: true } });
+    void getDarkroomAPI().catalogCancelMetadataAnalysis({
+      catalogId: current.catalogId,
+      sessionId: current.sessionId,
+      operationId,
+    }).catch((error: unknown) => {
+      if (get().metadataAnalysis?.operationId === operationId) {
+        set({ importError: formatPickerError(error) });
+      }
+    });
+  },
+
   clearLibrary: async () => {
     beginFolderOperation();
     try {
@@ -719,6 +907,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       entryMetadata: {},
       albums: [],
       archivedEntryIds: [],
+      libraryWorkspace: createLibraryWorkspaceState([]),
       catalogView: { type: "all" },
       selectedEntryId: null,
       selectedEntryIds: [],
@@ -726,6 +915,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       importState: "idle",
       importStatus: null,
       importError: null,
+      metadataAnalysis: null,
       catalogRecovery: null,
       needsFolderAccess: false,
     });
@@ -751,6 +941,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           entryMetadata: {},
           albums: [],
           archivedEntryIds: [],
+          libraryWorkspace: createLibraryWorkspaceState([]),
           selectedEntryId: null,
           selectedEntryIds: [],
           selectionAnchorId: null,
@@ -758,6 +949,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           catalogs: result.catalogs,
           catalogRecovery: result.recovery?.message ?? null,
           importError: null,
+          metadataAnalysis: null,
         });
         return;
       }

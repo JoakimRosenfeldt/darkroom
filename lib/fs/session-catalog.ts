@@ -35,6 +35,10 @@ import type {
   SessionId,
 } from "../catalog/runtime";
 import type { Album, EntryMetadata } from "../catalog/types";
+import {
+  parseLibraryWorkspaceJson,
+  type LibraryWorkspaceState,
+} from "../library/model";
 import type { FormatCapabilityReport } from "../formats/types";
 import type { CatalogV3FingerprintCoverage } from "../catalog/v3";
 import { createEntryMetadata } from "../catalog/defaults";
@@ -80,6 +84,7 @@ export interface HydratedCatalogState {
   readonly entryMetadata: Record<string, EntryMetadata>;
   readonly albums: Album[];
   readonly archivedEntryIds: string[];
+  readonly libraryWorkspace: LibraryWorkspaceState;
   readonly roots: readonly CatalogRootState[];
 }
 
@@ -317,6 +322,12 @@ function hydrate(
     createdAt: album.createdAt,
     updatedAt: album.updatedAt,
   }));
+  const validEntryIds = new Set(view.assets.map((asset) => asset.assetId));
+  const libraryWorkspace = parseLibraryWorkspaceJson(
+    view.libraryStateJson,
+    albums,
+    validEntryIds,
+  );
   return {
     catalogId: session.catalogId,
     sessionId: session.sessionId,
@@ -329,6 +340,7 @@ function hydrate(
     entryMetadata,
     albums,
     archivedEntryIds,
+    libraryWorkspace,
     roots: view.roots,
   };
 }
@@ -1033,6 +1045,7 @@ async function syncCatalogStateForBinding(
   entryMetadata: Record<string, EntryMetadata>,
   albums: readonly Album[],
   archivedEntryIds: readonly string[],
+  libraryWorkspace: LibraryWorkspaceState,
 ): Promise<number> {
   if (!isCurrentCatalogSync(binding)) return binding.revision;
   const view = await getDarkroomAPI().catalogQuery({
@@ -1101,6 +1114,10 @@ async function syncCatalogStateForBinding(
       });
     }
   }
+  const libraryStateJson = JSON.stringify(libraryWorkspace);
+  if (view.libraryStateJson !== libraryStateJson) {
+    mutations.push({ kind: "library-state-replace", stateJson: libraryStateJson });
+  }
   if (mutations.length === 0) {
     updateSessionRevision(view.catalog.revision);
     activeView = view;
@@ -1135,12 +1152,14 @@ export async function syncCatalogState(
   entryMetadata: Record<string, EntryMetadata>,
   albums: readonly Album[],
   archivedEntryIds: readonly string[],
+  libraryWorkspace: LibraryWorkspaceState,
 ): Promise<number> {
   return syncCatalogStateForBinding(
     captureCatalogSyncBinding(),
     entryMetadata,
     albums,
     archivedEntryIds,
+    libraryWorkspace,
   );
 }
 
@@ -1148,10 +1167,17 @@ export function scheduleCatalogStateSync(
   entryMetadata: Record<string, EntryMetadata>,
   albums: readonly Album[],
   archivedEntryIds: readonly string[],
+  libraryWorkspace: LibraryWorkspaceState,
 ): Promise<number> {
   const binding = captureCatalogSyncBinding();
   const task = mutationQueue.then(() =>
-    syncCatalogStateForBinding(binding, entryMetadata, albums, archivedEntryIds),
+    syncCatalogStateForBinding(
+      binding,
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+      libraryWorkspace,
+    ),
   );
   mutationQueue = task.then(() => undefined, () => undefined);
   return task;
