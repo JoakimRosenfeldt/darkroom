@@ -54,6 +54,15 @@ import {
   type LibraryWorkspaceState,
 } from "@/lib/library/model";
 import type { MetadataAnalysisProgress } from "@/lib/library/metadata-analysis";
+import {
+  effectiveMetadataValue,
+  parseMetadataOverrides,
+  parseMetadataPreset,
+  type MetadataEditableField,
+  type MetadataOverrides,
+  type MetadataPreset,
+  type MetadataValue,
+} from "@/lib/metadata/types";
 import type { ExactDuplicateTrashResult } from "@/lib/library/duplicate-actions";
 import { reconcileSelectionToResult } from "@/lib/library/result";
 import {
@@ -136,6 +145,20 @@ interface LibraryStore {
     entryIds: string[],
     patch: Partial<EntryMetadata>,
   ) => void;
+  applyMetadataOverrides: (
+    entryIds: readonly string[],
+    overrides: MetadataOverrides,
+    options?: {
+      readonly captionMode?: "replace" | "append";
+      readonly keywordMode?: "replace" | "append";
+    },
+  ) => void;
+  resetMetadataFields: (
+    entryIds: readonly string[],
+    fields: readonly MetadataEditableField[],
+  ) => void;
+  saveMetadataPreset: (preset: MetadataPreset) => void;
+  deleteMetadataPreset: (presetId: string) => void;
   mirrorDevelopDocument: (
     entryId: string,
     develop: EntryMetadata["develop"],
@@ -210,6 +233,7 @@ interface LibraryStore {
   refreshCatalogs: () => Promise<void>;
   cancelFolderOperation: () => void;
   refreshMetadataAnalysis: () => void;
+  refreshEntryMetadataAnalysis: (entryId: string) => void;
   cancelMetadataAnalysis: () => void;
   clearLibrary: () => Promise<void>;
   bootstrapLibrary: () => Promise<void>;
@@ -490,6 +514,124 @@ function applyLocalMetadata(
   }
 }
 
+const ABSENT_METADATA_VALUE: MetadataValue<never> = { kind: "absent" };
+
+function mergeMetadataOverrides(
+  current: MetadataOverrides,
+  patch: MetadataOverrides,
+  analysis: LibraryWorkspaceState["analysisByEntryId"][string] | undefined,
+  options: {
+    readonly captionMode?: "replace" | "append";
+    readonly keywordMode?: "replace" | "append";
+  },
+): MetadataOverrides {
+  let caption = patch.caption;
+  if (caption?.kind === "set" && options.captionMode === "append") {
+    const existing = effectiveMetadataValue(
+      analysis?.source?.description.caption ?? ABSENT_METADATA_VALUE,
+      current.caption,
+    );
+    caption = {
+      kind: "set",
+      value: existing && existing.trim().length > 0
+        ? `${existing}\n${caption.value}`
+        : caption.value,
+    };
+  }
+  let keywords = patch.keywords;
+  if (keywords?.kind === "set" && options.keywordMode === "append") {
+    const existing = effectiveMetadataValue(
+      analysis?.source?.description.keywords ?? ABSENT_METADATA_VALUE,
+      current.keywords,
+    ) ?? [];
+    keywords = {
+      kind: "set",
+      value: [...new Map(
+        [...existing, ...keywords.value].map((keyword) => [keyword.toLocaleLowerCase(), keyword]),
+      ).values()],
+    };
+  }
+  return parseMetadataOverrides({
+    ...current,
+    ...patch,
+    ...(caption === undefined ? {} : { caption }),
+    ...(keywords === undefined ? {} : { keywords }),
+  });
+}
+
+function metadataPatchFromOverrides(
+  patch: MetadataOverrides,
+  merged: MetadataOverrides,
+): Partial<EntryMetadata> {
+  return {
+    ...(patch.title === undefined
+      ? {}
+      : { title: merged.title?.kind === "set" ? merged.title.value : null }),
+    ...(patch.caption === undefined
+      ? {}
+      : { caption: merged.caption?.kind === "set" ? merged.caption.value : null }),
+    ...(patch.copyright === undefined
+      ? {}
+      : { copyright: merged.copyright?.kind === "set" ? merged.copyright.value : null }),
+    ...(patch.keywords === undefined
+      ? {}
+      : { keywords: merged.keywords?.kind === "set" ? merged.keywords.value : [] }),
+  };
+}
+
+function applyMetadataOverridesLocal(
+  entryIds: readonly string[],
+  overrides: MetadataOverrides,
+  options: {
+    readonly captionMode?: "replace" | "append";
+    readonly keywordMode?: "replace" | "append";
+  },
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  if (entryIds.length === 0) return;
+  const current = get();
+  const nextOverrides = { ...current.libraryWorkspace.metadataOverridesByEntryId };
+  const nextSync = { ...current.libraryWorkspace.metadataSyncByEntryId };
+  const nextMetadata = { ...current.entryMetadata };
+  const updatedAt = Date.now();
+  for (const entryId of entryIds) {
+    const merged = mergeMetadataOverrides(
+      nextOverrides[entryId] ?? {},
+      overrides,
+      current.libraryWorkspace.analysisByEntryId[entryId],
+      options,
+    );
+    nextOverrides[entryId] = merged;
+    const entryMetadata = getEntryMetadata(nextMetadata, entryId);
+    nextMetadata[entryId] = createEntryMetadata({
+      ...entryMetadata,
+      ...metadataPatchFromOverrides(overrides, merged),
+      updatedAt,
+    });
+    nextSync[entryId] = {
+      status: "catalog-only",
+      sidecarSha256: nextSync[entryId]?.sidecarSha256 ?? null,
+      sidecarModifiedAt: nextSync[entryId]?.sidecarModifiedAt ?? null,
+      catalogRevision: current.catalogRevision,
+      baseline: nextSync[entryId]?.baseline ?? {},
+      ownedFields: nextSync[entryId]?.ownedFields ?? [],
+      conflicts: nextSync[entryId]?.conflicts ?? [],
+      message: "Catalog saved. XMP publication requires an explicit sync.",
+      updatedAt,
+    };
+  }
+  set({
+    entryMetadata: nextMetadata,
+    libraryWorkspace: {
+      ...current.libraryWorkspace,
+      metadataOverridesByEntryId: nextOverrides,
+      metadataSyncByEntryId: nextSync,
+    },
+  });
+  scheduleStateSync(set, get);
+}
+
 function receiveMetadataProgress(
   progress: MetadataAnalysisProgress,
   set: (partial: Partial<LibraryStore>) => void,
@@ -517,6 +659,10 @@ function receiveMetadataProgress(
 function startMetadataAnalysis(
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
+  options: {
+    readonly entryIds?: readonly string[];
+    readonly force?: boolean;
+  } = {},
 ): void {
   const current = get();
   if (
@@ -526,8 +672,11 @@ function startMetadataAnalysis(
   ) {
     return;
   }
+  const requestedIds = options.entryIds === undefined ? null : new Set(options.entryIds);
   const entryIds = current.entries
+    .filter((entry) => requestedIds === null || requestedIds.has(entry.id))
     .filter((entry) => (
+      options.force ||
       current.libraryWorkspace.analysisByEntryId[entry.id]?.cacheSignature !==
       entryAnalysisCacheSignature(entry.size, entry.lastModified)
     ))
@@ -560,7 +709,13 @@ function startMetadataAnalysis(
     },
   });
 
-  void api.catalogAnalyzeMetadata({ catalogId, sessionId, operationId, entryIds }).then(
+  void api.catalogAnalyzeMetadata({
+    catalogId,
+    sessionId,
+    operationId,
+    entryIds,
+    force: options.force === true,
+  }).then(
     (result) => {
       const latest = get();
       if (
@@ -578,7 +733,6 @@ function startMetadataAnalysis(
         libraryWorkspace: { ...latest.libraryWorkspace, analysisByEntryId },
         metadataAnalysis: null,
       });
-      scheduleStateSync(set, get);
     },
     (error: unknown) => {
       const latest = get();
@@ -745,6 +899,80 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   setEntryMetadata: (entryId, patch) => applyLocalMetadata([entryId], patch, set, get),
   applyMetadataToEntries: (entryIds, patch) => applyLocalMetadata(entryIds, patch, set, get),
+
+  applyMetadataOverrides: (entryIds, overrides, options = {}) => {
+    applyMetadataOverridesLocal(entryIds, parseMetadataOverrides(overrides), options, set, get);
+  },
+
+  resetMetadataFields: (entryIds, fields) => {
+    if (entryIds.length === 0 || fields.length === 0) return;
+    const current = get();
+    const nextOverrides = { ...current.libraryWorkspace.metadataOverridesByEntryId };
+    const nextMetadata = { ...current.entryMetadata };
+    const nextSync = { ...current.libraryWorkspace.metadataSyncByEntryId };
+    const updatedAt = Date.now();
+    for (const entryId of entryIds) {
+      const entries = Object.entries(nextOverrides[entryId] ?? {})
+        .filter(([field]) => !fields.some((candidate) => candidate === field));
+      nextOverrides[entryId] = parseMetadataOverrides(Object.fromEntries(entries));
+      const metadata = getEntryMetadata(nextMetadata, entryId);
+      nextMetadata[entryId] = createEntryMetadata({
+        ...metadata,
+        ...(fields.includes("title") ? { title: null } : {}),
+        ...(fields.includes("caption") ? { caption: null } : {}),
+        ...(fields.includes("copyright") ? { copyright: null } : {}),
+        ...(fields.includes("keywords") ? { keywords: [] } : {}),
+        updatedAt,
+      });
+      nextSync[entryId] = {
+        status: "catalog-only",
+        sidecarSha256: nextSync[entryId]?.sidecarSha256 ?? null,
+        sidecarModifiedAt: nextSync[entryId]?.sidecarModifiedAt ?? null,
+        catalogRevision: current.catalogRevision,
+        baseline: nextSync[entryId]?.baseline ?? {},
+        ownedFields: nextSync[entryId]?.ownedFields ?? [],
+        conflicts: nextSync[entryId]?.conflicts ?? [],
+        message: "Overrides reset to source. XMP was not changed.",
+        updatedAt,
+      };
+    }
+    set({
+      entryMetadata: nextMetadata,
+      libraryWorkspace: {
+        ...current.libraryWorkspace,
+        metadataOverridesByEntryId: nextOverrides,
+        metadataSyncByEntryId: nextSync,
+      },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  saveMetadataPreset: (preset) => {
+    const parsed = parseMetadataPreset(preset);
+    const current = get();
+    const existing = current.libraryWorkspace.metadataPresets.findIndex(
+      (item) => item.id === parsed.id,
+    );
+    const metadataPresets = [...current.libraryWorkspace.metadataPresets];
+    if (existing === -1) metadataPresets.push(parsed);
+    else metadataPresets[existing] = parsed;
+    set({
+      libraryWorkspace: { ...current.libraryWorkspace, metadataPresets },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  deleteMetadataPreset: (presetId) => {
+    const current = get();
+    const metadataPresets = current.libraryWorkspace.metadataPresets.filter(
+      (preset) => preset.id !== presetId,
+    );
+    if (metadataPresets.length === current.libraryWorkspace.metadataPresets.length) return;
+    set({
+      libraryWorkspace: { ...current.libraryWorkspace, metadataPresets },
+    });
+    scheduleStateSync(set, get);
+  },
 
   mirrorDevelopDocument: (entryId, develop, sourceUpdatedAt = Date.now(), metadataPatch = {}) => {
     const { entryMetadata } = get();
@@ -1808,6 +2036,10 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   },
 
   refreshMetadataAnalysis: () => startMetadataAnalysis(set, get),
+
+  refreshEntryMetadataAnalysis: (entryId) => {
+    startMetadataAnalysis(set, get, { entryIds: [entryId], force: true });
+  },
 
   cancelMetadataAnalysis: () => {
     const current = get();

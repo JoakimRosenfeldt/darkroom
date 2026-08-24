@@ -14,6 +14,7 @@ export interface MetadataAnalysisRequest {
   readonly sessionId: SessionId;
   readonly operationId: OperationId;
   readonly entryIds: readonly AssetId[];
+  readonly force: boolean;
 }
 
 export interface MetadataAnalysisOperationRequest {
@@ -76,6 +77,7 @@ export function parseMetadataAnalysisRequest(value: unknown): MetadataAnalysisRe
   return {
     ...operation,
     entryIds: [...new Set(input.entryIds.map((entryId) => parseAssetId(entryId)))],
+    force: input.force === true,
   };
 }
 

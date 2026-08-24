@@ -77,6 +77,10 @@ function testParser(value: unknown): PhotoCatalog {
       pick: pick as PickStatus,
       rating: rating as StarRating,
       colorLabel: colorLabel as ColorLabel,
+      title: null,
+      caption: null,
+      copyright: null,
+      keywords: [],
       ...(develop === undefined ? {} : { develop }),
       developUpdatedAt: typeof rawMetadata.developUpdatedAt === "number" && Number.isFinite(rawMetadata.developUpdatedAt)
         ? rawMetadata.developUpdatedAt

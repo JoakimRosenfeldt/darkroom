@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import exifr from "exifr";
 import type { AssetId } from "../lib/catalog/ids";
 import type {
@@ -11,156 +13,26 @@ import {
   type CaptureTimeProvenance,
   type EntryAnalysis,
 } from "../lib/library/model";
-
-const EXIF_FIELDS = [
-  "DateTimeOriginal",
-  "SubSecTimeOriginal",
-  "OffsetTimeOriginal",
-  "CreateDate",
-  "OffsetTimeDigitized",
-  "Make",
-  "Model",
-  "LensModel",
-  "Lens",
-  "ISO",
-  "ISOSpeedRatings",
-  "FocalLength",
-  "City",
-  "ProvinceState",
-  "State",
-  "Country",
-  "CountryPrimaryLocationName",
-] as const;
+import { normalizeSourceMetadata, type SourceMetadataFallback } from "../lib/metadata/normalize";
+import {
+  SOURCE_METADATA_ADAPTER_VERSION,
+  SOURCE_METADATA_PARSER_VERSION,
+  metadataValue,
+} from "../lib/metadata/types";
+import type { MetadataCache } from "./metadata-cache";
 
 export interface MetadataAnalysisTarget {
   readonly entryId: AssetId;
   readonly filePath: string;
   readonly size: number;
   readonly modifiedAt: number;
+  readonly fallback?: SourceMetadataFallback;
 }
 
 export interface MetadataAnalysisServiceOptions {
   readonly concurrency?: number;
   readonly now?: () => number;
-}
-
-type ExifRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is ExifRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function textValue(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function numberValue(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value) && typeof value[0] === "number" && Number.isFinite(value[0])) {
-    return value[0];
-  }
-  return null;
-}
-
-function firstText(record: ExifRecord, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    const value = textValue(record[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function firstNumber(record: ExifRecord, keys: readonly string[]): number | null {
-  for (const key of keys) {
-    const value = numberValue(record[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-interface CaptureTime {
-  readonly key: number;
-  readonly display: string;
-  readonly provenance: CaptureTimeProvenance;
-}
-
-function dateParts(value: unknown): {
-  readonly year: number;
-  readonly month: number;
-  readonly day: number;
-  readonly hour: number;
-  readonly minute: number;
-  readonly second: number;
-  readonly display: string;
-} | null {
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return {
-      year: value.getUTCFullYear(),
-      month: value.getUTCMonth() + 1,
-      day: value.getUTCDate(),
-      hour: value.getUTCHours(),
-      minute: value.getUTCMinutes(),
-      second: value.getUTCSeconds(),
-      display: value.toISOString(),
-    };
-  }
-  const text = textValue(value);
-  if (text === null) return null;
-  const match = /^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/u.exec(text);
-  if (!match) return null;
-  const values = match.slice(1).map(Number);
-  if (values.length !== 6 || values.some((item) => !Number.isFinite(item))) return null;
-  const [year, month, day, hour, minute, second] = values;
-  if (
-    year === undefined || month === undefined || day === undefined ||
-    hour === undefined || minute === undefined || second === undefined ||
-    month < 1 || month > 12 || day < 1 || day > 31 ||
-    hour > 23 || minute > 59 || second > 60
-  ) return null;
-  return { year, month, day, hour, minute, second, display: text };
-}
-
-function offsetMinutes(value: unknown): number | null {
-  const offset = textValue(value);
-  if (offset === null) return null;
-  if (offset === "Z") return 0;
-  const match = /^([+-])(\d{2}):(\d{2})$/u.exec(offset);
-  if (!match) return null;
-  const hours = Number(match[2]);
-  const minutes = Number(match[3]);
-  if (hours > 23 || minutes > 59) return null;
-  return (match[1] === "-" ? -1 : 1) * (hours * 60 + minutes);
-}
-
-function captureTime(
-  value: unknown,
-  subsecondValue: unknown,
-  offsetValue: unknown,
-  provenance: CaptureTimeProvenance,
-): CaptureTime | null {
-  const parts = dateParts(value);
-  if (!parts) return null;
-  const subsecond = textValue(subsecondValue)?.replace(/\D/gu, "") ?? "";
-  const milliseconds = Number((subsecond + "000").slice(0, 3));
-  const utcWallTime = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second,
-    milliseconds,
-  );
-  if (!Number.isFinite(utcWallTime)) return null;
-  const offset = offsetMinutes(offsetValue);
-  return {
-    key: offset === null ? utcWallTime : utcWallTime - offset * 60_000,
-    display: [parts.display, subsecond ? `.${subsecond}` : "", textValue(offsetValue) ?? ""]
-      .join(""),
-    provenance,
-  };
+  readonly cache?: MetadataCache;
 }
 
 function normalizedError(error: unknown): string {
@@ -170,90 +42,158 @@ function normalizedError(error: unknown): string {
   return "Embedded metadata could not be read.";
 }
 
-async function hasGps(filePath: string): Promise<boolean | null> {
-  try {
-    const gps: unknown = await exifr.gps(filePath);
-    if (!isRecord(gps)) return false;
-    return numberValue(gps.latitude) !== null && numberValue(gps.longitude) !== null;
-  } catch {
-    return null;
-  }
+async function sha256(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  return hash.digest("hex");
 }
 
-async function analyzeTarget(
-  target: MetadataAnalysisTarget,
-  now: () => number,
-): Promise<{ readonly item: MetadataAnalysisItem; readonly failed: boolean }> {
-  const base = {
+function provenance(tag: string | undefined): CaptureTimeProvenance | null {
+  if (!tag) return null;
+  if (tag.includes("DateTimeOriginal")) return "date-time-original";
+  return tag.includes("CreateDate") ? "create-date" : null;
+}
+
+function analysisFromSnapshot(input: {
+  readonly target: MetadataAnalysisTarget;
+  readonly sourceSha256: string;
+  readonly extractedAt: number;
+  readonly parsed: unknown;
+}): EntryAnalysis {
+  const source = normalizeSourceMetadata({
+    parsed: input.parsed,
+    sourceSha256: input.sourceSha256,
+    byteLength: input.target.size,
+    modifiedAt: input.target.modifiedAt,
+    extractedAt: input.extractedAt,
+    fallback: input.target.fallback,
+  });
+  const captured = metadataValue(source.capture.time);
+  const latitude = metadataValue(source.location.latitude);
+  const longitude = metadataValue(source.location.longitude);
+  return {
+    cacheSignature: entryAnalysisCacheSignature(input.target.size, input.target.modifiedAt),
+    size: input.target.size,
+    modifiedAt: input.target.modifiedAt,
+    sourceSha256: input.sourceSha256,
+    parserVersion: SOURCE_METADATA_PARSER_VERSION,
+    adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+    cacheHit: false,
+    source,
+    captureTimeKey: captured?.sortKey ?? null,
+    captureTimeDisplay: captured === null
+      ? null
+      : `${captured.value}${captured.offset ?? ""}`,
+    captureTimeProvenance: provenance(source.capture.time.kind === "value" ? source.capture.time.tag : undefined),
+    cameraMake: metadataValue(source.capture.cameraMake),
+    cameraModel: metadataValue(source.capture.cameraModel),
+    lens: metadataValue(source.capture.lens),
+    iso: metadataValue(source.capture.iso),
+    focalLength: metadataValue(source.capture.focalLength),
+    location: {
+      city: metadataValue(source.location.city),
+      state: metadataValue(source.location.state),
+      country: metadataValue(source.location.country),
+    },
+    hasGps: latitude === null || longitude === null ? false : true,
+    error: null,
+    analyzedAt: input.extractedAt,
+  };
+}
+
+function cachedForTarget(cached: EntryAnalysis, target: MetadataAnalysisTarget): EntryAnalysis {
+  return {
+    ...cached,
     cacheSignature: entryAnalysisCacheSignature(target.size, target.modifiedAt),
     size: target.size,
     modifiedAt: target.modifiedAt,
-    analyzedAt: now(),
+    cacheHit: true,
+    source: cached.source === null
+      ? null
+      : {
+          ...cached.source,
+          file: {
+            ...cached.source.file,
+            byteLength: target.size,
+            modifiedAt: target.modifiedAt,
+          },
+        },
   };
+}
+
+async function analyzeTarget(
+  request: MetadataAnalysisRequest,
+  target: MetadataAnalysisTarget,
+  now: () => number,
+  cache: MetadataCache | undefined,
+): Promise<{ readonly item: MetadataAnalysisItem; readonly failed: boolean }> {
+  const digest = await sha256(target.filePath);
+  if (!request.force && cache) {
+    const cached = await cache.read({
+      catalogId: request.catalogId,
+      entryId: target.entryId,
+      sourceSha256: digest,
+      parserVersion: SOURCE_METADATA_PARSER_VERSION,
+      adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+    });
+    if (cached) {
+      return {
+        item: { entryId: target.entryId, analysis: cachedForTarget(cached, target) },
+        failed: cached.error !== null,
+      };
+    }
+  }
+
   try {
     const parsed: unknown = await exifr.parse(target.filePath, {
-      pick: [...EXIF_FIELDS],
+      mergeOutput: false,
       reviveValues: false,
+      translateKeys: true,
       translateValues: true,
+      sanitize: true,
+      multiSegment: false,
       tiff: true,
+      ifd0: {},
       exif: true,
       gps: true,
       iptc: true,
       xmp: true,
+      icc: true,
+      ihdr: true,
     });
-    const fields = isRecord(parsed) ? parsed : {};
-    const subsecond = textValue(fields.SubSecTimeOriginal);
-    const captured = captureTime(
-      fields.DateTimeOriginal,
-      subsecond,
-      fields.OffsetTimeOriginal,
-      subsecond === null ? "date-time-original" : "date-time-original-subsecond",
-    ) ?? captureTime(
-      fields.CreateDate,
-      null,
-      fields.OffsetTimeDigitized,
-      "create-date",
-    );
-    const analysis: EntryAnalysis = {
-      ...base,
-      captureTimeKey: captured?.key ?? null,
-      captureTimeDisplay: captured?.display ?? null,
-      captureTimeProvenance: captured?.provenance ?? null,
-      cameraMake: firstText(fields, ["Make"]),
-      cameraModel: firstText(fields, ["Model"]),
-      lens: firstText(fields, ["LensModel", "Lens"]),
-      iso: firstNumber(fields, ["ISO", "ISOSpeedRatings"]),
-      focalLength: firstNumber(fields, ["FocalLength"]),
-      location: {
-        city: firstText(fields, ["City"]),
-        state: firstText(fields, ["State", "ProvinceState"]),
-        country: firstText(fields, ["Country", "CountryPrimaryLocationName"]),
-      },
-      hasGps: await hasGps(target.filePath),
-      error: null,
-    };
+    const analysis = analysisFromSnapshot({
+      target,
+      sourceSha256: digest,
+      extractedAt: now(),
+      parsed,
+    });
+    await cache?.write({ catalogId: request.catalogId, entryId: target.entryId, analysis });
     return { item: { entryId: target.entryId, analysis }, failed: false };
   } catch (error) {
-    return {
-      item: {
-        entryId: target.entryId,
-        analysis: {
-          ...base,
-          captureTimeKey: null,
-          captureTimeDisplay: null,
-          captureTimeProvenance: null,
-          cameraMake: null,
-          cameraModel: null,
-          lens: null,
-          iso: null,
-          focalLength: null,
-          location: { city: null, state: null, country: null },
-          hasGps: null,
-          error: normalizedError(error),
-        },
-      },
-      failed: true,
+    const analysis: EntryAnalysis = {
+      cacheSignature: entryAnalysisCacheSignature(target.size, target.modifiedAt),
+      size: target.size,
+      modifiedAt: target.modifiedAt,
+      sourceSha256: digest,
+      parserVersion: SOURCE_METADATA_PARSER_VERSION,
+      adapterVersion: SOURCE_METADATA_ADAPTER_VERSION,
+      cacheHit: false,
+      source: null,
+      captureTimeKey: null,
+      captureTimeDisplay: null,
+      captureTimeProvenance: null,
+      cameraMake: target.fallback?.cameraMake ?? null,
+      cameraModel: target.fallback?.cameraModel ?? null,
+      lens: target.fallback?.lens ?? null,
+      iso: null,
+      focalLength: null,
+      location: { city: null, state: null, country: null },
+      hasGps: null,
+      error: normalizedError(error),
+      analyzedAt: now(),
     };
+    await cache?.write({ catalogId: request.catalogId, entryId: target.entryId, analysis });
+    return { item: { entryId: target.entryId, analysis }, failed: true };
   }
 }
 
@@ -290,7 +230,7 @@ export async function analyzeMetadataTargets(
       nextIndex += 1;
       const target = targets[index];
       if (!target) return;
-      const result = await analyzeTarget(target, now);
+      const result = await analyzeTarget(request, target, now, options.cache);
       items.push(result.item);
       completed += 1;
       if (result.failed) failed += 1;
