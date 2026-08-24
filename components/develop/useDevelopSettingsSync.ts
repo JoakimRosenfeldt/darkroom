@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
+  DevelopRepositoryError,
   getDevelopRepository,
   type SidecarMetadataPatch,
 } from "@/lib/develop/repository";
@@ -43,6 +44,12 @@ export function useDevelopSettingsSync({
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
   const metadataRef = useRef(metadata);
   const scheduledRevisionRef = useRef<{
+    readonly catalogId: string;
+    readonly entryId: string;
+    readonly document: number;
+    readonly metadata: number;
+  } | null>(null);
+  const exhaustedRevisionRef = useRef<{
     readonly catalogId: string;
     readonly entryId: string;
     readonly document: number;
@@ -103,11 +110,17 @@ export function useDevelopSettingsSync({
       scheduledRevisionRef.current.entryId === entry.id &&
       scheduledRevisionRef.current.document === documentRevision &&
       scheduledRevisionRef.current.metadata === metadataRevision;
+    const retryExhausted =
+      exhaustedRevisionRef.current?.catalogId === entry.catalogId &&
+      exhaustedRevisionRef.current.entryId === entry.id &&
+      exhaustedRevisionRef.current.document === documentRevision &&
+      exhaustedRevisionRef.current.metadata === metadataRevision;
     if (
       documentRevision === undefined ||
       metadataRevision === undefined ||
       sidecarStatus === "idle" ||
       sidecarStatus === "loading" ||
+      retryExhausted ||
       (sidecarStatus === "saving" && alreadyScheduled) ||
       (
         documentRevision === persistedDocumentRevision &&
@@ -129,6 +142,17 @@ export function useDevelopSettingsSync({
       session.snapshot(),
       { forceRetry: sidecarStatus === "error" },
     ).catch((error: unknown) => {
+      if (
+        error instanceof DevelopRepositoryError &&
+        error.code === "retry-exhausted"
+      ) {
+        exhaustedRevisionRef.current = {
+          catalogId: entry.catalogId,
+          entryId: entry.id,
+          document: documentRevision,
+          metadata: metadataRevision,
+        };
+      }
       const state = useDevelopStore.getState();
       if (
         state.activeCatalogId === entry.catalogId &&
