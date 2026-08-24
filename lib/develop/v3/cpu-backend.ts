@@ -25,6 +25,7 @@ import {
 } from "./analysis";
 import { proposeAutoTone, type AutoToneProposal } from "./auto-tone";
 import { cacheKeyMaterial, frameClassForPlan, planCacheKey } from "./cache";
+import type { CleanupEllipse } from "./cleanup";
 import { applyColorGrading } from "./color-grading";
 import {
   compileV3DevelopPlan,
@@ -43,9 +44,18 @@ import {
   type GeometryCrop,
   type GeometryPoint,
 } from "./geometry";
+import {
+  applyLocalBasicAdjustment,
+  applyRedEye,
+  manualMaskCoverage,
+  mapRepairSourcePoint,
+  repairCoverage,
+} from "./manual-edits";
 import { applyMonochrome, NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
 import {
   applyHueBoundedDefringe,
+  invertDistortedUv,
+  mapDistortedUv,
   NEUTRAL_LENS_CALIBRATION,
   type LensCalibration,
 } from "./optics";
@@ -65,7 +75,7 @@ import { MAX_TILE_OVERLAP, type CancellationProbe } from "./source";
 import { applyWhiteBalance } from "./white-balance";
 
 export const V3_CPU_BACKEND_ID = "darkroom-v3-cpu-reference";
-export const V3_CPU_BACKEND_REVISION = "1";
+export const V3_CPU_BACKEND_REVISION = "2";
 export const MAX_CPU_RENDER_PIXELS = 8_388_608;
 export const MAX_CPU_EXPORT_PIXELS = 50_000_000;
 const MAX_CPU_TILE_CORE_EDGE = 1_024;
@@ -226,6 +236,7 @@ interface FloatRgbImage extends ReadonlyRgbImage {
 interface GeometryRenderResult {
   readonly image: FloatRgbImage;
   readonly alpha: Uint8Array;
+  readonly context: GeometryContext;
 }
 
 interface RenderRegion {
@@ -233,6 +244,18 @@ interface RenderRegion {
   readonly y: number;
   readonly width: number;
   readonly height: number;
+}
+
+interface GeometryContext {
+  readonly user: CanonicalGeometry;
+  readonly userCrop: GeometryCrop;
+  readonly optics: CanonicalGeometry;
+  readonly opticsCrop: GeometryCrop;
+}
+
+interface MappedRenderPoint {
+  readonly postOptics: GeometryPoint;
+  readonly canonical: GeometryPoint;
 }
 
 const MIXER_BANDS = [
@@ -536,13 +559,13 @@ function unsupportedEditDiagnostics(input: CpuRenderInput): {
 
   for (const mask of input.document.local.masks) {
     if (!mask.enabled || localAdjustmentIsNeutral(mask)) continue;
-    reportUnsupported(
-      "local-adjustments",
-      mask.id,
-      "The CPU reference backend has no v3 local-mask raster callback.",
-    );
     for (const component of mask.components) {
       if (component.kind !== "ai") continue;
+      reportUnsupported(
+        "local-adjustments",
+        component.id,
+        "AI mask mattes require raster pixels that were not supplied to the CPU backend.",
+      );
       if (!assetPresent(input, component.assetId)) {
         reportMissing(component.assetId, component.id);
       }
@@ -551,17 +574,19 @@ function unsupportedEditDiagnostics(input: CpuRenderInput): {
 
   for (const component of input.document.cleanup.components) {
     if (!component.enabled) continue;
-    reportUnsupported(
-      "source-repair",
-      component.id,
-      "The CPU reference backend has no cleanup pixel callback.",
-    );
     if (
       component.kind === "repair" &&
       component.source.kind === "accepted-patch" &&
-      !assetPresent(input, component.source.asset.assetId)
+      component.opacity > 0
     ) {
-      reportMissing(component.source.asset.assetId, component.id);
+      reportUnsupported(
+        "source-repair",
+        component.id,
+        "Accepted cleanup patches require raster pixels that were not supplied to the CPU backend.",
+      );
+      if (!assetPresent(input, component.source.asset.assetId)) {
+        reportMissing(component.source.asset.assetId, component.id);
+      }
     }
   }
 
@@ -773,6 +798,18 @@ function userStageGeometry(
   };
 }
 
+function createGeometryContext(input: CpuRenderInput): GeometryContext {
+  const oriented = orientedDimensions(input.source);
+  const user = userStageGeometry(input.document, oriented);
+  const optics = opticsStageGeometry(input, manualLensCalibration(input.document));
+  return {
+    user,
+    userCrop: resolveConstrainedCrop(user),
+    optics,
+    opticsCrop: resolveConstrainedCrop(optics),
+  };
+}
+
 function maximumSourceValue(image: DevelopImage): number {
   return 2 ** image.bits - 1;
 }
@@ -854,6 +891,38 @@ function outputPoint(
     x: quality.sourceCenter.x + (point.x - 0.5) / quality.zoom,
     y: quality.sourceCenter.y + (point.y - 0.5) / quality.zoom,
   };
+}
+
+function mappedRenderPoint(
+  input: CpuRenderInput,
+  context: GeometryContext,
+  region: RenderRegion,
+  x: number,
+  y: number,
+): MappedRenderPoint | null {
+  const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
+  const userMapped = mapOutputToStored(
+    outputPoint(
+      x,
+      y,
+      outputDimensions,
+      input.request.plan.qualityAndDimensions,
+      region,
+    ),
+    context.user,
+    context.userCrop,
+  );
+  if (userMapped.kind !== "mapped" || !userMapped.insideDestination) return null;
+  const canonical = mapDistortedUv(
+    userMapped.point,
+    context.optics.optics.calibration.distortion,
+    context.optics.optics.amounts.distortion,
+  );
+  if (
+    canonical.x < 0 || canonical.x > 1 ||
+    canonical.y < 0 || canonical.y > 1
+  ) return null;
+  return { postOptics: userMapped.point, canonical };
 }
 
 function writeRgb(data: Float32Array, pixel: number, rgb: Rgb): void {
@@ -948,12 +1017,7 @@ function renderGeometry(
   transfer: TransferFunction,
   region: RenderRegion,
 ): GeometryRenderResult | null {
-  const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
-  const oriented = orientedDimensions(input.source);
-  const userGeometry = userStageGeometry(input.document, oriented);
-  const opticsGeometry = opticsStageGeometry(input, manualLensCalibration(input.document));
-  const userCrop = resolveConstrainedCrop(userGeometry);
-  const opticsCrop = resolveConstrainedCrop(opticsGeometry);
+  const context = createGeometryContext(input);
   const pixelCount = region.width * region.height;
   const data = new Float32Array(pixelCount * 3);
   const alpha = new Uint8Array(pixelCount);
@@ -961,31 +1025,243 @@ function renderGeometry(
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return null;
     for (let x = 0; x < region.width; x += 1) {
       const pixel = y * region.width + x;
-      const userMapped = mapOutputToStored(
-        outputPoint(
-          x,
-          y,
-          outputDimensions,
-          input.request.plan.qualityAndDimensions,
-          region,
-        ),
-        userGeometry,
-        userCrop,
-      );
-      if (userMapped.kind !== "mapped" || !userMapped.insideDestination) continue;
+      const mapped = mappedRenderPoint(input, context, region, x, y);
+      if (!mapped) continue;
       const sample = denoisedOpticsSample(
         input,
-        userMapped.point,
+        mapped.postOptics,
         transfer,
-        opticsGeometry,
-        opticsCrop,
+        context.optics,
+        context.opticsCrop,
       );
       if (!sample) continue;
       writeRgb(data, pixel, sample);
       alpha[pixel] = 255;
     }
   }
-  return { image: { width: region.width, height: region.height, channels: 3, data }, alpha };
+  return {
+    image: { width: region.width, height: region.height, channels: 3, data },
+    alpha,
+    context,
+  };
+}
+
+function readRgb(image: FloatRgbImage, pixel: number): Rgb {
+  const offset = pixel * 3;
+  return [
+    image.data[offset] ?? 0,
+    image.data[offset + 1] ?? 0,
+    image.data[offset + 2] ?? 0,
+  ];
+}
+
+function blendRgb(base: Rgb, adjustment: Rgb, amount: number): Rgb {
+  const bounded = clamp(amount, 0, 1);
+  return [
+    base[0] + (adjustment[0] - base[0]) * bounded,
+    base[1] + (adjustment[1] - base[1]) * bounded,
+    base[2] + (adjustment[2] - base[2]) * bounded,
+  ];
+}
+
+function sampleCanonicalBase(
+  input: CpuRenderInput,
+  context: GeometryContext,
+  point: GeometryPoint,
+  transfer: TransferFunction,
+): Rgb | null {
+  const postOptics = invertDistortedUv(
+    point,
+    context.optics.optics.calibration.distortion,
+    context.optics.optics.amounts.distortion,
+  );
+  return denoisedOpticsSample(
+    input,
+    postOptics,
+    transfer,
+    context.optics,
+    context.opticsCrop,
+  );
+}
+
+function ellipseOffset(
+  center: GeometryPoint,
+  ellipse: CleanupEllipse,
+  x: number,
+  y: number,
+): GeometryPoint {
+  const angle = ellipse.rotationDegrees * Math.PI / 180;
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const offsetX = x * ellipse.radiusX;
+  const offsetY = y * ellipse.radiusY;
+  return {
+    x: center.x + cosine * offsetX - sine * offsetY,
+    y: center.y + sine * offsetX + cosine * offsetY,
+  };
+}
+
+function lowFrequencySample(
+  input: CpuRenderInput,
+  context: GeometryContext,
+  center: GeometryPoint,
+  ellipse: CleanupEllipse,
+  transfer: TransferFunction,
+  fallback: Rgb,
+): Rgb {
+  const offsets: readonly (readonly [number, number])[] = [
+    [0, 0],
+    [-0.4, 0],
+    [0.4, 0],
+    [0, -0.4],
+    [0, 0.4],
+    [-0.28, -0.28],
+    [0.28, -0.28],
+    [-0.28, 0.28],
+    [0.28, 0.28],
+  ];
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let count = 0;
+  for (const [x, y] of offsets) {
+    const sample = sampleCanonicalBase(
+      input,
+      context,
+      ellipseOffset(center, ellipse, x, y),
+      transfer,
+    );
+    if (!sample) continue;
+    red += sample[0];
+    green += sample[1];
+    blue += sample[2];
+    count += 1;
+  }
+  return count === 0 ? fallback : [red / count, green / count, blue / count];
+}
+
+function healedSample(source: Rgb, sourceLow: Rgb, targetLow: Rgb): Rgb {
+  return [
+    clamp(targetLow[0] + source[0] - sourceLow[0], -16, 16),
+    clamp(targetLow[1] + source[1] - sourceLow[1], -16, 16),
+    clamp(targetLow[2] + source[2] - sourceLow[2], -16, 16),
+  ];
+}
+
+function applyManualCleanup(
+  input: CpuRenderInput,
+  geometry: GeometryRenderResult,
+  region: RenderRegion,
+  transfer: TransferFunction,
+): boolean {
+  const components = input.document.cleanup.components.filter((component) =>
+    component.enabled &&
+    (component.kind === "red-eye"
+      ? component.amount > 0
+      : component.opacity > 0 && component.source.kind === "sampled")
+  );
+  if (components.length === 0) return true;
+  for (let y = 0; y < geometry.image.height; y += 1) {
+    if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
+    for (let x = 0; x < geometry.image.width; x += 1) {
+      const pixel = y * geometry.image.width + x;
+      if ((geometry.alpha[pixel] ?? 0) === 0) continue;
+      const mapped = mappedRenderPoint(input, geometry.context, region, x, y);
+      if (!mapped) continue;
+      let result = readRgb(geometry.image, pixel);
+      for (const component of components) {
+        if (component.kind === "red-eye") {
+          result = applyRedEye(result, component, mapped.canonical);
+          continue;
+        }
+        if (component.source.kind !== "sampled") continue;
+        const amount = repairCoverage(
+          mapped.canonical,
+          component.target,
+          component.feather,
+          component.opacity,
+        );
+        if (amount <= 0) continue;
+        const sourcePoint = mapRepairSourcePoint(
+          mapped.canonical,
+          component.target,
+          component.source.region,
+        );
+        if (!sourcePoint) continue;
+        const source = sampleCanonicalBase(
+          input,
+          geometry.context,
+          sourcePoint,
+          transfer,
+        );
+        if (!source) continue;
+        let replacement = source;
+        if (component.mode !== "clone") {
+          // Stable source pixels keep tiled and full-frame output identical. Target
+          // blending remains ordered, while repair sources do not recursively sample repairs.
+          const sourceLow = lowFrequencySample(
+            input,
+            geometry.context,
+            sourcePoint,
+            component.source.region,
+            transfer,
+            source,
+          );
+          const targetBase = sampleCanonicalBase(
+            input,
+            geometry.context,
+            mapped.canonical,
+            transfer,
+          ) ?? result;
+          const targetLow = lowFrequencySample(
+            input,
+            geometry.context,
+            mapped.canonical,
+            component.target,
+            transfer,
+            targetBase,
+          );
+          replacement = healedSample(source, sourceLow, targetLow);
+        }
+        result = blendRgb(result, replacement, amount);
+      }
+      writeRgb(geometry.image.data, pixel, result);
+    }
+  }
+  return true;
+}
+
+function applyManualLocalAdjustments(
+  input: CpuRenderInput,
+  geometry: GeometryRenderResult,
+  region: RenderRegion,
+): boolean {
+  const masks = input.document.local.masks.filter((mask) =>
+    mask.enabled && !localAdjustmentIsNeutral(mask)
+  );
+  if (masks.length === 0) return true;
+  const dimensions = orientedDimensions(input.source);
+  for (let y = 0; y < geometry.image.height; y += 1) {
+    if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
+    for (let x = 0; x < geometry.image.width; x += 1) {
+      const pixel = y * geometry.image.width + x;
+      if ((geometry.alpha[pixel] ?? 0) === 0) continue;
+      const mapped = mappedRenderPoint(input, geometry.context, region, x, y);
+      if (!mapped) continue;
+      let result = readRgb(geometry.image, pixel);
+      for (const mask of masks) {
+        const coverage = manualMaskCoverage(mask, mapped.canonical, dimensions);
+        if (coverage <= 0) continue;
+        result = blendRgb(
+          result,
+          applyLocalBasicAdjustment(result, mask.adjustments),
+          coverage,
+        );
+      }
+      writeRgb(geometry.image.data, pixel, result);
+    }
+  }
+  return true;
 }
 
 function luminance(rgb: Rgb): number {
@@ -1387,8 +1663,10 @@ function executeRegion(
 ): ExecutedRegion | null {
   const geometry = renderGeometry(input, transfer, region);
   if (!geometry) return null;
+  if (!applyManualCleanup(input, geometry, region, transfer)) return null;
   beforeTone?.(geometry.image);
   if (!applyPointwiseStages(input, geometry.image)) return null;
+  if (!applyManualLocalAdjustments(input, geometry, region)) return null;
   const presence = applyPresence(input, geometry.image);
   if (!presence) return null;
   const sharpened = applySharpening(input, presence);
