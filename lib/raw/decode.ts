@@ -1,16 +1,30 @@
 import type { LibraryEntry } from "@/lib/fs/types";
+import {
+  getFormatCapability,
+  getDecoderProfileIdForFileName,
+  getFormatCapabilityForFileName,
+} from "@/lib/formats/registry";
 import { getFileFromEntry } from "@/lib/fs/directory";
+import { getAssetRequest } from "@/lib/fs/session-catalog";
 import { runWithThumbnailLimit } from "@/lib/cache/concurrency";
 import { nefProfile } from "./profiles/nef";
 import { standardImageProfile } from "./profiles/standard";
-import type { DecodeOptions, DecodedImage } from "./types";
+import type { DecodeOptions, DecodedImage, ImageProfile } from "./types";
 
-const PROFILES = [standardImageProfile, nefProfile];
+const PROFILES: Record<"standard" | "nef", typeof standardImageProfile> = {
+  standard: standardImageProfile,
+  nef: nefProfile,
+};
 
 export function resolveProfile(
-  file: Pick<LibraryEntry, "name">,
-): (typeof PROFILES)[number] | null {
-  return PROFILES.find((profile) => profile.detect(file)) ?? null;
+  file: Pick<LibraryEntry, "name"> & Partial<Pick<LibraryEntry, "formatId">>,
+): ImageProfile | null {
+  const profileId = file.formatId === "nef"
+    ? "nef"
+    : file.formatId === "jpeg" || file.formatId === "png" || file.formatId === "webp"
+      ? "standard"
+      : getDecoderProfileIdForFileName(file.name);
+  return profileId ? PROFILES[profileId] : null;
 }
 
 export function decodeEntry(
@@ -25,6 +39,14 @@ export async function decodeEntry(
   entry: LibraryEntry,
   options?: DecodeOptions,
 ): Promise<DecodedImage> {
+  const capability = entry.formatId === null
+    ? getFormatCapabilityForFileName(entry.name)
+    : getFormatCapability(entry.formatId);
+  if (!capability || capability.preview.status !== "supported") {
+    throw new Error(
+      entry.formatAvailability.reason ?? `Preview is unavailable for ${entry.name}.`,
+    );
+  }
   const profile = resolveProfile(entry);
   if (!profile) {
     throw new Error(`No decoder profile found for ${entry.name}`);
@@ -36,6 +58,7 @@ export async function decodeEntry(
     return profile.decode(buffer, {
       ...options,
       relativePath: entry.relativePath,
+      assetRequest: getAssetRequest(entry),
     });
   };
 

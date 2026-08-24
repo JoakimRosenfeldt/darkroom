@@ -195,7 +195,6 @@ function safeSuggestedFilename(
 }
 
 export function ExportDialog({ entries, onClose }: ExportDialogProps) {
-  const rootPath = useLibraryStore((state) => state.rootPath);
   const metadata = useLibraryStore((state) => state.entryMetadata);
   const [formats, setFormats] = useState<ExportFormatDescriptor[]>([]);
   const [format, setFormat] = useState<ExportFormatId>(DEFAULT_PREFERENCES.format);
@@ -289,10 +288,6 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     if (!selectedFormat || entries.length === 0) {
       return;
     }
-    if (!rootPath) {
-      setError("No approved photo folder is open.");
-      return;
-    }
     const sizeError = validateSize(size);
     const suffixError = validateSuffix(suffix);
     if (sizeError || suffixError) {
@@ -315,13 +310,12 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     try {
       const api = getDarkroomAPI();
       const destinationRequest: ExportDestinationRequest = {
+        catalogId: entries[0]!.catalogId,
+        sessionId: entries[0]!.sessionId,
+        assetIds: entries.map((entry) => entry.id),
         count: entries.length,
         format: selectedFormat.id,
         suggestedFilename: safeSuggestedFilename(entries[0], suffix, selectedFormat),
-        sources: entries.map((entry) => ({
-          rootPath: rootPath ?? "",
-          relativePath: entry.relativePath,
-        })),
       };
       const destination = await api.chooseExportDestination(destinationRequest);
       if (!destination) {
@@ -342,7 +336,6 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       const result = await runExportBatch({
         entries,
         metadata,
-        rootPath,
         destinationToken: destination.token,
         options: {
           format,
@@ -372,7 +365,6 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     lossless,
     metadata,
     quality,
-    rootPath,
     selectedFormat,
     size,
     suffix,

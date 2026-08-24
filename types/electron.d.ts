@@ -1,4 +1,33 @@
-import type { PhotoCatalog } from "../lib/catalog/types";
+import type {
+  CatalogActivationResult,
+  CatalogApplyRequest,
+  CatalogApplyResult,
+  CatalogAssetHeadRequest,
+  CatalogAssetRequest,
+  CatalogBootstrapResult,
+  CatalogCreateRequest,
+  CatalogDecodeRequest,
+  CatalogDecodeResult,
+  CatalogEvent,
+  CatalogOperationRequest,
+  CatalogOperationResult,
+  CatalogQueryRequest,
+  CatalogRemoveRequest,
+  CatalogRootRequest,
+  CatalogRootResult,
+  CatalogScanRequest,
+  CatalogSelectionRequest,
+  CatalogSessionRequest,
+  CatalogSidecarWriteRequest,
+  CatalogLiveStateView,
+} from "../lib/catalog/api";
+import type { LibraryOperationSnapshot } from "../lib/catalog/runtime";
+import type {
+  CatalogFingerprintBackfillOperationRequest,
+  CatalogFingerprintBackfillProgress,
+  CatalogFingerprintBackfillRequest,
+  CatalogFingerprintBackfillResumeRequest,
+} from "../lib/catalog/fingerprint-backfill";
 import type {
   AiModelId,
   AiModelDisclosureLink,
@@ -6,7 +35,6 @@ import type {
   AiModelState,
   Unsubscribe,
 } from "../lib/ai/types";
-import type { NefDecodeRequest, NefDecodeResult } from "../electron/nef-decoder-service";
 import type {
   ExportDestinationRequest,
   ExportEncodeOptions,
@@ -19,40 +47,96 @@ import type {
   ExportOptionsSettings,
   ExportOptionsSettingsInput,
 } from "../electron/settings";
-
-export interface ScannedFile {
-  name: string;
-  relativePath: string;
-  size: number;
-  lastModified: number;
-}
-
-export type { PhotoCatalog };
+import type { FormatCapabilityReport } from "../lib/formats/types";
+import type {
+  CatalogAdminBackupResult,
+  CatalogAdminCloneResult,
+  CatalogAdminImportRequest,
+  CatalogAdminInspectReport,
+  CatalogAdminOptimizePreview,
+  CatalogAdminOptimizeResult,
+  CatalogAdminPolicyRequest,
+  CatalogAdminSessionRequest,
+  CatalogBackupPolicyState,
+} from "../lib/catalog/admin";
+import type {
+  RelinkApplyRequest,
+  RelinkCancelRequest,
+  RelinkPrepareRequest,
+  RelinkServiceApplyResult,
+  RelinkServiceDraft,
+} from "../lib/catalog/relink";
+import type {
+  CatalogImportDraftView,
+  CatalogImportExecutionView,
+  CatalogImportOperationRequest,
+  CatalogImportPrepareRequest,
+} from "../lib/import/api";
+import type {
+  AutoImportCancelRequest,
+  AutoImportConfigureRequest,
+  AutoImportControlRequest,
+  AutoImportStatus,
+} from "../lib/import/auto-import-api";
 
 export interface DarkroomAPI {
   isElectron: true;
-  pickFolder(): Promise<{ path: string; name: string } | null>;
-  scanFolder(rootPath: string): Promise<ScannedFile[]>;
-  readFile(absolutePath: string): Promise<ArrayBuffer>;
-  readFileHead(absolutePath: string, maxBytes: number): Promise<ArrayBuffer>;
-  statFile(absolutePath: string): Promise<{ size: number; lastModified: number }>;
-  decodeNef(request: NefDecodeRequest): Promise<NefDecodeResult>;
-  getLastFolder(): Promise<string | null>;
-  setLastFolder(folderPath: string | null): Promise<void>;
-  folderExists(folderPath: string): Promise<boolean>;
-  readCatalog(rootPath: string): Promise<PhotoCatalog | null>;
-  writeCatalog(catalog: PhotoCatalog): Promise<void>;
-  deleteCatalog(rootPath: string): Promise<void>;
-  deleteFiles(absolutePaths: string[]): Promise<void>;
-  readSidecar(
-    rootPath: string,
-    relativePath: string,
-  ): Promise<{ contents: string; lastModified: number } | null>;
-  writeSidecar(
-    rootPath: string,
-    relativePath: string,
-    contents: string,
-  ): Promise<void>;
+  catalogBootstrap(): Promise<CatalogBootstrapResult>;
+  catalogCreate(request: CatalogCreateRequest): Promise<CatalogActivationResult>;
+  catalogOpen(request: CatalogSelectionRequest): Promise<CatalogActivationResult>;
+  catalogSwitch(request: CatalogSelectionRequest): Promise<CatalogActivationResult>;
+  catalogClose(request: CatalogSessionRequest): Promise<void>;
+  catalogAddRoot(request: CatalogSessionRequest): Promise<CatalogRootResult>;
+  catalogRelinkRoot(request: CatalogRootRequest): Promise<CatalogActivationResult>;
+  catalogRelinkFilesPrepare(request: RelinkPrepareRequest): Promise<RelinkServiceDraft | null>;
+  catalogRelinkFilesApply(request: RelinkApplyRequest): Promise<RelinkServiceApplyResult>;
+  catalogRelinkFilesCancel(request: RelinkCancelRequest): Promise<void>;
+  catalogRemove(request: CatalogRemoveRequest): Promise<void>;
+  catalogStartScan(request: CatalogScanRequest): Promise<CatalogOperationResult>;
+  catalogCancelScan(request: CatalogOperationRequest): Promise<void>;
+  catalogGetOperation(request: CatalogOperationRequest): Promise<LibraryOperationSnapshot>;
+  catalogWaitOperation(request: CatalogOperationRequest): Promise<LibraryOperationSnapshot>;
+  catalogQuery(request: CatalogQueryRequest): Promise<CatalogLiveStateView>;
+  catalogApply(request: CatalogApplyRequest): Promise<CatalogApplyResult>;
+  catalogImportPrepare(request: CatalogImportPrepareRequest): Promise<CatalogImportDraftView>;
+  catalogImportReview(request: CatalogImportOperationRequest): Promise<CatalogImportDraftView>;
+  catalogImportRun(request: CatalogImportOperationRequest): Promise<CatalogImportExecutionView>;
+  catalogImportCancel(request: CatalogImportOperationRequest): Promise<void>;
+  catalogAutoImportConfigure(request: AutoImportConfigureRequest): Promise<AutoImportStatus>;
+  catalogAutoImportStatus(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportEnable(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportDisable(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportPause(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportResume(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportRetryFailed(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportClearFailed(request: AutoImportControlRequest): Promise<AutoImportStatus>;
+  catalogAutoImportCancel(request: AutoImportCancelRequest): Promise<AutoImportStatus>;
+  catalogAutoImportOpenIngress(request: CatalogSessionRequest): Promise<void>;
+  catalogReadAsset(request: CatalogAssetRequest): Promise<ArrayBuffer>;
+  catalogReadAssetHead(request: CatalogAssetHeadRequest): Promise<ArrayBuffer>;
+  catalogStatAsset(request: CatalogAssetRequest): Promise<{ readonly size: number; readonly lastModified: number }>;
+  catalogReadSidecar(request: CatalogAssetRequest): Promise<{ readonly contents: string; readonly lastModified: number } | null>;
+  catalogWriteSidecar(request: CatalogSidecarWriteRequest): Promise<void>;
+  catalogDecodeAsset(request: CatalogAssetRequest, decode: CatalogDecodeRequest): Promise<CatalogDecodeResult>;
+  catalogTrashAsset(request: CatalogAssetRequest): Promise<void>;
+  onCatalogEvent(listener: (event: CatalogEvent) => void): Unsubscribe;
+  getFormatCapabilityReport(): Promise<FormatCapabilityReport>;
+  catalogFingerprintStatus(request: CatalogFingerprintBackfillRequest): Promise<CatalogFingerprintBackfillProgress | null>;
+  catalogFingerprintStart(request: CatalogFingerprintBackfillRequest): Promise<CatalogFingerprintBackfillProgress>;
+  catalogFingerprintResume(request: CatalogFingerprintBackfillResumeRequest): Promise<CatalogFingerprintBackfillProgress>;
+  catalogFingerprintRecover(request: CatalogFingerprintBackfillRequest): Promise<CatalogFingerprintBackfillProgress | null>;
+  catalogFingerprintCancel(request: CatalogFingerprintBackfillOperationRequest): Promise<void>;
+  onCatalogFingerprintProgress(listener: (progress: CatalogFingerprintBackfillProgress) => void): Unsubscribe;
+  catalogAdminInspect(request: CatalogAdminSessionRequest): Promise<CatalogAdminInspectReport>;
+  catalogAdminBackup(request: CatalogAdminSessionRequest): Promise<CatalogAdminBackupResult>;
+  catalogAdminExport(request: CatalogAdminSessionRequest): Promise<CatalogAdminBackupResult | null>;
+  catalogAdminValidatePackage(): Promise<CatalogAdminInspectReport | null>;
+  catalogAdminImportAsNew(request: CatalogAdminImportRequest): Promise<CatalogAdminCloneResult | null>;
+  catalogAdminOptimizePreview(request: CatalogAdminSessionRequest): Promise<CatalogAdminOptimizePreview>;
+  catalogAdminOptimize(request: CatalogAdminSessionRequest): Promise<CatalogAdminOptimizeResult>;
+  catalogAdminGetBackupPolicy(request: CatalogAdminSessionRequest): Promise<CatalogBackupPolicyState>;
+  catalogAdminSetBackupPolicy(request: CatalogAdminPolicyRequest): Promise<CatalogBackupPolicyState>;
+  catalogAdminRunScheduledBackup(request: CatalogAdminSessionRequest): Promise<CatalogAdminBackupResult | null>;
   getExportFormats(): Promise<ExportFormatDescriptor[]>;
   chooseExportDestination(
     request: ExportDestinationRequest,

@@ -13,6 +13,7 @@
     "test:catalog-worker:worker": "npm run build:electron && cross-env ELECTRON_RUN_AS_NODE=1 electron --no-warnings --experimental-strip-types scripts/catalog-worker-smoke.mts electron-dist/catalog-worker.js",
     "test:catalog-worker:electron": "npm run build:electron && node --no-warnings --experimental-strip-types scripts/catalog-worker-smoke.mts --app",
     "dist": "npm run build && node scripts/package-release.mjs",
+    "pretest": "node native/file-transaction-helper/build.mjs",
     "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mts",
     "lint": "eslint",
     "postinstall": "node scripts/patch-libraw.mjs && node scripts/ensure-electron.mjs"
@@ -60,6 +61,7 @@
       "node_modules/semver/**/*"
     ],
     "asarUnpack": [
+      "electron-dist/file-transaction-helper-*",
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*"
     ],

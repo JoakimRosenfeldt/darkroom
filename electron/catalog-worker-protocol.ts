@@ -48,6 +48,18 @@ import {
   type CatalogV3ValidationResult,
 } from "../lib/catalog/v3.ts";
 import {
+  parseCatalogLiveApplyInput,
+  parseCatalogLiveApplyResult,
+  parseCatalogLiveCreateInput,
+  parseCatalogLiveQueryInput,
+  parseCatalogLiveQueryResult,
+  type CatalogLiveApplyInput,
+  type CatalogLiveApplyResult,
+  type CatalogLiveCreateInput,
+  type CatalogLiveQueryInput,
+  type CatalogLiveState,
+} from "../lib/catalog/live.ts";
+import {
   parseCatalogFaultPoint,
   parseCatalogFaultStage,
   type CatalogFaultPoint,
@@ -108,6 +120,38 @@ export interface CatalogWorkerBackupResponse {
   readonly requestId: string;
   readonly destinationPath: string;
   readonly pages: number;
+}
+
+export interface CatalogWorkerVacuumIntoRequest {
+  readonly kind: "vacuum-into";
+  readonly requestId: string;
+  readonly destinationPath: string;
+}
+
+export interface CatalogWorkerVacuumIntoResponse {
+  readonly kind: "vacuum-into";
+  readonly requestId: string;
+  readonly destinationPath: string;
+  readonly byteLength: number;
+}
+
+export interface CatalogWorkerCloneCatalogRequest {
+  readonly kind: "clone-catalog";
+  readonly requestId: string;
+  readonly sourcePath: string;
+  readonly destinationPath: string;
+  readonly catalogId: CatalogId;
+  readonly displayName: string;
+  readonly appVersion: string;
+}
+
+export interface CatalogWorkerCloneCatalogResponse {
+  readonly kind: "clone-catalog";
+  readonly requestId: string;
+  readonly sourceCatalogId: CatalogId;
+  readonly catalogId: CatalogId;
+  readonly rootCount: number;
+  readonly assetCount: number;
 }
 
 export interface CatalogWorkerIntegrityCheckRequest {
@@ -287,6 +331,42 @@ export interface CatalogWorkerCatalogV3AlbumAssetPageResponse {
   readonly result: CatalogV3AlbumAssetPage;
 }
 
+export interface CatalogWorkerCatalogLiveCreateRequest {
+  readonly kind: "live-create";
+  readonly requestId: string;
+  readonly input: CatalogLiveCreateInput;
+}
+
+export interface CatalogWorkerCatalogLiveCreateResponse {
+  readonly kind: "live-create";
+  readonly requestId: string;
+  readonly result: CatalogLiveApplyResult;
+}
+
+export interface CatalogWorkerCatalogLiveQueryRequest {
+  readonly kind: "live-query";
+  readonly requestId: string;
+  readonly input: CatalogLiveQueryInput;
+}
+
+export interface CatalogWorkerCatalogLiveQueryResponse {
+  readonly kind: "live-query";
+  readonly requestId: string;
+  readonly result: CatalogLiveState;
+}
+
+export interface CatalogWorkerCatalogLiveApplyRequest {
+  readonly kind: "live-apply";
+  readonly requestId: string;
+  readonly input: CatalogLiveApplyInput;
+}
+
+export interface CatalogWorkerCatalogLiveApplyResponse {
+  readonly kind: "live-apply";
+  readonly requestId: string;
+  readonly result: CatalogLiveApplyResult;
+}
+
 export interface CatalogWorkerTestTracerRunRequest {
   readonly kind: "test-tracer-run";
   readonly requestId: string;
@@ -336,6 +416,8 @@ export type CatalogWorkerRequest =
   | CatalogWorkerOpenRequest
   | CatalogWorkerTransactionProbeRequest
   | CatalogWorkerBackupRequest
+  | CatalogWorkerVacuumIntoRequest
+  | CatalogWorkerCloneCatalogRequest
   | CatalogWorkerIntegrityCheckRequest
   | CatalogWorkerCloseRequest
   | CatalogWorkerShutdownRequest
@@ -350,6 +432,9 @@ export type CatalogWorkerRequest =
   | CatalogWorkerCatalogV3AssetPageRequest
   | CatalogWorkerCatalogV3AlbumSnapshotsRequest
   | CatalogWorkerCatalogV3AlbumAssetPageRequest
+  | CatalogWorkerCatalogLiveCreateRequest
+  | CatalogWorkerCatalogLiveQueryRequest
+  | CatalogWorkerCatalogLiveApplyRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
   | CatalogWorkerTestTracerInspectRequest;
@@ -388,6 +473,8 @@ export type CatalogWorkerResponse =
   | CatalogWorkerOpenResponse
   | CatalogWorkerTransactionProbeResponse
   | CatalogWorkerBackupResponse
+  | CatalogWorkerVacuumIntoResponse
+  | CatalogWorkerCloneCatalogResponse
   | CatalogWorkerIntegrityCheckResponse
   | CatalogWorkerCloseResponse
   | CatalogWorkerShutdownResponse
@@ -402,6 +489,9 @@ export type CatalogWorkerResponse =
   | CatalogWorkerCatalogV3AssetPageResponse
   | CatalogWorkerCatalogV3AlbumSnapshotsResponse
   | CatalogWorkerCatalogV3AlbumAssetPageResponse
+  | CatalogWorkerCatalogLiveCreateResponse
+  | CatalogWorkerCatalogLiveQueryResponse
+  | CatalogWorkerCatalogLiveApplyResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
   | CatalogWorkerTestTracerInspectResponse
@@ -428,6 +518,14 @@ function requiredString(record: RecordValue, key: string, allowEmpty = false): s
   return value;
 }
 
+function requiredBoundedString(record: RecordValue, key: string, maximum: number): string {
+  const value = requiredString(record, key);
+  if (value.length > maximum || value.includes("\u0000")) {
+    throw new Error(`Catalog worker ${key} is invalid.`);
+  }
+  return value;
+}
+
 function requiredNullableString(record: RecordValue, key: string): string | null {
   const value = record[key];
   if (value === null) return null;
@@ -441,6 +539,14 @@ function requiredAbsolutePath(record: RecordValue, key: string): string {
   const value = requiredString(record, key);
   if (!path.isAbsolute(value) || value !== path.normalize(value)) {
     throw new Error(`Catalog worker ${key} must be a normalized absolute path.`);
+  }
+  return value;
+}
+
+function requiredNonRootAbsolutePath(record: RecordValue, key: string): string {
+  const value = requiredAbsolutePath(record, key);
+  if (value === path.parse(value).root) {
+    throw new Error(`Catalog worker ${key} must be a non-root absolute path.`);
   }
   return value;
 }
@@ -1113,6 +1219,18 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId };
     case "backup":
       return { kind, requestId, destinationPath: requiredAbsolutePath(record, "destinationPath") };
+    case "vacuum-into":
+      return { kind, requestId, destinationPath: requiredNonRootAbsolutePath(record, "destinationPath") };
+    case "clone-catalog":
+      return {
+        kind,
+        requestId,
+        sourcePath: requiredNonRootAbsolutePath(record, "sourcePath"),
+        destinationPath: requiredNonRootAbsolutePath(record, "destinationPath"),
+        catalogId: requiredCatalogId(record),
+        displayName: requiredBoundedString(record, "displayName", 512),
+        appVersion: requiredBoundedString(record, "appVersion", 256),
+      };
     case "integrity-check":
       return { kind, requestId };
     case "close":
@@ -1161,6 +1279,12 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, input: parseCatalogV3AlbumPageInput(record.input) };
     case "v3-album-assets-page":
       return { kind, requestId, input: parseCatalogV3AlbumAssetPageInput(record.input) };
+    case "live-create":
+      return { kind, requestId, input: parseCatalogLiveCreateInput(record.input) };
+    case "live-query":
+      return { kind, requestId, input: parseCatalogLiveQueryInput(record.input) };
+    case "live-apply":
+      return { kind, requestId, input: parseCatalogLiveApplyInput(record.input) };
     case "test-tracer-run":
       return {
         kind,
@@ -1249,6 +1373,24 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
         destinationPath: requiredAbsolutePath(record, "destinationPath"),
         pages: requiredInteger(record, "pages"),
       };
+    case "vacuum-into":
+      if (requestId === null) throw new Error("Vacuum response needs a requestId.");
+      return {
+        kind,
+        requestId,
+        destinationPath: requiredNonRootAbsolutePath(record, "destinationPath"),
+        byteLength: requiredNonnegativeInteger(record, "byteLength"),
+      };
+    case "clone-catalog":
+      if (requestId === null) throw new Error("Clone response needs a requestId.");
+      return {
+        kind,
+        requestId,
+        sourceCatalogId: requiredCatalogId(record, "sourceCatalogId"),
+        catalogId: requiredCatalogId(record),
+        rootCount: requiredNonnegativeInteger(record, "rootCount"),
+        assetCount: requiredNonnegativeInteger(record, "assetCount"),
+      };
     case "integrity-check":
       if (requestId === null) throw new Error("Integrity response needs a requestId.");
       {
@@ -1302,6 +1444,15 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "v3-album-assets-page":
       if (requestId === null) throw new Error("Catalog v3 album asset response needs a requestId.");
       return { kind, requestId, result: parseCatalogV3AlbumAssetPage(requiredV3Result(record)) };
+    case "live-create":
+      if (requestId === null) throw new Error("Catalog live create response needs a requestId.");
+      return { kind, requestId, result: parseCatalogLiveApplyResult(requiredRecord(record.result, "live create result")) };
+    case "live-query":
+      if (requestId === null) throw new Error("Catalog live query response needs a requestId.");
+      return { kind, requestId, result: parseCatalogLiveQueryResult(requiredRecord(record.result, "live query result")) };
+    case "live-apply":
+      if (requestId === null) throw new Error("Catalog live apply response needs a requestId.");
+      return { kind, requestId, result: parseCatalogLiveApplyResult(requiredRecord(record.result, "live apply result")) };
     case "test-tracer-run":
     case "test-tracer-recover":
     case "test-tracer-inspect":

@@ -6,6 +6,7 @@ import {
   DEFAULT_EXPORT_SUFFIX,
   MAX_EXPORT_EDGE,
   MAX_EXPORT_PIXELS,
+  parseExportDestinationRequest,
   type ExportEncodeOptions,
   type ExportEncodeResult,
   type ExportFormatDescriptor,
@@ -13,6 +14,7 @@ import {
   type ExportPixelPayload,
   type ExportPixels,
 } from "../lib/export/types";
+import type { AssetId } from "../lib/catalog/ids";
 
 export type {
   ExportConflictBehavior,
@@ -24,7 +26,6 @@ export type {
   ExportPixels,
   ExportSizeOptions,
 } from "../lib/export/types";
-import { scanFolderTree } from "./fs-service";
 export type ExportResult = ExportEncodeResult;
 
 export interface ExportDialog {
@@ -39,16 +40,8 @@ export interface ExportDialog {
   }): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
 
-export interface ExportDestinationRequest {
-  count: number;
-  format: ExportFormatId;
-  suggestedFilename: string;
-  /** Renderer-selected sources, validated against the main-process scan. */
-  sources?: Array<{
-    rootPath: string;
-    relativePath: string;
-  }>;
-}
+export type { ExportDestinationRequest } from "../lib/export/types";
+import type { ExportDestinationRequest } from "../lib/export/types";
 
 export interface ExportFinalizeResult {
   revealToken: string | null;
@@ -56,11 +49,17 @@ export interface ExportFinalizeResult {
 }
 
 export interface ApprovedExportSource {
+  assetId: AssetId;
   path: string;
   directory: string;
   basename: string;
   device?: number;
   inode?: number;
+}
+
+export interface ResolvedCatalogExportSource {
+  readonly assetId: AssetId;
+  readonly path: string;
 }
 
 const MAX_FILENAME_LENGTH = 240;
@@ -159,10 +158,6 @@ function normalizedPathKey(value: string): string {
 
 function isNodePath(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !value.includes("\0");
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-  return isAbsolutePathWithin(root, path.resolve(candidate));
 }
 
 function statIdentity(stat: {
@@ -314,42 +309,35 @@ function stripKnownExtension(value: string): string {
   return knownExtensions.has(extension) ? value.slice(0, -extension.length) : value;
 }
 
-/**
- * Resolve every supported source in the main-owned active library. The
- * renderer's selection is intentionally not part of this capability: it may
- * omit a file or lie about a path, so the complete scan is what protects
- * source photos from replacement.
- */
 export async function resolveApprovedExportSources(
-  activeLibraryRoot: string | null,
+  resolvedSources: readonly ResolvedCatalogExportSource[],
 ): Promise<ApprovedExportSource[]> {
-  if (!activeLibraryRoot || !isNodePath(activeLibraryRoot) || !path.isAbsolute(activeLibraryRoot)) {
-    throw new Error("No approved library folder is open.");
+  if (!Array.isArray(resolvedSources)) {
+    throw new Error("Approved catalog sources are invalid.");
   }
-
-  const root = await fs.realpath(activeLibraryRoot);
-  const rootStat = await fs.stat(root);
-  if (!rootStat.isDirectory()) {
-    throw new Error("Approved library root is not a directory.");
-  }
-
-  const scannedFiles = await scanFolderTree(root);
   const sources: ApprovedExportSource[] = [];
-  for (const file of scannedFiles) {
-    const requestedPath = path.resolve(root, file.relativePath);
-    if (!isWithinRoot(root, requestedPath)) {
-      throw new Error("Approved source must stay inside the active library.");
+  const seen = new Set<AssetId>();
+  for (const source of resolvedSources) {
+    if (
+      typeof source !== "object" ||
+      source === null ||
+      !isNodePath(source.path) ||
+      !path.isAbsolute(source.path) ||
+      seen.has(source.assetId)
+    ) {
+      throw new Error("Approved catalog source is invalid.");
     }
-
-    const sourcePath = await fs.realpath(requestedPath);
-    if (!isWithinRoot(root, sourcePath)) {
-      throw new Error("Approved source cannot follow a symlink outside the library.");
+    const sourcePath = await fs.realpath(source.path);
+    if (!pathsEqual(sourcePath, source.path)) {
+      throw new Error("Approved source cannot use a symbolic link.");
     }
-    const sourceStat = await fs.stat(sourcePath);
-    if (!sourceStat.isFile()) {
+    const sourceStat = await fs.lstat(sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
       throw new Error("Approved source is not a regular file.");
     }
+    seen.add(source.assetId);
     sources.push({
+      assetId: source.assetId,
       path: sourcePath,
       directory: path.dirname(sourcePath),
       basename: path.basename(sourcePath),
@@ -977,33 +965,14 @@ export function createExportService(
   }
 
   async function resolveSelectedSources(
-    requested: ExportDestinationRequest["sources"],
+    requested: readonly AssetId[],
     sources: readonly ApprovedExportSource[],
   ): Promise<Set<string>> {
     const selected = new Set<string>();
-    if (!requested) {
-      return selected;
-    }
-    for (const item of requested) {
-      if (
-        typeof item !== "object" ||
-        item === null ||
-        !isNodePath(item.rootPath) ||
-        !path.isAbsolute(item.rootPath) ||
-        !isNodePath(item.relativePath) ||
-        path.isAbsolute(item.relativePath)
-      ) {
-        throw new Error("Selected export source is invalid.");
-      }
-      const root = await fs.realpath(item.rootPath);
-      const candidate = path.resolve(root, item.relativePath);
-      if (!isWithinRoot(root, candidate)) {
-        throw new Error("Selected export source must stay inside the approved library.");
-      }
-      const sourcePath = await fs.realpath(candidate);
-      const approved = sources.find((source) => pathsEqual(source.path, sourcePath));
+    for (const assetId of requested) {
+      const approved = sources.find((source) => source.assetId === assetId);
       if (!approved) {
-        throw new Error("Selected export source is not in the approved library scan.");
+        throw new Error("Selected export source is unavailable in the active catalog.");
       }
       selected.add(destinationSourceKey(approved));
     }
@@ -1025,26 +994,21 @@ export function createExportService(
     sources: ApprovedExportSource[],
   ): Promise<{ token: string } | null> {
     pruneExpiredCapabilities();
-    if (
-      typeof request !== "object" ||
-      request === null ||
-      !Number.isInteger(request.count) ||
-      request.count <= 0 ||
-      !Array.isArray(sources)
-    ) {
+    if (!Array.isArray(sources)) {
       throw new Error("Export destination request is invalid.");
     }
+    const parsedRequest = parseExportDestinationRequest(request);
     await ensureProvenanceReady();
-    const selectedSources = await resolveSelectedSources(request.sources, sources);
+    const selectedSources = await resolveSelectedSources(parsedRequest.assetIds, sources);
     const availableFormats = await getExportFormats();
-    const format = availableFormats.find((candidate) => candidate.id === request.format);
+    const format = availableFormats.find((candidate) => candidate.id === parsedRequest.format);
     if (!format) {
-      throw new Error(`Export format is unavailable: ${String(request.format)}`);
+      throw new Error(`Export format is unavailable: ${String(parsedRequest.format)}`);
     }
 
-    if (request.count === 1) {
+    if (parsedRequest.count === 1) {
       const suggestedBase = sanitizeFilenamePart(
-        stripKnownExtension(request.suggestedFilename),
+        stripKnownExtension(parsedRequest.suggestedFilename),
         "Suggested filename",
       );
       const result = await dialog.showSaveDialog({

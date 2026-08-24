@@ -2,6 +2,14 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  getNikonDecoderProvenance,
+} from "../lib/formats/registry.ts";
+import type {
+  NikonDecoderKind,
+  NikonDecoderProvenance,
+} from "../lib/formats/types.ts";
+import type { NikonRuntimePackageState } from "../lib/formats/types.ts";
 
 const PREVIEW_MAX_EDGE = 2560;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -37,6 +45,7 @@ export interface NefDecodeFailure {
 
 export interface NefDecodeSuccess {
   available: true;
+  provenance: NikonDecoderProvenance;
   version: 1;
   width: number;
   height: number;
@@ -56,6 +65,9 @@ export interface NefDecoderCommand {
   executable: string;
   fixedArgs?: readonly string[];
   env?: Record<string, string>;
+  kind?: NikonDecoderKind;
+  packageState?: NikonRuntimePackageState;
+  expectedChecksum?: string;
 }
 
 interface NefDecoderServiceOptions {
@@ -310,6 +322,7 @@ async function readOutput(
   output: string,
   request: NefDecodeRequest,
   outputIdentity: { dev: number; ino: number },
+  provenance: NikonDecoderProvenance,
 ): Promise<NefDecodeSuccess> {
   const outputStat = await fs.lstat(output);
   if (
@@ -407,6 +420,7 @@ async function readOutput(
     }
     return {
       available: true,
+      provenance,
       version: 1,
       width: Number(width),
       height: Number(height),
@@ -429,6 +443,22 @@ function asFailure(error: unknown): NefDecodeFailure {
     return { available: false, code: error.code, message: error.message };
   }
   return { available: false, code: "INTERNAL", message: "Nikon decoder failed unexpectedly." };
+}
+
+function getHelperProvenance(
+  command: NefDecoderCommand | null,
+): NikonDecoderProvenance {
+  const isCheckedInMock = command?.fixedArgs?.some((argument) =>
+    path.basename(argument) === "mock-decoder.mjs",
+  ) ?? false;
+  const isReleaseQualifiedCommand =
+    command?.kind === "native" &&
+    command.packageState === "packaged" &&
+    typeof command.expectedChecksum === "string" &&
+    /^[0-9a-f]{64}$/.test(command.expectedChecksum);
+  return isCheckedInMock || !isReleaseQualifiedCommand
+    ? "nikon-test-only"
+    : getNikonDecoderProvenance(command.kind);
 }
 
 export function createNefDecoderService(options: NefDecoderServiceOptions) {
@@ -467,7 +497,12 @@ export function createNefDecoderService(options: NefDecoderServiceOptions) {
           const outputIdentity = await fs.lstat(output);
           await runHelper(options.helper!, input, output, request, options.timeoutMs ?? 60_000);
           try {
-            return await readOutput(output, request, outputIdentity);
+            return await readOutput(
+              output,
+              request,
+              outputIdentity,
+              getHelperProvenance(options.helper),
+            );
           } catch (error) {
             if (error instanceof DecodeError) throw error;
             throw new DecodeError("INVALID_OUTPUT", "Nikon decoder output is missing or unreadable.");

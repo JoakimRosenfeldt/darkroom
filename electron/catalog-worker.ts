@@ -4,11 +4,13 @@ import { constants, existsSync } from "node:fs";
 import path from "node:path";
 import { parentPort, threadId, workerData } from "node:worker_threads";
 import {
+  parseCatalogId,
   parseOperationId,
   parseAssetId,
   type AssetId,
   type OperationId,
 } from "../lib/catalog/ids.ts";
+import { CATALOG_V3_TABLES, verifyCatalogV3Schema } from "./catalog-v3-schema.ts";
 import {
   CatalogFaultInjectedError,
   createCatalogFaultInjectorForTests,
@@ -28,8 +30,10 @@ import {
   type CatalogWorkerTestTracerInspectRequest,
   type CatalogWorkerTestTracerRecoverRequest,
   type CatalogWorkerTestTracerRunRequest,
+  type CatalogWorkerCloneCatalogRequest,
 } from "./catalog-worker-protocol.ts";
 import { CatalogV3Repository } from "./catalog-v3-repository.ts";
+import { CatalogLiveRepository } from "./catalog-live-repository.ts";
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -94,6 +98,10 @@ function requireDatabase(): DatabaseSync {
 
 function catalogV3Repository(): CatalogV3Repository {
   return new CatalogV3Repository(requireDatabase());
+}
+
+function catalogLiveRepository(): CatalogLiveRepository {
+  return new CatalogLiveRepository(requireDatabase());
 }
 
 function rowValue(row: Record<string, unknown>, key: string): unknown {
@@ -250,11 +258,144 @@ async function backupDatabase(destinationPath: string): Promise<number> {
   return backup(opened, destinationPath);
 }
 
-function integrityCheck(): {
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function vacuumIntoDatabase(destinationPath: string): Promise<number> {
+  const opened = requireDatabase();
+  if (databasePath === destinationPath) {
+    throw new Error("Catalog compact destination must differ from the open database.");
+  }
+  if (existsSync(destinationPath)) {
+    throw new Error("Catalog compact destination already exists.");
+  }
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  try {
+    opened.exec(`VACUUM INTO ${sqlString(destinationPath)}`);
+    const stat = await fs.stat(destinationPath);
+    return stat.size;
+  } catch (error) {
+    await removeFileIfPresent(destinationPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+function catalogMetaId(opened: DatabaseSync): ReturnType<typeof parseCatalogId> {
+  const row = opened.prepare("SELECT catalog_id AS catalogId FROM catalog_meta").get();
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    throw new Error("Catalog clone source identity is invalid.");
+  }
+  return parseCatalogId(rowString(row, "catalogId"));
+}
+
+async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): Promise<{
+  readonly sourceCatalogId: ReturnType<typeof parseCatalogId>;
+  readonly catalogId: ReturnType<typeof parseCatalogId>;
+  readonly rootCount: number;
+  readonly assetCount: number;
+}> {
+  if (request.sourcePath === request.destinationPath) {
+    throw new Error("Catalog clone source and destination must differ.");
+  }
+  if (existsSync(request.destinationPath)) {
+    throw new Error("Catalog clone destination already exists.");
+  }
+  let sourceCatalogId: ReturnType<typeof parseCatalogId>;
+  try {
+    const source = new DatabaseSync(request.sourcePath, { readOnly: true });
+    try {
+      verifyCatalogV3Schema(source);
+      sourceCatalogId = catalogMetaId(source);
+      if (sourceCatalogId === request.catalogId) {
+        throw new Error("Catalog clone needs a new catalog ID.");
+      }
+      await backup(source, request.destinationPath);
+    } finally {
+      source.close();
+    }
+  } catch (error) {
+    await removeFileIfPresent(request.destinationPath).catch(() => undefined);
+    throw error;
+  }
+
+  let cloned: DatabaseSync | undefined;
+  let completed = false;
+  try {
+    cloned = new DatabaseSync(request.destinationPath, {
+      enableForeignKeyConstraints: true,
+      timeout: 500,
+    });
+    verifyCatalogV3Schema(cloned);
+    cloned.exec("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; BEGIN IMMEDIATE;");
+    cloned.prepare(`
+      UPDATE catalog_meta
+      SET catalog_id = ?, display_name = ?, app_version = ?, revision = revision + 1
+      WHERE catalog_id = ?
+    `).run(request.catalogId, request.displayName, request.appVersion, sourceCatalogId);
+    for (const table of CATALOG_V3_TABLES) {
+      if (table === "catalog_meta") continue;
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    // A package carries historical locations for display only. Never let a clone
+    // inherit native authority or an enabled ingress rule.
+    cloned.prepare(`
+      UPDATE roots
+      SET canonical_path = NULL,
+          health = 'missing',
+          scan_state = 'unknown',
+          watch_state = 'disabled'
+      WHERE catalog_id = ?
+    `).run(request.catalogId);
+    cloned.prepare(`
+      UPDATE auto_import_rules
+      SET enabled = 0
+      WHERE catalog_id = ?
+    `).run(request.catalogId);
+    cloned.exec("COMMIT;");
+    const integrity = integrityCheckFor(cloned);
+    if (integrity.integrityCheck.length !== 1 || integrity.integrityCheck[0] !== "ok" || integrity.foreignKeyCheck.length > 0) {
+      throw new Error("Cloned catalog integrity validation failed.");
+    }
+    const rootRow = cloned.prepare("SELECT COUNT(*) AS count FROM roots WHERE catalog_id = ?").get(request.catalogId);
+    if (!rootRow || typeof rootRow !== "object" || Array.isArray(rootRow)) throw new Error("Cloned root count is invalid.");
+    const assetRow = cloned.prepare("SELECT COUNT(*) AS count FROM assets WHERE catalog_id = ?").get(request.catalogId);
+    if (!assetRow || typeof assetRow !== "object" || Array.isArray(assetRow)) throw new Error("Cloned asset count is invalid.");
+    const rootCount = rowInteger(rootRow, "count");
+    const assetCount = rowInteger(assetRow, "count");
+    completed = true;
+    return {
+      sourceCatalogId,
+      catalogId: request.catalogId,
+      rootCount,
+      assetCount,
+    };
+  } catch (error) {
+    try {
+      cloned?.exec("ROLLBACK;");
+    } catch {
+      // The transaction may already have ended.
+    }
+    throw error;
+  } finally {
+    cloned?.close();
+    if (cloned !== undefined && !completed) {
+      try {
+        await fs.unlink(request.destinationPath);
+      } catch (error) {
+        if (!isMissingFileError(error)) throw error;
+      }
+    }
+  }
+}
+
+function integrityCheckFor(opened: DatabaseSync): {
   readonly integrityCheck: readonly string[];
   readonly foreignKeyCheck: readonly CatalogForeignKeyViolation[];
 } {
-  const opened = requireDatabase();
   const integrityRows = opened.prepare("PRAGMA integrity_check").all();
   const integrityResults = integrityRows.map((row) => {
     if (!row || typeof row !== "object" || Array.isArray(row)) {
@@ -275,6 +416,13 @@ function integrityCheck(): {
     };
   });
   return { integrityCheck: integrityResults, foreignKeyCheck: foreignKeyResults };
+}
+
+function integrityCheck(): {
+  readonly integrityCheck: readonly string[];
+  readonly foreignKeyCheck: readonly CatalogForeignKeyViolation[];
+} {
+  return integrityCheckFor(requireDatabase());
 }
 
 function ensureTestTracerSchema(opened: DatabaseSync): void {
@@ -576,6 +724,21 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
       });
       return;
     }
+    case "vacuum-into": {
+      const byteLength = await vacuumIntoDatabase(request.destinationPath);
+      post({
+        kind: "vacuum-into",
+        requestId: request.requestId,
+        destinationPath: request.destinationPath,
+        byteLength,
+      });
+      return;
+    }
+    case "clone-catalog": {
+      const result = await cloneCatalogDatabase(request);
+      post({ kind: "clone-catalog", requestId: request.requestId, ...result });
+      return;
+    }
     case "integrity-check":
       post({ kind: "integrity-check", requestId: request.requestId, ...integrityCheck() });
       return;
@@ -665,6 +828,27 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
         kind: "v3-album-assets-page",
         requestId: request.requestId,
         result: catalogV3Repository().albumAssetPage(request.input),
+      });
+      return;
+    case "live-create":
+      post({
+        kind: "live-create",
+        requestId: request.requestId,
+        result: catalogLiveRepository().create(request.input),
+      });
+      return;
+    case "live-query":
+      post({
+        kind: "live-query",
+        requestId: request.requestId,
+        result: catalogLiveRepository().query(request.input),
+      });
+      return;
+    case "live-apply":
+      post({
+        kind: "live-apply",
+        requestId: request.requestId,
+        result: catalogLiveRepository().apply(request.input),
       });
       return;
     case "test-tracer-run": {

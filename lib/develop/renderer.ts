@@ -1,4 +1,5 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import { isNikonDecoderProvenance } from "@/lib/formats/registry";
 import { clampCropRect } from "@/lib/develop/crop-geometry";
 import { MAX_MATTE_EDGE } from "@/lib/develop/document";
 import type {
@@ -1212,7 +1213,7 @@ export class DevelopRenderer {
     this.disposeSourceBitmap();
     this.clearMatteCache();
     const gl = this.gl;
-    const nativePixels = image.metadata.decoderProvenance === "nikon-sdk" &&
+    const nativePixels = isNikonDecoderProvenance(image.metadata.decoderProvenance) &&
       image.rgb instanceof Uint16Array;
     const metadataWidth = Number(image.metadata.sourceWidth);
     const metadataHeight = Number(image.metadata.sourceHeight);

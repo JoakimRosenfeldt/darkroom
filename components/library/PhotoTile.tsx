@@ -6,6 +6,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { SelectEntryModifiers } from "@/stores/library-store";
+import { getFormatLabelForEntry } from "@/lib/formats/registry";
 import {
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
@@ -63,8 +64,8 @@ export const PhotoTile = memo(function PhotoTile({
       objectUrlRef.current = null;
     }
     setThumbnailUrl(null);
-    setStatus("loading");
-  }, [entry.id, decodeEdge]);
+    setStatus(entry.formatAvailability.status === "supported" ? "loading" : "error");
+  }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge]);
 
   useEffect(() => {
     const element = tileRef.current;
@@ -97,6 +98,11 @@ export const PhotoTile = memo(function PhotoTile({
 
   useEffect(() => {
     if (!isNearViewport || thumbnailUrl) {
+      return;
+    }
+
+    if (entry.formatAvailability.status !== "supported") {
+      setStatus("error");
       return;
     }
 
@@ -139,6 +145,10 @@ export const PhotoTile = memo(function PhotoTile({
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
+  const formatLabel = getFormatLabelForEntry(entry.name, entry.profileId);
+  const showFormatLabel =
+    entry.formatAvailability.status !== "supported" ||
+    (entry.profileId !== null && entry.profileId !== "standard");
 
   const content = (
     <div
@@ -162,8 +172,15 @@ export const PhotoTile = memo(function PhotoTile({
           sizes={`${width}px`}
         />
       ) : (
-        <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-wider text-lr-text-dim">
-          {status === "error" ? "Error" : "···"}
+        <div
+          className="flex h-full items-center justify-center px-2 text-center text-[10px] uppercase tracking-wider text-lr-text-dim"
+          title={entry.formatAvailability.reason ?? undefined}
+        >
+          {entry.formatAvailability.status !== "supported"
+            ? `${formatLabel}: unavailable`
+            : status === "error"
+              ? "Error"
+              : "···"}
         </div>
       )}
 
@@ -172,9 +189,9 @@ export const PhotoTile = memo(function PhotoTile({
           <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text">
             {entry.name}
           </p>
-          {entry.profileId && entry.profileId !== "standard" ? (
+          {showFormatLabel ? (
             <p className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-lr-accent">
-              {entry.profileId}
+              {formatLabel}
             </p>
           ) : null}
         </div>

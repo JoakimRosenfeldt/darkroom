@@ -1,5 +1,8 @@
+import type { CatalogAssetRequest } from "../catalog/api";
+
 export interface DecodeOptions {
   relativePath?: string;
+  assetRequest?: CatalogAssetRequest;
   thumbnail?: boolean;
   rawSource?: "embedded" | "developed";
   fullResolution?: boolean;
@@ -21,9 +24,11 @@ export interface DecodedImage {
   objectUrl?: string;
 }
 
+import type { DecoderProfileId } from "../formats/types";
+
 export interface ImageProfile {
-  id: string;
-  extensions: string[];
+  id: DecoderProfileId;
+  extensions: readonly string[];
   detect(file: Pick<{ name: string }, "name">): boolean;
   decode(
     input: Uint8Array,

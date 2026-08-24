@@ -1,5 +1,7 @@
 import type { LibraryEntry } from "@/lib/fs/types";
+import { isNikonDecoderProvenance } from "@/lib/formats/registry";
 import { decodeEntry } from "@/lib/raw/decode";
+import { assetCacheKey } from "./asset-cache-key";
 
 export interface DevelopImage {
   /** Oriented dimensions used by the editor and crop controls. */
@@ -24,7 +26,7 @@ const imageCache = new Map<string, DevelopImage>();
 const inFlightImages = new Map<string, Promise<DevelopImage>>();
 
 function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): DevelopImage {
-  const orientation = decoded.metadata.decoderProvenance === "nikon-sdk" &&
+  const orientation = isNikonDecoderProvenance(decoded.metadata.decoderProvenance) &&
     Number.isInteger(decoded.metadata.orientation) &&
     Number(decoded.metadata.orientation) >= 1 &&
     Number(decoded.metadata.orientation) <= 8
@@ -48,7 +50,11 @@ function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): Devel
 }
 
 function cacheKey(entry: LibraryEntry): string {
-  return `${entry.relativePath}:${entry.lastModified}`;
+  return assetCacheKey({
+    catalogId: entry.catalogId,
+    assetId: entry.id,
+    revision: entry.assetRevision,
+  }, "develop");
 }
 
 function rememberImage(key: string, image: DevelopImage): void {

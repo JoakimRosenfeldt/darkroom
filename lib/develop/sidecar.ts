@@ -1,5 +1,7 @@
 import type { EntryMetadata } from "@/lib/catalog/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
+import { getAssetRequest } from "@/lib/fs/session-catalog";
+import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopDocument } from "@/lib/develop/types";
 import { parseDevelopXmp, serializeDevelopXmp } from "@/lib/develop/xmp";
 
@@ -12,10 +14,9 @@ export interface DevelopSidecar {
 }
 
 export async function readDevelopSidecar(
-  rootPath: string,
-  relativePath: string,
+  entry: LibraryEntry,
 ): Promise<DevelopSidecar | null> {
-  const sidecar = await getDarkroomAPI().readSidecar(rootPath, relativePath);
+  const sidecar = await getDarkroomAPI().catalogReadSidecar(getAssetRequest(entry));
   if (!sidecar) {
     return null;
   }
@@ -28,8 +29,7 @@ export async function readDevelopSidecar(
 }
 
 export async function writeDevelopSidecar(
-  rootPath: string,
-  relativePath: string,
+  entry: LibraryEntry,
   document: DevelopDocument,
   metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
   existingContents: string | null,
@@ -38,6 +38,9 @@ export async function writeDevelopSidecar(
   if (contents === null) {
     return null;
   }
-  await getDarkroomAPI().writeSidecar(rootPath, relativePath, contents);
+  await getDarkroomAPI().catalogWriteSidecar({
+    ...getAssetRequest(entry),
+    contents,
+  });
   return contents;
 }

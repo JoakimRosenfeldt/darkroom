@@ -1,5 +1,6 @@
 import type { EntryMetadata, StarRating } from "@/lib/catalog/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
+import { getFormatFamilyForEntry } from "@/lib/formats/registry";
 import type { LibraryEntry } from "@/lib/fs/types";
 
 export type SortOption = "name" | "date" | "rating" | "pick";
@@ -59,10 +60,14 @@ export function filterByFormat(
   filter: FilterOption,
 ): LibraryEntry[] {
   if (filter === "raw") {
-    return entries.filter((entry) => entry.profileId !== "standard");
+    return entries.filter((entry) =>
+      getFormatFamilyForEntry(entry.name, entry.profileId) === "raw",
+    );
   }
   if (filter === "standard") {
-    return entries.filter((entry) => entry.profileId === "standard");
+    return entries.filter((entry) =>
+      getFormatFamilyForEntry(entry.name, entry.profileId) === "standard",
+    );
   }
   return entries;
 }

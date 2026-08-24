@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { DeleteFromDiskConfirm } from "@/components/library/DeleteFromDiskConfirm";
 import {
   IconAlbum,
   IconArchive,
@@ -20,6 +19,7 @@ type ActionOption = {
   id: "album" | "imported" | "restore" | "disk";
   label: string;
   description: string;
+  disabled?: boolean;
 };
 
 export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps) {
@@ -33,13 +33,8 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   );
   const archiveEntries = useLibraryStore((state) => state.archiveEntries);
   const restoreEntries = useLibraryStore((state) => state.restoreEntries);
-  const deleteEntriesFromDisk = useLibraryStore(
-    (state) => state.deleteEntriesFromDisk,
-  );
-
   const isArchiveView = catalogView.type === "archive";
   const [highlightIndex, setHighlightIndex] = useState(0);
-  const [confirmDiskDelete, setConfirmDiskDelete] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -53,8 +48,9 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
         },
         {
           id: "disk" as const,
-          label: "Remove from disk",
-          description: "Remove files from your library.",
+          label: "Remove from disk — unavailable",
+          description: "Safe, recoverable deletion is not available yet.",
+          disabled: true,
         },
       ];
     }
@@ -89,30 +85,32 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
     });
     result.push({
       id: "disk",
-      label: "Remove from disk",
-      description: "Remove files from your library.",
+      label: "Remove from disk — unavailable",
+      description: "Safe, recoverable deletion is not available yet.",
+      disabled: true,
     });
 
     return result;
   }, [albums, catalogView, entryIds, isArchiveView]);
 
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [options.length, isArchiveView]);
+  const activeIndex = options.length === 0
+    ? 0
+    : Math.min(highlightIndex, options.length - 1);
 
   useEffect(() => {
     dialogRef.current?.focus();
   }, []);
 
   useEffect(() => {
-    const highlighted = listRef.current?.children[highlightIndex] as
+    const highlighted = listRef.current?.children[activeIndex] as
       | HTMLElement
       | undefined;
     highlighted?.scrollIntoView({ block: "nearest" });
-  }, [highlightIndex]);
+  }, [activeIndex]);
 
   const runAction = useCallback(
     async (option: ActionOption) => {
+      if (option.disabled) return;
       if (option.id === "album") {
         if (catalogView.type === "album") {
           removeEntriesFromAlbum(catalogView.albumId, entryIds);
@@ -135,7 +133,6 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
         return;
       }
 
-      setConfirmDiskDelete(true);
     },
     [
       archiveEntries,
@@ -149,10 +146,6 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   );
 
   useEffect(() => {
-    if (confirmDiskDelete) {
-      return;
-    }
-
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -180,7 +173,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        const option = options[highlightIndex];
+        const option = options[activeIndex];
         if (option) {
           void runAction(option);
         }
@@ -189,7 +182,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [confirmDiskDelete, highlightIndex, onClose, options, runAction]);
+  }, [activeIndex, onClose, options, runAction]);
 
   const photoLabel =
     entryIds.length === 1 ? "1 photo" : `${entryIds.length} photos`;
@@ -208,15 +201,14 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   }
 
   return createPortal(
-    <>
-      <div
-        className="fixed inset-0 z-50 flex items-start justify-center bg-[#0a0908]/60 pt-[18vh]"
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !confirmDiskDelete) {
-            onClose();
-          }
-        }}
-      >
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[#0a0908]/60 pt-[18vh]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
         <div
           ref={dialogRef}
           tabIndex={-1}
@@ -233,7 +225,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
           <ul ref={listRef} className="py-1" role="listbox">
             {options.map((option, index) => {
-              const isActive = index === highlightIndex;
+              const isActive = index === activeIndex;
               const Icon = iconForOption(option.id);
               const isTrash = option.id === "disk";
 
@@ -243,11 +235,15 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
                     type="button"
                     role="option"
                     aria-selected={isActive}
+                    aria-disabled={option.disabled === true}
+                    disabled={option.disabled}
                     onMouseEnter={() => setHighlightIndex(index)}
                     onClick={() => void runAction(option)}
                     className={[
                       "flex w-full flex-col gap-0.5 px-3 py-2 text-left transition",
-                      isActive
+                      option.disabled
+                        ? "cursor-not-allowed text-lr-text-dim opacity-60"
+                        : isActive
                         ? "bg-lr-selection text-lr-text"
                         : "text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text",
                     ].join(" ")}
@@ -291,26 +287,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
             ↑↓ navigate · Enter confirm · Esc cancel
           </div>
         </div>
-      </div>
-
-      {confirmDiskDelete ? (
-        <DeleteFromDiskConfirm
-          entryIds={entryIds}
-          onClose={() => {
-            setConfirmDiskDelete(false);
-            onClose();
-          }}
-          onConfirm={() => {
-            void deleteEntriesFromDisk(entryIds)
-              .then(() => {
-                setConfirmDiskDelete(false);
-                onClose();
-              })
-              .catch(() => {});
-          }}
-        />
-      ) : null}
-    </>,
+    </div>,
     document.body,
   );
 }

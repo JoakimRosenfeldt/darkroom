@@ -153,7 +153,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
-  const rootPath = useLibraryStore((state) => state.rootPath);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
@@ -208,7 +207,6 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
 
   useDevelopSettingsSync({
     entry,
-    rootPath,
     metadata,
     mirrorDocument,
     hydrateMetadata,
@@ -270,6 +268,15 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
       setError(null);
       setDecoded(null);
       setRenderDiagnostics([]);
+
+      if (entry.formatAvailability.status !== "supported") {
+        setError(
+          entry.formatAvailability.reason ??
+            `Preview is unavailable for ${entry.name}.`,
+        );
+        setLoading(false);
+        return;
+      }
 
       try {
         const result = await loadDevelopImage(entry);

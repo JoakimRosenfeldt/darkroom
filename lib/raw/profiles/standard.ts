@@ -1,6 +1,11 @@
 import type { DecodeOptions, DecodedImage, ImageProfile } from "../types";
+import {
+  getFormatExtensionsForProfile,
+  getFormatCapabilityForFileName,
+  recognizeFormatFromBytes,
+} from "@/lib/formats/registry";
 
-const STANDARD_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+const STANDARD_EXTENSIONS = getFormatExtensionsForProfile("standard");
 
 async function blobToDecodedImage(
   blob: Blob,
@@ -105,9 +110,7 @@ export const standardImageProfile: ImageProfile = {
   id: "standard",
   extensions: STANDARD_EXTENSIONS,
   detect: (file) =>
-    STANDARD_EXTENSIONS.some((extension) =>
-      file.name.toLowerCase().endsWith(extension),
-    ),
+    getFormatCapabilityForFileName(file.name)?.profileId === "standard",
   decode: async (input, options?: DecodeOptions): Promise<DecodedImage> => {
     const mimeType = detectMimeType(input);
     let blob = new Blob([input as BlobPart], { type: mimeType });
@@ -124,29 +127,15 @@ export const standardImageProfile: ImageProfile = {
     return blobToDecodedImage(blob, {
       format: mimeType,
       source: "standard",
+      decoderProvenance: "standard",
     }, mode);
   },
 };
 
 function detectMimeType(input: Uint8Array): string {
-  if (input[0] === 0xff && input[1] === 0xd8) {
-    return "image/jpeg";
-  }
-  if (
-    input[0] === 0x89 &&
-    input[1] === 0x50 &&
-    input[2] === 0x4e &&
-    input[3] === 0x47
-  ) {
-    return "image/png";
-  }
-  if (
-    input[0] === 0x52 &&
-    input[1] === 0x49 &&
-    input[2] === 0x46 &&
-    input[3] === 0x46
-  ) {
-    return "image/webp";
-  }
+  const format = recognizeFormatFromBytes(input);
+  if (format?.id === "jpeg") return "image/jpeg";
+  if (format?.id === "png") return "image/png";
+  if (format?.id === "webp") return "image/webp";
   return "application/octet-stream";
 }

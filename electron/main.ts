@@ -10,18 +10,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  folderExists,
   getFolderName,
-  readFileBuffer,
-  readFileHead,
-  scanFolderTree,
-  statFile,
   trashFiles,
 } from "./fs-service";
-import { createCatalogStore } from "./catalog-store";
+import { createCatalogRegistryStore } from "./catalog-registry";
+import { migrateLegacyCatalogAtStartup } from "./catalog-startup-migration";
 import {
   createNefDecoderService,
-  type NefDecodeRequest,
   type NefDecoderCommand,
 } from "./nef-decoder-service";
 import {
@@ -31,6 +26,7 @@ import {
   type ExportDestinationRequest,
   type ExportPixelPayload,
 } from "./export-service";
+import { parseExportDestinationRequest } from "../lib/export/types.ts";
 import { createSettingsStore } from "./settings";
 import { getAppRoot, getOutDir, startStaticServer } from "./static-server";
 import {
@@ -48,6 +44,84 @@ import {
   createCatalogWorkerClient,
   type CatalogWorkerClient,
 } from "./catalog-worker-client";
+import {
+  CatalogCoordinator,
+  createCatalogCoordinatorRuntime,
+  type CatalogNativeAdminLease,
+  type CatalogFilesystemPort,
+  type CatalogPathAllocatorPort,
+  type CatalogPickerPort,
+  type CatalogRegistryPort,
+} from "./catalog-coordinator.ts";
+import {
+  CatalogAdminService,
+  FileCatalogBackupPolicyStore,
+  type CatalogAdminMaintenancePort,
+} from "./catalog-admin-service.ts";
+import {
+  parseCatalogAdminImportRequest,
+  parseCatalogAdminPolicyRequest,
+  parseCatalogAdminSessionRequest,
+} from "../lib/catalog/admin.ts";
+import { NativeAssetAccess } from "./native-asset-access.ts";
+import { CatalogWatcherReconcileAdapter } from "./catalog-watcher-adapter.ts";
+import { WatcherReconciliationService } from "./watcher-reconciliation.ts";
+import {
+  createCatalogManualImportController,
+  type CatalogManualImportController,
+} from "./catalog-manual-import-controller.ts";
+import { createFileTransactionJournal } from "./file-transaction-journal.ts";
+import {
+  createCatalogAutoImportRuntime,
+  type CatalogAutoImportRuntime,
+} from "./catalog-auto-import-runtime.ts";
+import { createAutoImportStore } from "./auto-import-store.ts";
+import { CatalogWorkLifecycle, type CatalogWorkToken } from "./catalog-work-lifecycle.ts";
+import { CatalogFingerprintBackfillAdapter } from "./catalog-fingerprint-backfill-adapter.ts";
+import {
+  CatalogFingerprintBackfillService,
+  parseFingerprintBackfillSnapshot,
+  type FingerprintBackfillExecution,
+  type FingerprintBackfillProgressEvent,
+  type FingerprintBackfillSnapshot,
+} from "./catalog-fingerprint-backfill-service.ts";
+import { CatalogFingerprintBackfillStore } from "./catalog-fingerprint-backfill-store.ts";
+import {
+  CatalogAssetRelinkService,
+  type CatalogRelinkSelectedCandidate,
+} from "./catalog-asset-relink-service.ts";
+import { createRuntimeFormatCapabilityReport } from "./format-capability-service.ts";
+import type { FormatCapabilityReport, NikonRuntimePackageState } from "../lib/formats/types.ts";
+import { isRuntimeNativeRoot, type AssetScopedOperations, type RuntimeRootProjection } from "./library-runtime.ts";
+import { createOperationId, type CatalogId, type OperationId } from "../lib/catalog/ids.ts";
+import { parseCatalogLiveQueryResult } from "../lib/catalog/live.ts";
+import {
+  parseCatalogDecodeRequest,
+  parseCatalogSessionRequest,
+  type CatalogBootstrapRecovery,
+} from "../lib/catalog/api.ts";
+import {
+  parseRelinkApplyRequest,
+  parseRelinkCancelRequest,
+  parseRelinkPrepareRequest,
+} from "../lib/catalog/relink.ts";
+import { parseRelativePath, type SessionId } from "../lib/catalog/runtime.ts";
+import {
+  parseCatalogFingerprintBackfillOperationRequest,
+  parseCatalogFingerprintBackfillRequest,
+  parseCatalogFingerprintBackfillResumeRequest,
+  type CatalogFingerprintBackfillProgress,
+  type CatalogFingerprintBackfillRequest,
+} from "../lib/catalog/fingerprint-backfill.ts";
+import {
+  parseCatalogImportOperationRequest,
+  parseCatalogImportPrepareRequest,
+} from "../lib/import/api.ts";
+import {
+  parseAutoImportCancelRequest,
+  parseAutoImportConfigureRequest,
+  parseAutoImportControlRequest,
+} from "../lib/import/auto-import-api.ts";
 
 registerAiModelScheme();
 
@@ -56,16 +130,192 @@ const DEV_SERVER_URL = process.env.DARKROOM_DEV_URL ?? "http://localhost:3000";
 
 let mainWindow: BrowserWindow | null = null;
 let staticServerPort: number | null = null;
-let activeLibraryRoot: string | null = null;
 let catalogWorkerClient: CatalogWorkerClient | null = null;
+let catalogCoordinator: CatalogCoordinator | null = null;
+let startupRecovery: CatalogBootstrapRecovery | null = null;
 let isQuitting = false;
+let shutdownCatalogBindings: (() => Promise<void>) | null = null;
+let formatCapabilityReport: Promise<FormatCapabilityReport> | null = null;
+let catalogBackupTimer: ReturnType<typeof setInterval> | null = null;
 
 const settingsStore = createSettingsStore(app.getPath("userData"));
-const catalogStore = createCatalogStore(app.getPath("userData"));
-const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
+const catalogRegistryStore = createCatalogRegistryStore(app.getPath("userData"));
 const CATALOG_WORKER_SHUTDOWN_TIMEOUT_MS = 2_000;
 const CATALOG_WORKER_SMOKE_ENV = "DARKROOM_CATALOG_WORKER_SMOKE";
 const CATALOG_WORKER_SMOKE_REPORT_ENV = "DARKROOM_CATALOG_WORKER_SMOKE_REPORT";
+
+async function runStartupMigration(): Promise<void> {
+  const result = await migrateLegacyCatalogAtStartup({
+    userDataPath: app.getPath("userData"),
+    workerPath: catalogWorkerPath(),
+    appVersion: app.getVersion(),
+    registry: catalogRegistryStore,
+    settings: settingsStore,
+  });
+  if (result.state === "recovery-required") {
+    startupRecovery = {
+      kind: "corrupt",
+      catalogId: result.catalogId,
+      message: result.message,
+    };
+  }
+}
+
+async function deleteManagedCatalogFile(databasePath: string): Promise<void> {
+  const directory = path.join(app.getPath("userData"), "catalog-databases");
+  const normalized = path.normalize(databasePath);
+  if (
+    !path.isAbsolute(normalized) ||
+    path.dirname(normalized) !== directory ||
+    path.extname(normalized) !== ".db"
+  ) {
+    throw new Error("Only a managed Darkroom catalog can be deleted.");
+  }
+  const directoryStat = await fs.lstat(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error("Catalog storage directory is unavailable.");
+  }
+  const databaseStat = await fs.lstat(normalized);
+  if (!databaseStat.isFile() || databaseStat.isSymbolicLink()) {
+    throw new Error("Catalog database is not a regular file.");
+  }
+  const sidecars: string[] = [];
+  for (const suffix of ["-wal", "-shm"] as const) {
+    const sidecar = `${normalized}${suffix}`;
+    try {
+      const stat = await fs.lstat(sidecar);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error("Catalog database sidecar is not a regular file.");
+      }
+      sidecars.push(sidecar);
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      ) {
+        throw error;
+      }
+    }
+  }
+  for (const filePath of [...sidecars, normalized]) {
+    await fs.unlink(filePath);
+  }
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  const handle = await fs.open(directoryPath, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function requireRegularFile(filePath: string, label: string): Promise<Awaited<ReturnType<typeof fs.lstat>>> {
+  const stat = await fs.lstat(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a regular file.`);
+  return stat;
+}
+
+async function swapOptimizedCatalogDatabase(
+  lease: CatalogNativeAdminLease,
+  input: { readonly catalogId: string; readonly temporaryPath: string; readonly sourcePath: string },
+): Promise<void> {
+  const sourcePath = path.normalize(path.resolve(input.sourcePath));
+  const temporaryPath = path.normalize(path.resolve(input.temporaryPath));
+  if (
+    input.catalogId !== lease.catalogId ||
+    sourcePath !== path.normalize(path.resolve(lease.databasePath)) ||
+    sourcePath === temporaryPath
+  ) {
+    throw new Error("Catalog optimization ownership is invalid.");
+  }
+  const temporaryBefore = await requireRegularFile(temporaryPath, "Compacted catalog");
+  await requireRegularFile(sourcePath, "Catalog database");
+  const backupPath = `${sourcePath}.optimize-backup-${randomUUID()}`;
+  const movedSidecars: { readonly source: string; readonly backup: string }[] = [];
+  let sourceMoved = false;
+  let compactMoved = false;
+  await lease.quiesce();
+  try {
+    const temporaryAfter = await requireRegularFile(temporaryPath, "Compacted catalog");
+    if (temporaryBefore.dev !== temporaryAfter.dev || temporaryBefore.ino !== temporaryAfter.ino) {
+      throw new Error("Compacted catalog changed before publication.");
+    }
+    await requireRegularFile(sourcePath, "Catalog database");
+    await fs.rename(sourcePath, backupPath);
+    sourceMoved = true;
+    for (const suffix of ["-wal", "-shm"] as const) {
+      const sidecar = `${sourcePath}${suffix}`;
+      try {
+        await requireRegularFile(sidecar, "Catalog database sidecar");
+        const backup = `${backupPath}${suffix}`;
+        await fs.rename(sidecar, backup);
+        movedSidecars.push({ source: sidecar, backup });
+      } catch (error) {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          error.code !== "ENOENT"
+        ) {
+          throw error;
+        }
+      }
+    }
+    await fs.rename(temporaryPath, sourcePath);
+    compactMoved = true;
+    await syncDirectory(path.dirname(sourcePath));
+    await lease.resume();
+  } catch (error) {
+    try {
+      const removeReplacementSidecars = compactMoved;
+      if (compactMoved) {
+        await fs.rename(sourcePath, temporaryPath);
+        compactMoved = false;
+      }
+      if (removeReplacementSidecars) {
+        for (const suffix of ["-wal", "-shm"] as const) {
+          const sidecar = `${sourcePath}${suffix}`;
+          try {
+            await requireRegularFile(sidecar, "Replacement catalog sidecar");
+            await fs.unlink(sidecar);
+          } catch (sidecarError) {
+            if (
+              typeof sidecarError !== "object" ||
+              sidecarError === null ||
+              !("code" in sidecarError) ||
+              sidecarError.code !== "ENOENT"
+            ) {
+              throw sidecarError;
+            }
+          }
+        }
+      }
+      if (sourceMoved) {
+        await fs.rename(backupPath, sourcePath);
+        sourceMoved = false;
+      }
+      for (const sidecar of movedSidecars) {
+        await fs.rename(sidecar.backup, sidecar.source);
+      }
+      await syncDirectory(path.dirname(sourcePath));
+      await lease.resume();
+    } catch {
+      throw new Error("Catalog optimization failed and needs recovery.");
+    }
+    throw error;
+  }
+  if (sourceMoved) {
+    await fs.unlink(backupPath).catch(() => undefined);
+    for (const sidecar of movedSidecars) {
+      await fs.unlink(sidecar.backup).catch(() => undefined);
+    }
+    await syncDirectory(path.dirname(sourcePath)).catch(() => undefined);
+  }
+}
 
 function catalogWorkerPath(): string {
   return path.join(__dirname, "catalog-worker.js");
@@ -217,29 +467,37 @@ const aiModelService = createAiModelService({
 function getNefDecoderCommand(): NefDecoderCommand | null {
   const privateHelper = process.env.DARKROOM_NEF_HELPER_PATH;
   if (!app.isPackaged && privateHelper && path.isAbsolute(privateHelper)) {
-    return { executable: privateHelper };
+    return { executable: privateHelper, kind: "native" };
   }
   if (!app.isPackaged && process.env.DARKROOM_ENABLE_NEF_MOCK === "1") {
     return {
       executable: process.execPath,
       fixedArgs: [path.join(app.getAppPath(), "native/nikon-nef-decoder/mock-decoder.mjs")],
       env: { ELECTRON_RUN_AS_NODE: "1" },
+      kind: "test-only",
     };
   }
   if (process.platform !== "darwin") return null;
   return {
     executable: path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder"),
+    kind: "native",
   };
 }
 
-async function activateLibraryRoot(rootPath: string): Promise<string> {
-  const stat = await fs.stat(rootPath);
-  if (!stat.isDirectory()) {
-    throw new Error("Library root must be a directory.");
-  }
-  const root = await fs.realpath(rootPath);
-  activeLibraryRoot = root;
-  return root;
+function getNikonPackageState(command: NefDecoderCommand | null): NikonRuntimePackageState {
+  if (command === null) return "unavailable";
+  if (command.kind === "test-only") return "test-only";
+  return app.isPackaged ? "packaged" : "development";
+}
+
+function getFormatCapabilityReport(): Promise<FormatCapabilityReport> {
+  const helper = getNefDecoderCommand();
+  formatCapabilityReport ??= createRuntimeFormatCapabilityReport({
+    appVersion: app.getVersion(),
+    helper,
+    packageState: getNikonPackageState(helper),
+  });
+  return formatCapabilityReport;
 }
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
@@ -258,97 +516,79 @@ function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
   }
 }
 
-async function resolveLibraryFile(
-  event: IpcMainInvokeEvent,
-  rootPath: string,
-  relativePath: string,
-): Promise<string> {
-  assertTrustedRenderer(event);
-  if (!activeLibraryRoot) {
-    throw new Error("No approved library folder is open.");
-  }
-
-  const requestedRoot = await fs.realpath(rootPath);
-  if (requestedRoot !== activeLibraryRoot) {
-    throw new Error("Sidecar path must use the active library.");
-  }
-
-  const absolute = path.resolve(activeLibraryRoot, relativePath);
-  const relative = path.relative(activeLibraryRoot, absolute);
-
-  if (
-    !relativePath ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error("Sidecar path must stay inside the active library.");
-  }
-
-  const directory = await fs.realpath(path.dirname(absolute));
-  const directoryRelative = path.relative(activeLibraryRoot, directory);
-  if (
-    directoryRelative === ".." ||
-    directoryRelative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(directoryRelative)
-  ) {
-    throw new Error("Sidecar path cannot follow a symlink outside the library.");
-  }
-
-  return path.join(directory, path.basename(absolute));
-}
-
-async function getSidecarPath(
-  event: IpcMainInvokeEvent,
-  rootPath: string,
-  relativePath: string,
-): Promise<string> {
-  const source = await resolveLibraryFile(event, rootPath, relativePath);
-  const parsed = path.parse(source);
-  return path.join(
-    parsed.dir,
-    parsed.ext.toLowerCase() === ".nef"
-      ? `${parsed.name}.xmp`
-      : `${parsed.base}.xmp`,
-  );
-}
-
-async function assertRegularSidecar(sidecarPath: string): Promise<boolean> {
-  try {
-    const stat = await fs.lstat(sidecarPath);
-    if (stat.isSymbolicLink()) {
-      throw new Error("Refusing to follow a symbolic-link XMP sidecar.");
-    }
-    if (!stat.isFile()) {
-      throw new Error("XMP sidecar is not a regular file.");
-    }
-    return true;
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return false;
-    }
-    throw error;
-  }
-}
-
-async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
-  await assertRegularSidecar(filePath);
-  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  try {
-    await fs.writeFile(temporaryPath, contents, "utf8");
-    await fs.rename(temporaryPath, filePath);
-  } finally {
-    await fs.unlink(temporaryPath).catch(() => undefined);
-  }
-}
-
 function getPreloadPath(): string {
   return path.join(__dirname, "preload.js");
+}
+
+function safeRelinkSelectionError(error: unknown): Error {
+  if (error instanceof Error && error.message.length > 0 && error.message.length <= 240) {
+    if (!error.message.includes("/") && !error.message.includes("\\")) {
+      return new Error(error.message);
+    }
+  }
+  return new Error("Selected relink files could not be prepared.");
+}
+
+function isPathInside(rootPath: string, candidatePath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative);
+}
+
+async function canonicalizeRelinkCandidates(
+  filePaths: readonly string[],
+  roots: readonly RuntimeRootProjection[],
+): Promise<readonly CatalogRelinkSelectedCandidate[]> {
+  if (filePaths.length === 0) throw new Error("No relink files were selected.");
+  if (roots.length === 0) throw new Error("No active catalog roots are available.");
+
+  const canonicalRoots = roots.filter(isRuntimeNativeRoot).map((root) => ({
+    rootId: root.rootId,
+    canonicalPath: path.resolve(root.nativePath),
+  }));
+  if (canonicalRoots.length === 0) throw new Error("No active catalog roots are available.");
+  const selectedPaths = new Set<string>();
+  const candidates: CatalogRelinkSelectedCandidate[] = [];
+
+  for (const filePath of filePaths) {
+    let canonicalPath: string;
+    try {
+      const selectedStat = await fs.lstat(filePath);
+      if (selectedStat.isSymbolicLink() || !selectedStat.isFile()) {
+        throw new Error("Selected relink item is not a regular file.");
+      }
+      canonicalPath = await fs.realpath(filePath);
+      const canonicalStat = await fs.lstat(canonicalPath);
+      if (canonicalStat.isSymbolicLink() || !canonicalStat.isFile()) {
+        throw new Error("Selected relink item is not a regular file.");
+      }
+    } catch (error) {
+      throw safeRelinkSelectionError(error);
+    }
+
+    if (selectedPaths.has(canonicalPath)) {
+      throw new Error("A relink file was selected more than once.");
+    }
+    selectedPaths.add(canonicalPath);
+
+    const matches = canonicalRoots.filter((root) => isPathInside(root.canonicalPath, canonicalPath));
+    if (matches.length === 0) throw new Error("Selected relink file is outside active catalog roots.");
+    if (matches.length !== 1) throw new Error("Selected relink file belongs to multiple active roots.");
+    const root = matches[0]!;
+    const relativePath = path.relative(root.canonicalPath, canonicalPath).split(path.sep).join("/");
+    try {
+      candidates.push({
+        rootId: root.rootId,
+        relativePath: parseRelativePath(relativePath),
+        absolutePath: canonicalPath,
+      });
+    } catch {
+      throw new Error("Selected relink file has an invalid relative path.");
+    }
+  }
+  return candidates;
 }
 
 async function loadWindow(window: BrowserWindow): Promise<void> {
@@ -396,6 +636,10 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  const worker = catalogWorkerClient;
+  if (!worker) {
+    throw new Error("Catalog coordinator started without a worker client.");
+  }
   const nefDecoder = createNefDecoderService({
     helper: getNefDecoderCommand(),
     tempRoot: app.getPath("temp"),
@@ -405,182 +649,950 @@ function registerIpcHandlers(): void {
   }, {
     provenancePath: path.join(app.getPath("userData"), "export-provenance.json"),
   });
-
-  ipcMain.handle("darkroom:pick-folder", async (event) => {
-    assertTrustedRenderer(event);
-    const result = await dialog.showOpenDialog({
-      properties: ["openDirectory"],
-      title: "Select photo folder",
-    });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
+  const coordinatorPicker: CatalogPickerPort = {
+    async chooseFolder() {
+      const result = await dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "Select catalog root",
+      });
+      if (result.canceled || result.filePaths.length === 0) return null;
+      const selectedPath = result.filePaths[0]!;
+      return { path: selectedPath, label: getFolderName(selectedPath) };
+    },
+  };
+  const coordinatorFilesystem: CatalogFilesystemPort = {
+    async canonicalizeDirectory(inputPath) {
+      const canonicalPath = await fs.realpath(inputPath);
+      const stat = await fs.lstat(canonicalPath);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Catalog root must be a directory.");
+      return { canonicalPath, label: getFolderName(canonicalPath) };
+    },
+    deleteCatalogFile: deleteManagedCatalogFile,
+  };
+  const coordinatorPaths: CatalogPathAllocatorPort = {
+    async allocateDatabasePath(catalogId) {
+      const databaseDirectory = path.join(app.getPath("userData"), "catalog-databases");
+      await fs.mkdir(databaseDirectory, { recursive: true });
+      return path.join(databaseDirectory, `${catalogId}.db`);
+    },
+  };
+  const coordinatorRegistry: CatalogRegistryPort = {
+    read: async () => (await catalogRegistryStore.read()).catalogs,
+    upsert: (value) => catalogRegistryStore.upsert(value),
+    remove: (catalogId) => catalogRegistryStore.remove(catalogId),
+  };
+  const nativeAssetAccess = new NativeAssetAccess();
+  const assetOperations: AssetScopedOperations = {
+    readSidecar: (location) => nativeAssetAccess.readSidecar(location),
+    writeSidecar: (location, contents) => nativeAssetAccess.writeSidecar(location, contents),
+    trash: async (location) => {
+      const absolutePath = await nativeAssetAccess.resolvePath(location);
+      await trashFiles([absolutePath]);
+    },
+    decode: async (location, requestValue) => {
+      const request = parseCatalogDecodeRequest(requestValue);
+      return nefDecoder.decode(location.canonicalRootPath, {
+        relativePath: location.relativePath,
+        mode: request.mode,
+        maxEdge: request.maxEdge,
+      });
+    },
+  };
+  const coordinatorRuntime = createCatalogCoordinatorRuntime({
+    worker,
+    picker: coordinatorPicker,
+    assetOperations,
+  });
+  const watcherService = new WatcherReconciliationService({
+    reconcileAdapter: new CatalogWatcherReconcileAdapter({
+      worker,
+      runtime: coordinatorRuntime,
+    }),
+  });
+  catalogCoordinator = new CatalogCoordinator({
+    picker: coordinatorPicker,
+    registry: coordinatorRegistry,
+    worker,
+    runtime: coordinatorRuntime,
+    watchers: watcherService,
+    settings: settingsStore,
+    filesystem: coordinatorFilesystem,
+    paths: coordinatorPaths,
+    startupRecovery,
+  });
+  const coordinator = catalogCoordinator;
+  let manualImportBinding: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+    readonly controller: CatalogManualImportController;
+  } | null = null;
+  let autoImportBinding: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+    readonly runtime: CatalogAutoImportRuntime;
+  } | null = null;
+  let pendingManualImportShutdown: Promise<void> | null = null;
+  let pendingAutoImportShutdown: Promise<void> | null = null;
+  const queueManualImportShutdown = (controller: CatalogManualImportController): void => {
+    const previous = pendingManualImportShutdown ?? Promise.resolve();
+    const next = previous.then(
+      () => controller.shutdown(),
+      () => controller.shutdown(),
+    );
+    pendingManualImportShutdown = next;
+    void next.then(
+      () => {
+        if (pendingManualImportShutdown === next) pendingManualImportShutdown = null;
+      },
+      () => {
+        if (pendingManualImportShutdown === next) pendingManualImportShutdown = null;
+      },
+    );
+  };
+  const discardManualImportController = (): void => {
+    const controller = manualImportBinding?.controller;
+    manualImportBinding = null;
+    if (controller !== undefined) queueManualImportShutdown(controller);
+  };
+  const shutdownManualImportController = async (): Promise<void> => {
+    const controller = manualImportBinding?.controller;
+    manualImportBinding = null;
+    if (controller !== undefined) queueManualImportShutdown(controller);
+    const pending = pendingManualImportShutdown;
+    if (pending !== null) await pending;
+  };
+  const queueAutoImportShutdown = (runtime: CatalogAutoImportRuntime): void => {
+    const previous = pendingAutoImportShutdown ?? Promise.resolve();
+    const next = previous.then(
+      () => runtime.shutdown(),
+      () => runtime.shutdown(),
+    );
+    pendingAutoImportShutdown = next;
+    void next.then(
+      () => {
+        if (pendingAutoImportShutdown === next) pendingAutoImportShutdown = null;
+      },
+      () => {
+        if (pendingAutoImportShutdown === next) pendingAutoImportShutdown = null;
+      },
+    );
+  };
+  const discardAutoImportRuntime = (): void => {
+    const runtime = autoImportBinding?.runtime;
+    autoImportBinding = null;
+    if (runtime !== undefined) queueAutoImportShutdown(runtime);
+  };
+  const shutdownAutoImportRuntime = async (): Promise<void> => {
+    const runtime = autoImportBinding?.runtime;
+    autoImportBinding = null;
+    if (runtime !== undefined) queueAutoImportShutdown(runtime);
+    const pending = pendingAutoImportShutdown;
+    if (pending !== null) await pending;
+  };
+  const shutdownImportBindings = async (): Promise<void> => {
+    await Promise.all([
+      shutdownManualImportController(),
+      shutdownAutoImportRuntime(),
+    ]);
+  };
+  const workLifecycle = new CatalogWorkLifecycle({
+    drainBindings: shutdownImportBindings,
+  });
+  const discardImportBindings = (binding: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+  }): void => {
+    if (
+      manualImportBinding?.catalogId === binding.catalogId &&
+      manualImportBinding.sessionId === binding.sessionId
+    ) discardManualImportController();
+    if (
+      autoImportBinding?.catalogId === binding.catalogId &&
+      autoImportBinding.sessionId === binding.sessionId
+    ) discardAutoImportRuntime();
+  };
+  const assertManualImportSession = async (binding: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+  }): Promise<void> => {
+    const before = coordinatorRuntime.getSession();
+    if (
+      before === null ||
+      before.catalogId !== binding.catalogId ||
+      before.sessionId !== binding.sessionId
+    ) {
+      discardImportBindings(binding);
+      throw new Error("Catalog import session is no longer active.");
     }
-
-    const folderPath = await activateLibraryRoot(result.filePaths[0]!);
-    return {
-      path: folderPath,
-      name: getFolderName(folderPath),
+    await coordinator.queryLive({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: null,
+    });
+    const after = coordinatorRuntime.getSession();
+    if (
+      after === null ||
+      after.catalogId !== binding.catalogId ||
+      after.sessionId !== binding.sessionId
+    ) {
+      discardImportBindings(binding);
+      throw new Error("Catalog import session changed.");
+    }
+  };
+  const getManualImportController = async (
+    catalogId: CatalogId,
+    sessionId: SessionId,
+    allowClosed = false,
+  ): Promise<CatalogManualImportController> => {
+    if (!allowClosed) workLifecycle.assertOpen();
+    const current = coordinatorRuntime.getSession();
+    if (
+      current === null ||
+      current.catalogId !== catalogId ||
+      current.sessionId !== sessionId
+    ) {
+      discardManualImportController();
+      throw new Error("Catalog import session is no longer active.");
+    }
+    if (
+      manualImportBinding?.catalogId === catalogId &&
+      manualImportBinding.sessionId === sessionId
+    ) {
+      return manualImportBinding.controller;
+    }
+    await shutdownManualImportController();
+    if (!allowClosed) workLifecycle.assertOpen();
+    const controller = createCatalogManualImportController({
+      catalogId,
+      sessionId,
+      worker,
+      assertCurrentSession: assertManualImportSession,
+      getNativeSessionRoots: () => coordinatorRuntime.getNativeSessionRoots()
+        .filter((root) => root.catalogId === catalogId)
+        .filter(isRuntimeNativeRoot)
+        .map((root) => ({
+          catalogId: root.catalogId,
+          rootId: root.rootId,
+          nativePath: root.nativePath,
+        })),
+      chooseFiles: async () => {
+        await assertManualImportSession({ catalogId, sessionId });
+        const result = await dialog.showOpenDialog({
+          title: "Select photos to import",
+          properties: ["openFile", "multiSelections"],
+        });
+        await assertManualImportSession({ catalogId, sessionId });
+        return result.canceled || result.filePaths.length === 0 ? null : result.filePaths;
+      },
+      journal: createFileTransactionJournal(
+        path.join(app.getPath("userData"), "catalog-import-state", catalogId),
+      ),
+    });
+    manualImportBinding = {
+      catalogId,
+      sessionId,
+      controller,
     };
+    return controller;
+  };
+  const recoverManualImportForSession = async (session: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+  } | null): Promise<void> => {
+    if (session === null) {
+      await shutdownManualImportController();
+      return;
+    }
+    try {
+      const controller = await getManualImportController(session.catalogId, session.sessionId, true);
+      await controller.recoverPending();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Manual import recovery failed.";
+      const diagnostic = message.length > 0 && message.length <= 500 && !message.includes("/") && !message.includes("\\")
+        ? message
+        : "Manual import recovery failed.";
+      process.stderr.write(`${diagnostic}\n`);
+    }
+  };
+  const getAutoImportRuntime = async (
+    catalogId: CatalogId,
+    sessionId: SessionId,
+    allowClosed = false,
+  ): Promise<CatalogAutoImportRuntime> => {
+    if (!allowClosed) workLifecycle.assertOpen();
+    const current = coordinatorRuntime.getSession();
+    if (
+      current === null ||
+      current.catalogId !== catalogId ||
+      current.sessionId !== sessionId
+    ) {
+      discardAutoImportRuntime();
+      throw new Error("Catalog Auto Import session is no longer active.");
+    }
+    if (
+      autoImportBinding?.catalogId === catalogId &&
+      autoImportBinding.sessionId === sessionId
+    ) {
+      return autoImportBinding.runtime;
+    }
+    await shutdownAutoImportRuntime();
+    if (!allowClosed) workLifecycle.assertOpen();
+    const runtime = createCatalogAutoImportRuntime({
+      catalogId,
+      sessionId,
+      worker,
+      assertCurrentSession: async () => assertManualImportSession({ catalogId, sessionId }),
+      applyLive: (input) => coordinator.applyAutoImportRule(input),
+      resolveNativeRoot: async (input) => {
+        await assertManualImportSession({ catalogId, sessionId });
+        const root = coordinatorRuntime.getNativeSessionRoots()
+          .filter(isRuntimeNativeRoot)
+          .find((candidate) => candidate.rootId === input.rootId && candidate.catalogId === input.catalogId);
+        if (root === undefined) throw new Error("Catalog root is unavailable.");
+        return { catalogId: root.catalogId, rootId: root.rootId, canonicalPath: root.nativePath };
+      },
+      store: createAutoImportStore(path.join(app.getPath("userData"), "catalog-auto-import-state", catalogId)),
+      journal: createFileTransactionJournal(
+        path.join(app.getPath("userData"), "catalog-import-state", catalogId),
+      ),
+      openPath: (nativePath) => shell.openPath(nativePath),
+    });
+    autoImportBinding = { catalogId, sessionId, runtime };
+    return runtime;
+  };
+  const recoverAutoImportForSession = async (session: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+  } | null): Promise<void> => {
+    if (session === null) {
+      await shutdownAutoImportRuntime();
+      return;
+    }
+    try {
+      const runtime = await getAutoImportRuntime(session.catalogId, session.sessionId, true);
+      await runtime.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Auto Import startup failed.";
+      const diagnostic = message.length > 0 && message.length <= 500 && !message.includes("/") && !message.includes("\\")
+        ? message
+        : "Auto Import startup failed.";
+      process.stderr.write(`${diagnostic}\n`);
+    }
+  };
+  const recoverCurrentCatalogBindings = async (): Promise<void> => {
+    const session = coordinatorRuntime.getSession();
+    await recoverManualImportForSession(session);
+    await recoverAutoImportForSession(session);
+  };
+  const runCatalogTransition = <T>(task: () => Promise<T>): Promise<T> => {
+    return workLifecycle.transition(task, recoverCurrentCatalogBindings);
+  };
+  shutdownCatalogBindings = async () => {
+    await workLifecycle.shutdown();
+  };
+  const relinkService = new CatalogAssetRelinkService({
+    worker,
+    session: {
+      assertActive: async (input) => {
+        await coordinator.queryLive({ ...input, expectedRevision: null });
+      },
+      getActiveRoots: ({ catalogId }) => coordinatorRuntime.getNativeSessionRoots()
+        .filter((root) => root.catalogId === catalogId)
+        .filter(isRuntimeNativeRoot)
+        .map((root) => ({
+          rootId: root.rootId,
+          canonicalPath: path.resolve(root.nativePath),
+        })),
+    },
   });
-
-  ipcMain.handle("darkroom:scan-folder", async (event, rootPath: string) => {
-    assertTrustedRenderer(event);
-    return scanFolderTree(rootPath);
+  coordinator.subscribe((event) => {
+    if (
+      manualImportBinding !== null &&
+      (manualImportBinding.catalogId !== event.catalogId || manualImportBinding.sessionId !== event.sessionId)
+    ) {
+      discardManualImportController();
+    }
+    if (
+      autoImportBinding !== null &&
+      (autoImportBinding.catalogId !== event.catalogId || autoImportBinding.sessionId !== event.sessionId)
+    ) {
+      discardAutoImportRuntime();
+    }
+    if (
+      event.kind === "reconcile-completed" &&
+      autoImportBinding?.catalogId === event.catalogId &&
+      autoImportBinding.sessionId === event.sessionId
+    ) {
+      try {
+        workLifecycle.assertOpen();
+        void workLifecycle.track("auto", () =>
+          autoImportBinding!.runtime.reconcile(event.rootId, event.payload.scopes),
+        ).catch(() => undefined);
+      } catch {
+        // A transition or shutdown has already closed the work gate.
+      }
+    }
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send("darkroom:catalog-event", event);
   });
+  interface FingerprintJob {
+    readonly catalogId: CatalogId;
+    readonly sessionId: CatalogFingerprintBackfillRequest["sessionId"];
+    readonly operationId: OperationId;
+    readonly workToken: CatalogWorkToken | null;
+    cancelled: boolean;
+  }
+  const fingerprintJobs = new Map<OperationId, FingerprintJob>();
+  const fingerprintProgress = (
+    request: CatalogFingerprintBackfillRequest,
+    value: FingerprintBackfillExecution | FingerprintBackfillProgressEvent | FingerprintBackfillSnapshot,
+  ): CatalogFingerprintBackfillProgress => {
+    const counts = "progress" in value ? value.progress : value;
+    return {
+      catalogId: request.catalogId,
+      sessionId: request.sessionId,
+      operationId: value.operationId,
+      state: value.state,
+      total: counts.total,
+      indexed: counts.indexed,
+      stale: counts.stale,
+      remaining: counts.remaining,
+      processed: counts.processed,
+      failed: counts.failed,
+      unchecked: counts.unchecked,
+    };
+  };
+  const sendFingerprintProgress = (progress: CatalogFingerprintBackfillProgress): void => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send("darkroom:catalog-fingerprint-progress", progress);
+  };
+  const assertFingerprintSession = async (request: CatalogFingerprintBackfillRequest): Promise<void> => {
+    await coordinator.queryLive({ ...request, expectedRevision: null });
+  };
+  const fingerprintStore = (catalogId: CatalogId): CatalogFingerprintBackfillStore =>
+    new CatalogFingerprintBackfillStore(app.getPath("userData"), catalogId);
+  const latestFingerprintSnapshot = async (
+    request: CatalogFingerprintBackfillRequest,
+  ): Promise<FingerprintBackfillSnapshot | null> => {
+    workLifecycle.assertOpen();
+    await assertFingerprintSession(request);
+    const snapshots = await fingerprintStore(request.catalogId).list();
+    return [...snapshots].sort((left, right) =>
+      right.updatedAt - left.updatedAt || right.operationId.localeCompare(left.operationId)
+    )[0] ?? null;
+  };
+  const runFingerprintBackfill = async (
+    request: CatalogFingerprintBackfillRequest,
+    operationId: OperationId,
+    sourceOperationId: OperationId | null,
+    startCancelled = false,
+    workToken: CatalogWorkToken | null = null,
+  ): Promise<CatalogFingerprintBackfillProgress> => {
+    const conflict = [...fingerprintJobs.values()].find(
+      (job) => job.catalogId === request.catalogId,
+    );
+    if (conflict !== undefined) {
+      throw new Error("A fingerprint backfill is already active for this catalog.");
+    }
+    const job: FingerprintJob = {
+      ...request,
+      operationId,
+      workToken,
+      cancelled: startCancelled || workToken?.isCancelled() === true,
+    };
+    fingerprintJobs.set(operationId, job);
+    try {
+      await assertFingerprintSession(request);
+      const state = parseCatalogLiveQueryResult(await worker.liveQuery({
+        catalogId: request.catalogId,
+        expectedRevision: null,
+      }));
+      const store = fingerprintStore(request.catalogId);
+      const adapter = new CatalogFingerprintBackfillAdapter(
+        request.catalogId,
+        worker,
+        {
+          resolve: async (asset) => {
+            await assertFingerprintSession(request);
+            const root = coordinatorRuntime.getNativeSessionRoots()
+              .filter(isRuntimeNativeRoot)
+              .find(
+                (candidate) =>
+                  candidate.catalogId === request.catalogId &&
+                  candidate.rootId === asset.rootId,
+              );
+            if (root === undefined) throw new Error("Fingerprint asset root is unavailable.");
+            return {
+              catalogId: request.catalogId,
+              assetId: asset.assetId,
+              rootId: asset.rootId,
+              canonicalRootPath: root.nativePath,
+              relativePath: asset.relativePath,
+            };
+          },
+        },
+        { pathAccess: nativeAssetAccess },
+      );
+      const service = new CatalogFingerprintBackfillService(store, adapter, adapter);
+      const onProgress = (value: FingerprintBackfillProgressEvent): void => {
+        sendFingerprintProgress(fingerprintProgress(request, value));
+      };
+      const common = {
+        catalogId: request.catalogId,
+        operationId,
+        assets: state.assets,
+        isCancelled: () => job.cancelled || job.workToken?.isCancelled() === true,
+        onProgress,
+      };
+      const execution = sourceOperationId === null
+        ? await service.run(common)
+        : await service.resume({ ...common, sourceOperationId });
+      return fingerprintProgress(request, execution);
+    } finally {
+      if (fingerprintJobs.get(operationId) === job) fingerprintJobs.delete(operationId);
+    }
+  };
+  let currentAdminLease: CatalogNativeAdminLease | null = null;
+  const maintenance: CatalogAdminMaintenancePort = {
+    async quiesce() {
+      throw new Error("Merge and Replace restore are unavailable in this build.");
+    },
+    async resume() {
+      if (currentAdminLease === null) throw new Error("Catalog maintenance is inactive.");
+      await currentAdminLease.resume();
+    },
+    async swapOptimized(input) {
+      if (currentAdminLease === null) throw new Error("Catalog maintenance is inactive.");
+      await swapOptimizedCatalogDatabase(currentAdminLease, input);
+    },
+  };
+  const adminService = new CatalogAdminService({
+    worker,
+    appVersion: app.getVersion(),
+    paths: {
+      async databasePath(catalogId) {
+        const existing = (await coordinatorRegistry.read()).find((entry) => entry.catalogId === catalogId);
+        return existing?.databasePath ?? coordinatorPaths.allocateDatabasePath(catalogId);
+      },
+      async backupDirectory(catalogId) {
+        return path.join(app.getPath("userData"), "catalog-backups", catalogId);
+      },
+      async temporaryDirectory(catalogId) {
+        return path.join(app.getPath("userData"), "catalog-admin-temporary", catalogId);
+      },
+    },
+    policyStore: new FileCatalogBackupPolicyStore(
+      path.join(app.getPath("userData"), "catalog-backup-policies.json"),
+    ),
+    maintenance,
+    publishClone: async (input) => {
+      await coordinatorRegistry.upsert({
+        catalogId: input.catalogId,
+        displayName: input.displayName,
+        databasePath: input.databasePath,
+        health: "healthy",
+        lastOpenedAt: 0,
+      });
+    },
+  });
+  const withActiveAdmin = <T>(
+    value: unknown,
+    task: (lease: CatalogNativeAdminLease) => Promise<T>,
+  ): Promise<T> => {
+    const request = parseCatalogAdminSessionRequest(value);
+    return coordinator.runCatalogAdmin(request, async (lease) => {
+      if (currentAdminLease !== null) throw new Error("Catalog administration is already active.");
+      currentAdminLease = lease;
+      try {
+        return await task(lease);
+      } finally {
+        currentAdminLease = null;
+      }
+    });
+  };
 
-  ipcMain.handle("darkroom:read-file", async (event, absolutePath: string) => {
+  catalogBackupTimer = setInterval(() => {
+    void coordinator.runScheduledCatalogAdmin(async (lease) => {
+      if (currentAdminLease !== null) return null;
+      currentAdminLease = lease;
+      try {
+        return await adminService.runScheduledBackup(lease.catalogId);
+      } finally {
+        currentAdminLease = null;
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Scheduled catalog backup failed.";
+      process.stderr.write(`${message}\n`);
+    });
+  }, 60_000);
+  catalogBackupTimer.unref();
+
+  ipcMain.handle("darkroom:catalog-bootstrap", async (event) => {
     assertTrustedRenderer(event);
-    const buffer = await readFileBuffer(absolutePath);
-    return buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength,
+    return runCatalogTransition(() => coordinator.bootstrap());
+  });
+  ipcMain.handle("darkroom:catalog-create", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return runCatalogTransition(() => coordinator.createCatalog(value));
+  });
+  ipcMain.handle("darkroom:catalog-open", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return runCatalogTransition(() => coordinator.openCatalog(value));
+  });
+  ipcMain.handle("darkroom:catalog-switch", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return runCatalogTransition(() => coordinator.switchCatalog(value));
+  });
+  ipcMain.handle("darkroom:catalog-close", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await runCatalogTransition(() => coordinator.closeCatalog(value));
+  });
+  ipcMain.handle("darkroom:catalog-add-root", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.addRoot(value);
+  });
+  ipcMain.handle("darkroom:catalog-relink-root", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return runCatalogTransition(() => coordinator.relinkRoot(value));
+  });
+  ipcMain.handle("darkroom:catalog-relink-files-prepare", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseRelinkPrepareRequest(value);
+    workLifecycle.assertOpen();
+    await coordinator.queryLive({ ...request, expectedRevision: null });
+    workLifecycle.assertOpen();
+    const result = await dialog.showOpenDialog({
+      title: "Select files to relink",
+      properties: ["openFile", "multiSelections"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    workLifecycle.assertOpen();
+    const roots = coordinatorRuntime.getNativeSessionRoots()
+      .filter((root) => root.catalogId === request.catalogId)
+      .filter(isRuntimeNativeRoot);
+    const selectedCandidates = await canonicalizeRelinkCandidates(result.filePaths, roots);
+    workLifecycle.assertOpen();
+    return relinkService.prepare({ ...request, selectedCandidates });
+  });
+  ipcMain.handle("darkroom:catalog-relink-files-apply", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseRelinkApplyRequest(value);
+    return workLifecycle.track("manual", (token) => relinkService.apply(request, token.isCancelled));
+  });
+  ipcMain.handle("darkroom:catalog-relink-files-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseRelinkCancelRequest(value);
+    await workLifecycle.track("manual", (token) => relinkService.cancel(request, token.isCancelled));
+  });
+  ipcMain.handle("darkroom:catalog-remove", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await coordinator.removeCatalog(value);
+  });
+  ipcMain.handle("darkroom:catalog-start-scan", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.startScan(value);
+  });
+  ipcMain.handle("darkroom:catalog-cancel-scan", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    coordinator.cancelScan(value);
+  });
+  ipcMain.handle("darkroom:catalog-get-operation", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.getOperation(value);
+  });
+  ipcMain.handle("darkroom:catalog-wait-operation", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.waitForOperation(value);
+  });
+  ipcMain.handle("darkroom:catalog-query", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.queryLive(value);
+  });
+  ipcMain.handle("darkroom:catalog-apply", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.applyLive(value);
+  });
+  ipcMain.handle("darkroom:catalog-import-prepare", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogImportPrepareRequest(value);
+    const controller = await getManualImportController(request.catalogId, request.sessionId);
+    return runManualWork(() => controller.prepare(request));
+  });
+  ipcMain.handle("darkroom:catalog-import-review", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogImportOperationRequest(value);
+    const controller = await getManualImportController(request.catalogId, request.sessionId);
+    return runManualWork(() => controller.review(request));
+  });
+  ipcMain.handle("darkroom:catalog-import-run", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogImportOperationRequest(value);
+    const controller = await getManualImportController(request.catalogId, request.sessionId);
+    return runManualWork(() => controller.run(request));
+  });
+  ipcMain.handle("darkroom:catalog-import-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogImportOperationRequest(value);
+    const controller = await getManualImportController(request.catalogId, request.sessionId);
+    workLifecycle.assertOpen();
+    controller.cancel(request);
+    await assertManualImportSession({
+      catalogId: request.catalogId,
+      sessionId: request.sessionId,
+    });
+  });
+  const requireAutoImportAction = <T extends ReturnType<typeof parseAutoImportControlRequest>["action"]>(
+    request: ReturnType<typeof parseAutoImportControlRequest>,
+    action: T,
+  ): void => {
+    if (request.action !== action) throw new Error("Auto Import control action does not match the channel.");
+  };
+  const runManualWork = <T>(task: () => Promise<T>): Promise<T> =>
+    workLifecycle.track("manual", task);
+  const runAutoWork = <T>(task: () => Promise<T>): Promise<T> =>
+    workLifecycle.track("auto", task);
+  ipcMain.handle("darkroom:catalog-auto-import-configure", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportConfigureRequest(value);
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.configure({
+      ingressRootId: request.ingressRootId,
+      ingressRelativePath: request.ingressRelativePath,
+      destinationRootId: request.destinationRootId,
+      destinationRelativePath: request.destinationRelativePath,
+      presetId: request.presetId,
+      duplicatePolicy: request.duplicatePolicy,
+      destinationConflictPolicy: request.destinationConflictPolicy,
+      stabilityMs: request.stabilityMs,
+      maxAttempts: request.maxAttempts,
+      retryBackoffMs: request.retryBackoffMs,
+      enabled: request.enabled,
+    }));
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-status", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "status");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.status());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-enable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "enable");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.enable());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-disable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "disable");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.disable());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-pause", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "pause");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.pause());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-resume", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "resume");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.resume());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-retry-failed", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "retry-failed");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.retryFailed());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-clear-failed", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportControlRequest(value);
+    requireAutoImportAction(request, "clear-failed");
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.clearFailed());
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseAutoImportCancelRequest(value);
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    return runAutoWork(() => runtime.cancel(request.queueId));
+  });
+  ipcMain.handle("darkroom:catalog-auto-import-open-ingress", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogSessionRequest(value);
+    const runtime = await getAutoImportRuntime(request.catalogId, request.sessionId);
+    await runAutoWork(() => runtime.openIngress());
+  });
+  ipcMain.handle("darkroom:catalog-read-asset", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.readAsset(value);
+  });
+  ipcMain.handle("darkroom:catalog-read-asset-head", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.readAssetHead(value);
+  });
+  ipcMain.handle("darkroom:catalog-stat-asset", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.statAsset(value);
+  });
+  ipcMain.handle("darkroom:catalog-read-sidecar", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.readSidecar(value);
+  });
+  ipcMain.handle("darkroom:catalog-write-sidecar", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await coordinator.writeSidecar(value);
+  });
+  ipcMain.handle("darkroom:catalog-decode-asset", async (event, value: unknown, request: unknown) => {
+    assertTrustedRenderer(event);
+    return coordinator.decodeAsset(value, request);
+  });
+  ipcMain.handle("darkroom:catalog-trash-asset", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await coordinator.trashAsset(value);
+  });
+  ipcMain.handle("darkroom:get-format-capability-report", async (event) => {
+    assertTrustedRenderer(event);
+    return getFormatCapabilityReport();
+  });
+  ipcMain.handle("darkroom:catalog-fingerprint-status", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogFingerprintBackfillRequest(value);
+    const snapshot = await latestFingerprintSnapshot(request);
+    return snapshot === null ? null : fingerprintProgress(request, snapshot);
+  });
+  ipcMain.handle("darkroom:catalog-fingerprint-start", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogFingerprintBackfillRequest(value);
+    workLifecycle.assertOpen();
+    return workLifecycle.track("fingerprint", (token) =>
+      runFingerprintBackfill(request, createOperationId(), null, false, token),
     );
   });
-
-  ipcMain.handle(
-    "darkroom:read-file-head",
-    async (event, absolutePath: string, maxBytes: number) => {
-      assertTrustedRenderer(event);
-      const buffer = await readFileHead(absolutePath, maxBytes);
-      return buffer.buffer.slice(
-        buffer.byteOffset,
-        buffer.byteOffset + buffer.byteLength,
+  ipcMain.handle("darkroom:catalog-fingerprint-resume", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogFingerprintBackfillResumeRequest(value);
+    workLifecycle.assertOpen();
+    return workLifecycle.track("fingerprint", (token) =>
+      runFingerprintBackfill(request, createOperationId(), request.sourceOperationId, false, token),
+    );
+  });
+  ipcMain.handle("darkroom:catalog-fingerprint-recover", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    workLifecycle.assertOpen();
+    const request = parseCatalogFingerprintBackfillRequest(value);
+    const snapshot = await latestFingerprintSnapshot(request);
+    if (snapshot === null) return null;
+    if (snapshot.state !== "planned" && snapshot.state !== "running") {
+      return fingerprintProgress(request, snapshot);
+    }
+    const active = fingerprintJobs.get(snapshot.operationId);
+    if (
+      active?.catalogId === request.catalogId &&
+      active.sessionId === request.sessionId
+    ) {
+      return fingerprintProgress(request, snapshot);
+    }
+    workLifecycle.assertOpen();
+    return workLifecycle.track("fingerprint", (token) =>
+      runFingerprintBackfill(request, snapshot.operationId, null, false, token),
+    );
+  });
+  ipcMain.handle("darkroom:catalog-fingerprint-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    workLifecycle.assertOpen();
+    const request = parseCatalogFingerprintBackfillOperationRequest(value);
+    await assertFingerprintSession(request);
+    const job = fingerprintJobs.get(request.operationId);
+    if (job !== undefined) {
+      if (job.catalogId !== request.catalogId || job.sessionId !== request.sessionId) {
+        throw new Error("Fingerprint operation belongs to another catalog session.");
+      }
+      job.cancelled = true;
+      return;
+    }
+    const stored = await fingerprintStore(request.catalogId).load(request.operationId);
+    if (stored === null) return;
+    const snapshot = parseFingerprintBackfillSnapshot(stored);
+    if (snapshot.state === "planned" || snapshot.state === "running") {
+      await workLifecycle.track("fingerprint", (token) =>
+        runFingerprintBackfill(request, request.operationId, null, true, token),
       );
-    },
-  );
-
-  ipcMain.handle("darkroom:stat-file", async (event, absolutePath: string) => {
-    assertTrustedRenderer(event);
-    return statFile(absolutePath);
-  });
-
-  ipcMain.handle(
-    "darkroom:decode-nef",
-    async (event, request: NefDecodeRequest) => {
-      assertTrustedRenderer(event);
-      return nefDecoder.decode(activeLibraryRoot, request);
-    },
-  );
-
-  ipcMain.handle("darkroom:get-last-folder", async (event) => {
-    assertTrustedRenderer(event);
-    const folderPath = await settingsStore.getLastFolder();
-    if (folderPath) {
-      try {
-        await activateLibraryRoot(folderPath);
-      } catch {
-        activeLibraryRoot = null;
-      }
     }
-    return folderPath;
   });
 
-  ipcMain.handle("darkroom:set-last-folder", async (event, folderPath: string | null) => {
+  ipcMain.handle("darkroom:catalog-admin-inspect", async (event, value: unknown) => {
     assertTrustedRenderer(event);
-    if (folderPath) {
-      const requestedRoot = await fs.realpath(folderPath);
-      if (requestedRoot !== activeLibraryRoot) {
-        throw new Error("Library folder was not selected through Darkroom.");
-      }
-    } else {
-      activeLibraryRoot = null;
-    }
-    await settingsStore.setLastFolder(folderPath);
+    return withActiveAdmin(value, (lease) => adminService.inspectCatalog(lease.databasePath));
   });
-
-  ipcMain.handle("darkroom:folder-exists", async (event, folderPath: string) => {
+  ipcMain.handle("darkroom:catalog-admin-backup", async (event, value: unknown) => {
     assertTrustedRenderer(event);
-    return folderExists(folderPath);
+    return withActiveAdmin(value, (lease) => adminService.backupCatalog(lease.catalogId));
   });
-
-  ipcMain.handle("darkroom:catalog-read", async (event, rootPath: string) => {
+  ipcMain.handle("darkroom:catalog-admin-export", async (event, value: unknown) => {
     assertTrustedRenderer(event);
-    return catalogStore.read(rootPath);
+    return withActiveAdmin(value, async (lease) => {
+      const result = await dialog.showSaveDialog({
+        title: "Export catalog package",
+        defaultPath: `${lease.displayName}.darkroomcatalog`,
+        filters: [{ name: "Darkroom catalog", extensions: ["darkroomcatalog"] }],
+      });
+      if (result.canceled || result.filePath.length === 0) return null;
+      const packagePath = result.filePath.endsWith(".darkroomcatalog")
+        ? result.filePath
+        : `${result.filePath}.darkroomcatalog`;
+      return adminService.exportCatalogPackage(lease.catalogId, packagePath);
+    });
   });
-
-  ipcMain.handle("darkroom:catalog-write", async (event, catalog) => {
+  ipcMain.handle("darkroom:catalog-admin-validate-package", async (event) => {
     assertTrustedRenderer(event);
-    await catalogStore.write(catalog);
+    const result = await dialog.showOpenDialog({
+      title: "Validate catalog package",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return coordinator.runCatalogManagement(() => adminService.inspectCatalogPackage(result.filePaths[0]!));
   });
-
-  ipcMain.handle("darkroom:catalog-delete", async (event, rootPath: string) => {
+  ipcMain.handle("darkroom:catalog-admin-import-as-new", async (event, value: unknown) => {
     assertTrustedRenderer(event);
-    await catalogStore.remove(rootPath);
+    const request = parseCatalogAdminImportRequest(value);
+    const result = await dialog.showOpenDialog({
+      title: "Import catalog as new",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return coordinator.runCatalogManagement(
+      () => adminService.cloneAsNew(result.filePaths[0]!, request.displayName),
+    );
   });
-
-  ipcMain.handle(
-    "darkroom:delete-files",
-    async (event, absolutePaths: string[]) => {
-      assertTrustedRenderer(event);
-      await trashFiles(absolutePaths);
-    },
-  );
-
-  ipcMain.handle(
-    "darkroom:read-sidecar",
-    async (event, rootPath: string, relativePath: string) => {
-      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
-      try {
-        if (!await assertRegularSidecar(sidecarPath)) {
-          return null;
-        }
-        const stat = await fs.lstat(sidecarPath);
-        if (stat.size > MAX_SIDECAR_BYTES) {
-          throw new Error("XMP sidecar is not a supported file size.");
-        }
-        const contents = await fs.readFile(sidecarPath, "utf8");
-        return { contents, lastModified: stat.mtimeMs };
-      } catch (error) {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return null;
-        }
-        throw error;
-      }
-    },
-  );
-
-  ipcMain.handle(
-    "darkroom:write-sidecar",
-    async (
-      event,
-      rootPath: string,
-      relativePath: string,
-      contents: string | null,
-    ) => {
-      const sidecarPath = await getSidecarPath(event, rootPath, relativePath);
-      if (contents === null) {
-        try {
-          if (!await assertRegularSidecar(sidecarPath)) {
-            return;
-          }
-          await fs.unlink(sidecarPath);
-        } catch (error) {
-          if (
-            typeof error === "object" &&
-            error !== null &&
-            "code" in error &&
-            error.code === "ENOENT"
-          ) {
-            return;
-          }
-          throw error;
-        }
-        return;
-      }
-
-      if (Buffer.byteLength(contents, "utf8") > MAX_SIDECAR_BYTES) {
-        throw new Error("XMP sidecar is not a supported file size.");
-      }
-
-      await writeFileAtomically(sidecarPath, contents);
-    },
-  );
+  ipcMain.handle("darkroom:catalog-admin-optimize-preview", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return withActiveAdmin(value, (lease) => adminService.optimizePreview(lease.catalogId));
+  });
+  ipcMain.handle("darkroom:catalog-admin-optimize", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return runCatalogTransition(() => withActiveAdmin(value, (lease) => adminService.optimize(lease.catalogId)));
+  });
+  ipcMain.handle("darkroom:catalog-admin-get-backup-policy", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return withActiveAdmin(value, (lease) => adminService.getBackupPolicy(lease.catalogId));
+  });
+  ipcMain.handle("darkroom:catalog-admin-set-backup-policy", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseCatalogAdminPolicyRequest(value);
+    return withActiveAdmin(request, (lease) => adminService.setBackupPolicy(lease.catalogId, request.policy));
+  });
+  ipcMain.handle("darkroom:catalog-admin-run-scheduled-backup", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return withActiveAdmin(value, (lease) => adminService.runScheduledBackup(lease.catalogId));
+  });
 
   ipcMain.handle("darkroom:get-export-formats", async (event) => {
     assertTrustedRenderer(event);
@@ -591,16 +1603,14 @@ function registerIpcHandlers(): void {
     "darkroom:choose-export-destination",
     async (event, request: ExportDestinationRequest) => {
       assertTrustedRenderer(event);
-      if (
-        typeof request !== "object" ||
-        request === null ||
-        !Number.isInteger(request.count) ||
-        request.count <= 0
-      ) {
-        throw new Error("Export destination request is invalid.");
-      }
-      const sources = await resolveApprovedExportSources(activeLibraryRoot);
-      return exportService.chooseExportDestination(request, sources);
+      const parsed = parseExportDestinationRequest(request);
+      const locations = await coordinator.exportAssetLocations(parsed);
+      const resolved = await Promise.all(locations.map(async (location) => ({
+        assetId: location.assetId,
+        path: await nativeAssetAccess.resolvePath(location),
+      })));
+      const sources = await resolveApprovedExportSources(resolved);
+      return exportService.chooseExportDestination(parsed, sources);
     },
   );
 
@@ -684,6 +1694,7 @@ app.whenReady().then(async () => {
     await runCatalogWorkerAppSmoke();
     return;
   }
+  await runStartupMigration();
   registerAiModelProtocol(aiModelService);
   registerIpcHandlers();
   await createWindow();
@@ -704,8 +1715,20 @@ app.on("before-quit", (event) => {
     return;
   }
   isQuitting = true;
+  if (catalogBackupTimer !== null) {
+    clearInterval(catalogBackupTimer);
+    catalogBackupTimer = null;
+  }
   event.preventDefault();
-  void stopCatalogWorker()
+  const coordinatorShutdown = Promise.resolve()
+    .then(() => shutdownCatalogBindings?.())
+    .then(() => catalogCoordinator?.close());
+  void coordinatorShutdown
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Catalog coordinator shutdown failed.";
+      process.stderr.write(`${message}\n`);
+    })
+    .finally(() => stopCatalogWorker())
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Catalog worker shutdown failed.";
       process.stderr.write(`${message}\n`);

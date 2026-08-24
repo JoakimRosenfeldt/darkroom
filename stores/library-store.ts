@@ -1,43 +1,53 @@
 import { create } from "zustand";
 import { formatPickerError } from "@/lib/fs/access";
 import {
+  activateCatalog,
+  addCatalogRoot as addCatalogRootSession,
+  bootstrapCatalog,
+  cancelCatalogScan,
+  clearSessionCatalog,
+  closeActiveCatalog,
+  createCatalog as createCatalogSession,
+  getActiveCatalogView,
+  queryActiveCatalog,
+  relinkCatalogRoot as relinkCatalogRootSession,
+  removeCatalog as removeCatalogSession,
+  renameActiveCatalog,
+  scanCatalogRoot,
+  scheduleCatalogStateSync,
+  subscribeCatalogState,
+  switchCatalog as switchCatalogSession,
+  type CatalogRootState,
+  type HydratedCatalogState,
+  type ScanProgress,
+} from "@/lib/fs/session-catalog";
+import type {
+  CatalogActivationResult,
+  CatalogPresetView,
+  CatalogSummary,
+} from "@/lib/catalog/api";
+import type { CatalogId, RootId } from "@/lib/catalog/ids";
+import type { CatalogV3FingerprintCoverage } from "@/lib/catalog/v3";
+import {
   getEntryMetadata,
   createEntryMetadata,
 } from "@/lib/catalog/defaults";
-import {
-  buildPhotoCatalog,
-  deleteCatalog,
-  loadCatalog,
-  scheduleCatalogPersist,
-} from "@/lib/catalog/persistence";
 import type {
   Album,
   EntryMetadata,
 } from "@/lib/catalog/types";
+import { filterArchivedEntries, filterOnlyArchivedEntries } from "@/lib/library/archive";
 import { pruneMetadataForEntries } from "@/lib/library/curation";
-import { filterArchivedEntries, filterOnlyArchivedEntries, pruneArchivedEntryIds } from "@/lib/library/archive";
 import { pruneAlbumsForEntries } from "@/lib/library/folders";
-import {
-  clearPersistedLibrary,
-  persistLastFolder,
-  scanDirectory,
-  type ScanProgress,
-} from "@/lib/fs/directory";
-import { deleteFilesFromDisk, getDarkroomAPI, joinRootPath } from "@/lib/fs/platform";
-import {
-  hasSessionCatalog,
-  setSessionCatalog,
-  getSessionCatalog,
-} from "@/lib/fs/session-catalog";
+import { getDarkroomAPI } from "@/lib/fs/platform";
+import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { resolveProfile } from "@/lib/raw/decode";
 import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import { setDevelopMetadataWriter, useDevelopStore } from "@/stores/develop-store";
 
 const fsDebug = (...args: unknown[]) => console.log("[darkroom:fs]", ...args);
-const fsDebugWarn = (...args: unknown[]) => console.warn("[darkroom:fs]", ...args);
-const fsDebugError = (step: string, error: unknown, detail?: unknown) =>
-  console.error("[darkroom:fs]", step, error, detail);
+const fsDebugError = (step: string, error: unknown) =>
+  console.error("[darkroom:fs]", step, error);
 
 export type ImportState = "idle" | "importing" | "restoring" | "error";
 
@@ -48,36 +58,6 @@ export interface SelectEntryModifiers {
 
 type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
-function restoreSelection(
-  entries: LibraryEntry[],
-  previousIds: string[],
-  previousAnchor: string | null,
-): {
-  selectedEntryIds: string[];
-  selectedEntryId: string | null;
-  selectionAnchorId: string | null;
-} {
-  const validIds = previousIds.filter((id) =>
-    entries.some((entry) => entry.id === id),
-  );
-  const selectedEntryIds =
-    validIds.length > 0
-      ? validIds
-      : entries[0]
-        ? [entries[0].id]
-        : [];
-  const anchorValid =
-    previousAnchor &&
-    entries.some((entry) => entry.id === previousAnchor);
-  return {
-    selectedEntryIds,
-    selectedEntryId: selectedEntryIds.at(-1) ?? null,
-    selectionAnchorId: anchorValid
-      ? previousAnchor
-      : (selectedEntryIds[0] ?? null),
-  };
-}
-
 export type CatalogView =
   | { type: "all" }
   | { type: "folder"; path: string | null }
@@ -85,15 +65,24 @@ export type CatalogView =
   | { type: "archive" };
 
 interface LibraryStore {
+  catalogId: CatalogId | null;
+  sessionId: string | null;
+  catalogRevision: number;
   folderName: string | null;
-  rootPath: string | null;
   entries: LibraryEntry[];
+  unresolvedEntries: LibraryEntry[];
+  fingerprintCoverage: CatalogV3FingerprintCoverage;
+  importPresets: readonly CatalogPresetView[];
   albums: Album[];
   archivedEntryIds: string[];
+  catalogs: readonly CatalogSummary[];
+  catalogRoots: readonly CatalogRootState[];
+  catalogManagerOpen: boolean;
   catalogView: CatalogView;
   importState: ImportState;
   importStatus: string | null;
   importError: string | null;
+  catalogRecovery: string | null;
   needsFolderAccess: boolean;
   selectedEntryId: string | null;
   selectedEntryIds: string[];
@@ -122,7 +111,10 @@ interface LibraryStore {
     patch: SidecarMetadataPatch,
     sourceUpdatedAt: number,
   ) => void;
-  restoreEntryMetadata: (entryId: string, patch: Pick<EntryMetadata, "pick" | "rating" | "colorLabel">) => void;
+  restoreEntryMetadata: (
+    entryId: string,
+    patch: Pick<EntryMetadata, "pick" | "rating" | "colorLabel">,
+  ) => void;
   setCatalogView: (view: CatalogView) => void;
   createAlbum: (name: string) => string;
   renameAlbum: (albumId: string, name: string) => void;
@@ -133,380 +125,340 @@ interface LibraryStore {
   archiveEntries: (entryIds: string[]) => void;
   restoreEntries: (entryIds: string[]) => void;
   deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
-  importFromFolderPath: (
-    rootPath: string,
-    folderName: string,
-    mode?: "import" | "restore",
-  ) => void;
+  createCatalog: (displayName: string) => Promise<void>;
+  addCatalogRoot: () => Promise<void>;
+  relinkCatalogRoot: (rootId?: RootId) => Promise<void>;
+  renameCatalog: (displayName: string) => Promise<void>;
+  removeCatalogRecent: (catalogId: CatalogId) => Promise<void>;
+  deleteCatalog: (catalogId: CatalogId, confirmation: string) => Promise<void>;
+  switchCatalog: (catalogId: CatalogId) => Promise<void>;
+  openCatalogManager: () => void;
+  closeCatalogManager: () => void;
+  refreshCatalogs: () => Promise<void>;
   cancelFolderOperation: () => void;
   clearLibrary: () => Promise<void>;
   bootstrapLibrary: () => Promise<void>;
 }
 
-const SCAN_TIMEOUT_MS = 90_000;
-
 let folderOperationGeneration = 0;
+
+const EMPTY_FINGERPRINT_COVERAGE: CatalogV3FingerprintCoverage = {
+  total: 0,
+  missing: 0,
+  hashing: 0,
+  valid: 0,
+  stale: 0,
+  failed: 0,
+};
 
 function beginFolderOperation(): number {
   folderOperationGeneration += 1;
-  fsDebug("beginFolderOperation", {
-    generation: folderOperationGeneration,
-  });
   return folderOperationGeneration;
 }
 
 function isActiveFolderOperation(generation: number): boolean {
-  const active = generation === folderOperationGeneration;
-  if (!active) {
-    fsDebugWarn("isActiveFolderOperation: stale generation ignored", {
-      generation,
-      current: folderOperationGeneration,
-    });
-  }
-  return active;
+  return generation === folderOperationGeneration;
 }
 
-function attachProfiles(entries: LibraryEntry[]): LibraryEntry[] {
-  return entries.map((entry) => ({
-    ...entry,
-    profileId: resolveProfile(entry)?.id ?? null,
-  }));
-}
-
-function persistCatalogInBackground(
-  rootPath: string,
-  entryMetadata: Record<string, EntryMetadata>,
-  albums: Album[],
-  archivedEntryIds: string[],
-): void {
-  scheduleCatalogPersist(
-    buildPhotoCatalog(rootPath, entryMetadata, albums, archivedEntryIds),
-  );
-}
-
-async function loadAndMergeCatalog(
-  rootPath: string,
+function restoreSelection(
   entries: LibraryEntry[],
-): Promise<{
-  entryMetadata: Record<string, EntryMetadata>;
-  albums: Album[];
-  archivedEntryIds: string[];
-}> {
-  const entryIds = new Set(entries.map((entry) => entry.id));
-  const catalog = await loadCatalog(rootPath);
-  const stored = catalog?.entries ?? {};
-  const entryMetadata = pruneMetadataForEntries(stored, entryIds);
-  const albums = pruneAlbumsForEntries(catalog?.albums ?? [], entryIds);
-  const archivedEntryIds = pruneArchivedEntryIds(
-    catalog?.archivedEntryIds ?? [],
-    entryIds,
-  );
-  return { entryMetadata, albums, archivedEntryIds };
+  previousIds: string[],
+  previousAnchor: string | null,
+): {
+  selectedEntryIds: string[];
+  selectedEntryId: string | null;
+  selectionAnchorId: string | null;
+} {
+  const validIds = previousIds.filter((id) => entries.some((entry) => entry.id === id));
+  const selectedEntryIds = validIds.length > 0
+    ? validIds
+    : entries[0] ? [entries[0].id] : [];
+  const anchorValid = previousAnchor !== null && entries.some((entry) => entry.id === previousAnchor);
+  return {
+    selectedEntryIds,
+    selectedEntryId: selectedEntryIds.at(-1) ?? null,
+    selectionAnchorId: anchorValid ? previousAnchor : selectedEntryIds[0] ?? null,
+  };
 }
 
-function persistLastFolderInBackground(rootPath: string): void {
-  void persistLastFolder(rootPath).catch(() => {
-    // Folder persistence is best-effort.
+function applyHydratedState(
+  state: HydratedCatalogState,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  const catalogChanged = get().catalogId !== state.catalogId;
+  if (catalogChanged) {
+    useDevelopStore.getState().clearLibrarySessions();
+  }
+  const activeEntries = filterArchivedEntries(state.entries, state.archivedEntryIds);
+  set({
+    catalogId: state.catalogId,
+    sessionId: state.sessionId,
+    catalogRevision: state.revision,
+    folderName: state.displayName,
+    entries: state.entries,
+    unresolvedEntries: state.unresolvedEntries,
+    fingerprintCoverage: state.fingerprintCoverage,
+    importPresets: state.importPresets,
+    catalogRoots: state.roots,
+    entryMetadata: state.entryMetadata,
+    albums: state.albums,
+    archivedEntryIds: state.archivedEntryIds,
+    ...restoreSelection(activeEntries, get().selectedEntryIds, get().selectionAnchorId),
+    needsFolderAccess: false,
+    importError: null,
+    catalogRecovery: null,
   });
 }
 
-async function loadFolderCatalog(
-  rootPath: string,
-  generation: number,
-  onProgress: (progress: ScanProgress) => void,
-): Promise<LibraryEntry[]> {
-  fsDebug("loadFolderCatalog: start", {
-    generation,
-    rootPath,
-  });
-
-  return Promise.race([
-    scanDirectory(rootPath, onProgress),
-    new Promise<LibraryEntry[]>((_, reject) => {
-      window.setTimeout(
-        () =>
-          reject(
-            new Error(
-              "Timed out while reading the folder. Try a local folder that is not synced with iCloud, OneDrive, or Google Drive.",
-            ),
-          ),
-        SCAN_TIMEOUT_MS,
+function scheduleStateSync(
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  const catalogId = get().catalogId;
+  const sessionId = get().sessionId;
+  if (catalogId === null || sessionId === null) {
+    return;
+  }
+  const { entryMetadata, albums, archivedEntryIds } = get();
+  void scheduleCatalogStateSync(entryMetadata, albums, archivedEntryIds).then(
+    (revision) => {
+      if (get().catalogId === catalogId && get().sessionId === sessionId) {
+        set({ catalogRevision: revision });
+      }
+    },
+    (error: unknown) => {
+      if (get().catalogId !== catalogId || get().sessionId !== sessionId) {
+        return;
+      }
+      void queryActiveCatalog().then(
+        (state) => {
+          if (get().catalogId === catalogId && get().sessionId === sessionId) {
+            applyHydratedState(state, set, get);
+          }
+          set({ importError: formatPickerError(error) });
+        },
+        () => {
+          set({ importError: formatPickerError(error) });
+        },
       );
-    }),
-  ]);
+    },
+  );
 }
 
-async function completeDirectoryImport(
+function applyLocalMetadata(
+  entryIds: string[],
+  patch: Partial<EntryMetadata>,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  if (entryIds.length === 0) return;
+  const { entryMetadata } = get();
+  const updated = { ...entryMetadata };
+  const updatedAt = Date.now();
+  const history: Array<{ entryId: string; before: EntryMetadata; after: EntryMetadata }> = [];
+  for (const entryId of entryIds) {
+    const before = getEntryMetadata(updated, entryId);
+    const after = createEntryMetadata({ ...before, ...patch, updatedAt });
+    updated[entryId] = after;
+    history.push({ entryId, before, after });
+  }
+  set({ entryMetadata: updated });
+  for (const item of history) {
+    useDevelopStore.getState().recordMetadataEdit(
+      item.entryId,
+      item.before,
+      item.after,
+      item.before.develop ?? createDefaultDevelopDocument(),
+    );
+  }
+  scheduleStateSync(set, get);
+}
+
+async function scanRoots(
   generation: number,
-  rootPath: string,
-  folderName: string,
-  hadSavedFolder: boolean,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): Promise<void> {
+  const roots = getActiveCatalogView()?.roots ?? [];
+  for (const root of roots) {
+    if (!isActiveFolderOperation(generation)) return;
+    if (root.scanState === "complete") continue;
+    const scanned = await scanCatalogRoot(root.rootId, (progress: ScanProgress) => {
+      if (!isActiveFolderOperation(generation)) return;
+      const phase = progress.phase === "statting" ? "Indexing" : "Scanning";
+      const counts = `${progress.count} accepted · ${progress.filesConsidered ?? 0} files · ${progress.directoriesVisited ?? 0} folders`;
+      const terminal = progress.status && progress.status !== "completed"
+        ? `Scan ${progress.status}${progress.errorMessage ? `: ${progress.errorMessage}` : ""}`
+        : `${phase} · ${counts}`;
+      set({ importStatus: progress.done ? terminal : `${phase} · ${counts}` });
+    });
+    if (!isActiveFolderOperation(generation)) return;
+    applyHydratedState(scanned, set, get);
+  }
+}
+
+async function finishImport(
+  generation: number,
+  load: () => Promise<HydratedCatalogState>,
+  mode: "import" | "restore",
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
 ): Promise<void> {
   try {
-    set({ importStatus: `Scanning "${folderName}"…` });
-    let lastProgressStatusAt = 0;
-
-    const scanned = attachProfiles(
-      await loadFolderCatalog(rootPath, generation, (progress) => {
-        if (!isActiveFolderOperation(generation)) {
-          return;
-        }
-        const shouldUpdateStatus =
-          progress.count === 1 ||
-          progress.done ||
-          progress.count - lastProgressStatusAt >= 25;
-
-        if (shouldUpdateStatus) {
-          lastProgressStatusAt = progress.count;
-          fsDebug("completeDirectoryImport: scan progress", {
-            generation,
-            count: progress.count,
-            latestPath: progress.latestPath,
-            done: progress.done ?? false,
-          });
-          set({ importStatus: `Found ${progress.count} photos…` });
-        }
-      }),
-    );
-
-    if (!isActiveFolderOperation(generation)) {
-      return;
-    }
-
-    if (scanned.length === 0) {
-      throw new Error(
-        "No supported photos found. Darkroom supports NEF, JPEG, PNG, and WebP.",
-      );
-    }
-
-    const { entryMetadata, albums, archivedEntryIds } =
-      await loadAndMergeCatalog(rootPath, scanned);
-
-    setSessionCatalog(folderName, scanned, rootPath);
-
-    fsDebug("completeDirectoryImport: success", {
-      generation,
-      folderName,
-      rootPath,
-      entryCount: scanned.length,
-    });
-
-    const activeEntries = filterArchivedEntries(scanned, archivedEntryIds);
-    if (get().rootPath !== rootPath) {
-      useDevelopStore.getState().clearLibrarySessions();
-    }
-    const selection = restoreSelection(
-      activeEntries,
-      get().selectedEntryIds,
-      get().selectionAnchorId,
-    );
-
     set({
-      folderName,
-      rootPath,
-      entries: scanned,
-      entryMetadata,
-      albums,
-      archivedEntryIds,
-      catalogView: { type: "all" },
-      ...selection,
-      needsFolderAccess: false,
-      importState: "idle",
-      importStatus: null,
+      importState: mode === "restore" ? "restoring" : "importing",
+      importStatus: "Opening catalog…",
       importError: null,
     });
-
-    persistLastFolderInBackground(rootPath);
+    const state = await load();
+    if (!isActiveFolderOperation(generation)) return;
+    applyHydratedState(state, set, get);
+    set({ importStatus: "Scanning catalog…" });
+    await scanRoots(generation, set, get);
+    if (!isActiveFolderOperation(generation)) return;
+    set({ importState: "idle", importStatus: null, needsFolderAccess: false });
   } catch (error) {
-    if (!isActiveFolderOperation(generation)) {
-      return;
-    }
-
-    fsDebugError("completeDirectoryImport: failed", error, { generation });
+    if (!isActiveFolderOperation(generation)) return;
+    fsDebugError("catalog import failed", error);
     set({
       importState: "idle",
+      importStatus: get().importStatus?.startsWith("Scan ")
+        ? get().importStatus
+        : null,
       importError: formatPickerError(error),
-      importStatus: null,
-      needsFolderAccess: hadSavedFolder || get().entries.length === 0,
+      needsFolderAccess: get().entries.length === 0,
     });
   }
 }
 
+async function refreshCatalogSummaries(
+  set: (partial: Partial<LibraryStore>) => void,
+): Promise<readonly CatalogSummary[]> {
+  const result = await bootstrapCatalog();
+  set({ catalogs: result.catalogs });
+  return result.catalogs;
+}
+
 export const useLibraryStore = create<LibraryStore>((set, get) => ({
+  catalogId: null,
+  sessionId: null,
+  catalogRevision: 0,
   folderName: null,
-  rootPath: null,
   entries: [],
+  unresolvedEntries: [],
+  fingerprintCoverage: EMPTY_FINGERPRINT_COVERAGE,
+  importPresets: [],
   albums: [],
   archivedEntryIds: [],
+  catalogs: [],
+  catalogRoots: [],
+  catalogManagerOpen: false,
   catalogView: { type: "all" },
   importState: "idle",
   importStatus: null,
   importError: null,
+  catalogRecovery: null,
   needsFolderAccess: false,
   selectedEntryId: null,
   selectedEntryIds: [],
   selectionAnchorId: null,
   entryMetadata: {},
 
-  setSelectedEntryId: (id) =>
-    set({
-      selectedEntryId: id,
-      selectedEntryIds: id ? [id] : [],
-      selectionAnchorId: id,
-    }),
+  setSelectedEntryId: (id) => set({
+    selectedEntryId: id,
+    selectedEntryIds: id ? [id] : [],
+    selectionAnchorId: id,
+  }),
 
-  clearSelection: () =>
-    set({
-      selectedEntryIds: [],
-      selectedEntryId: null,
-      selectionAnchorId: null,
-    }),
+  clearSelection: () => set({ selectedEntryIds: [], selectedEntryId: null, selectionAnchorId: null }),
 
   selectEntry: (id, modifiers, visibleOrder) => {
     const { selectedEntryIds, selectionAnchorId } = get();
-
     if (modifiers.toggle) {
       const next = selectedEntryIds.includes(id)
         ? selectedEntryIds.filter((entryId) => entryId !== id)
         : [...selectedEntryIds, id];
       set({
         selectedEntryIds: next,
-        selectedEntryId: next.includes(id)
-          ? id
-          : (next.at(-1) ?? null),
+        selectedEntryId: next.includes(id) ? id : next.at(-1) ?? null,
         selectionAnchorId: selectionAnchorId ?? id,
       });
       return;
     }
-
     if (modifiers.shift) {
       const anchor = selectionAnchorId ?? get().selectedEntryId;
       if (anchor) {
-        const anchorIdx = visibleOrder.indexOf(anchor);
-        const targetIdx = visibleOrder.indexOf(id);
-        if (anchorIdx >= 0 && targetIdx >= 0) {
-          const start = Math.min(anchorIdx, targetIdx);
-          const end = Math.max(anchorIdx, targetIdx);
-          set({
-            selectedEntryIds: visibleOrder.slice(start, end + 1),
-            selectedEntryId: id,
-          });
+        const anchorIndex = visibleOrder.indexOf(anchor);
+        const targetIndex = visibleOrder.indexOf(id);
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const start = Math.min(anchorIndex, targetIndex);
+          const end = Math.max(anchorIndex, targetIndex);
+          set({ selectedEntryIds: visibleOrder.slice(start, end + 1), selectedEntryId: id });
           return;
         }
       }
     }
-
-    set({
-      selectedEntryIds: [id],
-      selectedEntryId: id,
-      selectionAnchorId: id,
-    });
+    set({ selectedEntryIds: [id], selectedEntryId: id, selectionAnchorId: id });
   },
 
-  setEntryMetadata: (entryId, patch) => {
-    get().applyMetadataToEntries([entryId], patch);
-  },
+  setEntryMetadata: (entryId, patch) => applyLocalMetadata([entryId], patch, set, get),
+  applyMetadataToEntries: (entryIds, patch) => applyLocalMetadata(entryIds, patch, set, get),
 
-  applyMetadataToEntries: (entryIds, patch) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
-    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
-    const updated = { ...entryMetadata };
-    const updatedAt = Date.now();
-    const history: Array<{ entryId: string; before: EntryMetadata; after: EntryMetadata }> = [];
-
-    for (const entryId of entryIds) {
-      const current = getEntryMetadata(updated, entryId);
-      const after = createEntryMetadata({
-        ...current,
-        ...patch,
-        updatedAt,
-      });
-      updated[entryId] = after;
-      history.push({ entryId, before: current, after });
-    }
-
-    set({ entryMetadata: updated });
-
-    for (const item of history) {
-      useDevelopStore.getState().recordMetadataEdit(
-        item.entryId,
-        item.before,
-        item.after,
-        item.before.develop ?? createDefaultDevelopDocument(),
-      );
-    }
-
-    if (rootPath) {
-      persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
-    }
-  },
-
-  mirrorDevelopDocument: (
-    entryId,
-    develop,
-    sourceUpdatedAt = Date.now(),
-    metadataPatch = {},
-  ) => {
-    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+  mirrorDevelopDocument: (entryId, develop, sourceUpdatedAt = Date.now(), metadataPatch = {}) => {
+    const { entryMetadata } = get();
     const current = getEntryMetadata(entryMetadata, entryId);
     const developUpdatedAt = Math.max(sourceUpdatedAt, current.developUpdatedAt + 1);
     const metadataChanged = Object.keys(metadataPatch).length > 0;
-    const updatedAt = metadataChanged
-      ? Math.max(sourceUpdatedAt, current.updatedAt + 1)
-      : current.updatedAt;
-    const updated = {
-      ...entryMetadata,
-      [entryId]: createEntryMetadata({
-        ...current,
-        ...metadataPatch,
-        develop,
-        developUpdatedAt,
-        updatedAt,
-      }),
-    };
-    set({ entryMetadata: updated });
-    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
+    const updatedAt = metadataChanged ? Math.max(sourceUpdatedAt, current.updatedAt + 1) : current.updatedAt;
+    set({
+      entryMetadata: {
+        ...entryMetadata,
+        [entryId]: createEntryMetadata({
+          ...current,
+          ...metadataPatch,
+          develop,
+          developUpdatedAt,
+          updatedAt,
+        }),
+      },
+    });
+    scheduleStateSync(set, get);
   },
 
   hydrateEntryMetadata: (entryId, patch, sourceUpdatedAt) => {
-    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+    const { entryMetadata } = get();
     const current = getEntryMetadata(entryMetadata, entryId);
-    const updated = {
-      ...entryMetadata,
-      [entryId]: createEntryMetadata({
-        ...current,
-        ...patch,
-        updatedAt: Math.max(sourceUpdatedAt, current.updatedAt + 1),
-      }),
-    };
-    set({ entryMetadata: updated });
-    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
+    set({
+      entryMetadata: {
+        ...entryMetadata,
+        [entryId]: createEntryMetadata({
+          ...current,
+          ...patch,
+          updatedAt: Math.max(sourceUpdatedAt, current.updatedAt + 1),
+        }),
+      },
+    });
+    scheduleStateSync(set, get);
   },
 
   restoreEntryMetadata: (entryId, patch) => {
-    const { rootPath, entryMetadata, albums, archivedEntryIds } = get();
+    const { entryMetadata } = get();
     const current = getEntryMetadata(entryMetadata, entryId);
-    const updated = {
-      ...entryMetadata,
-      [entryId]: createEntryMetadata({ ...current, ...patch, updatedAt: Date.now() }),
-    };
-    set({ entryMetadata: updated });
-    if (rootPath) persistCatalogInBackground(rootPath, updated, albums, archivedEntryIds);
+    set({
+      entryMetadata: {
+        ...entryMetadata,
+        [entryId]: createEntryMetadata({ ...current, ...patch, updatedAt: Date.now() }),
+      },
+    });
+    scheduleStateSync(set, get);
   },
 
   setCatalogView: (view) => set({ catalogView: view }),
 
   createAlbum: (name) => {
     const trimmed = name.trim();
-    if (!trimmed) {
-      return "";
-    }
-
+    if (!trimmed) return "";
     const now = Date.now();
     const album: Album = {
       id: crypto.randomUUID(),
@@ -515,414 +467,255 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
-    const albums = [...get().albums, album];
-    set({ albums, catalogView: { type: "album", albumId: album.id } });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
-
+    set({ albums: [...get().albums, album], catalogView: { type: "album", albumId: album.id } });
+    scheduleStateSync(set, get);
     return album.id;
   },
 
   renameAlbum: (albumId, name) => {
     const trimmed = name.trim();
-    if (!trimmed) {
-      return;
-    }
-
-    const albums = get().albums.map((album) =>
-      album.id === albumId
+    if (!trimmed) return;
+    set({
+      albums: get().albums.map((album) => album.id === albumId
         ? { ...album, name: trimmed, updatedAt: Date.now() }
-        : album,
-    );
-    set({ albums });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+        : album),
+    });
+    scheduleStateSync(set, get);
   },
 
   deleteAlbum: (albumId) => {
-    const albums = get().albums.filter((album) => album.id !== albumId);
     const currentView = get().catalogView;
-    const catalogView =
-      currentView.type === "album" && currentView.albumId === albumId
-        ? { type: "all" as const }
-        : currentView;
-    set({ albums, catalogView });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    const catalogView = currentView.type === "album" && currentView.albumId === albumId
+      ? { type: "all" as const }
+      : currentView;
+    set({ albums: get().albums.filter((album) => album.id !== albumId), catalogView });
+    scheduleStateSync(set, get);
   },
 
   addEntriesToAlbum: (albumId, entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
+    if (entryIds.length === 0) return;
     const entryIdSet = new Set(entryIds);
-    const albums = get().albums.map((album) => {
-      if (album.id !== albumId) {
-        return album;
-      }
-
-      const merged = new Set([...album.entryIds, ...entryIdSet]);
-      return {
-        ...album,
-        entryIds: [...merged],
-        updatedAt: Date.now(),
-      };
+    set({
+      albums: get().albums.map((album) => album.id !== albumId
+        ? album
+        : { ...album, entryIds: [...new Set([...album.entryIds, ...entryIdSet])], updatedAt: Date.now() }),
     });
-    set({ albums });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    scheduleStateSync(set, get);
   },
 
   removeEntriesFromAlbum: (albumId, entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
+    if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    const albums = get().albums.map((album) => {
-      if (album.id !== albumId) {
-        return album;
-      }
-
-      return {
-        ...album,
-        entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
-        updatedAt: Date.now(),
-      };
+    set({
+      albums: get().albums.map((album) => album.id !== albumId
+        ? album
+        : { ...album, entryIds: album.entryIds.filter((id) => !removeSet.has(id)), updatedAt: Date.now() }),
     });
-    set({ albums });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    scheduleStateSync(set, get);
   },
 
   removeEntriesFromAllAlbums: (entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
+    if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    const albums = get().albums.map((album) => ({
+    set({ albums: get().albums.map((album) => ({
       ...album,
       entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
       updatedAt: Date.now(),
-    }));
-    set({ albums });
-
-    const { rootPath, entryMetadata, archivedEntryIds } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    })) });
+    scheduleStateSync(set, get);
   },
 
   archiveEntries: (entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
+    if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    const archivedEntryIds = [
-      ...new Set([...get().archivedEntryIds, ...entryIds]),
-    ];
+    const archivedEntryIds = [...new Set([...get().archivedEntryIds, ...entryIds])];
     const albums = get().albums.map((album) => ({
       ...album,
       entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
       updatedAt: Date.now(),
     }));
     const activeEntries = filterArchivedEntries(get().entries, archivedEntryIds);
-    const selection = restoreSelection(
-      activeEntries,
-      get().selectedEntryIds,
-      get().selectionAnchorId,
-    );
-
-    set({
-      archivedEntryIds,
-      albums,
-      ...selection,
-    });
-
-    const { rootPath, entryMetadata } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    set({ archivedEntryIds, albums, ...restoreSelection(activeEntries, get().selectedEntryIds, get().selectionAnchorId) });
+    scheduleStateSync(set, get);
   },
 
   restoreEntries: (entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
+    if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    const archivedEntryIds = get().archivedEntryIds.filter(
-      (id) => !removeSet.has(id),
-    );
+    const archivedEntryIds = get().archivedEntryIds.filter((id) => !removeSet.has(id));
     const { entries, catalogView } = get();
-    const activeEntries =
-      catalogView.type === "archive"
-        ? filterOnlyArchivedEntries(entries, archivedEntryIds)
-        : filterArchivedEntries(entries, archivedEntryIds);
-    const selection = restoreSelection(
-      activeEntries,
-      get().selectedEntryIds.filter((id) => !removeSet.has(id)),
-      get().selectionAnchorId,
-    );
-
-    set({
-      archivedEntryIds,
-      ...selection,
-    });
-
-    const { rootPath, entryMetadata, albums } = get();
-    if (rootPath) {
-      persistCatalogInBackground(
-        rootPath,
-        entryMetadata,
-        albums,
-        archivedEntryIds,
-      );
-    }
+    const activeEntries = catalogView.type === "archive"
+      ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+      : filterArchivedEntries(entries, archivedEntryIds);
+    set({ archivedEntryIds, ...restoreSelection(activeEntries, get().selectedEntryIds.filter((id) => !removeSet.has(id)), get().selectionAnchorId) });
+    scheduleStateSync(set, get);
   },
 
   deleteEntriesFromDisk: async (entryIds) => {
-    if (entryIds.length === 0) {
-      return;
-    }
-
-    const { rootPath, folderName, entries, catalogView } = get();
-    if (!rootPath) {
-      return;
-    }
-
-    const removeSet = new Set(entryIds);
-    const toDelete = entries.filter((entry) => removeSet.has(entry.id));
-    const absolutePaths = toDelete.map((entry) =>
-      joinRootPath(rootPath, entry.relativePath),
-    );
-
+    if (entryIds.length === 0) return;
+    const targets = get().entries.filter((entry) => entryIds.includes(entry.id));
     try {
-      await deleteFilesFromDisk(absolutePaths);
+      await Promise.all(targets.map((entry) => getDarkroomAPI().catalogTrashAsset(getAssetRequest(entry))));
     } catch (error) {
       const message = formatPickerError(error);
       set({ importError: message });
       throw new Error(message);
     }
-
-    const remainingEntries = entries.filter((entry) => !removeSet.has(entry.id));
-    const remainingIds = new Set(remainingEntries.map((entry) => entry.id));
-    const entryMetadata = pruneMetadataForEntries(
-      get().entryMetadata,
-      remainingIds,
-    );
+    const removeSet = new Set(entryIds);
+    const entries = get().entries.filter((entry) => !removeSet.has(entry.id));
+    const remainingIds = new Set<string>(entries.map((entry) => entry.id));
+    const entryMetadata = pruneMetadataForEntries(get().entryMetadata, remainingIds);
     const albums = pruneAlbumsForEntries(get().albums, remainingIds);
-    const archivedEntryIds = get().archivedEntryIds.filter((id) =>
-      remainingIds.has(id),
-    );
-    const activeEntries =
-      catalogView.type === "archive"
-        ? filterOnlyArchivedEntries(remainingEntries, archivedEntryIds)
-        : filterArchivedEntries(remainingEntries, archivedEntryIds);
-    const selection = restoreSelection(
-      activeEntries,
-      get().selectedEntryIds.filter((id) => remainingIds.has(id)),
-      get().selectionAnchorId,
-    );
-
-    set({
-      entries: remainingEntries,
-      entryMetadata,
-      albums,
-      archivedEntryIds,
-      importError: null,
-      ...selection,
-    });
-
-    if (folderName) {
-      setSessionCatalog(folderName, remainingEntries, rootPath);
-      persistLastFolderInBackground(rootPath);
-    }
-
-    persistCatalogInBackground(
-      rootPath,
-      entryMetadata,
-      albums,
-      archivedEntryIds,
-    );
+    const archivedEntryIds = get().archivedEntryIds.filter((id) => remainingIds.has(id));
+    const visible = get().catalogView.type === "archive"
+      ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+      : filterArchivedEntries(entries, archivedEntryIds);
+    set({ entries, entryMetadata, albums, archivedEntryIds, importError: null, ...restoreSelection(visible, get().selectedEntryIds.filter((id) => remainingIds.has(id)), get().selectionAnchorId) });
+    scheduleStateSync(set, get);
   },
 
-  bootstrapLibrary: async () => {
-    fsDebug("bootstrapLibrary: start");
-
-    if (hasSessionCatalog()) {
-      const { rootPath, folderName, entries } = getSessionCatalog();
-      if (rootPath && folderName) {
-        fsDebug("bootstrapLibrary: restored from session memory", {
-          folderName,
-          rootPath,
-          entryCount: entries.length,
-        });
-        const restoredEntries = attachProfiles(entries);
-        const { entryMetadata, albums, archivedEntryIds } =
-          await loadAndMergeCatalog(rootPath, restoredEntries);
-        const activeEntries = filterArchivedEntries(
-          restoredEntries,
-          archivedEntryIds,
-        );
-        if (get().rootPath !== rootPath) {
-          useDevelopStore.getState().clearLibrarySessions();
-        }
-        set({
-          folderName,
-          rootPath,
-          entries: restoredEntries,
-          entryMetadata,
-          albums,
-          archivedEntryIds,
-          ...restoreSelection(
-            activeEntries,
-            get().selectedEntryIds,
-            get().selectionAnchorId,
-          ),
-          needsFolderAccess: false,
-          importState: "idle",
-          importError: null,
-          importStatus: null,
-        });
-        return;
-      }
-    }
-
-    const api = getDarkroomAPI();
-    const lastFolderPath = await api.getLastFolder();
-
-    if (lastFolderPath && (await api.folderExists(lastFolderPath))) {
-      const folderName = lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath;
-      fsDebug("bootstrapLibrary: restoring last folder", {
-        folderName,
-        rootPath: lastFolderPath,
-      });
-      get().importFromFolderPath(lastFolderPath, folderName, "restore");
+  createCatalog: async (displayName) => {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      set({ importError: "Catalog name is required." });
       return;
     }
+    const generation = beginFolderOperation();
+    await finishImport(generation, () => createCatalogSession(trimmed), "import", set, get);
+    await refreshCatalogSummaries(set).catch((error: unknown) => {
+      set({ importError: formatPickerError(error) });
+    });
+  },
 
-    if (lastFolderPath) {
-      set({
-        folderName: lastFolderPath.split(/[/\\]/).pop() ?? lastFolderPath,
-        rootPath: lastFolderPath,
-        entries: [],
-        needsFolderAccess: true,
-      });
+  addCatalogRoot: async () => {
+    const generation = beginFolderOperation();
+    await finishImport(generation, async () => (await addCatalogRootSession()).state, "restore", set, get);
+    await refreshCatalogSummaries(set).catch((error: unknown) => {
+      set({ importError: formatPickerError(error) });
+    });
+  },
+
+  relinkCatalogRoot: async (rootId) => {
+    const target = rootId ?? get().catalogRoots.find((root) => root.health !== "online")?.rootId;
+    if (!target) {
+      set({ importError: "No catalog root is available to relink." });
+      return;
+    }
+    const generation = beginFolderOperation();
+    await finishImport(generation, () => relinkCatalogRootSession(target), "restore", set, get);
+    await refreshCatalogSummaries(set).catch((error: unknown) => {
+      set({ importError: formatPickerError(error) });
+    });
+  },
+
+  renameCatalog: async (displayName) => {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      set({ importError: "Catalog name is required." });
+      return;
+    }
+    try {
+      const state = await renameActiveCatalog(trimmed);
+      applyHydratedState(state, set, get);
+      await refreshCatalogSummaries(set);
+    } catch (error) {
+      set({ importError: formatPickerError(error) });
     }
   },
 
-  importFromFolderPath: (rootPath, folderName, mode = "import") => {
+  removeCatalogRecent: async (catalogId) => {
+    const catalog = get().catalogs.find((item) => item.catalogId === catalogId);
+    if (!catalog) return;
+    if (get().catalogId === catalogId) {
+      set({ importError: "Close the active catalog before removing it from recents." });
+      return;
+    }
+    try {
+      await removeCatalogSession(catalogId, catalog.displayName, false);
+      await refreshCatalogSummaries(set);
+    } catch (error) {
+      set({ importError: formatPickerError(error) });
+    }
+  },
+
+  deleteCatalog: async (catalogId, confirmation) => {
+    const catalog = get().catalogs.find((item) => item.catalogId === catalogId);
+    if (!catalog) return;
+    if (confirmation !== catalog.displayName) {
+      set({ importError: "Type the exact catalog name to delete it." });
+      return;
+    }
+    try {
+      await removeCatalogSession(catalogId, confirmation, true);
+      if (get().catalogId === catalogId) {
+        useDevelopStore.getState().clearLibrarySessions();
+        set({
+          catalogId: null,
+          sessionId: null,
+          catalogRevision: 0,
+          folderName: null,
+          entries: [],
+          unresolvedEntries: [],
+          fingerprintCoverage: EMPTY_FINGERPRINT_COVERAGE,
+          importPresets: [],
+          catalogRoots: [],
+          entryMetadata: {},
+          albums: [],
+          archivedEntryIds: [],
+          catalogView: { type: "all" },
+          selectedEntryId: null,
+          selectedEntryIds: [],
+          selectionAnchorId: null,
+          needsFolderAccess: true,
+        });
+      }
+      await refreshCatalogSummaries(set);
+    } catch (error) {
+      set({ importError: formatPickerError(error) });
+    }
+  },
+
+  switchCatalog: async (catalogId) => {
     const generation = beginFolderOperation();
-    const hadSavedFolder = Boolean(get().folderName);
-
-    fsDebug("importFromFolderPath: start", {
-      generation,
-      mode,
-      folderName,
-      rootPath,
+    await finishImport(generation, () => switchCatalogSession(catalogId), "restore", set, get);
+    await refreshCatalogSummaries(set).catch((error: unknown) => {
+      set({ importError: formatPickerError(error) });
     });
+  },
 
-    set({
-      importState: mode === "restore" ? "restoring" : "importing",
-      importError: null,
-      importStatus: `Scanning "${folderName}"…`,
-    });
-
-    void completeDirectoryImport(
-      generation,
-      rootPath,
-      folderName,
-      hadSavedFolder,
-      set,
-      get,
-    );
+  openCatalogManager: () => set({ catalogManagerOpen: true }),
+  closeCatalogManager: () => set({ catalogManagerOpen: false }),
+  refreshCatalogs: async () => {
+    await refreshCatalogSummaries(set);
   },
 
   cancelFolderOperation: () => {
-    const hadSavedFolder = Boolean(get().folderName);
-
-    fsDebug("cancelFolderOperation", {
-      hadSavedFolder,
-      currentGeneration: folderOperationGeneration,
-    });
-
     beginFolderOperation();
-
-    set({
-      importState: "idle",
-      importStatus: null,
-      importError: null,
-      needsFolderAccess: hadSavedFolder || get().entries.length === 0,
+    void cancelCatalogScan().catch((error: unknown) => {
+      set({ importError: formatPickerError(error) });
     });
+    set({ importState: "idle", importStatus: null, needsFolderAccess: get().entries.length === 0 });
   },
 
   clearLibrary: async () => {
-    fsDebug("clearLibrary: start");
-    const { rootPath } = get();
     beginFolderOperation();
-    await clearPersistedLibrary();
-    if (rootPath) {
-      await deleteCatalog(rootPath);
+    try {
+      await closeActiveCatalog();
+    } catch (error) {
+      set({ importError: formatPickerError(error) });
+      return;
     }
     useDevelopStore.getState().clearLibrarySessions();
     set({
+      catalogId: null,
+      sessionId: null,
+      catalogRevision: 0,
       folderName: null,
-      rootPath: null,
       entries: [],
+      unresolvedEntries: [],
+      fingerprintCoverage: EMPTY_FINGERPRINT_COVERAGE,
+      importPresets: [],
+      catalogRoots: [],
       entryMetadata: {},
       albums: [],
       archivedEntryIds: [],
@@ -933,10 +726,63 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       importState: "idle",
       importStatus: null,
       importError: null,
+      catalogRecovery: null,
       needsFolderAccess: false,
     });
   },
+
+  bootstrapLibrary: async () => {
+    fsDebug("bootstrapLibrary: start");
+    try {
+      const result = await bootstrapCatalog();
+      if (!result.session) {
+        clearSessionCatalog();
+        useDevelopStore.getState().clearLibrarySessions();
+        set({
+          catalogId: null,
+          sessionId: null,
+          catalogRevision: 0,
+          folderName: null,
+          entries: [],
+          unresolvedEntries: [],
+          fingerprintCoverage: EMPTY_FINGERPRINT_COVERAGE,
+          importPresets: [],
+          catalogRoots: [],
+          entryMetadata: {},
+          albums: [],
+          archivedEntryIds: [],
+          selectedEntryId: null,
+          selectedEntryIds: [],
+          selectionAnchorId: null,
+          needsFolderAccess: true,
+          catalogs: result.catalogs,
+          catalogRecovery: result.recovery?.message ?? null,
+          importError: null,
+        });
+        return;
+      }
+      const catalog = result.catalogs.find((item) => item.catalogId === result.session?.catalogId);
+      if (!catalog) throw new Error("The active catalog is not registered.");
+      const activation: CatalogActivationResult = { catalog, session: result.session };
+      const generation = beginFolderOperation();
+      set({ catalogs: result.catalogs });
+      await finishImport(generation, () => activateCatalog(activation), "restore", set, get);
+    } catch (error) {
+      set({ importError: formatPickerError(error), needsFolderAccess: true });
+    }
+  },
 }));
+
+subscribeCatalogState((state) => {
+  const current = useLibraryStore.getState();
+  if (
+    current.catalogId !== state.catalogId ||
+    current.sessionId !== state.sessionId
+  ) {
+    return;
+  }
+  applyHydratedState(state, useLibraryStore.setState, useLibraryStore.getState);
+});
 
 setDevelopMetadataWriter((entryId, values) => {
   useLibraryStore.getState().restoreEntryMetadata(entryId, values);

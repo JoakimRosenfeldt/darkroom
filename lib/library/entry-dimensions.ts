@@ -11,14 +11,19 @@ import {
   getFileHeadFromEntry,
 } from "@/lib/fs/directory";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { getFormatFamilyForEntry } from "@/lib/formats/registry";
 import { readRawDimensions } from "@/lib/raw/libraw-client";
-import { resolveProfile } from "@/lib/raw/decode";
+import { assetCacheKey } from "@/lib/cache/asset-cache-key";
 
 const STANDARD_PROBE_BYTES = 512 * 1024;
 const inFlightProbes = new Map<string, Promise<number>>();
 
 function probeKey(entry: LibraryEntry): string {
-  return `${entry.relativePath}:${entry.lastModified}`;
+  return assetCacheKey({
+    catalogId: entry.catalogId,
+    assetId: entry.id,
+    revision: entry.assetRevision,
+  }, "dimensions");
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -29,8 +34,9 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 async function ratioFromCachedThumbnail(entry: LibraryEntry): Promise<number | null> {
   const blob = await getCachedThumbnail({
-    relativePath: entry.relativePath,
-    lastModified: entry.lastModified,
+    catalogId: entry.catalogId,
+    assetId: entry.id,
+    revision: entry.assetRevision,
     thumbnail: true,
   });
 
@@ -45,12 +51,16 @@ async function ratioFromCachedThumbnail(entry: LibraryEntry): Promise<number | n
 }
 
 async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
-  const profile = resolveProfile(entry);
-  if (!profile) {
+  if (entry.formatAvailability.status !== "supported") {
     return 1;
   }
 
-  if (profile.id === "standard") {
+  const family = getFormatFamilyForEntry(entry.name, entry.profileId);
+  if (!family) {
+    return 1;
+  }
+
+  if (family === "standard") {
     const head = await getFileHeadFromEntry(entry, STANDARD_PROBE_BYTES);
     const dimensions = parseImageDimensions(entry.name, head);
     if (dimensions) {
@@ -69,6 +79,10 @@ async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
     return 1;
   }
 
+  if (family !== "raw") {
+    return 1;
+  }
+
   const file = await getFileFromEntry(entry);
   const dimensions = await readRawDimensions(new Uint8Array(await file.arrayBuffer()));
   if (dimensions) {
@@ -83,6 +97,9 @@ export async function resolveEntryAspectRatio(
   options: { signal?: AbortSignal } = {},
 ): Promise<number> {
   throwIfAborted(options.signal);
+  if (entry.formatAvailability.status !== "supported") {
+    return 1;
+  }
 
   const cachedThumbnailRatio = await ratioFromCachedThumbnail(entry);
   throwIfAborted(options.signal);

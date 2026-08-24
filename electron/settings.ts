@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   DEFAULT_EXPORT_SUFFIX,
   type ExportConflictBehavior,
   type ExportFormatId,
   type ExportSizeOptions,
-} from "../lib/export/types";
+} from "../lib/export/types.ts";
+import { parseCatalogId, type CatalogId } from "../lib/catalog/ids.ts";
 
 export interface ExportOptionsSettings {
   format: ExportFormatId;
@@ -18,6 +20,7 @@ export interface ExportOptionsSettings {
 
 export interface AppSettings {
   lastFolderPath: string | null;
+  lastCatalogId: CatalogId | null;
   exportOptions: ExportOptionsSettings;
 }
 
@@ -34,6 +37,7 @@ const DEFAULT_EXPORT_OPTIONS: ExportOptionsSettings = {
 
 const DEFAULT_SETTINGS: AppSettings = {
   lastFolderPath: null,
+  lastCatalogId: null,
   exportOptions: DEFAULT_EXPORT_OPTIONS,
 };
 
@@ -130,16 +134,26 @@ function normalizeExportOptions(value: unknown): ExportOptionsSettings {
 
 function normalizeSettings(value: unknown): AppSettings {
   const input = isRecord(value) ? value : {};
+  let lastCatalogId: CatalogId | null = null;
+  if (typeof input.lastCatalogId === "string") {
+    try {
+      lastCatalogId = parseCatalogId(input.lastCatalogId);
+    } catch {
+      lastCatalogId = null;
+    }
+  }
   return {
     lastFolderPath: typeof input.lastFolderPath === "string"
       ? input.lastFolderPath
       : null,
+    lastCatalogId,
     exportOptions: normalizeExportOptions(input.exportOptions),
   };
 }
 
 export function createSettingsStore(userDataPath: string) {
   const settingsPath = path.join(userDataPath, "settings.json");
+  let writes: Promise<void> = Promise.resolve();
 
   async function read(): Promise<AppSettings> {
     try {
@@ -152,31 +166,82 @@ export function createSettingsStore(userDataPath: string) {
 
   async function write(settings: AppSettings): Promise<void> {
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
-    await fs.writeFile(settingsPath, JSON.stringify(normalizeSettings(settings), null, 2), "utf8");
+    const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`;
+    const contents = JSON.stringify(normalizeSettings(settings), null, 2);
+    let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+    try {
+      handle = await fs.open(temporaryPath, "wx", 0o600);
+      await handle.writeFile(contents, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await fs.rename(temporaryPath, settingsPath);
+      await syncDirectory(path.dirname(settingsPath));
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await fs.unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async function syncDirectory(directoryPath: string): Promise<void> {
+    try {
+      const handle = await fs.open(directoryPath, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      // Directory fsync is unavailable on some platforms; the file rename remains atomic.
+    }
+  }
+
+  async function update(mutator: (settings: AppSettings) => void): Promise<void> {
+    const result = writes.then(async () => {
+      const settings = await read();
+      mutator(settings);
+      await write(settings);
+    }, async () => {
+      const settings = await read();
+      mutator(settings);
+      await write(settings);
+    });
+    writes = result.then(() => undefined, () => undefined);
+    await result;
   }
 
   return {
     async getLastFolder(): Promise<string | null> {
+      await writes;
       return (await read()).lastFolderPath;
     },
 
     async setLastFolder(folderPath: string | null): Promise<void> {
-      const settings = await read();
-      settings.lastFolderPath = folderPath;
-      await write(settings);
+      await update((settings) => { settings.lastFolderPath = folderPath; });
+    },
+
+    async getLastCatalogId(): Promise<CatalogId | null> {
+      await writes;
+      return (await read()).lastCatalogId;
+    },
+
+    async setLastCatalogId(catalogId: CatalogId | null): Promise<void> {
+      await update((settings) => { settings.lastCatalogId = catalogId; });
     },
 
     async getExportOptions(): Promise<ExportOptionsSettings> {
+      await writes;
       return (await read()).exportOptions;
     },
 
     async setExportOptions(options: ExportOptionsSettingsInput): Promise<void> {
-      const settings = await read();
-      settings.exportOptions = normalizeExportOptions({
-        ...settings.exportOptions,
-        ...(isRecord(options) ? options : {}),
+      await update((settings) => {
+        settings.exportOptions = normalizeExportOptions({
+          ...settings.exportOptions,
+          ...(isRecord(options) ? options : {}),
+        });
       });
-      await write(settings);
     },
   };
 }
