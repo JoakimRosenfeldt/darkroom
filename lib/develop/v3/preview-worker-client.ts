@@ -1,6 +1,7 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { PixelDimensions } from "@/lib/develop/process";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
+import type { V3PreviewRenderMode } from "@/lib/develop/v3/runtime";
 import type {
   V3PreviewWorkerImage,
   V3PreviewWorkerMaskMatte,
@@ -12,7 +13,7 @@ import type { LibraryEntry } from "@/lib/fs/types";
 interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
   readonly devicePixelRatio: number;
-  readonly previewMode: "interactive" | "settled";
+  readonly previewMode: V3PreviewRenderMode;
   readonly includeAnalysis: boolean;
   readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
 }

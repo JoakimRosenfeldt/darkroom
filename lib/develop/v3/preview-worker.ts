@@ -86,10 +86,10 @@ async function renderLatest(): Promise<void> {
       previewMode: message.previewMode,
       assets,
     } as const;
-    const gpuPreparation = await prepareV3RuntimeRender(message.document, {
-      ...runtimeRequest,
-      previewMode: "settled",
-    });
+    const gpuPreparation = await prepareV3RuntimeRender(
+      message.document,
+      runtimeRequest,
+    );
     let backend: V3PreviewBackend = "gpu";
     let result: V3PreviewRenderOutput;
     if (

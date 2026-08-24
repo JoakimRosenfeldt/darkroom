@@ -3,6 +3,7 @@ import type { PixelDimensions } from "@/lib/develop/process";
 import type { CpuRenderResult } from "@/lib/develop/v3/cpu-backend";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { V3GpuPreviewRenderResult } from "@/lib/develop/v3/gpu-backend";
+import type { V3PreviewRenderMode } from "@/lib/develop/v3/runtime";
 import type { LibraryEntry } from "@/lib/fs/types";
 
 export type V3PreviewWorkerImage = Omit<DevelopImage, "blob" | "objectUrl">;
@@ -34,7 +35,7 @@ export type V3PreviewWorkerRequest =
       readonly document: DevelopDocumentV3;
       readonly viewportDimensions: PixelDimensions;
       readonly devicePixelRatio: number;
-      readonly previewMode: "interactive" | "settled";
+      readonly previewMode: V3PreviewRenderMode;
       readonly includeAnalysis: boolean;
       readonly maskMattes: readonly V3PreviewWorkerMaskMatte[];
     };

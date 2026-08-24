@@ -22,6 +22,9 @@ import {
 } from "@/lib/develop/v3/optics";
 
 const CURVE_LUT_SIZE = 1_024;
+const MAX_CACHED_GEOMETRY_MAPS = 3;
+const MAX_CACHED_TARGETS = 3;
+const REFINED_PREVIEW_MAX_PIXELS = 64_000;
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
 out vec2 vUv;
@@ -326,8 +329,8 @@ interface GpuState {
   readonly gl: WebGL2RenderingContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
-  targets: GpuTargets | null;
-  geometryMap: GeometryMap | null;
+  readonly targets: Map<string, GpuTargets>;
+  readonly geometryMaps: Map<string, GeometryMap>;
 }
 
 interface GpuRenderedFrame {
@@ -995,8 +998,10 @@ export class V3GpuPreviewRenderer {
   dispose(): void {
     const state = this.#state;
     if (!state) return;
-    if (state.targets) deleteTargets(state.gl, state.targets);
-    if (state.geometryMap) state.gl.deleteTexture(state.geometryMap.texture);
+    for (const targets of state.targets.values()) deleteTargets(state.gl, targets);
+    for (const map of state.geometryMaps.values()) {
+      state.gl.deleteTexture(map.texture);
+    }
     state.gl.deleteTexture(state.source);
     state.gl.deleteProgram(state.programs.pointwise);
     state.gl.deleteProgram(state.programs.spatial);
@@ -1060,19 +1065,43 @@ export class V3GpuPreviewRenderer {
         encode: program(gl, ENCODE_SHADER),
       },
       source: sourceTexture(gl, input),
-      targets: null,
-      geometryMap: null,
+      targets: new Map(),
+      geometryMaps: new Map(),
     };
     this.#state = state;
     return state;
   }
 
   #targets(state: GpuState, width: number, height: number): GpuTargets {
-    const current = state.targets;
-    if (current?.width === width && current.height === height) return current;
-    if (current) deleteTargets(state.gl, current);
+    const key = `${width}x${height}`;
+    const current = state.targets.get(key);
+    if (current) {
+      state.targets.delete(key);
+      state.targets.set(key, current);
+      state.canvas.width = width;
+      state.canvas.height = height;
+      state.gl.viewport(0, 0, width, height);
+      return current;
+    }
     const targets = createTargets(state.gl, width, height);
-    state.targets = targets;
+    state.targets.set(key, targets);
+    for (const [cachedKey, cachedTargets] of state.targets) {
+      if (
+        cachedKey !== key &&
+        width * height > REFINED_PREVIEW_MAX_PIXELS &&
+        cachedTargets.width * cachedTargets.height > REFINED_PREVIEW_MAX_PIXELS
+      ) {
+        state.targets.delete(cachedKey);
+        deleteTargets(state.gl, cachedTargets);
+      }
+    }
+    while (state.targets.size > MAX_CACHED_TARGETS) {
+      const oldestKey = state.targets.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = state.targets.get(oldestKey);
+      state.targets.delete(oldestKey);
+      if (oldest) deleteTargets(state.gl, oldest);
+    }
     state.canvas.width = width;
     state.canvas.height = height;
     state.gl.viewport(0, 0, width, height);
@@ -1081,8 +1110,12 @@ export class V3GpuPreviewRenderer {
 
   #geometryMap(state: GpuState, input: CpuRenderInput): WebGLTexture {
     const key = geometryMapKey(input);
-    if (state.geometryMap?.key === key) return state.geometryMap.texture;
-    if (state.geometryMap) state.gl.deleteTexture(state.geometryMap.texture);
+    const current = state.geometryMaps.get(key);
+    if (current) {
+      state.geometryMaps.delete(key);
+      state.geometryMaps.set(key, current);
+      return current.texture;
+    }
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     const value = texture(state.gl, {
       width: dimensions.width,
@@ -1093,7 +1126,14 @@ export class V3GpuPreviewRenderer {
       pixels: geometryMapPixels(input),
       filter: state.gl.NEAREST,
     });
-    state.geometryMap = { key, texture: value };
+    state.geometryMaps.set(key, { key, texture: value });
+    while (state.geometryMaps.size > MAX_CACHED_GEOMETRY_MAPS) {
+      const oldestKey = state.geometryMaps.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = state.geometryMaps.get(oldestKey);
+      state.geometryMaps.delete(oldestKey);
+      if (oldest) state.gl.deleteTexture(oldest.texture);
+    }
     return value;
   }
 

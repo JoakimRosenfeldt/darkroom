@@ -69,8 +69,10 @@ const PREVIEW_ANALYSIS_TAPS = [
 const EXPORT_ANALYSIS_TAPS = ["display-output", "scene-headroom"] as const;
 const EXPORT_TILE_EDGE = 1_024;
 const INTERACTIVE_PREVIEW_MAX_PIXELS = 16_000;
+const REFINED_PREVIEW_MAX_PIXELS = 64_000;
 
 export type V3SourcePurpose = "preview" | "export";
+export type V3PreviewRenderMode = "interactive" | "refined" | "settled";
 
 export type V3SourceRecordResult =
   | { readonly kind: "source"; readonly source: SourceRecord }
@@ -90,7 +92,7 @@ export interface V3PreviewSessionRenderRequest extends V3RuntimeRequestBase {
   readonly kind: "v3-preview";
   readonly viewportDimensions: PixelDimensions;
   readonly devicePixelRatio: number;
-  readonly previewMode: "interactive" | "settled";
+  readonly previewMode: V3PreviewRenderMode;
 }
 
 export interface V3ExportSessionRenderRequest extends V3RuntimeRequestBase {
@@ -493,7 +495,9 @@ function previewQuality(
   );
   const maximumPixels = request.previewMode === "interactive"
     ? INTERACTIVE_PREVIEW_MAX_PIXELS
-    : MAX_CPU_RENDER_PIXELS;
+    : request.previewMode === "refined"
+      ? REFINED_PREVIEW_MAX_PIXELS
+      : MAX_CPU_RENDER_PIXELS;
   const pixelCount = outputDimensions.width * outputDimensions.height;
   if (pixelCount > maximumPixels) {
     const scale = Math.sqrt(maximumPixels / pixelCount);
