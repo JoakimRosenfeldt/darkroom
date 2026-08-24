@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -28,12 +29,12 @@ import {
   type V3PreviewMaskMatte,
 } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
+import type { V3PreviewRenderOutput } from "@/lib/develop/v3/preview-worker-types";
 import type {
   CpuAnalysisTapResult,
   CpuBackendBlockingDiagnostic,
   CpuBackendDiagnostic,
   CpuPointColorInput,
-  CpuRenderResult,
 } from "@/lib/develop/v3/cpu-backend";
 import type { Sha256Digest } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -150,11 +151,13 @@ function centeredImageRect(
   };
 }
 
-function beforeDocument(input: {
+interface BeforeDocumentInput {
   readonly geometry: DevelopDocumentV3["geometry"];
   readonly geometryFrame: DevelopDocumentV3["local"]["geometryFrame"];
   readonly manualDistortion: DevelopDocumentV3["optics"]["manualDistortion"];
-}): DevelopDocumentV3 {
+}
+
+function beforeDocument(input: BeforeDocumentInput): DevelopDocumentV3 {
   const neutral = createDefaultV3DevelopDocument();
   return {
     ...neutral,
@@ -170,7 +173,9 @@ function beforeDocument(input: {
   };
 }
 
-function resultMessage(result: Exclude<CpuRenderResult, { readonly kind: "rendered" }>): string {
+function resultMessage(
+  result: Exclude<V3PreviewRenderOutput, { readonly kind: "rendered" }>,
+): string {
   if (result.kind === "cancelled") return "Preview render was cancelled.";
   if (result.kind === "blocked") {
     const diagnostic = result.diagnostics[0];
@@ -246,6 +251,20 @@ export function DevelopCanvas({
   const beforeGeometry = document?.geometry ?? null;
   const beforeGeometryFrame = document?.local.geometryFrame ?? null;
   const beforeManualDistortion = document?.optics.manualDistortion ?? null;
+  const beforeDocumentKey = beforeGeometry && beforeGeometryFrame &&
+      beforeManualDistortion !== null
+    ? JSON.stringify({
+        geometry: beforeGeometry,
+        geometryFrame: beforeGeometryFrame,
+        manualDistortion: beforeManualDistortion,
+      } satisfies BeforeDocumentInput)
+    : null;
+  const neutralBeforeDocument = useMemo(
+    () => beforeDocumentKey
+      ? beforeDocument(JSON.parse(beforeDocumentKey) as BeforeDocumentInput)
+      : null,
+    [beforeDocumentKey],
+  );
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 1, height: 1 });
   const [viewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
@@ -304,15 +323,24 @@ export function DevelopCanvas({
     }
 
     let disposed = false;
+    let renderedViewportWidth = 0;
+    let renderedViewportHeight = 0;
 
-    const render = () => {
+    const render = (force = false) => {
+      const width = Math.max(1, Math.round(container.clientWidth));
+      const height = Math.max(1, Math.round(container.clientHeight));
+      if (
+        !force &&
+        width === renderedViewportWidth &&
+        height === renderedViewportHeight
+      ) return;
+      renderedViewportWidth = width;
+      renderedViewportHeight = height;
       pointColorInputRef.current = null;
       setShowBefore(false);
       clearActiveAnalysis(entry.catalogId, entry.id);
       analysisCallbackRef.current?.([]);
       const requestId = ++requestRef.current;
-      const width = Math.max(1, Math.round(container.clientWidth));
-      const height = Math.max(1, Math.round(container.clientHeight));
       const session = getDevelopSession(entry.catalogId, entry.id);
       if (!hasRenderedRef.current) setPreview({ kind: "loading" });
       const quickWorker = quickWorkerRef.current;
@@ -335,14 +363,22 @@ export function DevelopCanvas({
         : document;
 
       const applyResult = (
-        result: CpuRenderResult,
+        result: V3PreviewRenderOutput,
         allowStaleDraft = false,
       ): boolean => {
+        const closeBitmap = (): void => {
+          if (result.kind === "rendered" && "bitmap" in result) {
+            result.bitmap.close();
+          }
+        };
         const staleDraft = allowStaleDraft &&
           result.kind === "rendered" &&
           quickWorkerRef.current === quickWorker &&
           requestId > drawnRequestRef.current;
-        if ((disposed || requestId !== requestRef.current) && !staleDraft) return false;
+        if ((disposed || requestId !== requestRef.current) && !staleDraft) {
+          closeBitmap();
+          return false;
+        }
         if (result.kind !== "rendered") {
           pointColorInputRef.current = null;
           if (result.kind === "blocked") {
@@ -364,17 +400,22 @@ export function DevelopCanvas({
         ) {
           if (staleDraft) {
             const dimensions = result.dimensions;
-            canvas.width = dimensions.width;
-            canvas.height = dimensions.height;
-            context.putImageData(
-              new ImageData(
-                imageDataPixels(result.pixels.pixels),
-                dimensions.width,
-                dimensions.height,
-              ),
-              0,
-              0,
-            );
+            if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
+            if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
+            if ("bitmap" in result) {
+              context.drawImage(result.bitmap, 0, 0);
+              result.bitmap.close();
+            } else {
+              context.putImageData(
+                new ImageData(
+                  imageDataPixels(result.pixels.pixels),
+                  dimensions.width,
+                  dimensions.height,
+                ),
+                0,
+                0,
+              );
+            }
             const scale = Math.min(width / dimensions.width, height / dimensions.height);
             setDisplayDimensions({
               width: Math.max(1, Math.round(dimensions.width * scale)),
@@ -386,6 +427,7 @@ export function DevelopCanvas({
             return true;
           }
           analysisCallbackRef.current?.([]);
+          closeBitmap();
           setPreview({
             kind: "cancelled",
             message: "The Develop document changed during this render.",
@@ -394,17 +436,22 @@ export function DevelopCanvas({
         }
         const dimensions = result.dimensions;
         pointColorInputRef.current = result.pointColorInput;
-        canvas.width = dimensions.width;
-        canvas.height = dimensions.height;
-        context.putImageData(
-          new ImageData(
-            imageDataPixels(result.pixels.pixels),
-            dimensions.width,
-            dimensions.height,
-          ),
-          0,
-          0,
-        );
+        if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
+        if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
+        if ("bitmap" in result) {
+          context.drawImage(result.bitmap, 0, 0);
+          result.bitmap.close();
+        } else {
+          context.putImageData(
+            new ImageData(
+              imageDataPixels(result.pixels.pixels),
+              dimensions.width,
+              dimensions.height,
+            ),
+            0,
+            0,
+          );
+        }
         const scale = Math.min(width / dimensions.width, height / dimensions.height);
         setDisplayDimensions({
           width: Math.max(1, Math.round(dimensions.width * scale)),
@@ -445,16 +492,21 @@ export function DevelopCanvas({
         const quick = await quickWorker.render(renderDocument, {
           ...options,
           previewMode: "interactive",
+          includeAnalysis: false,
         });
-        if (!applyResult(quick, true) || previewMode === "interactive") return;
+        if (
+          !applyResult(quick.result, true) ||
+          previewMode === "interactive"
+        ) return;
 
         const detailWorker = new V3PreviewWorkerClient(entry, image);
         detailWorkerRef.current = detailWorker;
         const detailed = await detailWorker.render(renderDocument, {
           ...options,
           previewMode: "settled",
+          includeAnalysis: true,
         });
-        applyResult(detailed);
+        applyResult(detailed.result);
       };
 
       void renderPreview().catch((error: unknown) => {
@@ -470,8 +522,8 @@ export function DevelopCanvas({
       });
     };
 
-    render();
-    const observer = new ResizeObserver(render);
+    render(true);
+    const observer = new ResizeObserver(() => render());
     observer.observe(container);
     return () => {
       disposed = true;
@@ -491,29 +543,22 @@ export function DevelopCanvas({
       !container ||
       !sourceCanvas ||
       !sourceContext ||
-      !beforeGeometry ||
-      !beforeGeometryFrame ||
-      beforeManualDistortion === null
+      !neutralBeforeDocument
     ) return;
 
     let disposed = false;
     const width = Math.max(1, Math.round(container.clientWidth));
     const height = Math.max(1, Math.round(container.clientHeight));
-    const neutralDocument = beforeDocument({
-      geometry: beforeGeometry,
-      geometryFrame: beforeGeometryFrame,
-      manualDistortion: beforeManualDistortion,
-    });
     const renderDocument = cropActive
       ? {
-          ...neutralDocument,
+          ...neutralBeforeDocument,
           geometry: {
-            ...neutralDocument.geometry,
+            ...neutralBeforeDocument.geometry,
             constrainCrop: false,
-            crop: { ...neutralDocument.geometry.crop, enabled: false },
+            crop: { ...neutralBeforeDocument.geometry.crop, enabled: false },
           },
         }
-      : neutralDocument;
+      : neutralBeforeDocument;
     setBeforeReady(false);
     setShowBefore(false);
 
@@ -531,19 +576,35 @@ export function DevelopCanvas({
         viewportDimensions: { width, height },
         devicePixelRatio: window.devicePixelRatio || 1,
         previewMode: "settled",
-      }).then((before) => {
-        if (disposed || before.kind !== "rendered") return;
-        sourceCanvas.width = before.dimensions.width;
-        sourceCanvas.height = before.dimensions.height;
-        sourceContext.putImageData(
-          new ImageData(
-            imageDataPixels(before.pixels.pixels),
-            before.dimensions.width,
-            before.dimensions.height,
-          ),
-          0,
-          0,
-        );
+        includeAnalysis: false,
+      }).then(({ result: before }) => {
+        if (disposed) {
+          if (before.kind === "rendered" && "bitmap" in before) {
+            before.bitmap.close();
+          }
+          return;
+        }
+        if (before.kind !== "rendered") return;
+        if (sourceCanvas.width !== before.dimensions.width) {
+          sourceCanvas.width = before.dimensions.width;
+        }
+        if (sourceCanvas.height !== before.dimensions.height) {
+          sourceCanvas.height = before.dimensions.height;
+        }
+        if ("bitmap" in before) {
+          sourceContext.drawImage(before.bitmap, 0, 0);
+          before.bitmap.close();
+        } else {
+          sourceContext.putImageData(
+            new ImageData(
+              imageDataPixels(before.pixels.pixels),
+              before.dimensions.width,
+              before.dimensions.height,
+            ),
+            0,
+            0,
+          );
+        }
         setBeforeReady(true);
       }).catch(() => {
         if (!disposed) setBeforeReady(false);
@@ -558,9 +619,7 @@ export function DevelopCanvas({
     };
   }, [
     cropActive,
-    beforeGeometry,
-    beforeGeometryFrame,
-    beforeManualDistortion,
+    neutralBeforeDocument,
     entry,
     image,
   ]);

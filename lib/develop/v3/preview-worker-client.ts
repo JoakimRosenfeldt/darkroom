@@ -1,10 +1,10 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { PixelDimensions } from "@/lib/develop/process";
-import type { CpuRenderResult } from "@/lib/develop/v3/cpu-backend";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type {
   V3PreviewWorkerImage,
   V3PreviewWorkerMaskMatte,
+  V3PreviewWorkerRenderResult,
   V3PreviewWorkerResponse,
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -13,11 +13,12 @@ interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
   readonly devicePixelRatio: number;
   readonly previewMode: "interactive" | "settled";
+  readonly includeAnalysis: boolean;
   readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
 }
 
 interface PendingRender {
-  readonly resolve: (result: CpuRenderResult) => void;
+  readonly resolve: (result: V3PreviewWorkerRenderResult) => void;
   readonly reject: (error: Error) => void;
 }
 
@@ -58,10 +59,17 @@ export class V3PreviewWorkerClient {
     this.#worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse>): void => {
       const response = event.data;
       const pending = this.#pending.get(response.requestId);
-      if (!pending) return;
+      if (!pending) {
+        if (
+          response.kind === "result" &&
+          response.result.kind === "rendered" &&
+          "bitmap" in response.result
+        ) response.result.bitmap.close();
+        return;
+      }
       this.#pending.delete(response.requestId);
       if (response.kind === "result") {
-        pending.resolve(response.result);
+        pending.resolve({ backend: response.backend, result: response.result });
       } else {
         pending.reject(new Error(response.message));
       }
@@ -86,8 +94,10 @@ export class V3PreviewWorkerClient {
   render(
     document: DevelopDocumentV3,
     options: PreviewWorkerRenderOptions,
-  ): Promise<CpuRenderResult> {
-    if (this.#disposed) return Promise.resolve({ kind: "cancelled" });
+  ): Promise<V3PreviewWorkerRenderResult> {
+    if (this.#disposed) {
+      return Promise.resolve({ backend: "cpu", result: { kind: "cancelled" } });
+    }
     const requestId = ++this.#nextRequestId;
     return new Promise((resolve, reject) => {
       this.#pending.set(requestId, { resolve, reject });
@@ -98,6 +108,7 @@ export class V3PreviewWorkerClient {
         viewportDimensions: options.viewportDimensions,
         devicePixelRatio: options.devicePixelRatio,
         previewMode: options.previewMode,
+        includeAnalysis: options.includeAnalysis,
         maskMattes: options.maskMattes ?? [],
       });
     });
@@ -108,7 +119,7 @@ export class V3PreviewWorkerClient {
     this.#disposed = true;
     this.#worker.terminate();
     for (const pending of this.#pending.values()) {
-      pending.resolve({ kind: "cancelled" });
+      pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     }
     this.#pending.clear();
   }
