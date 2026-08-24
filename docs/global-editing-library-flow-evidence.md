@@ -143,7 +143,7 @@ The feature branch now contains the full code path described by the plan:
 - automatic legacy-document migration with live source validation, copied mask-asset validation, persisted-revision verification, and no UI path back to the legacy process;
 - strict current documents, retained migration compatibility data, stale-source checks, semantic render plans, SDR RGBA8 preview, and tiled export;
 - input-profile and optics capability states, canonical geometry, global tone and color, live analysis, presence, detail, local masks, manual cleanup, generated-job contracts, HDR and proof capability blocks, and exact-result batch policy;
-- production UI for one Crop/Edit/Mask/Info flow, Auto Tone, histogram and diagnostics, zoom, pan, hold-to-view Before, manual crop, local and AI masks, cleanup, white-balance and Point Color sampling, and per-photo batch selection.
+- production UI for one Crop/Edit/Mask/Cleanup/Info flow, Auto Tone, histogram and diagnostics, zoom, pan, hold-to-view Before, manual crop, local and AI masks, white-balance and Point Color sampling, and per-photo batch selection.
 
 Unsupported high-bit, HDR, proof, licensed profile, depth, People, Reflection, and Dust paths remain visible and blocked. The implementation does not substitute data or silently reduce those claims.
 
@@ -155,15 +155,16 @@ The run used the seven bundled demo photos through the real Electron bridge and 
 | --- | --- |
 | Exact Library result | The Library showed all seven ordered demo entries and retained the selected first photo. |
 | Develop navigation | `city-night.jpg` opened as photo 1 of 7 with the saved filmstrip order. |
-| Unified editor | Develop opened directly into one current editor with Crop, Edit, Mask, and Info rail actions. No process-version choice or comparison screen was shown. |
+| Unified editor | Develop opened directly into one current editor with Crop, Edit, Mask, Cleanup, and Info rail actions. No process-version choice or comparison screen was shown. |
 | Source identity | A real fractional filesystem modification time passed unchanged through the v3 source, asset, and generated-job validators after their contracts were aligned with the catalog identity. |
 | Automatic migration | `coastal-light.jpg` was seeded with a legacy crop, geometry, RGB curve, denoise, and sharpening document with no sidecar. Concurrent opens shared one hydration and write, migrated without user input, reached `Saved · SDR · 8-bit output`, and a direct catalog query confirmed persisted version 3 without a sidecar race. |
 | Canvas inspection | The migrated photo exposed Fit, zoom, pan, and hold-to-view Before controls in the same editor. Before used the decoded, EXIF-oriented source. |
-| Auto Tone | The accepted analysis wrote ordinary stored values: Exposure `+0.85 EV`, Contrast `-6`, Highlights `+40`, Shadows `+19`, Whites `+25`, and Blacks `-13`. Undo became available. |
+| Preview response | On a 1,707 by 2,560 source, the isolated CPU path rendered active slider frames in `51 ms` and settled frames in `163 to 170 ms`. The live Electron canvas began updating `88 ms` after slider input and settled `162 ms` after release. |
+| Auto Tone | The accepted analysis wrote ordinary stored values: Exposure `+0.59 EV`, Contrast `+4`, Highlights `0`, Shadows `+2`, Whites `-8`, and Blacks `-3`. Undo became available. |
 | Masks | The unified Mask panel loaded a persisted brush mask and exposed rename, copy, reorder, delete, size, feather, flow, density, invert, local adjustments, and Subject/Sky actions. The local models remained undownloaded, so inference was not run. |
 | Batch scope | The dialog selected the exact seven-photo stored result and named the current semantic group. A catalog revision change blocked execution until the explicit `Refresh result` action, as required. |
 
-The screenshots under `docs/pr-screenshots/global-editing-library-flow/` record the Library result, unified editor, mask tools, and exact batch selection.
+The screenshots under `docs/pr-screenshots/global-editing-library-flow/` record the Library result, unified editor, Auto Tone control, Cleanup panel, mask tools, and exact batch selection.
 
 ## Final command state
 
