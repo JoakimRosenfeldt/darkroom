@@ -27,9 +27,13 @@ import {
   buildV3SourceRecord,
   loadV3PreviewMaskMattes,
   type V3PreviewMaskMatte,
+  type V3PreviewRenderMode,
 } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
-import type { V3PreviewRenderOutput } from "@/lib/develop/v3/preview-worker-types";
+import type {
+  V3PreviewBackend,
+  V3PreviewRenderOutput,
+} from "@/lib/develop/v3/preview-worker-types";
 import type {
   CpuAnalysisTapResult,
   CpuBackendBlockingDiagnostic,
@@ -127,6 +131,15 @@ interface DisplayDimensions {
   readonly height: number;
 }
 
+interface DrawnFrame {
+  readonly backend: V3PreviewBackend;
+  readonly cropActive: boolean;
+  readonly documentRevision: number;
+  readonly mode: V3PreviewRenderMode;
+  readonly viewportHeight: number;
+  readonly viewportWidth: number;
+}
+
 interface PanGesture {
   readonly pointerId: number;
   readonly startX: number;
@@ -217,6 +230,8 @@ export function DevelopCanvas({
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
+  const drawnFrameRef = useRef<DrawnFrame | null>(null);
+  const lastInteractiveRevisionRef = useRef<number | null>(null);
   const maskMattesRef = useRef<{
     readonly key: string;
     readonly value: Promise<readonly V3PreviewMaskMatte[]>;
@@ -242,6 +257,7 @@ export function DevelopCanvas({
       : undefined;
     return session?.transientEdit ? "interactive" : "settled";
   });
+  const previewModeRef = useRef(previewMode);
   const maskTool = useDevelopStore((state) => {
     const session = state.activeCatalogId === entry.catalogId
       ? state.sessions[entry.id]
@@ -277,6 +293,10 @@ export function DevelopCanvas({
     (maskingActive && maskTool !== "none");
 
   useEffect(() => {
+    previewModeRef.current = previewMode;
+  }, [previewMode]);
+
+  useEffect(() => {
     diagnosticsCallbackRef.current = onRenderDiagnostics;
   }, [onRenderDiagnostics]);
 
@@ -287,6 +307,8 @@ export function DevelopCanvas({
   useEffect(() => {
     hasRenderedRef.current = false;
     drawnRequestRef.current = 0;
+    drawnFrameRef.current = null;
+    lastInteractiveRevisionRef.current = null;
     maskMattesRef.current = null;
     let worker: V3PreviewWorkerClient;
     try {
@@ -306,6 +328,8 @@ export function DevelopCanvas({
       worker.dispose();
       detailWorkerRef.current?.dispose();
       beforeWorkerRef.current?.dispose();
+      pointColorInputRef.current = null;
+      clearActiveAnalysis(entry.catalogId, entry.id);
       quickWorkerRef.current = null;
       detailWorkerRef.current = null;
       beforeWorkerRef.current = null;
@@ -336,21 +360,35 @@ export function DevelopCanvas({
       ) return;
       renderedViewportWidth = width;
       renderedViewportHeight = height;
-      pointColorInputRef.current = null;
-      setShowBefore(false);
-      clearActiveAnalysis(entry.catalogId, entry.id);
-      analysisCallbackRef.current?.([]);
-      const requestId = ++requestRef.current;
       const session = getDevelopSession(entry.catalogId, entry.id);
-      if (!hasRenderedRef.current) setPreview({ kind: "loading" });
       const quickWorker = quickWorkerRef.current;
-      detailWorkerRef.current?.dispose();
-      detailWorkerRef.current = null;
       if (!session || !document || !quickWorker) {
         setPreview({ kind: "invalid", message: "Develop session is not ready." });
         return;
       }
       const renderSnapshot = session.snapshot();
+      const drawnFrame = drawnFrameRef.current;
+      const sameFrame = drawnFrame?.documentRevision ===
+          renderSnapshot.documentRevision &&
+        drawnFrame.viewportWidth === width &&
+        drawnFrame.viewportHeight === height &&
+        drawnFrame.cropActive === cropActive;
+      if (previewMode === "interactive") {
+        lastInteractiveRevisionRef.current = renderSnapshot.documentRevision;
+        if (sameFrame) return;
+      }
+      const interactionRelease = previewMode === "settled" &&
+        lastInteractiveRevisionRef.current === renderSnapshot.documentRevision;
+      if (interactionRelease && sameFrame && drawnFrame.mode === "settled") return;
+
+      pointColorInputRef.current = null;
+      setShowBefore(false);
+      clearActiveAnalysis(entry.catalogId, entry.id);
+      analysisCallbackRef.current?.([]);
+      const requestId = ++requestRef.current;
+      if (!hasRenderedRef.current) setPreview({ kind: "loading" });
+      detailWorkerRef.current?.dispose();
+      detailWorkerRef.current = null;
       const renderDocument = cropActive
         ? {
             ...document,
@@ -364,6 +402,8 @@ export function DevelopCanvas({
 
       const applyResult = (
         result: V3PreviewRenderOutput,
+        mode: V3PreviewRenderMode,
+        backend: V3PreviewBackend,
         allowStaleDraft = false,
       ): boolean => {
         const closeBitmap = (): void => {
@@ -372,6 +412,7 @@ export function DevelopCanvas({
           }
         };
         const staleDraft = allowStaleDraft &&
+          previewModeRef.current === "interactive" &&
           result.kind === "rendered" &&
           quickWorkerRef.current === quickWorker &&
           requestId > drawnRequestRef.current;
@@ -422,6 +463,14 @@ export function DevelopCanvas({
               height: Math.max(1, Math.round(dimensions.height * scale)),
             });
             drawnRequestRef.current = requestId;
+            drawnFrameRef.current = {
+              backend,
+              cropActive,
+              documentRevision: renderSnapshot.documentRevision,
+              mode,
+              viewportHeight: height,
+              viewportWidth: width,
+            };
             hasRenderedRef.current = true;
             setPreview({ kind: "rendered" });
             return true;
@@ -469,6 +518,14 @@ export function DevelopCanvas({
           analysisCallbackRef.current?.(result.analysis);
         }
         drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
+        drawnFrameRef.current = {
+          backend,
+          cropActive,
+          documentRevision: renderSnapshot.documentRevision,
+          mode,
+          viewportHeight: height,
+          viewportWidth: width,
+        };
         hasRenderedRef.current = true;
         setPreview({ kind: "rendered" });
         return true;
@@ -489,24 +546,38 @@ export function DevelopCanvas({
           devicePixelRatio: window.devicePixelRatio || 1,
           maskMattes,
         } as const;
-        const quick = await quickWorker.render(renderDocument, {
-          ...options,
-          previewMode: "interactive",
-          includeAnalysis: false,
-        });
-        if (
-          !applyResult(quick.result, true) ||
-          previewMode === "interactive"
-        ) return;
+        let backend = sameFrame ? drawnFrame.backend : null;
+        if (!interactionRelease) {
+          const quick = await quickWorker.render(renderDocument, {
+            ...options,
+            previewMode: "interactive",
+            includeAnalysis: false,
+          });
+          if (!applyResult(quick.result, "interactive", quick.backend, true)) return;
+          backend = quick.backend;
+          if (disposed || requestId !== requestRef.current) return;
+        }
 
-        const detailWorker = new V3PreviewWorkerClient(entry, image);
-        detailWorkerRef.current = detailWorker;
+        if (previewMode === "interactive") {
+          const refined = await quickWorker.render(renderDocument, {
+            ...options,
+            previewMode: "refined",
+            includeAnalysis: false,
+          });
+          applyResult(refined.result, "refined", refined.backend, true);
+          return;
+        }
+
+        const detailWorker = backend === "gpu"
+          ? quickWorker
+          : new V3PreviewWorkerClient(entry, image);
+        if (detailWorker !== quickWorker) detailWorkerRef.current = detailWorker;
         const detailed = await detailWorker.render(renderDocument, {
           ...options,
           previewMode: "settled",
           includeAnalysis: true,
         });
-        applyResult(detailed.result);
+        applyResult(detailed.result, "settled", detailed.backend);
       };
 
       void renderPreview().catch((error: unknown) => {
@@ -529,8 +600,6 @@ export function DevelopCanvas({
       disposed = true;
       detailWorkerRef.current?.dispose();
       detailWorkerRef.current = null;
-      pointColorInputRef.current = null;
-      clearActiveAnalysis(entry.catalogId, entry.id);
       observer.disconnect();
     };
   }, [cropActive, document, documentRevision, entry, image, previewMode]);
