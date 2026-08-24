@@ -124,6 +124,12 @@ import {
   type MetadataAnalysisRequest,
   type MetadataAnalysisResult,
 } from "../lib/library/metadata-analysis.ts";
+import {
+  parseExactDuplicateTrashRequest,
+  parseExactDuplicateTrashResult,
+  type ExactDuplicateTrashRequest,
+  type ExactDuplicateTrashResult,
+} from "../lib/library/duplicate-actions.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -345,6 +351,13 @@ const darkroom = {
 
   catalogTrashAsset(request: CatalogAssetRequest): Promise<void> {
     return ipcRenderer.invoke("darkroom:catalog-trash-asset", parseCatalogAssetRequest(request));
+  },
+
+  async catalogTrashExactDuplicates(request: ExactDuplicateTrashRequest): Promise<ExactDuplicateTrashResult> {
+    return parseExactDuplicateTrashResult(await ipcRenderer.invoke(
+      "darkroom:catalog-trash-exact-duplicates",
+      parseExactDuplicateTrashRequest(request),
+    ));
   },
 
   async catalogAnalyzeMetadata(request: MetadataAnalysisRequest): Promise<MetadataAnalysisResult> {

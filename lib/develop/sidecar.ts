@@ -3,7 +3,7 @@ import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopDocument } from "@/lib/develop/types";
-import { parseDevelopXmp, serializeDevelopXmp } from "@/lib/develop/xmp";
+import { parseDevelopXmp, parseKeywordXmp, serializeDevelopXmp } from "@/lib/develop/xmp";
 
 export interface DevelopSidecar {
   contents: string;
@@ -11,6 +11,7 @@ export interface DevelopSidecar {
   lastModified: number;
   rating?: EntryMetadata["rating"];
   colorLabel: EntryMetadata["colorLabel"] | undefined;
+  keywords: ReturnType<typeof parseKeywordXmp>;
 }
 
 export async function readDevelopSidecar(
@@ -24,6 +25,7 @@ export async function readDevelopSidecar(
   return {
     contents: sidecar.contents,
     ...parseDevelopXmp(sidecar.contents),
+    keywords: parseKeywordXmp(sidecar.contents),
     lastModified: sidecar.lastModified,
   };
 }

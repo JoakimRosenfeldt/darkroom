@@ -12,11 +12,12 @@ interface AlbumPickerPopupProps {
 }
 
 type PickerRow =
-  | { kind: "album"; album: Album }
+  | { kind: "album"; album: Album; path: string }
   | { kind: "create"; name: string };
 
 export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
   const albums = useLibraryStore((state) => state.albums);
+  const collections = useLibraryStore((state) => state.libraryWorkspace.collections);
   const createAlbum = useLibraryStore((state) => state.createAlbum);
   const addEntriesToAlbum = useLibraryStore((state) => state.addEntriesToAlbum);
 
@@ -28,12 +29,28 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
   const rows = useMemo(() => {
     const trimmed = query.trim();
     const lowerQuery = trimmed.toLowerCase();
+    const byId = new Map(collections.map((node) => [node.id, node]));
+    const pathFor = (album: Album): string => {
+      const parts = [album.name];
+      let parentId = byId.get(album.id)?.parentId ?? null;
+      const seen = new Set<string>();
+      while (parentId && !seen.has(parentId)) {
+        seen.add(parentId);
+        const parent = byId.get(parentId);
+        if (!parent) break;
+        parts.unshift(parent.name);
+        parentId = parent.parentId;
+      }
+      return parts.join(" / ");
+    };
+    const albumPaths = albums.map((album) => ({ album, path: pathFor(album) }));
     const matched = lowerQuery
-      ? albums.filter((album) => album.name.toLowerCase().includes(lowerQuery))
-      : albums;
+      ? albumPaths.filter((item) => item.path.toLowerCase().includes(lowerQuery))
+      : albumPaths;
     const result: PickerRow[] = matched.map((album) => ({
       kind: "album",
-      album,
+      album: album.album,
+      path: album.path,
     }));
 
     const exactMatch = albums.some(
@@ -48,11 +65,8 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
     }
 
     return result;
-  }, [albums, query]);
-
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [query, rows.length]);
+  }, [albums, collections, query]);
+  const activeHighlightIndex = Math.min(highlightIndex, Math.max(0, rows.length - 1));
 
   const confirmRow = useCallback(
     (row: PickerRow) => {
@@ -76,11 +90,11 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
   }, []);
 
   useEffect(() => {
-    const highlighted = listRef.current?.children[highlightIndex] as
+    const highlighted = listRef.current?.children[activeHighlightIndex] as
       | HTMLElement
       | undefined;
     highlighted?.scrollIntoView({ block: "nearest" });
-  }, [highlightIndex]);
+  }, [activeHighlightIndex]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -110,7 +124,7 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        const row = rows[highlightIndex];
+        const row = rows[activeHighlightIndex];
         if (row) {
           confirmRow(row);
         }
@@ -119,7 +133,7 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [confirmRow, highlightIndex, onClose, rows]);
+  }, [activeHighlightIndex, confirmRow, onClose, rows]);
 
   const photoLabel =
     entryIds.length === 1 ? "1 photo" : `${entryIds.length} photos`;
@@ -150,7 +164,10 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setHighlightIndex(0);
+            }}
             placeholder="Search albums…"
             className="w-full rounded border border-lr-border-subtle bg-lr-panel-raised px-2.5 py-1.5 text-sm text-lr-text outline-none focus:border-lr-accent"
           />
@@ -167,10 +184,10 @@ export function AlbumPickerPopup({ entryIds, onClose }: AlbumPickerPopupProps) {
             </li>
           ) : (
             rows.map((row, index) => {
-              const isActive = index === highlightIndex;
+              const isActive = index === activeHighlightIndex;
               const label =
                 row.kind === "album"
-                  ? row.album.name
+                  ? row.path
                   : `Create "${row.name}"`;
               const count =
                 row.kind === "album" ? row.album.entryIds.length : null;

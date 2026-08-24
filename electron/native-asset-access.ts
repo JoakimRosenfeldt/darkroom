@@ -215,7 +215,11 @@ export class NativeAssetAccess {
     });
   }
 
-  async writeSidecar(location: NativeAssetLocation, contents: string | null): Promise<void> {
+  async writeSidecar(
+    location: NativeAssetLocation,
+    contents: string | null,
+    expectedLastModified?: number | null,
+  ): Promise<void> {
     if (contents !== null && Buffer.byteLength(contents, "utf8") > MAX_SIDECAR_BYTES) {
       throw new NativeAssetAccessError("Sidecar is too large.");
     }
@@ -225,7 +229,7 @@ export class NativeAssetAccess {
     const absolutePath = candidatePath(rootPath, relativePath);
     const parentPath = path.dirname(absolutePath);
     if (parentPath !== rootPath) await assertNoSymlinkPath(rootPath, parentPath);
-    await assertExistingRegularSidecar(absolutePath);
+    await assertSidecarVersion(absolutePath, expectedLastModified);
     if (contents === null) {
       await fs.unlink(absolutePath).catch((error: unknown) => {
         if (!isNotFound(error)) throw new NativeAssetAccessError("Could not remove sidecar.");
@@ -241,7 +245,7 @@ export class NativeAssetAccess {
       await handle.close();
       handle = null;
       await verifiedRootPath(location.canonicalRootPath);
-      await assertExistingRegularSidecar(absolutePath);
+      await assertSidecarVersion(absolutePath, expectedLastModified);
       await fs.rename(temporaryPath, absolutePath);
     } catch (error) {
       await handle?.close().catch(() => undefined);
@@ -250,6 +254,28 @@ export class NativeAssetAccess {
     } finally {
       await fs.unlink(temporaryPath).catch(() => undefined);
     }
+  }
+}
+
+async function assertSidecarVersion(
+  absolutePath: string,
+  expectedLastModified: number | null | undefined,
+): Promise<void> {
+  if (expectedLastModified === undefined) {
+    await assertExistingRegularSidecar(absolutePath);
+    return;
+  }
+  try {
+    const stat = await fs.lstat(absolutePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new NativeAssetAccessError("Sidecar is not a regular file.");
+    if (expectedLastModified === null || stat.mtimeMs !== expectedLastModified) {
+      throw new NativeAssetAccessError("Sidecar changed after it was read. Reload before saving keywords.");
+    }
+  } catch (error) {
+    if (isNotFound(error) && expectedLastModified === null) return;
+    if (isNotFound(error)) throw new NativeAssetAccessError("Sidecar changed after it was read. Reload before saving keywords.");
+    if (error instanceof NativeAssetAccessError) throw error;
+    throw new NativeAssetAccessError("Sidecar is unavailable.");
   }
 }
 

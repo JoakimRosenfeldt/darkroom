@@ -82,6 +82,9 @@ function parseFacets(value: unknown): LibraryFacets {
     edited,
     albums: stringArray(value.albums),
     keywords: stringArray(value.keywords),
+    keywordMode: value.keywordMode === "descendants" || value.keywordMode === "ancestors"
+      ? value.keywordMode
+      : "exact",
   };
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   DevelopRenderer,
@@ -16,6 +16,13 @@ import type { MaskTool } from "@/components/develop/MaskingPanel";
 import { computeContainedImageRect } from "@/lib/develop/crop-geometry";
 import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import type { CropSettings, SourceSignature } from "@/lib/develop/types";
+import {
+  anchoredViewerTransform,
+  nextZoomPercent,
+  relativeScaleForMode,
+  type ViewerZoomMode,
+} from "@/lib/viewer/geometry";
+import { isEditableTarget } from "@/hooks/is-editable-target";
 
 export interface CropPreviewTransform {
   scale: number;
@@ -103,6 +110,8 @@ export function DevelopCanvas({
   const [error, setError] = useState<string | null>(null);
   const [, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
   const [viewTransform, setViewTransform] = useState(FIT_TRANSFORM);
+  const [zoomMode, setZoomMode] = useState<ViewerZoomMode>("fit");
+  const [zoomPercent, setZoomPercent] = useState(100);
   const [panning, setPanning] = useState(false);
   const [imageRect, setImageRect] = useState(() =>
     computeContainedImageRect(1, 1, image.width, image.height),
@@ -148,6 +157,8 @@ export function DevelopCanvas({
     setReady(false);
     setError(null);
     setViewTransform(FIT_TRANSFORM);
+    setZoomMode("fit");
+    setZoomPercent(100);
 
     async function loadRenderer() {
       try {
@@ -212,14 +223,32 @@ export function DevelopCanvas({
           image.height,
         ),
       );
-      setDisplayImageRect(
-        computeContainedImageRect(
-          currentContainer.clientWidth,
-          currentContainer.clientHeight,
-          settings.crop.enabled ? image.width * settings.crop.width : image.width,
-          settings.crop.enabled ? image.height * settings.crop.height : image.height,
-        ),
+      const nextDisplayRect = computeContainedImageRect(
+        currentContainer.clientWidth,
+        currentContainer.clientHeight,
+        settings.crop.enabled ? image.width * settings.crop.width : image.width,
+        settings.crop.enabled ? image.height * settings.crop.height : image.height,
       );
+      setDisplayImageRect(nextDisplayRect);
+      if (!cropActive) {
+        setViewTransform((current) => ({
+          ...current,
+          x: clampZoomOffset(
+            currentContainer.clientWidth,
+            nextDisplayRect.x,
+            nextDisplayRect.width,
+            current.scale,
+            current.x,
+          ),
+          y: clampZoomOffset(
+            currentContainer.clientHeight,
+            nextDisplayRect.y,
+            nextDisplayRect.height,
+            current.scale,
+            current.y,
+          ),
+        }));
+      }
       const state = useDevelopStore.getState();
       const activeDocument = state.activeEntryId
         ? state.sessions[state.activeEntryId]?.document ?? EMPTY_DOCUMENT
@@ -308,28 +337,67 @@ export function DevelopCanvas({
 
   function onWheel(event: React.WheelEvent) {
     const container = containerRef.current;
-    if (!cropActive || !container) {
+    if (!container) {
       return;
     }
     event.preventDefault();
     const bounds = container.getBoundingClientRect();
     const pointerX = event.clientX - bounds.left;
     const pointerY = event.clientY - bounds.top;
-    onPreviewTransformChange((current) => {
-      const scale = Math.max(
-        MIN_PREVIEW_ZOOM,
-        Math.min(MAX_PREVIEW_ZOOM, current.scale * Math.exp(-event.deltaY * 0.001)),
-      );
-      const ratio = scale / current.scale;
-      const xLimit = bounds.width * (1 - scale);
-      const yLimit = bounds.height * (1 - scale);
-      return {
-        scale,
-        x: Math.max(Math.min(0, xLimit), Math.min(Math.max(0, xLimit), pointerX - (pointerX - current.x) * ratio)),
-        y: Math.max(Math.min(0, yLimit), Math.min(Math.max(0, yLimit), pointerY - (pointerY - current.y) * ratio)),
-      };
-    });
+    if (cropActive) {
+      onPreviewTransformChange((current) => {
+        const scale = Math.max(
+          MIN_PREVIEW_ZOOM,
+          Math.min(MAX_PREVIEW_ZOOM, current.scale * Math.exp(-event.deltaY * 0.001)),
+        );
+        const ratio = scale / current.scale;
+        const xLimit = bounds.width * (1 - scale);
+        const yLimit = bounds.height * (1 - scale);
+        return {
+          scale,
+          x: Math.max(Math.min(0, xLimit), Math.min(Math.max(0, xLimit), pointerX - (pointerX - current.x) * ratio)),
+          y: Math.max(Math.min(0, yLimit), Math.min(Math.max(0, yLimit), pointerY - (pointerY - current.y) * ratio)),
+        };
+      });
+      return;
+    }
+    const percent = nextZoomPercent(zoomMode === "custom" ? zoomPercent : 100, event.deltaY < 0 ? 1 : -1);
+    applyViewerZoom("custom", percent, { x: pointerX, y: pointerY });
   }
+
+  const applyViewerZoom = useCallback((
+    mode: ViewerZoomMode,
+    percent = 100,
+    anchor?: { x: number; y: number },
+  ) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const viewport = { width: container.clientWidth, height: container.clientHeight };
+    const source = {
+      width: settings.crop.enabled ? image.width * settings.crop.width : image.width,
+      height: settings.crop.enabled ? image.height * settings.crop.height : image.height,
+    };
+    const rect = computeContainedImageRect(viewport.width, viewport.height, source.width, source.height);
+    const scale = Math.max(
+      MIN_PREVIEW_ZOOM,
+      Math.min(MAX_PREVIEW_ZOOM, relativeScaleForMode(
+        mode,
+        viewport,
+        source,
+        window.devicePixelRatio,
+        percent,
+      )),
+    );
+    setViewTransform((current) => anchoredViewerTransform(
+      current,
+      scale,
+      anchor ?? { x: viewport.width / 2, y: viewport.height / 2 },
+      viewport,
+      rect,
+    ));
+    setZoomMode(mode);
+    setZoomPercent(percent);
+  }, [image.height, image.width, settings.crop.enabled, settings.crop.height, settings.crop.width]);
 
   function getViewImageRect(width: number, height: number) {
     return computeContainedImageRect(
@@ -440,6 +508,7 @@ export function DevelopCanvas({
     }
     if (viewTransform.scale > 1) {
       setViewTransform(FIT_TRANSFORM);
+      setZoomMode("fit");
       return;
     }
     setViewTransform({
@@ -459,12 +528,32 @@ export function DevelopCanvas({
         bounds.height / 2 - pointerY * DETAIL_ZOOM,
       ),
     });
+    setZoomMode("custom");
+    setZoomPercent(200);
   }
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "\\") {
         setShowOriginal(true);
+        return;
+      }
+      if (isEditableTarget(event.target) || cropActive || (maskingActive && maskTool !== "none")) return;
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        applyViewerZoom("custom", nextZoomPercent(zoomMode === "custom" ? zoomPercent : 100, 1));
+      } else if (event.key === "-") {
+        event.preventDefault();
+        applyViewerZoom("custom", nextZoomPercent(zoomMode === "custom" ? zoomPercent : 100, -1));
+      } else if (event.key === "0") {
+        event.preventDefault();
+        applyViewerZoom("fit");
+      } else if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        applyViewerZoom("fill");
+      } else if (event.key === "!") {
+        event.preventDefault();
+        applyViewerZoom("actual");
       }
     }
     function onKeyUp(event: KeyboardEvent) {
@@ -479,7 +568,7 @@ export function DevelopCanvas({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [setShowOriginal]);
+  }, [applyViewerZoom, cropActive, maskingActive, maskTool, setShowOriginal, zoomMode, zoomPercent]);
 
   if (error) {
     return (
@@ -522,6 +611,46 @@ export function DevelopCanvas({
       onPointerUp={finishPan}
       onPointerCancel={(event) => finishPan(event, false)}
     >
+      {!cropActive && !(maskingActive && maskTool !== "none") ? (
+        <div
+          className="absolute right-3 top-3 z-40 flex items-center gap-1 rounded-lg border border-white/10 bg-black/70 p-1 shadow-xl backdrop-blur"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {(["fit", "fill", "actual"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={zoomMode === mode}
+              onClick={() => applyViewerZoom(mode)}
+              className={`rounded-md px-2 py-1 text-[10px] uppercase tracking-wide ${
+                zoomMode === mode ? "bg-lr-selection text-lr-accent" : "text-white/65 hover:text-white"
+              }`}
+            >
+              {mode === "actual" ? "1:1" : mode}
+            </button>
+          ))}
+          <button
+            type="button"
+            aria-label="Zoom out"
+            onClick={() => applyViewerZoom("custom", nextZoomPercent(zoomMode === "custom" ? zoomPercent : 100, -1))}
+            className="rounded px-2 py-1 text-xs text-white/65 hover:text-white"
+          >
+            −
+          </button>
+          <span role="status" aria-label={`Zoom ${zoomMode === "fit" ? "fit" : zoomMode === "fill" ? "fill" : zoomMode === "actual" ? "actual pixels" : `${zoomPercent} percent`}`} className="w-10 text-center font-mono text-[10px] text-white/75">
+            {zoomMode === "fit" ? "FIT" : zoomMode === "fill" ? "FILL" : zoomMode === "actual" ? "1:1" : `${zoomPercent}%`}
+          </span>
+          <button
+            type="button"
+            aria-label="Zoom in"
+            onClick={() => applyViewerZoom("custom", nextZoomPercent(zoomMode === "custom" ? zoomPercent : 100, 1))}
+            className="rounded px-2 py-1 text-xs text-white/65 hover:text-white"
+          >
+            +
+          </button>
+        </div>
+      ) : null}
       <div
         className={`absolute inset-0 ${
           cropActive || panning

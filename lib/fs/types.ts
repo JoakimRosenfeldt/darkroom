@@ -25,6 +25,8 @@ export interface LibraryEntry {
   health: "present" | "missing" | "ambiguous" | "unreadable";
   formatId: string | null;
   formatAvailability: EntryFormatAvailability;
+  fingerprintStatus?: "missing" | "hashing" | "valid" | "stale" | "failed";
+  fingerprintSha256?: string | null;
 }
 
 export const SUPPORTED_EXTENSIONS = SUPPORTED_INPUT_EXTENSIONS;

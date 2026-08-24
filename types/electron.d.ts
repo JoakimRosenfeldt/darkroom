@@ -84,6 +84,10 @@ import type {
   MetadataAnalysisRequest,
   MetadataAnalysisResult,
 } from "../lib/library/metadata-analysis";
+import type {
+  ExactDuplicateTrashRequest,
+  ExactDuplicateTrashResult,
+} from "../lib/library/duplicate-actions";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -125,6 +129,7 @@ export interface DarkroomAPI {
   catalogWriteSidecar(request: CatalogSidecarWriteRequest): Promise<void>;
   catalogDecodeAsset(request: CatalogAssetRequest, decode: CatalogDecodeRequest): Promise<CatalogDecodeResult>;
   catalogTrashAsset(request: CatalogAssetRequest): Promise<void>;
+  catalogTrashExactDuplicates(request: ExactDuplicateTrashRequest): Promise<ExactDuplicateTrashResult>;
   catalogAnalyzeMetadata(request: MetadataAnalysisRequest): Promise<MetadataAnalysisResult>;
   catalogCancelMetadataAnalysis(request: MetadataAnalysisOperationRequest): Promise<void>;
   onCatalogMetadataAnalysisProgress(listener: (progress: MetadataAnalysisProgress) => void): Unsubscribe;

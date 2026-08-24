@@ -2,14 +2,14 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
-import { DeleteAlbumConfirm } from "@/components/library/DeleteAlbumConfirm";
+import { CollectionTree } from "@/components/library/CollectionTree";
+import { KeywordPanel } from "@/components/library/KeywordPanel";
 import {
   IconAlbum,
   IconArchive,
   IconChevronRight,
   IconFolder,
   IconPlus,
-  IconTrash,
 } from "@/components/shell/icons";
 import {
   buildFolderTree,
@@ -19,9 +19,13 @@ import {
   filterArchivedEntries,
   filterOnlyArchivedEntries,
 } from "@/lib/library/archive";
-import type { Album } from "@/lib/catalog/types";
+import { buildExactDuplicateGroups } from "@/lib/library/duplicates";
+import { isEntryInFolderSubtree, type LibraryPrimaryScope } from "@/lib/library/result";
+import { useLibraryResult } from "@/hooks/useLibraryResult";
 import { useLibraryStore } from "@/stores/library-store";
 import { CatalogManager } from "@/components/catalog/CatalogManager";
+
+const ALL_LIBRARY_SCOPE: LibraryPrimaryScope = { type: "all" };
 
 export function SidePanel() {
   const entries = useLibraryStore((state) => state.entries);
@@ -30,22 +34,16 @@ export function SidePanel() {
   const folderName = useLibraryStore((state) => state.folderName);
   const catalogRecovery = useLibraryStore((state) => state.catalogRecovery);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
+  const workspace = useLibraryStore((state) => state.libraryWorkspace);
   const albums = useLibraryStore((state) => state.albums);
+  const entryMetadata = useLibraryStore((state) => state.entryMetadata);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const setCatalogView = useLibraryStore((state) => state.setCatalogView);
-  const createAlbum = useLibraryStore((state) => state.createAlbum);
-  const renameAlbum = useLibraryStore((state) => state.renameAlbum);
-  const deleteAlbum = useLibraryStore((state) => state.deleteAlbum);
+  const clearQuickCollection = useLibraryStore((state) => state.clearQuickCollection);
+  const restoreExcludedEntries = useLibraryStore((state) => state.restoreExcludedEntries);
   const clearLibrary = useLibraryStore((state) => state.clearLibrary);
   const openCatalogManager = useLibraryStore((state) => state.openCatalogManager);
-
-  const [creatingAlbum, setCreatingAlbum] = useState(false);
-  const [newAlbumName, setNewAlbumName] = useState("");
-  const [renamingAlbumId, setRenamingAlbumId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [albumPendingDelete, setAlbumPendingDelete] = useState<Album | null>(
-    null,
-  );
+  const filteredLibrary = useLibraryResult(ALL_LIBRARY_SCOPE, false);
 
   const libraryEntries = useMemo(
     () => filterArchivedEntries(entries, archivedEntryIds),
@@ -61,31 +59,26 @@ export function SidePanel() {
     () => buildFolderTree(libraryEntries),
     [libraryEntries],
   );
+  const duplicateGroups = useMemo(
+    () => buildExactDuplicateGroups(entries, entryMetadata, albums, archivedEntryIds, workspace),
+    [albums, archivedEntryIds, entries, entryMetadata, workspace],
+  );
+  const filteredFolderCounts = useMemo(() => {
+    const matchingIds = new Set(filteredLibrary.matchingEntryIds);
+    const matchingEntries = libraryEntries.filter((entry) => matchingIds.has(entry.id));
+    const counts = new Map<string, number>();
+    function count(nodes: readonly FolderNode[]) {
+      for (const node of nodes) {
+        counts.set(node.path, matchingEntries.filter((entry) =>
+          isEntryInFolderSubtree(entry, node.path)
+        ).length);
+        count(node.children);
+      }
+    }
+    count(folderTree.folders);
+    return counts;
+  }, [filteredLibrary.matchingEntryIds, folderTree.folders, libraryEntries]);
   const hasImportedFolder = catalogId !== null && !needsFolderAccess;
-
-  function handleCreateAlbum() {
-    const id = createAlbum(newAlbumName);
-    if (id) {
-      setNewAlbumName("");
-      setCreatingAlbum(false);
-    }
-  }
-
-  function handleRenameAlbum(albumId: string) {
-    if (renameValue.trim()) {
-      renameAlbum(albumId, renameValue);
-    }
-    setRenamingAlbumId(null);
-    setRenameValue("");
-  }
-
-  function handleDeleteAlbum(album: Album) {
-    if (album.entryIds.length > 0) {
-      setAlbumPendingDelete(album);
-      return;
-    }
-    deleteAlbum(album.id);
-  }
 
   return (
     <>
@@ -114,10 +107,24 @@ export function SidePanel() {
                 isActive={catalogView.type === "all"}
                 onClick={() => setCatalogView({ type: "all" })}
               />
-              {folderTree.rootPhotoCount > 0 ? (
+              <CatalogItem
+                label="Quick Collection"
+                count={workspace.quickEntryIds.length}
+                icon={<IconAlbum className="h-3 w-3 text-lr-accent" />}
+                isActive={catalogView.type === "quick"}
+                onClick={() => setCatalogView({ type: "quick" })}
+              />
+              <CatalogItem
+                label="Exact Duplicates"
+                count={duplicateGroups.length}
+                icon={<IconArchive className="h-3 w-3 text-lr-text-dim" />}
+                isActive={catalogView.type === "duplicates"}
+                onClick={() => setCatalogView({ type: "duplicates" })}
+              />
+              {libraryEntries.length > 0 ? (
                 <CatalogItem
                   label="Root"
-                  count={folderTree.rootPhotoCount}
+                  count={filteredLibrary.photoCount}
                   icon={<IconFolder className="h-3 w-3 text-lr-text-dim" />}
                   isActive={
                     catalogView.type === "folder" && catalogView.path === ""
@@ -133,6 +140,7 @@ export function SidePanel() {
                   node={node}
                   depth={0}
                   catalogView={catalogView}
+                  filteredCounts={filteredFolderCounts}
                   onSelect={(path) =>
                     setCatalogView({ type: "folder", path })
                   }
@@ -157,116 +165,8 @@ export function SidePanel() {
           )}
         </section>
 
-        <section className="mt-4 px-2">
-          <div className="flex items-center justify-between px-2 pb-2">
-            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-faint">
-              Albums
-            </h3>
-            <button
-              type="button"
-              onClick={() => {
-                setCreatingAlbum(true);
-                setNewAlbumName("");
-              }}
-              disabled={!hasImportedFolder}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text disabled:opacity-40"
-              title="New album"
-            >
-              <IconPlus className="h-3 w-3" />
-            </button>
-          </div>
-
-          {creatingAlbum ? (
-            <div className="px-2 py-1">
-              <input
-                type="text"
-                value={newAlbumName}
-                onChange={(event) => setNewAlbumName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    handleCreateAlbum();
-                  }
-                  if (event.key === "Escape") {
-                    setCreatingAlbum(false);
-                    setNewAlbumName("");
-                  }
-                }}
-                onBlur={() => {
-                  if (newAlbumName.trim()) {
-                    handleCreateAlbum();
-                  } else {
-                    setCreatingAlbum(false);
-                  }
-                }}
-                placeholder="Album name"
-                autoFocus
-                className="w-full rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-2 text-xs text-lr-text outline-none focus:border-lr-accent"
-              />
-            </div>
-          ) : null}
-
-          {albums.length > 0 ? (
-            <ul className="space-y-px">
-              {albums.map((album) => (
-                <li key={album.id} className="group flex items-center gap-0.5">
-                  {renamingAlbumId === album.id ? (
-                    <input
-                      type="text"
-                      value={renameValue}
-                      onChange={(event) => setRenameValue(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          handleRenameAlbum(album.id);
-                        }
-                        if (event.key === "Escape") {
-                          setRenamingAlbumId(null);
-                          setRenameValue("");
-                        }
-                      }}
-                      onBlur={() => handleRenameAlbum(album.id)}
-                      autoFocus
-                      className="mx-2 flex-1 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-2 text-xs text-lr-text outline-none focus:border-lr-accent"
-                    />
-                  ) : (
-                    <>
-                      <CatalogItem
-                        label={album.name}
-                        count={album.entryIds.length}
-                        icon={
-                          <IconAlbum className="h-3 w-3 text-lr-text-dim" />
-                        }
-                        isActive={
-                          catalogView.type === "album" &&
-                          catalogView.albumId === album.id
-                        }
-                        onClick={() =>
-                          setCatalogView({ type: "album", albumId: album.id })
-                        }
-                        onDoubleClick={() => {
-                          setRenamingAlbumId(album.id);
-                          setRenameValue(album.name);
-                        }}
-                        className="flex-1"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteAlbum(album)}
-                        className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-lr-text-faint opacity-0 transition hover:bg-lr-panel-hover hover:text-lr-danger group-hover:opacity-100 group-focus-within:opacity-100"
-                        title="Delete album"
-                      >
-                        <IconTrash className="h-3 w-3" />
-                      </button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="px-2 py-2 text-xs text-lr-text-muted">
-              Create albums to group photos.
-            </p>
-          )}
-        </section>
+        <CollectionTree disabled={!hasImportedFolder} />
+        <KeywordPanel disabled={!hasImportedFolder} />
       </div>
 
         <div className="group border-t border-lr-border-subtle px-4 py-3">
@@ -302,20 +202,24 @@ export function SidePanel() {
             >
               Reset
             </button>
+            {workspace.quickEntryIds.length > 0 ? (
+              <button type="button" onClick={clearQuickCollection} className="text-[11px] text-lr-text-faint hover:text-lr-text">
+                Clear Quick
+              </button>
+            ) : null}
+            {workspace.excludedEntryIds.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => restoreExcludedEntries([...workspace.excludedEntryIds])}
+                className="text-[11px] text-lr-text-faint hover:text-lr-text"
+              >
+                Restore hidden ({workspace.excludedEntryIds.length})
+              </button>
+            ) : null}
           </div>
         </div>
       </aside>
 
-      {albumPendingDelete ? (
-        <DeleteAlbumConfirm
-          album={albumPendingDelete}
-          onConfirm={() => {
-            deleteAlbum(albumPendingDelete.id);
-            setAlbumPendingDelete(null);
-          }}
-          onClose={() => setAlbumPendingDelete(null)}
-        />
-      ) : null}
       <CatalogManager />
     </>
   );
@@ -325,11 +229,13 @@ function FolderTreeNode({
   node,
   depth,
   catalogView,
+  filteredCounts,
   onSelect,
 }: {
   node: FolderNode;
   depth: number;
   catalogView: ReturnType<typeof useLibraryStore.getState>["catalogView"];
+  filteredCounts: ReadonlyMap<string, number>;
   onSelect: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState(depth < 1);
@@ -359,7 +265,7 @@ function FolderTreeNode({
         )}
         <CatalogItem
           label={node.name}
-          count={node.photoCount}
+          count={filteredCounts.get(node.path) ?? 0}
           icon={<IconFolder className="h-3 w-3 text-lr-text-dim" />}
           isActive={isActive}
           onClick={() => onSelect(node.path)}
@@ -374,6 +280,7 @@ function FolderTreeNode({
               node={child}
               depth={depth + 1}
               catalogView={catalogView}
+              filteredCounts={filteredCounts}
               onSelect={onSelect}
             />
           ))}

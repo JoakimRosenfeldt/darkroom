@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
+import { DuplicateWorkspace } from "@/components/library/DuplicateWorkspace";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import { LibraryToolbar } from "@/components/shell/LibraryToolbar";
 import { SidePanel } from "@/components/shell/SidePanel";
@@ -51,7 +52,17 @@ export default function HomePage() {
   }, [archivedEntryIds.length, catalogView.type, setCatalogView]);
 
   const [viewSettings, updateViewSettings] = useLibraryViewSettings();
-  const { sort, filter, curationFilter, thumbSize, viewMode } = viewSettings;
+  const {
+    sort,
+    sortDirection,
+    filter,
+    curationFilter,
+    textQuery,
+    facets,
+    thumbSize,
+    viewMode,
+    autoAdvance,
+  } = viewSettings;
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
 
@@ -110,21 +121,36 @@ export default function HomePage() {
           <LibraryToolbar
             photoCount={libraryResult.photoCount}
             sort={sort}
+            sortDirection={sortDirection}
             filter={filter}
             curationFilter={curationFilter}
+            textQuery={textQuery}
+            facets={facets}
+            facetCounts={libraryResult.facetCounts}
             thumbSize={thumbSize}
             viewMode={viewMode}
             onSortChange={(next) => updateViewSettings({ sort: next })}
+            onSortDirectionChange={(next) => updateViewSettings({ sortDirection: next })}
             onFilterChange={(next) => updateViewSettings({ filter: next })}
             onCurationFilterChange={(next) =>
               updateViewSettings({ curationFilter: next })
             }
+            onTextQueryChange={(next) => updateViewSettings({ textQuery: next })}
+            onFacetsChange={(next) => updateViewSettings({ facets: next })}
             onThumbSizeChange={(next) =>
               updateViewSettings({ thumbSize: next })
             }
             onViewModeChange={(next) =>
               updateViewSettings({ viewMode: next })
             }
+            autoAdvance={autoAdvance}
+            onAutoAdvanceChange={(next) => updateViewSettings({ autoAdvance: next })}
+            onCompare={() => {
+              const [candidateId, selectId] = selectedEntryIds;
+              if (candidateId && selectId) {
+                router.push(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
+              }
+            }}
             onExport={() => setExportEntryIds(selectedEntryIds)}
           />
 
@@ -195,7 +221,16 @@ export default function HomePage() {
                     {importError}
                   </div>
                 ) : null}
-                {viewMode === "dynamic" ? (
+                {catalogView.type === "duplicates" ? (
+                  <DuplicateWorkspace />
+                ) : visibleEntries.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                    <p className="text-sm text-lr-text-muted">No photos match this view.</p>
+                    <p className="max-w-sm text-xs text-lr-text-faint">
+                      {textQuery ? `Nothing matched “${textQuery}”. Clear search or adjust filters.` : "Adjust the active filters or choose another collection."}
+                    </p>
+                  </div>
+                ) : viewMode === "dynamic" ? (
                   <DynamicPhotoGrid
                     entries={visibleEntries}
                     rowHeight={thumbSize}
@@ -364,6 +399,7 @@ function LibraryCurationBar({
                 key={label}
                 type="button"
                 title={`${label} label`}
+                aria-label={`${label} color label`}
                 onClick={() =>
                   onApply(selectedEntryIds, {
                     colorLabel:

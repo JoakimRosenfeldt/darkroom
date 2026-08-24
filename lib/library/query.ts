@@ -17,6 +17,7 @@ export interface NumericFacetRange {
 }
 
 export type EditedFacetValue = "edited" | "unedited";
+export type KeywordFacetMode = "exact" | "descendants" | "ancestors";
 
 export interface LibraryFacets {
   readonly cameras: readonly string[];
@@ -27,6 +28,7 @@ export interface LibraryFacets {
   readonly edited: readonly EditedFacetValue[];
   readonly albums: readonly string[];
   readonly keywords: readonly string[];
+  readonly keywordMode: KeywordFacetMode;
 }
 
 export interface NumericFacetSummary {
@@ -56,6 +58,7 @@ export const EMPTY_LIBRARY_FACETS: LibraryFacets = {
   edited: [],
   albums: [],
   keywords: [],
+  keywordMode: "exact",
 };
 
 export interface QueryIndexRecord {
@@ -73,6 +76,8 @@ export interface QueryIndexRecord {
   readonly albumIds: ReadonlySet<string>;
   readonly albumNames: readonly string[];
   readonly keywordIds: ReadonlySet<string>;
+  readonly keywordAncestorIds: ReadonlySet<string>;
+  readonly keywordDescendantIds: ReadonlySet<string>;
   readonly keywordPaths: readonly string[];
 }
 
@@ -144,6 +149,37 @@ export function buildQueryIndex(
   }
 
   const keywordById = new Map(workspace.keywords.map((keyword) => [keyword.id, keyword]));
+  const keywordChildren = new Map<string, string[]>();
+  for (const keyword of workspace.keywords) {
+    if (keyword.parentId === null) continue;
+    const children = keywordChildren.get(keyword.parentId) ?? [];
+    children.push(keyword.id);
+    keywordChildren.set(keyword.parentId, children);
+  }
+  function ancestorIds(keywordId: string): string[] {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    let current: string | null = keywordId;
+    while (current !== null && !seen.has(current)) {
+      seen.add(current);
+      ids.push(current);
+      current = keywordById.get(current)?.parentId ?? null;
+    }
+    return ids;
+  }
+  function descendantIds(keywordId: string): string[] {
+    const ids: string[] = [];
+    const pending = [keywordId];
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current || seen.has(current)) continue;
+      seen.add(current);
+      ids.push(current);
+      pending.push(...(keywordChildren.get(current) ?? []));
+    }
+    return ids;
+  }
   const records = new Map<string, QueryIndexRecord>();
   for (const entry of entries) {
     const analysis = workspace.analysisByEntryId[entry.id];
@@ -155,6 +191,8 @@ export function buildQueryIndex(
       .map((id) => albumNameById.get(id))
       .filter((name): name is string => name !== undefined);
     const keywordIds = new Set(workspace.entryKeywordIds[entry.id] ?? []);
+    const keywordAncestorIds = new Set([...keywordIds].flatMap(ancestorIds));
+    const keywordDescendantIds = new Set([...keywordIds].flatMap(descendantIds));
     const keywords = [...keywordIds]
       .map((id) => keywordById.get(id))
       .filter((keyword): keyword is Keyword => keyword !== undefined);
@@ -186,6 +224,8 @@ export function buildQueryIndex(
       albumIds,
       albumNames,
       keywordIds,
+      keywordAncestorIds,
+      keywordDescendantIds,
       keywordPaths,
     });
   }
@@ -238,7 +278,12 @@ export function matchesFacets(
   if (
     excludedFacet !== "keywords" &&
     facets.keywords.length > 0 &&
-    !facets.keywords.some((keywordId) => record.keywordIds.has(keywordId))
+    !facets.keywords.some((keywordId) => {
+      if (keywordId === UNKNOWN_FACET_VALUE) return record.keywordIds.size === 0;
+      if (facets.keywordMode === "descendants") return record.keywordAncestorIds.has(keywordId);
+      if (facets.keywordMode === "ancestors") return record.keywordDescendantIds.has(keywordId);
+      return record.keywordIds.has(keywordId);
+    })
   ) return false;
   return true;
 }

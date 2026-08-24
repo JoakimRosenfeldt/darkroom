@@ -4,6 +4,7 @@ import {
   activateCatalog,
   addCatalogRoot as addCatalogRootSession,
   bootstrapCatalog,
+  backupCatalogAdmin,
   cancelCatalogScan,
   clearSessionCatalog,
   closeActiveCatalog,
@@ -48,14 +49,22 @@ import { pruneAlbumsForEntries } from "@/lib/library/folders";
 import {
   createLibraryWorkspaceState,
   entryAnalysisCacheSignature,
+  type CollectionNode,
+  type SmartRuleGroup,
   type LibraryWorkspaceState,
 } from "@/lib/library/model";
 import type { MetadataAnalysisProgress } from "@/lib/library/metadata-analysis";
+import type { ExactDuplicateTrashResult } from "@/lib/library/duplicate-actions";
 import { reconcileSelectionToResult } from "@/lib/library/result";
+import {
+  getVisibleLibraryResult,
+  readAutoAdvancePreference,
+} from "@/lib/library/result-session";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDefaultDevelopDocument } from "@/lib/develop/document";
+import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import { setDevelopMetadataWriter, useDevelopStore } from "@/stores/develop-store";
 
 const fsDebug = (...args: unknown[]) => console.log("[darkroom:fs]", ...args);
@@ -83,7 +92,10 @@ export type CatalogView =
   | { type: "all" }
   | { type: "folder"; path: string | null }
   | { type: "album"; albumId: string }
-  | { type: "archive" };
+  | { type: "smart"; collectionId: string }
+  | { type: "quick" }
+  | { type: "archive" }
+  | { type: "duplicates" };
 
 interface LibraryStore {
   catalogId: CatalogId | null;
@@ -140,7 +152,19 @@ interface LibraryStore {
     patch: Pick<EntryMetadata, "pick" | "rating" | "colorLabel">,
   ) => void;
   setCatalogView: (view: CatalogView) => void;
-  createAlbum: (name: string) => string;
+  createAlbum: (name: string, parentId?: string | null) => string;
+  createCollectionSet: (name: string, parentId?: string | null) => string;
+  createSmartAlbum: (
+    name: string,
+    rule: SmartRuleGroup,
+    parentId?: string | null,
+  ) => string;
+  updateSmartAlbumRule: (collectionId: string, rule: SmartRuleGroup) => void;
+  duplicateSmartAlbum: (collectionId: string) => string;
+  renameCollection: (collectionId: string, name: string) => void;
+  moveCollection: (collectionId: string, parentId: string | null) => void;
+  reorderCollection: (collectionId: string, direction: -1 | 1) => void;
+  deleteCollection: (collectionId: string, deleteDescendants?: boolean) => void;
   renameAlbum: (albumId: string, name: string) => void;
   deleteAlbum: (albumId: string) => void;
   addEntriesToAlbum: (albumId: string, entryIds: string[]) => void;
@@ -148,6 +172,31 @@ interface LibraryStore {
   removeEntriesFromAllAlbums: (entryIds: string[]) => void;
   archiveEntries: (entryIds: string[]) => void;
   restoreEntries: (entryIds: string[]) => void;
+  toggleQuickEntries: (entryIds: string[]) => void;
+  clearQuickCollection: () => void;
+  setTargetAlbum: (albumId: string | null) => void;
+  addEntriesToTarget: (entryIds: string[]) => void;
+  createKeyword: (name: string, parentId?: string | null) => string;
+  renameKeyword: (keywordId: string, name: string) => void;
+  moveKeyword: (keywordId: string, parentId: string | null) => void;
+  mergeKeyword: (sourceId: string, targetId: string) => void;
+  deleteKeyword: (keywordId: string, deleteSubtree?: boolean) => void;
+  assignKeywordToEntries: (keywordId: string, entryIds: string[]) => void;
+  removeKeywordFromEntries: (keywordId: string, entryIds: string[]) => void;
+  hydrateEntryKeywords: (
+    entryId: string,
+    flat: readonly string[],
+    hierarchical: readonly string[],
+  ) => void;
+  stackEntries: (entryIds: string[]) => string;
+  addEntriesToStack: (stackId: string, entryIds: string[]) => void;
+  removeEntriesFromStack: (stackId: string, entryIds: string[]) => void;
+  reorderStackEntry: (stackId: string, entryId: string, direction: -1 | 1) => void;
+  unstackEntries: (entryIds: string[]) => void;
+  setStackCover: (stackId: string, entryId: string) => void;
+  excludeEntries: (entryIds: string[]) => void;
+  restoreExcludedEntries: (entryIds: string[]) => void;
+  trashExactDuplicates: (keeperId: string, targetIds: string[]) => Promise<ExactDuplicateTrashResult>;
   deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
   createCatalog: (displayName: string) => Promise<void>;
   addCatalogRoot: () => Promise<void>;
@@ -168,6 +217,7 @@ interface LibraryStore {
 
 let folderOperationGeneration = 0;
 let metadataProgressUnsubscribe: (() => void) | null = null;
+let autoAdvanceGeneration = 0;
 
 const EMPTY_FINGERPRINT_COVERAGE: CatalogV3FingerprintCoverage = {
   total: 0,
@@ -206,6 +256,103 @@ function restoreSelection(
     selectedEntryId: selectedEntryIds.at(-1) ?? null,
     selectionAnchorId: anchorValid ? previousAnchor : selectedEntryIds[0] ?? null,
   };
+}
+
+function nextCollectionOrder(
+  collections: readonly CollectionNode[],
+  parentId: string | null,
+): number {
+  return collections.reduce(
+    (highest, node) => node.parentId === parentId ? Math.max(highest, node.order + 1) : highest,
+    0,
+  );
+}
+
+function descendantCollectionIds(
+  collections: readonly CollectionNode[],
+  collectionId: string,
+): Set<string> {
+  const descendants = new Set<string>();
+  const pending = [collectionId];
+  while (pending.length > 0) {
+    const parentId = pending.pop();
+    if (parentId === undefined) continue;
+    for (const node of collections) {
+      if (node.parentId === parentId && !descendants.has(node.id)) {
+        descendants.add(node.id);
+        pending.push(node.id);
+      }
+    }
+  }
+  return descendants;
+}
+
+function pruneWorkspaceForEntries(
+  workspace: LibraryWorkspaceState,
+  validEntryIds: ReadonlySet<string>,
+): LibraryWorkspaceState {
+  const entryKeywordIds = Object.fromEntries(
+    Object.entries(workspace.entryKeywordIds).filter(([entryId]) => validEntryIds.has(entryId)),
+  );
+  const analysisByEntryId = Object.fromEntries(
+    Object.entries(workspace.analysisByEntryId).filter(([entryId]) => validEntryIds.has(entryId)),
+  );
+  return {
+    ...workspace,
+    quickEntryIds: workspace.quickEntryIds.filter((id) => validEntryIds.has(id)),
+    entryKeywordIds,
+    archiveMemberships: workspace.archiveMemberships.filter((item) => validEntryIds.has(item.entryId)),
+    excludedEntryIds: workspace.excludedEntryIds.filter((id) => validEntryIds.has(id)),
+    analysisByEntryId,
+    stacks: workspace.stacks.flatMap((stack) => {
+      const entryIds = stack.entryIds.filter((id) => validEntryIds.has(id));
+      if (entryIds.length < 2) return [];
+      return [{
+        ...stack,
+        entryIds,
+        coverEntryId: entryIds.includes(stack.coverEntryId) ? stack.coverEntryId : entryIds[0],
+        updatedAt: Date.now(),
+      }];
+    }),
+  };
+}
+
+function keywordPath(
+  keywordId: string,
+  workspace: LibraryWorkspaceState,
+): string {
+  const byId = new Map(workspace.keywords.map((keyword) => [keyword.id, keyword]));
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  let current = byId.get(keywordId);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    parts.unshift(current.name);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return parts.join("|");
+}
+
+function persistKeywordSidecars(
+  entryIds: readonly string[],
+  workspace: LibraryWorkspaceState,
+  entries: readonly LibraryEntry[],
+  set: (partial: Partial<LibraryStore>) => void,
+): void {
+  const keywordById = new Map(workspace.keywords.map((keyword) => [keyword.id, keyword]));
+  for (const entryId of [...new Set(entryIds)]) {
+    const entry = entries.find((item) => item.id === entryId);
+    if (!entry) continue;
+    const assigned = workspace.entryKeywordIds[entryId] ?? [];
+    const flat = assigned.flatMap((id) => {
+      const keyword = keywordById.get(id);
+      return keyword ? [keyword.name, ...keyword.synonyms] : [];
+    });
+    const hierarchical = assigned.map((id) => keywordPath(id, workspace)).filter(Boolean);
+    void writeKeywordSidecar(entry, flat, hierarchical).catch((error: unknown) => {
+      set({ importError: `Keyword sidecar conflict: ${formatPickerError(error)}` });
+    });
+  }
 }
 
 function applyHydratedState(
@@ -288,6 +435,14 @@ function applyLocalMetadata(
   get: () => LibraryStore,
 ): void {
   if (entryIds.length === 0) return;
+  const resultBefore = getVisibleLibraryResult();
+  const visibleBefore = resultBefore.entryIds;
+  const activeEntryId = entryIds.length === 1 ? entryIds[0] ?? null : null;
+  const activeIndex = activeEntryId === null ? -1 : visibleBefore.indexOf(activeEntryId);
+  const shouldAutoAdvance = activeEntryId !== null &&
+    activeIndex >= 0 &&
+    readAutoAdvancePreference() &&
+    (patch.pick !== undefined || patch.rating !== undefined || patch.colorLabel !== undefined);
   const { entryMetadata } = get();
   const updated = { ...entryMetadata };
   const updatedAt = Date.now();
@@ -308,6 +463,31 @@ function applyLocalMetadata(
     );
   }
   scheduleStateSync(set, get);
+  if (shouldAutoAdvance) {
+    const generation = ++autoAdvanceGeneration;
+    const reconcile = (attempt: number) => {
+      if (generation !== autoAdvanceGeneration || get().selectedEntryId !== activeEntryId) return;
+      const resultAfter = getVisibleLibraryResult();
+      if (resultAfter.revision === resultBefore.revision && attempt < 2) {
+        globalThis.setTimeout(() => reconcile(attempt + 1), 0);
+        return;
+      }
+      const currentIds = new Set(resultAfter.entryIds);
+      const nextId = visibleBefore.slice(activeIndex + 1).find((id) => currentIds.has(id)) ??
+        (currentIds.has(activeEntryId) ? activeEntryId : undefined) ??
+        [...visibleBefore.slice(0, activeIndex)].reverse().find((id) => currentIds.has(id));
+      if (nextId === undefined) {
+        set({ selectedEntryId: null, selectedEntryIds: [], selectionAnchorId: null });
+        return;
+      }
+      set({
+        selectedEntryId: nextId,
+        selectedEntryIds: [nextId],
+        selectionAnchorId: nextId,
+      });
+    };
+    globalThis.setTimeout(() => reconcile(0), 0);
+  }
 }
 
 function receiveMetadataProgress(
@@ -617,9 +797,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   setCatalogView: (view) => set({ catalogView: view }),
 
-  createAlbum: (name) => {
+  createAlbum: (name, parentId = null) => {
     const trimmed = name.trim();
     if (!trimmed) return "";
+    const workspace = get().libraryWorkspace;
+    if (
+      parentId !== null &&
+      !workspace.collections.some((node) => node.kind === "set" && node.id === parentId)
+    ) return "";
     const now = Date.now();
     const album: Album = {
       id: crypto.randomUUID(),
@@ -628,88 +813,837 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
-    set({ albums: [...get().albums, album], catalogView: { type: "album", albumId: album.id } });
+    const collection: CollectionNode = {
+      kind: "album",
+      id: album.id,
+      name: album.name,
+      parentId,
+      order: nextCollectionOrder(workspace.collections, parentId),
+      createdAt: now,
+      updatedAt: now,
+    };
+    set({
+      albums: [...get().albums, album],
+      libraryWorkspace: {
+        ...workspace,
+        collections: [...workspace.collections, collection],
+      },
+      catalogView: { type: "album", albumId: album.id },
+    });
     scheduleStateSync(set, get);
     return album.id;
+  },
+
+  createCollectionSet: (name, parentId = null) => {
+    const trimmed = name.trim();
+    if (!trimmed) return "";
+    const workspace = get().libraryWorkspace;
+    if (
+      parentId !== null &&
+      !workspace.collections.some((node) => node.kind === "set" && node.id === parentId)
+    ) return "";
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        collections: [...workspace.collections, {
+          kind: "set",
+          id,
+          name: trimmed,
+          parentId,
+          order: nextCollectionOrder(workspace.collections, parentId),
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+    });
+    scheduleStateSync(set, get);
+    return id;
+  },
+
+  createSmartAlbum: (name, rule, parentId = null) => {
+    const trimmed = name.trim();
+    if (!trimmed) return "";
+    const workspace = get().libraryWorkspace;
+    if (
+      parentId !== null &&
+      !workspace.collections.some((node) => node.kind === "set" && node.id === parentId)
+    ) return "";
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        collections: [...workspace.collections, {
+          kind: "smart",
+          id,
+          name: trimmed,
+          parentId,
+          order: nextCollectionOrder(workspace.collections, parentId),
+          rule,
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+      catalogView: { type: "smart", collectionId: id },
+    });
+    scheduleStateSync(set, get);
+    return id;
+  },
+
+  updateSmartAlbumRule: (collectionId, rule) => {
+    const workspace = get().libraryWorkspace;
+    let changed = false;
+    const collections = workspace.collections.map((node) => {
+      if (node.kind !== "smart" || node.id !== collectionId) return node;
+      changed = true;
+      return { ...node, rule, updatedAt: Date.now() };
+    });
+    if (!changed) return;
+    set({ libraryWorkspace: { ...workspace, collections } });
+    scheduleStateSync(set, get);
+  },
+
+  duplicateSmartAlbum: (collectionId) => {
+    const workspace = get().libraryWorkspace;
+    const source = workspace.collections.find(
+      (node) => node.kind === "smart" && node.id === collectionId,
+    );
+    if (!source || source.kind !== "smart") return "";
+    return get().createSmartAlbum(
+      `${source.name} copy`,
+      structuredClone(source.rule),
+      source.parentId,
+    );
+  },
+
+  renameCollection: (collectionId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const workspace = get().libraryWorkspace;
+    const now = Date.now();
+    set({
+      albums: get().albums.map((album) => album.id === collectionId
+        ? { ...album, name: trimmed, updatedAt: now }
+        : album),
+      libraryWorkspace: {
+        ...workspace,
+        collections: workspace.collections.map((node) => node.id === collectionId
+          ? { ...node, name: trimmed, updatedAt: now }
+          : node),
+      },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  moveCollection: (collectionId, parentId) => {
+    const workspace = get().libraryWorkspace;
+    const node = workspace.collections.find((item) => item.id === collectionId);
+    if (!node || node.parentId === parentId) return;
+    if (
+      parentId !== null &&
+      !workspace.collections.some((item) => item.kind === "set" && item.id === parentId)
+    ) return;
+    if (parentId === collectionId || descendantCollectionIds(workspace.collections, collectionId).has(parentId ?? "")) {
+      return;
+    }
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        collections: workspace.collections.map((item) => item.id === collectionId
+          ? {
+              ...item,
+              parentId,
+              order: nextCollectionOrder(workspace.collections, parentId),
+              updatedAt: Date.now(),
+            }
+          : item),
+      },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  reorderCollection: (collectionId, direction) => {
+    const workspace = get().libraryWorkspace;
+    const node = workspace.collections.find((item) => item.id === collectionId);
+    if (!node) return;
+    const siblings = workspace.collections
+      .filter((item) => item.parentId === node.parentId)
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+    const index = siblings.findIndex((item) => item.id === collectionId);
+    const neighbor = siblings[index + direction];
+    if (!neighbor) return;
+    const collections = workspace.collections.map((item) => {
+      if (item.id === node.id) return { ...item, order: neighbor.order, updatedAt: Date.now() };
+      if (item.id === neighbor.id) return { ...item, order: node.order, updatedAt: Date.now() };
+      return item;
+    });
+    set({ libraryWorkspace: { ...workspace, collections } });
+    scheduleStateSync(set, get);
+  },
+
+  deleteCollection: (collectionId, deleteDescendants = false) => {
+    const workspace = get().libraryWorkspace;
+    const node = workspace.collections.find((item) => item.id === collectionId);
+    if (!node) return;
+    if (node.kind === "album") {
+      get().deleteAlbum(collectionId);
+      return;
+    }
+    const descendants = descendantCollectionIds(workspace.collections, collectionId);
+    const removedIds = deleteDescendants
+      ? new Set([collectionId, ...descendants])
+      : new Set([collectionId]);
+    const removedAlbumIds = new Set(
+      workspace.collections
+        .filter((item) => removedIds.has(item.id) && item.kind === "album")
+        .map((item) => item.id),
+    );
+    const collections = workspace.collections
+      .filter((item) => !removedIds.has(item.id))
+      .map((item) => !deleteDescendants && item.parentId === collectionId
+        ? { ...item, parentId: node.parentId, updatedAt: Date.now() }
+        : item);
+    const currentView = get().catalogView;
+    const catalogView = (
+      (currentView.type === "smart" && removedIds.has(currentView.collectionId)) ||
+      (currentView.type === "album" && removedIds.has(currentView.albumId))
+    ) ? { type: "all" as const } : currentView;
+    set({
+      albums: get().albums.filter((album) => !removedAlbumIds.has(album.id)),
+      libraryWorkspace: {
+        ...workspace,
+        collections,
+        targetAlbumId: workspace.targetAlbumId !== null && removedAlbumIds.has(workspace.targetAlbumId)
+          ? null
+          : workspace.targetAlbumId,
+        archiveMemberships: workspace.archiveMemberships.map((snapshot) => ({
+          ...snapshot,
+          albums: snapshot.albums.filter((membership) => !removedAlbumIds.has(membership.albumId)),
+        })),
+      },
+      catalogView,
+    });
+    scheduleStateSync(set, get);
   },
 
   renameAlbum: (albumId, name) => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    const now = Date.now();
+    const workspace = get().libraryWorkspace;
     set({
       albums: get().albums.map((album) => album.id === albumId
-        ? { ...album, name: trimmed, updatedAt: Date.now() }
+        ? { ...album, name: trimmed, updatedAt: now }
         : album),
+      libraryWorkspace: {
+        ...workspace,
+        collections: workspace.collections.map((node) => node.id === albumId
+          ? { ...node, name: trimmed, updatedAt: now }
+          : node),
+      },
     });
     scheduleStateSync(set, get);
   },
 
   deleteAlbum: (albumId) => {
     const currentView = get().catalogView;
+    const workspace = get().libraryWorkspace;
     const catalogView = currentView.type === "album" && currentView.albumId === albumId
       ? { type: "all" as const }
       : currentView;
-    set({ albums: get().albums.filter((album) => album.id !== albumId), catalogView });
+    set({
+      albums: get().albums.filter((album) => album.id !== albumId),
+      libraryWorkspace: {
+        ...workspace,
+        collections: workspace.collections.filter((node) => node.id !== albumId),
+        targetAlbumId: workspace.targetAlbumId === albumId ? null : workspace.targetAlbumId,
+        archiveMemberships: workspace.archiveMemberships.map((snapshot) => ({
+          ...snapshot,
+          albums: snapshot.albums.filter((membership) => membership.albumId !== albumId),
+        })),
+      },
+      catalogView,
+    });
     scheduleStateSync(set, get);
   },
 
   addEntriesToAlbum: (albumId, entryIds) => {
     if (entryIds.length === 0) return;
-    const entryIdSet = new Set(entryIds);
-    set({
-      albums: get().albums.map((album) => album.id !== albumId
-        ? album
-        : { ...album, entryIds: [...new Set([...album.entryIds, ...entryIdSet])], updatedAt: Date.now() }),
+    const validIds = new Set<string>(get().entries.map((entry) => entry.id));
+    let changed = false;
+    const albums = get().albums.map((album) => {
+      if (album.id !== albumId) return album;
+      const existing = new Set(album.entryIds);
+      const added = entryIds.filter((id) => validIds.has(id) && !existing.has(id));
+      if (added.length === 0) return album;
+      changed = true;
+      return { ...album, entryIds: [...album.entryIds, ...added], updatedAt: Date.now() };
     });
+    if (!changed) return;
+    set({ albums });
     scheduleStateSync(set, get);
   },
 
   removeEntriesFromAlbum: (albumId, entryIds) => {
     if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    set({
-      albums: get().albums.map((album) => album.id !== albumId
-        ? album
-        : { ...album, entryIds: album.entryIds.filter((id) => !removeSet.has(id)), updatedAt: Date.now() }),
+    let changed = false;
+    const albums = get().albums.map((album) => {
+      if (album.id !== albumId || !album.entryIds.some((id) => removeSet.has(id))) return album;
+      changed = true;
+      return {
+        ...album,
+        entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
+        updatedAt: Date.now(),
+      };
     });
+    if (!changed) return;
+    set({ albums });
     scheduleStateSync(set, get);
   },
 
   removeEntriesFromAllAlbums: (entryIds) => {
     if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    set({ albums: get().albums.map((album) => ({
-      ...album,
-      entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
-      updatedAt: Date.now(),
-    })) });
+    let changed = false;
+    const albums = get().albums.map((album) => {
+      if (!album.entryIds.some((id) => removeSet.has(id))) return album;
+      changed = true;
+      return {
+        ...album,
+        entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
+        updatedAt: Date.now(),
+      };
+    });
+    if (!changed) return;
+    set({ albums });
     scheduleStateSync(set, get);
   },
 
   archiveEntries: (entryIds) => {
     if (entryIds.length === 0) return;
-    const removeSet = new Set(entryIds);
-    const archivedEntryIds = [...new Set([...get().archivedEntryIds, ...entryIds])];
-    const albums = get().albums.map((album) => ({
+    const current = get();
+    const validIds = new Set<string>(current.entries.map((entry) => entry.id));
+    const newlyArchived = entryIds.filter(
+      (id) => validIds.has(id) && !current.archivedEntryIds.includes(id),
+    );
+    if (newlyArchived.length === 0) return;
+    const removeSet = new Set(newlyArchived);
+    const archivedEntryIds = [...current.archivedEntryIds, ...newlyArchived];
+    const snapshots = newlyArchived.map((entryId) => ({
+      entryId,
+      albums: current.albums.flatMap((album) => {
+        const index = album.entryIds.indexOf(entryId);
+        return index >= 0 ? [{ albumId: album.id, index }] : [];
+      }),
+    }));
+    const albums = current.albums.map((album) => ({
       ...album,
       entryIds: album.entryIds.filter((id) => !removeSet.has(id)),
-      updatedAt: Date.now(),
+      updatedAt: album.entryIds.some((id) => removeSet.has(id)) ? Date.now() : album.updatedAt,
     }));
-    const activeEntries = filterArchivedEntries(get().entries, archivedEntryIds);
-    set({ archivedEntryIds, albums, ...restoreSelection(activeEntries, get().selectedEntryIds, get().selectionAnchorId) });
+    const activeEntries = filterArchivedEntries(current.entries, archivedEntryIds);
+    set({
+      archivedEntryIds,
+      albums,
+      libraryWorkspace: {
+        ...current.libraryWorkspace,
+        archiveMemberships: [
+          ...current.libraryWorkspace.archiveMemberships.filter((item) => !removeSet.has(item.entryId)),
+          ...snapshots,
+        ],
+      },
+      ...restoreSelection(activeEntries, current.selectedEntryIds, current.selectionAnchorId),
+    });
     scheduleStateSync(set, get);
   },
 
   restoreEntries: (entryIds) => {
     if (entryIds.length === 0) return;
     const removeSet = new Set(entryIds);
-    const archivedEntryIds = get().archivedEntryIds.filter((id) => !removeSet.has(id));
-    const { entries, catalogView } = get();
+    const current = get();
+    const restoredIds = current.archivedEntryIds.filter((id) => removeSet.has(id));
+    if (restoredIds.length === 0) return;
+    const archivedEntryIds = current.archivedEntryIds.filter((id) => !removeSet.has(id));
+    const snapshots = current.libraryWorkspace.archiveMemberships
+      .filter((item) => removeSet.has(item.entryId));
+    const albums = current.albums.map((album) => {
+      const insertions = snapshots
+        .flatMap((snapshot) => snapshot.albums
+          .filter((membership) => membership.albumId === album.id)
+          .map((membership) => ({ entryId: snapshot.entryId, index: membership.index })))
+        .filter((item) => !album.entryIds.includes(item.entryId))
+        .sort((left, right) => left.index - right.index);
+      if (insertions.length === 0) return album;
+      const nextIds = [...album.entryIds];
+      for (const item of insertions) {
+        nextIds.splice(Math.min(item.index, nextIds.length), 0, item.entryId);
+      }
+      return { ...album, entryIds: nextIds, updatedAt: Date.now() };
+    });
+    const { entries, catalogView } = current;
     const activeEntries = catalogView.type === "archive"
       ? filterOnlyArchivedEntries(entries, archivedEntryIds)
       : filterArchivedEntries(entries, archivedEntryIds);
-    set({ archivedEntryIds, ...restoreSelection(activeEntries, get().selectedEntryIds.filter((id) => !removeSet.has(id)), get().selectionAnchorId) });
+    set({
+      archivedEntryIds,
+      albums,
+      libraryWorkspace: {
+        ...current.libraryWorkspace,
+        archiveMemberships: current.libraryWorkspace.archiveMemberships
+          .filter((item) => !removeSet.has(item.entryId)),
+      },
+      ...restoreSelection(
+        activeEntries,
+        current.selectedEntryIds.filter((id) => !removeSet.has(id)),
+        current.selectionAnchorId,
+      ),
+    });
     scheduleStateSync(set, get);
+  },
+
+  toggleQuickEntries: (entryIds) => {
+    if (entryIds.length === 0) return;
+    const current = get();
+    const valid = new Set<string>(current.entries.map((entry) => entry.id));
+    const uniqueIds = [...new Set(entryIds)].filter((id) => valid.has(id));
+    if (uniqueIds.length === 0) return;
+    const quick = new Set(current.libraryWorkspace.quickEntryIds);
+    const remove = uniqueIds.every((id) => quick.has(id));
+    const quickEntryIds = remove
+      ? current.libraryWorkspace.quickEntryIds.filter((id) => !uniqueIds.includes(id))
+      : [...current.libraryWorkspace.quickEntryIds, ...uniqueIds.filter((id) => !quick.has(id))];
+    set({
+      libraryWorkspace: { ...current.libraryWorkspace, quickEntryIds },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  clearQuickCollection: () => {
+    const workspace = get().libraryWorkspace;
+    if (workspace.quickEntryIds.length === 0) return;
+    set({ libraryWorkspace: { ...workspace, quickEntryIds: [] } });
+    scheduleStateSync(set, get);
+  },
+
+  setTargetAlbum: (albumId) => {
+    const current = get();
+    const targetAlbumId = albumId !== null && current.albums.some((album) => album.id === albumId)
+      ? albumId
+      : null;
+    if (current.libraryWorkspace.targetAlbumId === targetAlbumId) return;
+    set({ libraryWorkspace: { ...current.libraryWorkspace, targetAlbumId } });
+    scheduleStateSync(set, get);
+  },
+
+  addEntriesToTarget: (entryIds) => {
+    const targetAlbumId = get().libraryWorkspace.targetAlbumId;
+    if (targetAlbumId !== null) get().addEntriesToAlbum(targetAlbumId, entryIds);
+  },
+
+  createKeyword: (name, parentId = null) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.includes("|")) return "";
+    const workspace = get().libraryWorkspace;
+    if (parentId !== null && !workspace.keywords.some((keyword) => keyword.id === parentId)) {
+      return "";
+    }
+    const siblingExists = workspace.keywords.some((keyword) =>
+      keyword.parentId === parentId && keyword.name.localeCompare(trimmed, undefined, { sensitivity: "base" }) === 0
+    );
+    if (siblingExists) return "";
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        keywords: [...workspace.keywords, {
+          id,
+          parentId,
+          name: trimmed,
+          synonyms: [],
+          export: true,
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+    });
+    scheduleStateSync(set, get);
+    return id;
+  },
+
+  renameKeyword: (keywordId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.includes("|")) return;
+    const workspace = get().libraryWorkspace;
+    const keyword = workspace.keywords.find((item) => item.id === keywordId);
+    if (!keyword || workspace.keywords.some((item) =>
+      item.id !== keywordId &&
+      item.parentId === keyword.parentId &&
+      item.name.localeCompare(trimmed, undefined, { sensitivity: "base" }) === 0
+    )) return;
+    const nextWorkspace = {
+      ...workspace,
+      keywords: workspace.keywords.map((item) => item.id === keywordId
+        ? { ...item, name: trimmed, updatedAt: Date.now() }
+        : item),
+    };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(Object.keys(workspace.entryKeywordIds), nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  moveKeyword: (keywordId, parentId) => {
+    const workspace = get().libraryWorkspace;
+    const keyword = workspace.keywords.find((item) => item.id === keywordId);
+    if (!keyword || keyword.parentId === parentId) return;
+    if (parentId !== null && !workspace.keywords.some((item) => item.id === parentId)) return;
+    const descendants = new Set<string>();
+    const pending = [keywordId];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      for (const child of workspace.keywords.filter((item) => item.parentId === current)) {
+        if (!descendants.has(child.id)) {
+          descendants.add(child.id);
+          pending.push(child.id);
+        }
+      }
+    }
+    if (parentId === keywordId || (parentId !== null && descendants.has(parentId))) return;
+    if (workspace.keywords.some((item) =>
+      item.id !== keywordId &&
+      item.parentId === parentId &&
+      item.name.localeCompare(keyword.name, undefined, { sensitivity: "base" }) === 0
+    )) return;
+    const nextWorkspace = {
+      ...workspace,
+      keywords: workspace.keywords.map((item) => item.id === keywordId
+        ? { ...item, parentId, updatedAt: Date.now() }
+        : item),
+    };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(Object.keys(workspace.entryKeywordIds), nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  mergeKeyword: (sourceId, targetId) => {
+    const workspace = get().libraryWorkspace;
+    if (sourceId === targetId || !workspace.keywords.some((item) => item.id === sourceId) || !workspace.keywords.some((item) => item.id === targetId)) return;
+    const entryKeywordIds = Object.fromEntries(
+      Object.entries(workspace.entryKeywordIds).map(([entryId, ids]) => [
+        entryId,
+        [...new Set(ids.map((id) => id === sourceId ? targetId : id))],
+      ]),
+    );
+    const nextWorkspace = {
+      ...workspace,
+      keywords: workspace.keywords
+        .filter((item) => item.id !== sourceId)
+        .map((item) => item.parentId === sourceId
+          ? { ...item, parentId: targetId, updatedAt: Date.now() }
+          : item),
+      entryKeywordIds,
+    };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(Object.keys(entryKeywordIds), nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  deleteKeyword: (keywordId, deleteSubtree = false) => {
+    const workspace = get().libraryWorkspace;
+    const keyword = workspace.keywords.find((item) => item.id === keywordId);
+    if (!keyword) return;
+    const removedIds = new Set([keywordId]);
+    if (deleteSubtree) {
+      const pending = [keywordId];
+      while (pending.length > 0) {
+        const current = pending.pop();
+        for (const child of workspace.keywords.filter((item) => item.parentId === current)) {
+          if (removedIds.has(child.id)) continue;
+          removedIds.add(child.id);
+          pending.push(child.id);
+        }
+      }
+    }
+    const entryKeywordIds = Object.fromEntries(
+      Object.entries(workspace.entryKeywordIds).map(([entryId, ids]) => [
+        entryId,
+        ids.filter((id) => !removedIds.has(id)),
+      ]),
+    );
+    const nextWorkspace = {
+      ...workspace,
+      keywords: workspace.keywords
+        .filter((item) => !removedIds.has(item.id))
+        .map((item) => item.parentId === keywordId
+          ? { ...item, parentId: keyword.parentId, updatedAt: Date.now() }
+          : item),
+      entryKeywordIds,
+    };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(Object.keys(entryKeywordIds), nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  assignKeywordToEntries: (keywordId, entryIds) => {
+    const workspace = get().libraryWorkspace;
+    if (!workspace.keywords.some((keyword) => keyword.id === keywordId)) return;
+    const valid = new Set<string>(get().entries.map((entry) => entry.id));
+    const entryKeywordIds = { ...workspace.entryKeywordIds };
+    let changed = false;
+    for (const entryId of entryIds) {
+      if (!valid.has(entryId)) continue;
+      const ids = entryKeywordIds[entryId] ?? [];
+      if (ids.includes(keywordId)) continue;
+      entryKeywordIds[entryId] = [...ids, keywordId];
+      changed = true;
+    }
+    if (!changed) return;
+    const nextWorkspace = { ...workspace, entryKeywordIds };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(entryIds, nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  removeKeywordFromEntries: (keywordId, entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const entryKeywordIds = { ...workspace.entryKeywordIds };
+    let changed = false;
+    for (const entryId of entryIds) {
+      const ids = entryKeywordIds[entryId] ?? [];
+      if (!ids.includes(keywordId)) continue;
+      entryKeywordIds[entryId] = ids.filter((id) => id !== keywordId);
+      changed = true;
+    }
+    if (!changed) return;
+    const nextWorkspace = { ...workspace, entryKeywordIds };
+    set({ libraryWorkspace: nextWorkspace });
+    persistKeywordSidecars(entryIds, nextWorkspace, get().entries, set);
+    scheduleStateSync(set, get);
+  },
+
+  hydrateEntryKeywords: (entryId, flat, hierarchical) => {
+    const workspace = get().libraryWorkspace;
+    const keywords = [...workspace.keywords];
+    const assigned = new Set(workspace.entryKeywordIds[entryId] ?? []);
+    const ensurePath = (parts: readonly string[]): string | null => {
+      let parentId: string | null = null;
+      let leafId: string | null = null;
+      for (const rawPart of parts) {
+        const name = rawPart.trim();
+        if (!name) continue;
+        let keyword = keywords.find((item) =>
+          item.parentId === parentId && item.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+        );
+        if (!keyword) {
+          const now = Date.now();
+          keyword = {
+            id: crypto.randomUUID(),
+            parentId,
+            name,
+            synonyms: [],
+            export: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+          keywords.push(keyword);
+        }
+        parentId = keyword.id;
+        leafId = keyword.id;
+      }
+      return leafId;
+    };
+    for (const path of hierarchical) {
+      const id = ensurePath(path.split("|").filter(Boolean));
+      if (id) assigned.add(id);
+    }
+    for (const name of flat) {
+      const alreadyRepresented = keywords.some((keyword) =>
+        assigned.has(keyword.id) && keyword.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+      );
+      if (!alreadyRepresented) {
+        const id = ensurePath([name]);
+        if (id) assigned.add(id);
+      }
+    }
+    const nextIds = [...assigned];
+    if (
+      keywords.length === workspace.keywords.length &&
+      nextIds.length === (workspace.entryKeywordIds[entryId]?.length ?? 0)
+    ) return;
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        keywords,
+        entryKeywordIds: { ...workspace.entryKeywordIds, [entryId]: nextIds },
+      },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  stackEntries: (entryIds) => {
+    const current = get();
+    const valid = new Set<string>(current.entries.map((entry) => entry.id));
+    const uniqueIds = [...new Set(entryIds)].filter((id) => valid.has(id));
+    if (uniqueIds.length < 2) return "";
+    const occupied = new Set(current.libraryWorkspace.stacks.flatMap((stack) => stack.entryIds));
+    if (uniqueIds.some((id) => occupied.has(id))) return "";
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    set({
+      libraryWorkspace: {
+        ...current.libraryWorkspace,
+        stacks: [...current.libraryWorkspace.stacks, {
+          id,
+          entryIds: uniqueIds,
+          coverEntryId: uniqueIds[0],
+          reason: null,
+          createdAt: now,
+          updatedAt: now,
+        }],
+      },
+    });
+    scheduleStateSync(set, get);
+    return id;
+  },
+
+  addEntriesToStack: (stackId, entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const valid = new Set<string>(get().entries.map((entry) => entry.id));
+    const occupiedElsewhere = new Set(
+      workspace.stacks.filter((stack) => stack.id !== stackId).flatMap((stack) => stack.entryIds),
+    );
+    let changed = false;
+    const stacks = workspace.stacks.map((stack) => {
+      if (stack.id !== stackId) return stack;
+      const existing = new Set(stack.entryIds);
+      const added = entryIds.filter((id) => valid.has(id) && !existing.has(id) && !occupiedElsewhere.has(id));
+      if (added.length === 0) return stack;
+      changed = true;
+      return { ...stack, entryIds: [...stack.entryIds, ...added], updatedAt: Date.now() };
+    });
+    if (!changed) return;
+    set({ libraryWorkspace: { ...workspace, stacks } });
+    scheduleStateSync(set, get);
+  },
+
+  removeEntriesFromStack: (stackId, entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const removed = new Set(entryIds);
+    let changed = false;
+    const stacks = workspace.stacks.flatMap((stack) => {
+      if (stack.id !== stackId || !stack.entryIds.some((id) => removed.has(id))) return [stack];
+      changed = true;
+      const nextIds = stack.entryIds.filter((id) => !removed.has(id));
+      if (nextIds.length < 2) return [];
+      return [{
+        ...stack,
+        entryIds: nextIds,
+        coverEntryId: nextIds.includes(stack.coverEntryId) ? stack.coverEntryId : nextIds[0],
+        updatedAt: Date.now(),
+      }];
+    });
+    if (!changed) return;
+    set({ libraryWorkspace: { ...workspace, stacks } });
+    scheduleStateSync(set, get);
+  },
+
+  reorderStackEntry: (stackId, entryId, direction) => {
+    const workspace = get().libraryWorkspace;
+    let changed = false;
+    const stacks = workspace.stacks.map((stack) => {
+      if (stack.id !== stackId) return stack;
+      const index = stack.entryIds.indexOf(entryId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= stack.entryIds.length) return stack;
+      const entryIds = [...stack.entryIds];
+      [entryIds[index], entryIds[nextIndex]] = [entryIds[nextIndex]!, entryIds[index]!];
+      changed = true;
+      return { ...stack, entryIds, updatedAt: Date.now() };
+    });
+    if (!changed) return;
+    set({ libraryWorkspace: { ...workspace, stacks } });
+    scheduleStateSync(set, get);
+  },
+
+  unstackEntries: (entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const targets = new Set(entryIds);
+    const stacks = workspace.stacks.filter((stack) =>
+      !stack.entryIds.some((entryId) => targets.has(entryId))
+    );
+    if (stacks.length === workspace.stacks.length) return;
+    set({ libraryWorkspace: { ...workspace, stacks } });
+    scheduleStateSync(set, get);
+  },
+
+  setStackCover: (stackId, entryId) => {
+    const workspace = get().libraryWorkspace;
+    let changed = false;
+    const stacks = workspace.stacks.map((stack) => {
+      if (stack.id !== stackId || !stack.entryIds.includes(entryId) || stack.coverEntryId === entryId) {
+        return stack;
+      }
+      changed = true;
+      return { ...stack, coverEntryId: entryId, updatedAt: Date.now() };
+    });
+    if (!changed) return;
+    set({ libraryWorkspace: { ...workspace, stacks } });
+    scheduleStateSync(set, get);
+  },
+
+  excludeEntries: (entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const valid = new Set<string>(get().entries.map((entry) => entry.id));
+    const excluded = new Set(workspace.excludedEntryIds);
+    const added = entryIds.filter((id) => valid.has(id) && !excluded.has(id));
+    if (added.length === 0) return;
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        excludedEntryIds: [...workspace.excludedEntryIds, ...added],
+      },
+    });
+    scheduleStateSync(set, get);
+  },
+
+  restoreExcludedEntries: (entryIds) => {
+    const workspace = get().libraryWorkspace;
+    const restored = new Set(entryIds);
+    const excludedEntryIds = workspace.excludedEntryIds.filter((id) => !restored.has(id));
+    if (excludedEntryIds.length === workspace.excludedEntryIds.length) return;
+    set({ libraryWorkspace: { ...workspace, excludedEntryIds } });
+    scheduleStateSync(set, get);
+  },
+
+  trashExactDuplicates: async (keeperId, targetIds) => {
+    const current = get();
+    const keeper = current.entries.find((entry) => entry.id === keeperId);
+    if (!keeper || current.catalogId === null || current.sessionId === null) {
+      throw new Error("The duplicate keeper is no longer available.");
+    }
+    const targets = current.entries
+      .filter((entry) => entry.id !== keeperId && targetIds.includes(entry.id))
+      .map((entry) => entry.id);
+    if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
+    await backupCatalogAdmin();
+    const result = await getDarkroomAPI().catalogTrashExactDuplicates({
+      catalogId: current.catalogId,
+      sessionId: current.sessionId,
+      keeperId: keeper.id,
+      targetIds: targets,
+    });
+    const trashed = result.items.filter((item) => item.trashed).map((item) => item.entryId);
+    if (trashed.length > 0) get().excludeEntries(trashed);
+    const failures = result.items.filter((item) => !item.trashed);
+    if (failures.length > 0) {
+      set({
+        importError: `${failures.length} duplicate${failures.length === 1 ? "" : "s"} could not be trashed: ${failures[0]?.error ?? "Unknown error"}`,
+      });
+    }
+    return result;
   },
 
   deleteEntriesFromDisk: async (entryIds) => {
@@ -728,10 +1662,23 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const entryMetadata = pruneMetadataForEntries(get().entryMetadata, remainingIds);
     const albums = pruneAlbumsForEntries(get().albums, remainingIds);
     const archivedEntryIds = get().archivedEntryIds.filter((id) => remainingIds.has(id));
+    const libraryWorkspace = pruneWorkspaceForEntries(get().libraryWorkspace, remainingIds);
     const visible = get().catalogView.type === "archive"
       ? filterOnlyArchivedEntries(entries, archivedEntryIds)
       : filterArchivedEntries(entries, archivedEntryIds);
-    set({ entries, entryMetadata, albums, archivedEntryIds, importError: null, ...restoreSelection(visible, get().selectedEntryIds.filter((id) => remainingIds.has(id)), get().selectionAnchorId) });
+    set({
+      entries,
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+      libraryWorkspace,
+      importError: null,
+      ...restoreSelection(
+        visible,
+        get().selectedEntryIds.filter((id) => remainingIds.has(id)),
+        get().selectionAnchorId,
+      ),
+    });
     scheduleStateSync(set, get);
   },
 

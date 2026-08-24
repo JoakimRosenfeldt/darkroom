@@ -297,6 +297,8 @@ function entryFromAsset(
     health: asset.health,
     formatId: asset.formatId,
     formatAvailability: formatAvailability(asset.formatId, name),
+    fingerprintStatus: asset.fingerprintStatus,
+    fingerprintSha256: asset.fingerprintSha256,
   };
 }
 

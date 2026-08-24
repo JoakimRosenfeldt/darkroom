@@ -13,6 +13,15 @@ import {
   getRatingFromCurationFilter,
   isRatingCurationFilter,
 } from "@/lib/library/curation";
+import {
+  EMPTY_LIBRARY_FACETS,
+  UNKNOWN_FACET_VALUE,
+  hasActiveFacets,
+  type LibraryFacetCounts,
+  type LibraryFacets,
+  type NumericFacetRange,
+  type NumericFacetSummary,
+} from "@/lib/library/query";
 import { useLibraryStore } from "@/stores/library-store";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
 import {
@@ -27,15 +36,25 @@ export type { CurationFilter, FilterOption, GridViewMode, SortOption };
 interface LibraryToolbarProps {
   photoCount: number;
   sort: SortOption;
+  sortDirection: "ascending" | "descending";
   filter: FilterOption;
   curationFilter: CurationFilter;
+  textQuery: string;
+  facets: LibraryFacets;
+  facetCounts: LibraryFacetCounts;
   thumbSize: number;
   viewMode: GridViewMode;
   onSortChange: (sort: SortOption) => void;
+  onSortDirectionChange: (direction: "ascending" | "descending") => void;
   onFilterChange: (filter: FilterOption) => void;
   onCurationFilterChange: (filter: CurationFilter) => void;
+  onTextQueryChange: (query: string) => void;
+  onFacetsChange: (facets: LibraryFacets) => void;
   onThumbSizeChange: (size: number) => void;
   onViewModeChange: (mode: GridViewMode) => void;
+  autoAdvance: boolean;
+  onAutoAdvanceChange: (enabled: boolean) => void;
+  onCompare: () => void;
   onExport: () => void;
 }
 
@@ -101,19 +120,30 @@ function getFormatLabel(filter: FilterOption): string {
 export function LibraryToolbar({
   photoCount,
   sort,
+  sortDirection,
   filter,
   curationFilter,
+  textQuery,
+  facets,
+  facetCounts,
   thumbSize,
   viewMode,
   onSortChange,
+  onSortDirectionChange,
   onFilterChange,
   onCurationFilterChange,
+  onTextQueryChange,
+  onFacetsChange,
   onThumbSizeChange,
   onViewModeChange,
+  autoAdvance,
+  onAutoAdvanceChange,
+  onCompare,
   onExport,
 }: LibraryToolbarProps) {
   const folderName = useLibraryStore((state) => state.folderName);
   const albums = useLibraryStore((state) => state.albums);
+  const keywords = useLibraryStore((state) => state.libraryWorkspace.keywords);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const importState = useLibraryStore((state) => state.importState);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
@@ -124,10 +154,13 @@ export function LibraryToolbar({
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const activeRatingFilter = getRatingFromCurationFilter(curationFilter);
   const activeFilterCount =
-    (curationFilter === "all" ? 0 : 1) + (filter === "all" ? 0 : 1);
+    (curationFilter === "all" ? 0 : 1) +
+    (filter === "all" ? 0 : 1) +
+    (hasActiveFacets(facets) ? 1 : 0);
 
   let scopeTitle = folderName ?? "Library";
   if (catalogView.type === "folder") {
@@ -141,6 +174,14 @@ export function LibraryToolbar({
       albums.find((album) => album.id === catalogView.albumId)?.name ?? "Album";
   } else if (catalogView.type === "archive") {
     scopeTitle = "Archive";
+  } else if (catalogView.type === "quick") {
+    scopeTitle = "Quick Collection";
+  } else if (catalogView.type === "smart") {
+    scopeTitle = useLibraryStore.getState().libraryWorkspace.collections.find(
+      (node) => node.id === catalogView.collectionId,
+    )?.name ?? "Smart Album";
+  } else if (catalogView.type === "duplicates") {
+    scopeTitle = "Duplicates";
   }
 
   useEffect(() => {
@@ -178,6 +219,31 @@ export function LibraryToolbar({
     };
   }, [openPopover]);
 
+  useEffect(() => {
+    function focusSearch(event: KeyboardEvent) {
+      if (
+        (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+        ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f")
+      ) {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
+  function toggleFacet(key: "cameras" | "lenses" | "locations" | "edited" | "albums" | "keywords", value: string) {
+    const current: readonly string[] = facets[key];
+    onFacetsChange({
+      ...facets,
+      [key]: current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value],
+    });
+  }
+
   function toggleCurationFilter(next: CurationFilter) {
     onCurationFilterChange(curationFilter === next ? "all" : next);
   }
@@ -204,6 +270,31 @@ export function LibraryToolbar({
           needsFolderAccess ? "max-[1100px]:hidden" : "",
         ].join(" ")}
       />
+
+      <div className="relative min-w-[120px] max-w-[240px] flex-1">
+        <input
+          ref={searchRef}
+          type="search"
+          value={textQuery}
+          onChange={(event) => onTextQueryChange(event.target.value)}
+          placeholder="Search photos"
+          aria-label="Search photos"
+          className="h-[34px] w-full rounded-lg border border-lr-border-subtle bg-lr-panel-raised px-3 pr-8 text-xs text-lr-text outline-none placeholder:text-lr-text-faint focus:border-lr-accent"
+        />
+        {textQuery ? (
+          <button
+            type="button"
+            onClick={() => {
+              onTextQueryChange("");
+              searchRef.current?.focus();
+            }}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-lr-text-faint hover:text-lr-text"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
 
       {needsFolderAccess ? (
         <FolderPickerButton
@@ -275,6 +366,17 @@ export function LibraryToolbar({
                 </span>
               </button>
             ))}
+            <div className="mt-1 grid grid-cols-2 gap-1 border-t border-lr-border-subtle pt-1.5">
+              {(["ascending", "descending"] as const).map((direction) => (
+                <FilterButton
+                  key={direction}
+                  active={sortDirection === direction}
+                  onClick={() => onSortDirectionChange(direction)}
+                >
+                  {direction === "ascending" ? "Ascending" : "Descending"}
+                </FilterButton>
+              ))}
+            </div>
           </div>
         ) : null}
       </div>
@@ -413,10 +515,101 @@ export function LibraryToolbar({
               </div>
             </FilterSection>
 
+            <div className="max-h-64 space-y-3 overflow-y-auto border-t border-lr-border-subtle pt-3">
+              <FacetValues
+                label="Camera"
+                values={facetCounts.cameras}
+                selected={facets.cameras}
+                onToggle={(value) => toggleFacet("cameras", value)}
+              />
+              <FacetValues
+                label="Lens"
+                values={facetCounts.lenses}
+                selected={facets.lenses}
+                onToggle={(value) => toggleFacet("lenses", value)}
+              />
+              <FacetValues
+                label="Location"
+                values={facetCounts.locations}
+                selected={facets.locations}
+                onToggle={(value) => toggleFacet("locations", value)}
+              />
+              <FilterSection label="ISO range">
+                <NumericFacetInputs
+                  min={facets.iso.min}
+                  max={facets.iso.max}
+                  includeUnknown={facets.iso.includeUnknown}
+                  available={facetCounts.iso}
+                  onChange={(iso) => onFacetsChange({ ...facets, iso })}
+                />
+              </FilterSection>
+              <FilterSection label="Focal length range">
+                <NumericFacetInputs
+                  min={facets.focalLength.min}
+                  max={facets.focalLength.max}
+                  includeUnknown={facets.focalLength.includeUnknown}
+                  available={facetCounts.focalLength}
+                  onChange={(focalLength) => onFacetsChange({ ...facets, focalLength })}
+                />
+              </FilterSection>
+              <FacetValues
+                label="Develop"
+                values={facetCounts.edited}
+                selected={facets.edited}
+                onToggle={(value) => toggleFacet("edited", value)}
+              />
+              <FacetValues
+                label="Album"
+                values={Object.fromEntries(Object.entries(facetCounts.albums).map(([id, count]) => [
+                  albums.find((album) => album.id === id)?.name ?? id,
+                  count,
+                ]))}
+                selected={facets.albums.map((id) => albums.find((album) => album.id === id)?.name ?? id)}
+                onToggle={(name) => {
+                  const id = albums.find((album) => album.name === name)?.id ?? name;
+                  toggleFacet("albums", id);
+                }}
+              />
+              <FilterSection label="Keyword">
+                <div className="flex flex-wrap gap-1">
+                  {(["exact", "descendants", "ancestors"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={facets.keywordMode === mode}
+                      onClick={() => onFacetsChange({ ...facets, keywordMode: mode })}
+                      className={`rounded-md border px-2 py-1 text-[10px] ${facets.keywordMode === mode ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}
+                    >
+                      {mode === "exact" ? "Exact" : mode === "descendants" ? "Include descendants" : "Include ancestors"}
+                    </button>
+                  ))}
+                </div>
+                <FacetValueButtons
+                  values={Object.fromEntries(Object.entries(facetCounts.keywords).map(([id, count]) => [
+                    keywords.find((keyword) => keyword.id === id)?.name ?? id,
+                    count,
+                  ]))}
+                  selected={facets.keywords.map((id) => keywords.find((keyword) => keyword.id === id)?.name ?? id)}
+                  onToggle={(name) => {
+                    const id = keywords.find((keyword) => keyword.name === name)?.id ?? name;
+                    toggleFacet("keywords", id);
+                  }}
+                />
+              </FilterSection>
+            </div>
+
             <div className="flex items-center gap-2 border-t border-lr-border-subtle pt-2.5">
               <span className="text-[11px] text-lr-text-faint">
                 {photoCount} match{photoCount === 1 ? "" : "es"}
               </span>
+              <button
+                type="button"
+                onClick={() => onFacetsChange(EMPTY_LIBRARY_FACETS)}
+                disabled={!hasActiveFacets(facets)}
+                className="text-[11px] text-lr-text-muted hover:text-lr-text disabled:opacity-40"
+              >
+                Clear metadata
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -443,6 +636,9 @@ export function LibraryToolbar({
           label={getFormatLabel(filter)}
           onClear={() => onFilterChange("all")}
         />
+      ) : null}
+      {hasActiveFacets(facets) ? (
+        <FilterChip label="Metadata filters" onClear={() => onFacetsChange(EMPTY_LIBRARY_FACETS)} />
       ) : null}
 
       <div className="flex-1" />
@@ -496,6 +692,30 @@ export function LibraryToolbar({
 
       <button
         type="button"
+        aria-pressed={autoAdvance}
+        onClick={() => onAutoAdvanceChange(!autoAdvance)}
+        className={`h-[34px] shrink-0 rounded-lg border px-2.5 text-[11px] transition-colors ${
+          autoAdvance
+            ? "border-lr-accent bg-lr-selection text-lr-accent"
+            : "border-lr-border-subtle text-lr-text-muted hover:text-lr-text"
+        }`}
+        title="Advance after single-photo curation"
+      >
+        Auto
+      </button>
+
+      <button
+        type="button"
+        onClick={onCompare}
+        disabled={selectedEntryIds.length !== 2}
+        className="h-[34px] shrink-0 rounded-lg border border-lr-border-subtle px-3 text-xs text-lr-text-muted transition hover:text-lr-text disabled:opacity-35"
+        title="Compare exactly two selected photos"
+      >
+        Compare
+      </button>
+
+      <button
+        type="button"
         onClick={onExport}
         disabled={selectedEntryIds.length === 0 || needsFolderAccess}
         className="h-[34px] shrink-0 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition-colors hover:bg-lr-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
@@ -525,6 +745,95 @@ function FilterSection({
       </h3>
       {children}
     </section>
+  );
+}
+
+function FacetValues({
+  label,
+  values,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  values: Readonly<Record<string, number>>;
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <FilterSection label={label}>
+      <FacetValueButtons values={values} selected={selected} onToggle={onToggle} />
+    </FilterSection>
+  );
+}
+
+function FacetValueButtons({
+  values,
+  selected,
+  onToggle,
+}: {
+  values: Readonly<Record<string, number>>;
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+}) {
+  const items = Object.entries(values)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 12);
+  return items.length > 0 ? (
+    <div className="flex flex-wrap gap-1">
+      {items.map(([value, count]) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={selected.includes(value)}
+          onClick={() => onToggle(value)}
+          className={`rounded-md border px-2 py-1 text-[10px] ${selected.includes(value) ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:border-lr-border"}`}
+        >
+          {value === UNKNOWN_FACET_VALUE ? "Unkeyworded" : value} · {count}
+        </button>
+      ))}
+    </div>
+  ) : (
+    <p className="text-[10px] text-lr-text-faint">No values under the current filters.</p>
+  );
+}
+
+function NumericFacetInputs({
+  min,
+  max,
+  includeUnknown,
+  available,
+  onChange,
+}: NumericFacetRange & {
+  available: NumericFacetSummary;
+  onChange: (range: NumericFacetRange) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-1.5">
+      <input
+        type="number"
+        value={min ?? ""}
+        placeholder={available.min === null ? "Min" : String(available.min)}
+        aria-label="Minimum value"
+        onChange={(event) => onChange({ min: event.target.value === "" ? null : Number(event.target.value), max, includeUnknown })}
+        className="min-w-0 rounded-md border border-lr-border-subtle bg-lr-panel px-2 py-1.5 text-[11px] text-lr-text outline-none focus:border-lr-accent"
+      />
+      <input
+        type="number"
+        value={max ?? ""}
+        placeholder={available.max === null ? "Max" : String(available.max)}
+        aria-label="Maximum value"
+        onChange={(event) => onChange({ min, max: event.target.value === "" ? null : Number(event.target.value), includeUnknown })}
+        className="min-w-0 rounded-md border border-lr-border-subtle bg-lr-panel px-2 py-1.5 text-[11px] text-lr-text outline-none focus:border-lr-accent"
+      />
+      <label className="col-span-2 flex items-center gap-2 text-[10px] text-lr-text-muted">
+        <input
+          type="checkbox"
+          checked={includeUnknown}
+          onChange={(event) => onChange({ min, max, includeUnknown: event.target.checked })}
+        />
+        Include unknown ({available.unknownCount})
+      </label>
+    </div>
   );
 }
 

@@ -135,6 +135,11 @@ import {
   analyzeMetadataTargets,
   type MetadataAnalysisTarget,
 } from "./metadata-analysis-service.ts";
+import { fingerprintNoFollowFile } from "./catalog-fingerprint-service.ts";
+import {
+  parseExactDuplicateTrashRequest,
+  type ExactDuplicateTrashItemResult,
+} from "../lib/library/duplicate-actions.ts";
 
 registerAiModelScheme();
 
@@ -697,7 +702,7 @@ function registerIpcHandlers(): void {
   const nativeAssetAccess = new NativeAssetAccess();
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),
-    writeSidecar: (location, contents) => nativeAssetAccess.writeSidecar(location, contents),
+    writeSidecar: (location, contents, expectedLastModified) => nativeAssetAccess.writeSidecar(location, contents, expectedLastModified),
     trash: async (location) => {
       const absolutePath = await nativeAssetAccess.resolvePath(location);
       await trashFiles([absolutePath]);
@@ -1567,6 +1572,63 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-trash-asset", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     await coordinator.trashAsset(value);
+  });
+  ipcMain.handle("darkroom:catalog-trash-exact-duplicates", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseExactDuplicateTrashRequest(value);
+    const state = await coordinator.queryLive({
+      catalogId: request.catalogId,
+      sessionId: request.sessionId,
+      expectedRevision: null,
+    });
+    const roots = new Map(
+      coordinatorRuntime.getNativeSessionRoots()
+        .filter(isRuntimeNativeRoot)
+        .filter((root) => root.catalogId === request.catalogId)
+        .map((root) => [root.rootId, root.nativePath] as const),
+    );
+    const assets = new Map(state.assets.map((asset) => [asset.assetId, asset]));
+    const resolveAssetPath = async (entryId: AssetId): Promise<string> => {
+      const asset = assets.get(entryId);
+      if (!asset || asset.health !== "present") throw new Error("Duplicate member is no longer present.");
+      const canonicalRootPath = roots.get(asset.rootId);
+      if (!canonicalRootPath) throw new Error("Duplicate member root is unavailable.");
+      return nativeAssetAccess.resolvePath({
+        catalogId: request.catalogId,
+        assetId: asset.assetId,
+        rootId: asset.rootId,
+        canonicalRootPath,
+        relativePath: asset.relativePath,
+      });
+    };
+    const keeperPath = await resolveAssetPath(request.keeperId);
+    const keeper = await fingerprintNoFollowFile(keeperPath);
+    if (keeper.status !== "valid" || keeper.sha256 === null || keeper.observation === null) {
+      throw new Error("The keeper could not be verified before trashing duplicates.");
+    }
+    const items: ExactDuplicateTrashItemResult[] = [];
+    for (const entryId of request.targetIds) {
+      try {
+        const targetPath = await resolveAssetPath(entryId);
+        const target = await fingerprintNoFollowFile(targetPath);
+        if (
+          target.status !== "valid" ||
+          target.sha256 !== keeper.sha256 ||
+          target.observation?.size !== keeper.observation.size
+        ) {
+          throw new Error("File changed or is no longer byte-identical to the keeper.");
+        }
+        await trashFiles([targetPath]);
+        items.push({ entryId, trashed: true, error: null });
+      } catch (reason) {
+        items.push({
+          entryId,
+          trashed: false,
+          error: reason instanceof Error ? reason.message : "Could not move file to the OS trash.",
+        });
+      }
+    }
+    return { items };
   });
   ipcMain.handle("darkroom:catalog-analyze-metadata", async (event, value: unknown) => {
     assertTrustedRenderer(event);

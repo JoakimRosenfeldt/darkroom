@@ -24,6 +24,9 @@ export function useAlbumPickerShortcut({
   const [albumPickerOpen, setAlbumPickerOpen] = useState(false);
   const [removePopupOpen, setRemovePopupOpen] = useState(false);
   const catalogView = useLibraryStore((state) => state.catalogView);
+  const targetAlbumId = useLibraryStore((state) => state.libraryWorkspace.targetAlbumId);
+  const addEntriesToTarget = useLibraryStore((state) => state.addEntriesToTarget);
+  const toggleQuickEntries = useLibraryStore((state) => state.toggleQuickEntries);
   const isArchiveView = catalogView.type === "archive";
 
   const entryIds = useMemo(
@@ -69,7 +72,32 @@ export function useAlbumPickerShortcut({
         !event.shiftKey
       ) {
         event.preventDefault();
+        if (targetAlbumId) addEntriesToTarget(entryIds);
+        else setAlbumPickerOpen(true);
+        return;
+      }
+
+      if (
+        event.key.toLowerCase() === "b" &&
+        event.shiftKey &&
+        !isArchiveView &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
         setAlbumPickerOpen(true);
+        return;
+      }
+
+      if (
+        event.key.toLowerCase() === "q" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        toggleQuickEntries(entryIds);
         return;
       }
 
@@ -86,7 +114,15 @@ export function useAlbumPickerShortcut({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [disabled, entryIds.length, isArchiveView, overlayOpen]);
+  }, [
+    addEntriesToTarget,
+    disabled,
+    entryIds,
+    isArchiveView,
+    overlayOpen,
+    targetAlbumId,
+    toggleQuickEntries,
+  ]);
 
   const albumPicker =
     albumPickerOpen && !isArchiveView ? (
