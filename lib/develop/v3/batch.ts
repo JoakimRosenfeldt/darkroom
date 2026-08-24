@@ -134,11 +134,24 @@ export const BATCH_SOURCE_SPECIFIC_POLICIES = {
 export type BatchSkipReason =
   | "unchanged"
   | "v2-upgrade-required"
+  | "read-only-newer"
   | "unsupported-capability"
   | "source-specific-policy"
   | "conflict"
   | "missing-asset"
   | "cancelled";
+
+export type BatchGroupSkipReason =
+  | "unchanged"
+  | "unsupported-capability"
+  | "source-specific-policy"
+  | "missing-asset";
+
+export interface BatchGroupSkip {
+  readonly group: BatchSemanticGroup;
+  readonly reason: BatchGroupSkipReason;
+  readonly message: string;
+}
 
 export type BatchFailurePhase =
   | "open"
@@ -153,6 +166,7 @@ export type BatchPhotoResult =
       readonly kind: "changed";
       readonly entryId: AssetId;
       readonly changedGroups: readonly [BatchSemanticGroup, ...BatchSemanticGroup[]];
+      readonly skippedGroups: readonly BatchGroupSkip[];
       readonly documentRevision: string;
       readonly completed: BatchOutputAction["kind"];
     }
@@ -161,6 +175,7 @@ export type BatchPhotoResult =
       readonly entryId: AssetId;
       readonly reason: BatchSkipReason;
       readonly message: string;
+      readonly skippedGroups: readonly BatchGroupSkip[];
     }
   | {
       readonly kind: "failed";
@@ -195,6 +210,35 @@ export type BatchProgress =
       readonly completed: number;
       readonly total: number;
     };
+
+export function orderedBatchGroups(
+  scope: BatchCopyScope,
+): readonly [BatchSemanticGroup, ...BatchSemanticGroup[]] {
+  switch (scope.kind) {
+    case "current-group":
+      return [parseBatchSemanticGroup(scope.group)];
+    case "selected-groups": {
+      const parsed = scope.groups.map(parseBatchSemanticGroup);
+      const selected = new Set(parsed);
+      if (selected.size !== parsed.length) {
+        throw new Error("Selected batch groups contain duplicates.");
+      }
+      const groups = BATCH_SEMANTIC_GROUPS.filter((group) => selected.has(group));
+      const first = groups[0];
+      if (!first) throw new Error("Selected batch groups are empty.");
+      return [first, ...groups.slice(1)];
+    }
+    case "full-document":
+      if (scope.confirmation !== "explicit") {
+        throw new Error("Full-document batch copy requires explicit confirmation.");
+      }
+      return BATCH_SEMANTIC_GROUPS;
+    default: {
+      const exhaustive: never = scope;
+      return exhaustive;
+    }
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -289,6 +333,14 @@ function boundedResultText(value: string): boolean {
   return value.length > 0 && value.length <= 1_024 && !value.includes("\0");
 }
 
+function groupSkipsAreValid(skips: readonly BatchGroupSkip[]): boolean {
+  return skips.length <= BATCH_SEMANTIC_GROUPS.length &&
+    new Set(skips.map((skip) => skip.group)).size === skips.length &&
+    skips.every((skip) =>
+      BATCH_SEMANTIC_GROUPS.includes(skip.group) && boundedResultText(skip.message)
+    );
+}
+
 function resultIsValid(result: BatchPhotoResult): boolean {
   switch (result.kind) {
     case "changed":
@@ -296,9 +348,10 @@ function resultIsValid(result: BatchPhotoResult): boolean {
         result.changedGroups.length <= BATCH_SEMANTIC_GROUPS.length &&
         new Set(result.changedGroups).size === result.changedGroups.length &&
         result.changedGroups.every((group) => BATCH_SEMANTIC_GROUPS.includes(group)) &&
+        groupSkipsAreValid(result.skippedGroups) &&
         boundedResultText(result.documentRevision);
     case "skipped":
-      return boundedResultText(result.message);
+      return boundedResultText(result.message) && groupSkipsAreValid(result.skippedGroups);
     case "failed":
       return boundedResultText(result.code) && boundedResultText(result.message);
     default: {
