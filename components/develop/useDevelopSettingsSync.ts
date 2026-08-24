@@ -8,6 +8,7 @@ import {
 } from "@/lib/develop/repository";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { PersistedDevelopDocument } from "@/lib/develop/v3/document";
+import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-copy";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -53,6 +54,13 @@ export function useDevelopSettingsSync({
     activateEntry(entry.catalogId, entry.id, catalogDocument);
     const session = getDevelopSession(entry.catalogId, entry.id);
     if (!session) return;
+    session.attachUpgradeAssetCopy(createV3UpgradeAssetCopyAdapter({
+      entry,
+      currentDocument: () => {
+        const snapshot = session.snapshot();
+        return snapshot.processKind === "v2" ? snapshot.document : null;
+      },
+    }));
     repository.configure(session, metadataRef.current, {
       mirrorCatalog: persistCatalog,
       hydrateKeywords,
