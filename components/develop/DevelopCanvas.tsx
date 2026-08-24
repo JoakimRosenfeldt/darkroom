@@ -25,6 +25,7 @@ import type { Rgb } from "@/lib/develop/v3/profiles";
 import {
   buildV3SourceRecord,
   loadV3PreviewMaskMattes,
+  type V3PreviewMaskMatte,
 } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
 import type {
@@ -211,6 +212,10 @@ export function DevelopCanvas({
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
+  const maskMattesRef = useRef<{
+    readonly key: string;
+    readonly value: Promise<readonly V3PreviewMaskMatte[]>;
+  } | null>(null);
   const diagnosticsCallbackRef = useRef(onRenderDiagnostics);
   const analysisCallbackRef = useRef(onAnalysis);
   const documentRevision = useDevelopStore((state) =>
@@ -263,6 +268,7 @@ export function DevelopCanvas({
   useEffect(() => {
     hasRenderedRef.current = false;
     drawnRequestRef.current = 0;
+    maskMattesRef.current = null;
     let worker: V3PreviewWorkerClient;
     try {
       worker = new V3PreviewWorkerClient(entry, image);
@@ -422,7 +428,14 @@ export function DevelopCanvas({
       };
 
       const renderPreview = async (): Promise<void> => {
-        const maskMattes = await loadV3PreviewMaskMattes(renderDocument, entry, image);
+        const maskMatteKey = JSON.stringify(renderDocument.local.maskAssetRefs);
+        if (maskMattesRef.current?.key !== maskMatteKey) {
+          maskMattesRef.current = {
+            key: maskMatteKey,
+            value: loadV3PreviewMaskMattes(renderDocument, entry, image),
+          };
+        }
+        const maskMattes = await maskMattesRef.current.value;
         if (disposed || requestId !== requestRef.current) return;
         const options = {
           viewportDimensions: { width, height },
@@ -446,9 +459,9 @@ export function DevelopCanvas({
 
       void renderPreview().catch((error: unknown) => {
         if (disposed || requestId !== requestRef.current) return;
-        diagnosticsCallbackRef.current?.([]);
-        analysisCallbackRef.current?.([]);
         if (!hasRenderedRef.current) {
+          diagnosticsCallbackRef.current?.([]);
+          analysisCallbackRef.current?.([]);
           setPreview({
             kind: "invalid",
             message: error instanceof Error ? error.message : "Could not render the preview.",

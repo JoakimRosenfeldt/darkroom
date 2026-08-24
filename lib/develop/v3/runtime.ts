@@ -390,16 +390,17 @@ export async function loadV3PreviewMaskMattes(
   entry: LibraryEntry,
   image: DevelopImage,
 ): Promise<readonly V3PreviewMaskMatte[]> {
-  const sourceResult = buildV3SourceRecord(entry, image, "preview");
-  if (sourceResult.kind === "blocked") return [];
-  const assets = await runtimeAssets(document, sourceResult.source, undefined);
-  if (!assets?.maskMatte) return [];
   const requiredIds = new Set<string>();
   for (const mask of document.local.masks) {
     for (const component of mask.components) {
       if (component.kind === "ai") requiredIds.add(component.assetId);
     }
   }
+  if (requiredIds.size === 0) return [];
+  const sourceResult = buildV3SourceRecord(entry, image, "preview");
+  if (sourceResult.kind === "blocked") return [];
+  const assets = await runtimeAssets(document, sourceResult.source, undefined);
+  if (!assets?.maskMatte) return [];
   return [...requiredIds].flatMap((assetId) => {
     const matte = assets.maskMatte?.(assetId);
     return matte ? [{ assetId, ...matte }] : [];
