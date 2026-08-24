@@ -2,6 +2,7 @@ import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   disposeDevelopImage,
   loadDevelopExportImage,
+  loadDevelopInferenceImage,
   type DevelopImage,
 } from "@/lib/cache/develop-image-cache";
 import {
@@ -12,6 +13,7 @@ import {
   DevelopSessionCore,
   getActiveDevelopSession,
 } from "@/lib/develop/session";
+import type { CpuRenderResult } from "@/lib/develop/v3/cpu-backend";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { serializeDevelopXmp, serializeMetadataXmp } from "@/lib/develop/xmp";
 import type { MetadataOverrides } from "@/lib/metadata/types";
@@ -129,6 +131,25 @@ function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Export failed.";
 }
 
+function v3RenderError(result: Exclude<CpuRenderResult, { readonly kind: "rendered" }>): string {
+  if (result.kind === "cancelled") return "V3 export was cancelled.";
+  if (result.kind === "blocked") {
+    const diagnostic = result.diagnostics[0];
+    return "reason" in diagnostic
+      ? `V3 export is blocked: ${diagnostic.reason}`
+      : `V3 export is blocked: ${diagnostic.kind}.`;
+  }
+  const issue = result.issues[0];
+  return "reason" in issue
+    ? `V3 export request is invalid: ${issue.reason}`
+    : `V3 export request is invalid: ${issue.kind}.`;
+}
+
+function hasCompleteSourcePixels(image: DevelopImage): boolean {
+  const expected = image.sourceWidth * image.sourceHeight * image.colors;
+  return Number.isSafeInteger(expected) && expected > 0 && image.rgb.length === expected;
+}
+
 function toEncodeOptions(
   options: ExportRunnerOptions["options"],
 ): EncodeOptions {
@@ -183,7 +204,6 @@ export async function runExportBatch(
         if (developSnapshot.processKind === "read-only-newer") {
           throw new Error(developSnapshot.readOnly.message);
         }
-        const developDocument = developSnapshot.document;
         const descriptive: MetadataOverrides = {
           ...(entryMetadata.title === null ? {} : { title: { kind: "set", value: entryMetadata.title } }),
           ...(entryMetadata.caption === null ? {} : { caption: { kind: "set", value: entryMetadata.caption } }),
@@ -191,19 +211,60 @@ export async function runExportBatch(
           ...(entryMetadata.keywords.length === 0 ? {} : { keywords: { kind: "set", value: entryMetadata.keywords } }),
           ...metadataOverrides[entry.id],
         };
-        const developXmp = serializeDevelopXmp(developDocument, entryMetadata, null);
-        const outputXmp = serializeMetadataXmp(developXmp, descriptive);
         exportImage = await loadDevelopExportImage(entry);
 
         progress("rendering");
-        renderer ??= new FrozenV2Renderer(document.createElement("canvas"), true);
-        pixels = await developSession.render({
-          kind: "export",
-          image: exportImage,
-          sourceSignature: sourceSignatureForEntry(entry),
-          size: toEncodeSize(options.size),
-          renderer,
-        });
+        let renderSnapshot = developSession.snapshot();
+        if (renderSnapshot.processKind === "v3" && !hasCompleteSourcePixels(exportImage)) {
+          const pixelImage = await loadDevelopInferenceImage(entry);
+          exportImage = {
+            ...pixelImage,
+            blob: exportImage.blob,
+            objectUrl: exportImage.objectUrl,
+          };
+          renderSnapshot = developSession.snapshot();
+        }
+        if (renderSnapshot.processKind === "read-only-newer") {
+          throw new Error(renderSnapshot.readOnly.message);
+        }
+        const developXmp = serializeDevelopXmp(renderSnapshot.document, entryMetadata, null);
+        const outputXmp = serializeMetadataXmp(developXmp, descriptive);
+        if (renderSnapshot.processKind === "v2") {
+          renderer ??= new FrozenV2Renderer(document.createElement("canvas"), true);
+          pixels = await developSession.render({
+            kind: "export",
+            image: exportImage,
+            sourceSignature: sourceSignatureForEntry(entry),
+            size: toEncodeSize(options.size),
+            renderer,
+          });
+        } else {
+          const rendered = await developSession.render({
+            kind: "v3-export",
+            entry,
+            image: exportImage,
+            size: options.size,
+            format: options.format,
+            quality: options.quality,
+            lossless: options.lossless,
+            cancellation: {
+              isCancelled,
+              reason: () => isCancelled() ? "The export was cancelled." : null,
+            },
+          });
+          if (rendered.kind !== "rendered") throw new Error(v3RenderError(rendered));
+          const embeddedPreview = exportImage.metadata.decoderProvenance === "embedded";
+          pixels = {
+            pixels: rendered.pixels.pixels,
+            width: rendered.dimensions.width,
+            height: rendered.dimensions.height,
+            provenance: embeddedPreview ? "embedded-preview" : "decoded",
+            embeddedPreview,
+            ...(embeddedPreview
+              ? { warning: "RAW export uses its embedded preview." }
+              : {}),
+          };
+        }
 
         progress("encoding");
         const encoded = await api.encodeAndSaveExport(

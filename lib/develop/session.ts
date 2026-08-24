@@ -1,4 +1,5 @@
 import type { EntryMetadata } from "@/lib/catalog/types";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   applyDevelopCommand,
   replayDevelopPatches,
@@ -6,12 +7,13 @@ import {
   type DevelopPatch,
 } from "@/lib/develop/commands";
 import {
+  FrozenV2Renderer,
   renderFrozenV2,
   type FrozenV2ExportRequest,
   type FrozenV2PrepareRequest,
   type FrozenV2PreviewRequest,
 } from "@/lib/develop/frozen-v2-backend";
-import type { DevelopDiagnostic } from "@/lib/develop/process";
+import type { DevelopDiagnostic, PixelDimensions } from "@/lib/develop/process";
 import type {
   CropSettings,
   DevelopDocument,
@@ -34,9 +36,25 @@ import type {
 import {
   createV3MigrationCandidate,
   type RequiredV2AssetCopy,
+  type V3MigrationCandidate,
 } from "@/lib/develop/v3/migration";
 import type { DevelopAssetRef } from "@/lib/develop/v3/assets";
+import {
+  MAX_CPU_RENDER_PIXELS,
+  type CpuAnalysisTapResult,
+  type CpuBackendBlockingDiagnostic,
+  type CpuBackendDiagnostic,
+  type CpuBackendValidationIssue,
+  type CpuRenderResult,
+} from "@/lib/develop/v3/cpu-backend";
+import {
+  renderV3Runtime,
+  type V3SessionRenderRequest,
+} from "@/lib/develop/v3/runtime";
+import type { CancellationProbe } from "@/lib/develop/v3/source";
 import type { RawExportRenderResult } from "@/lib/export/types";
+import type { LibraryEntry } from "@/lib/fs/types";
+import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import type { RenderPreparation } from "@/lib/develop/renderer";
 
 const HISTORY_LIMIT = 100;
@@ -191,6 +209,44 @@ export interface V3MigrationAcceptanceReceipt {
   ];
 }
 
+export interface V3UpgradeComparisonRequest {
+  readonly kind: "v3-upgrade-comparison";
+  readonly entry: LibraryEntry;
+  readonly image: DevelopImage;
+  readonly outputDimensions: PixelDimensions;
+  readonly cancellation?: CancellationProbe;
+}
+
+export interface V3UpgradeComparisonFrame {
+  readonly pixels: Uint8Array;
+  readonly dimensions: PixelDimensions;
+}
+
+export type V3UpgradeComparisonResult =
+  | {
+      readonly kind: "compared";
+      readonly baseline: V3UpgradeComparisonFrame;
+      readonly candidate: V3UpgradeComparisonFrame;
+      readonly candidateDiagnostics: readonly CpuBackendDiagnostic[];
+      readonly candidateAnalysis: readonly CpuAnalysisTapResult[];
+      readonly acceptance: V3MigrationAcceptanceReceipt;
+    }
+  | {
+      readonly kind: "blocked";
+      readonly diagnostics: readonly [
+        CpuBackendBlockingDiagnostic,
+        ...CpuBackendBlockingDiagnostic[],
+      ];
+    }
+  | {
+      readonly kind: "invalid";
+      readonly issues: readonly [
+        CpuBackendValidationIssue | { readonly kind: "comparison-invalid"; readonly reason: string },
+        ...(CpuBackendValidationIssue | { readonly kind: "comparison-invalid"; readonly reason: string })[],
+      ];
+    }
+  | { readonly kind: "cancelled" };
+
 export type DevelopSessionControlCommand =
   | { readonly kind: "undo" }
   | { readonly kind: "redo" }
@@ -223,10 +279,10 @@ export class DevelopSessionCommandError extends Error {
 }
 
 export class DevelopRenderUnavailableError extends Error {
-  readonly code: "v3-backend-unavailable" | "newer-process-read-only";
+  readonly code: "v3-process-required" | "newer-process-read-only";
 
   constructor(
-    code: "v3-backend-unavailable" | "newer-process-read-only",
+    code: "v3-process-required" | "newer-process-read-only",
     message: string,
   ) {
     super(message);
@@ -250,6 +306,8 @@ export interface DevelopSession {
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
   render(request: FrozenV2ExportRequest): Promise<RawExportRenderResult>;
+  render(request: V3SessionRenderRequest): Promise<CpuRenderResult>;
+  render(request: V3UpgradeComparisonRequest): Promise<V3UpgradeComparisonResult>;
   save(): Promise<DevelopSaveResult>;
 }
 
@@ -362,6 +420,34 @@ function sameAssetReference(left: DevelopAssetRef, right: DevelopAssetRef): bool
     left.producerRevision === right.producerRevision &&
     left.coordinateFrameRevision === right.coordinateFrameRevision &&
     left.colorStageId === right.colorStageId;
+}
+
+function invalidV3Render(reason: string): CpuRenderResult {
+  return {
+    kind: "invalid",
+    issues: [{ kind: "request-mismatch", reason }],
+  };
+}
+
+function invalidUpgradeComparison(reason: string): V3UpgradeComparisonResult {
+  return {
+    kind: "invalid",
+    issues: [{ kind: "comparison-invalid", reason }],
+  };
+}
+
+function migrationAcceptance(
+  sourceDocumentRevision: number,
+  candidate: V3MigrationCandidate,
+): V3MigrationAcceptanceReceipt {
+  return {
+    kind: "same-quality-comparison-accepted",
+    sourceDocumentRevision,
+    baselineVersion: candidate.comparison.baselineVersion,
+    candidateVersion: candidate.comparison.candidateVersion,
+    quality: candidate.comparison.quality,
+    acceptedGroups: candidate.comparison.compareGroups,
+  };
 }
 
 export function createDevelopPluginCommand(
@@ -847,13 +933,150 @@ export class DevelopSessionCore implements DevelopSession {
     return this.snapshot();
   }
 
+  async #renderUpgradeComparison(
+    request: V3UpgradeComparisonRequest,
+  ): Promise<V3UpgradeComparisonResult> {
+    const snapshot = this.snapshot();
+    if (snapshot.processKind === "read-only-newer") {
+      return { kind: "blocked", diagnostics: [snapshot.readOnly.diagnostic] };
+    }
+    if (snapshot.processKind !== "v2") {
+      return invalidUpgradeComparison("Upgrade comparison requires an editable v2 document.");
+    }
+    if (
+      request.entry.catalogId !== this.catalogId ||
+      request.entry.id !== this.entryId
+    ) {
+      return invalidUpgradeComparison("The comparison source does not belong to this session.");
+    }
+    const bounds = request.outputDimensions;
+    const pixelCount = bounds.width * bounds.height;
+    if (
+      !Number.isSafeInteger(bounds.width) ||
+      !Number.isSafeInteger(bounds.height) ||
+      bounds.width < 1 ||
+      bounds.height < 1 ||
+      !Number.isSafeInteger(pixelCount) ||
+      pixelCount > MAX_CPU_RENDER_PIXELS
+    ) {
+      return invalidUpgradeComparison("Comparison dimensions exceed the fit preview limit.");
+    }
+    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
+
+    const sourceDocument = snapshot.document;
+    const sourceDocumentRevision = snapshot.documentRevision;
+    const candidate = createV3MigrationCandidate(sourceDocument);
+    let baseline: RawExportRenderResult;
+    const renderer = new FrozenV2Renderer(document.createElement("canvas"), true);
+    try {
+      baseline = await renderFrozenV2(sourceDocument, {
+        kind: "export",
+        image: request.image,
+        sourceSignature: sourceSignatureForEntry(request.entry),
+        size: {
+          mode: "fit",
+          width: bounds.width,
+          height: bounds.height,
+          neverUpscale: true,
+        },
+        renderer,
+      });
+    } catch (error) {
+      return invalidUpgradeComparison(
+        error instanceof Error ? error.message : "Could not render the v2 comparison frame.",
+      );
+    } finally {
+      renderer.dispose();
+    }
+    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
+
+    const candidateResult = await renderV3Runtime(candidate.document, {
+      kind: "v3-fit-comparison",
+      entry: request.entry,
+      image: request.image,
+      outputDimensions: bounds,
+      cancellation: request.cancellation,
+    });
+    if (candidateResult.kind !== "rendered") return candidateResult;
+    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
+    const current = this.snapshot();
+    if (
+      current.processKind !== "v2" ||
+      current.documentRevision !== sourceDocumentRevision ||
+      current.document !== sourceDocument
+    ) {
+      return invalidUpgradeComparison(
+        "The v2 document changed during comparison. Compare the current revision again.",
+      );
+    }
+    if (
+      baseline.width !== candidateResult.dimensions.width ||
+      baseline.height !== candidateResult.dimensions.height
+    ) {
+      return invalidUpgradeComparison(
+        "The v2 and v3 candidates did not resolve to identical fit dimensions.",
+      );
+    }
+    return {
+      kind: "compared",
+      baseline: {
+        pixels: baseline.pixels,
+        dimensions: { width: baseline.width, height: baseline.height },
+      },
+      candidate: {
+        pixels: candidateResult.pixels.pixels,
+        dimensions: candidateResult.dimensions,
+      },
+      candidateDiagnostics: candidateResult.diagnostics,
+      candidateAnalysis: candidateResult.analysis,
+      acceptance: migrationAcceptance(sourceDocumentRevision, candidate),
+    };
+  }
+
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
   render(request: FrozenV2ExportRequest): Promise<RawExportRenderResult>;
+  render(request: V3SessionRenderRequest): Promise<CpuRenderResult>;
+  render(request: V3UpgradeComparisonRequest): Promise<V3UpgradeComparisonResult>;
   render(
-    request: FrozenV2PrepareRequest | FrozenV2PreviewRequest | FrozenV2ExportRequest,
-  ): Promise<RenderPreparation | RawExportRenderResult> {
+    request:
+      | FrozenV2PrepareRequest
+      | FrozenV2PreviewRequest
+      | FrozenV2ExportRequest
+      | V3SessionRenderRequest
+      | V3UpgradeComparisonRequest,
+  ): Promise<
+    | RenderPreparation
+    | RawExportRenderResult
+    | CpuRenderResult
+    | V3UpgradeComparisonResult
+  > {
+    if (request.kind === "v3-upgrade-comparison") {
+      return this.#renderUpgradeComparison(request);
+    }
     const snapshot = this.snapshot();
+    if (request.kind === "v3-preview" || request.kind === "v3-export") {
+      if (snapshot.processKind === "read-only-newer") {
+        return Promise.resolve({
+          kind: "blocked",
+          diagnostics: [snapshot.readOnly.diagnostic],
+        });
+      }
+      if (snapshot.processKind !== "v3") {
+        return Promise.resolve(
+          invalidV3Render("V3 rendering requires an editable v3 document."),
+        );
+      }
+      if (
+        request.entry.catalogId !== this.catalogId ||
+        request.entry.id !== this.entryId
+      ) {
+        return Promise.resolve(
+          invalidV3Render("The render source does not belong to this session."),
+        );
+      }
+      return renderV3Runtime(snapshot.document, request);
+    }
     if (snapshot.processKind === "read-only-newer") {
       return Promise.reject(
         new DevelopRenderUnavailableError("newer-process-read-only", snapshot.readOnly.message),
@@ -862,8 +1085,8 @@ export class DevelopSessionCore implements DevelopSession {
     if (snapshot.processKind === "v3") {
       return Promise.reject(
         new DevelopRenderUnavailableError(
-          "v3-backend-unavailable",
-          "V3 rendering is not connected to the active backend yet.",
+          "v3-process-required",
+          "Use the v3 render request for this Develop document.",
         ),
       );
     }
