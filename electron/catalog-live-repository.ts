@@ -329,6 +329,19 @@ function hasRows(database: DatabaseSync, table: string): boolean {
   return row !== undefined;
 }
 
+function ensureLibraryStateTable(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS library_state (
+      catalog_id TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL CHECK (
+        json_valid(state_json) AND json_type(state_json) = 'object'
+      ),
+      updated_at REAL NOT NULL,
+      FOREIGN KEY (catalog_id) REFERENCES catalog_meta (catalog_id)
+    ) STRICT;
+  `);
+}
+
 function prepareFreshCatalogV3Database(database: DatabaseSync): void {
   if (isCatalogV3DatabaseEmpty(database)) {
     installCatalogV3Schema(database);
@@ -357,6 +370,7 @@ export class CatalogLiveRepository {
 
   private schema(): void {
     verifyCatalogV3Schema(this.database);
+    ensureLibraryStateTable(this.database);
   }
 
   private transaction<T>(operation: () => T): T {
@@ -445,6 +459,41 @@ export class CatalogLiveRepository {
         assetIds: members,
       };
     });
+  }
+
+  private libraryStateJson(catalogId: CatalogId): string | null {
+    const row = this.database.prepare(
+      "SELECT state_json AS stateJson FROM library_state WHERE catalog_id = ?",
+    ).get(catalogId);
+    if (row === undefined) return null;
+    if (!isRow(row)) throw new Error("Catalog live library state row is invalid.");
+    return requiredString(row, "stateJson");
+  }
+
+  private applyLibraryState(
+    catalogId: CatalogId,
+    stateJson: string,
+    now: number,
+  ): boolean {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stateJson);
+    } catch {
+      throw new Error("Catalog live library state JSON is invalid.");
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("Catalog live library state must be an object.");
+    }
+    const current = this.libraryStateJson(catalogId);
+    if (current === stateJson) return false;
+    this.database.prepare(`
+      INSERT INTO library_state (catalog_id, state_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT (catalog_id) DO UPDATE SET
+        state_json = excluded.state_json,
+        updated_at = excluded.updated_at
+    `).run(catalogId, stateJson, now);
+    return true;
   }
 
   private rootFromRow(value: unknown): RootRecord {
@@ -1137,6 +1186,7 @@ export class CatalogLiveRepository {
       case "album-delete": return this.applyAlbumDelete(catalogId, mutation.albumId);
       case "album-membership-replace": return this.applyAlbumMembership(catalogId, mutation);
       case "archive-set": return this.applyMetadataPatch(catalogId, mutation.assetId, { kind: "metadata-patch", assetId: mutation.assetId, patch: { version: 1, archive: mutation.archived } }, now);
+      case "library-state-replace": return this.applyLibraryState(catalogId, mutation.stateJson, now);
       case "fingerprint-set": return this.applyFingerprint(catalogId, mutation.fingerprint, now);
       case "preset-upsert": return this.applyPresetUpsert(catalogId, mutation, now);
       case "preset-rename": {
@@ -1301,6 +1351,7 @@ export class CatalogLiveRepository {
       operations: this.operationRows(input.catalogId),
       presets: this.presetRows(input.catalogId),
       rules: this.ruleRows(input.catalogId),
+      libraryStateJson: this.libraryStateJson(input.catalogId),
       fingerprintCoverage: coverage,
       fingerprintMatches,
     };
@@ -1315,6 +1366,7 @@ export class CatalogLiveRepository {
   public create(input: CatalogLiveCreateInput): CatalogLiveApplyResult {
     const validated = parseCatalogLiveCreateInput(input);
     prepareFreshCatalogV3Database(this.database);
+    ensureLibraryStateTable(this.database);
     const now = validated.now ?? Date.now();
     return this.transaction(() => {
       this.database.prepare(`

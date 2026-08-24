@@ -65,6 +65,15 @@ export function useLibraryContextMenu(
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
+  const workspace = useLibraryStore((state) => state.libraryWorkspace);
+  const toggleQuickEntries = useLibraryStore((state) => state.toggleQuickEntries);
+  const addEntriesToTarget = useLibraryStore((state) => state.addEntriesToTarget);
+  const assignKeywordToEntries = useLibraryStore((state) => state.assignKeywordToEntries);
+  const stackEntries = useLibraryStore((state) => state.stackEntries);
+  const addEntriesToStack = useLibraryStore((state) => state.addEntriesToStack);
+  const unstackEntries = useLibraryStore((state) => state.unstackEntries);
+  const setStackCover = useLibraryStore((state) => state.setStackCover);
+  const excludeEntries = useLibraryStore((state) => state.excludeEntries);
 
   const isArchiveView = catalogView.type === "archive";
 
@@ -336,11 +345,111 @@ export function useLibraryContextMenu(
 
             <ContextMenuItem
               onClick={() => {
+                toggleQuickEntries(actionTargets);
+                closeMenu();
+              }}
+            >
+              Toggle Quick Collection
+              <ShortcutHint>Q</ShortcutHint>
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => {
+                addEntriesToTarget(actionTargets);
+                closeMenu();
+              }}
+            >
+              Add to target album
+              <ShortcutHint>B</ShortcutHint>
+            </ContextMenuItem>
+
+            {workspace.keywords.length > 0 ? (
+              <>
+                <ContextMenuSeparator />
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-lr-text-dim">
+                  Add keyword
+                </div>
+                {workspace.keywords.map((keyword) => (
+                  <ContextMenuItem
+                    key={keyword.id}
+                    onClick={() => {
+                      assignKeywordToEntries(keyword.id, actionTargets);
+                      closeMenu();
+                    }}
+                  >
+                    {keyword.name}
+                  </ContextMenuItem>
+                ))}
+              </>
+            ) : null}
+
+            <ContextMenuSeparator />
+            {actionTargets.length > 1 ? (
+              <ContextMenuItem
+                onClick={() => {
+                  stackEntries(actionTargets);
+                  closeMenu();
+                }}
+              >
+                Stack selected
+              </ContextMenuItem>
+            ) : null}
+            {workspace.stacks.length > 0 && actionTargets.every((id) =>
+              !workspace.stacks.some((stack) => stack.entryIds.includes(id))
+            ) ? workspace.stacks.map((stack, index) => (
+              <ContextMenuItem
+                key={`add-${stack.id}`}
+                onClick={() => {
+                  addEntriesToStack(stack.id, actionTargets);
+                  closeMenu();
+                }}
+              >
+                Add to stack {index + 1}
+              </ContextMenuItem>
+            )) : null}
+            {workspace.stacks.some((stack) => stack.entryIds.some((id) => actionTargets.includes(id))) ? (
+              <>
+                <ContextMenuItem
+                  onClick={() => {
+                    unstackEntries(actionTargets);
+                    closeMenu();
+                  }}
+                >
+                  Remove selected from stack
+                </ContextMenuItem>
+                {actionTargets.length === 1 ? workspace.stacks
+                  .filter((stack) => stack.entryIds.includes(actionTargets[0]!))
+                  .map((stack) => (
+                    <ContextMenuItem
+                      key={stack.id}
+                      onClick={() => {
+                        setStackCover(stack.id, actionTargets[0]!);
+                        closeMenu();
+                      }}
+                    >
+                      Set as stack cover
+                    </ContextMenuItem>
+                  )) : null}
+              </>
+            ) : null}
+
+            <ContextMenuSeparator />
+
+            <ContextMenuItem
+              onClick={() => {
                 archiveEntries(actionTargets);
                 closeMenu();
               }}
             >
-              Remove from imported
+              Archive
+            </ContextMenuItem>
+
+            <ContextMenuItem
+              onClick={() => {
+                excludeEntries(actionTargets);
+                closeMenu();
+              }}
+            >
+              Hide from catalog
             </ContextMenuItem>
 
             <ContextMenuItem

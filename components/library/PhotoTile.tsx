@@ -11,6 +11,8 @@ import {
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
 import { EntryMetadataBadges } from "./EntryMetadataBar";
+import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
+import { useLibraryStore } from "@/stores/library-store";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -42,6 +44,8 @@ export const PhotoTile = memo(function PhotoTile({
   getScrollRoot,
 }: PhotoTileProps) {
   const router = useRouter();
+  const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
+  const [viewSettings, updateViewSettings] = useLibraryViewSettings();
   const tileRef = useRef<HTMLDivElement>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -149,6 +153,19 @@ export const PhotoTile = memo(function PhotoTile({
   const showFormatLabel =
     entry.formatAvailability.status !== "supported" ||
     (entry.profileId !== null && entry.profileId !== "standard");
+  const stack = stacks.find((item) => item.entryIds.includes(entry.id));
+  const stackExpanded = stack ? viewSettings.expandedStackIds.includes(stack.id) : false;
+
+  function toggleStack(event: React.MouseEvent | React.KeyboardEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!stack) return;
+    updateViewSettings({
+      expandedStackIds: stackExpanded
+        ? viewSettings.expandedStackIds.filter((id) => id !== stack.id)
+        : [...viewSettings.expandedStackIds, stack.id],
+    });
+  }
 
   const content = (
     <div
@@ -203,6 +220,22 @@ export const PhotoTile = memo(function PhotoTile({
 
       {metadata ? (
         <EntryMetadataBadges metadata={metadata} compact={caption} />
+      ) : null}
+
+      {stack ? (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={`${stackExpanded ? "Collapse" : "Expand"} stack of ${stack.entryIds.length} photos`}
+          aria-pressed={stackExpanded}
+          onClick={toggleStack}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") toggleStack(event);
+          }}
+          className="absolute right-2 top-2 z-30 rounded-md border border-white/15 bg-black/70 px-1.5 py-1 font-mono text-[9px] text-white shadow"
+        >
+          {stackExpanded ? "▾" : "▸"} {stack.entryIds.length}
+        </span>
       ) : null}
 
       {selected ? (

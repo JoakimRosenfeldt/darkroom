@@ -152,6 +152,7 @@ export interface AssetHeadRequestInput extends AssetRequestInput {
 
 export interface AssetSidecarWriteRequest extends AssetRequestInput {
   readonly contents: string | null;
+  readonly expectedLastModified?: number | null;
 }
 
 export interface ScanRequestInput {
@@ -216,12 +217,17 @@ export function parseAssetHeadRequestInput(value: unknown): AssetHeadRequestInpu
 export function parseAssetSidecarWriteRequestInput(value: unknown): AssetSidecarWriteRequest {
   const input = recordValue(value, "Asset sidecar write request");
   const contents = input.contents;
+  const expectedLastModified = input.expectedLastModified;
   if (contents !== null && (typeof contents !== "string" || new TextEncoder().encode(contents).byteLength > MAX_SIDECAR_BYTES)) {
     throw new Error("Asset sidecar contents are invalid or too large.");
+  }
+  if (expectedLastModified !== undefined && expectedLastModified !== null && (typeof expectedLastModified !== "number" || !Number.isFinite(expectedLastModified))) {
+    throw new Error("Asset sidecar expected modification time is invalid.");
   }
   return {
     ...parseAssetRequestInput(input),
     contents,
+    expectedLastModified,
   };
 }
 

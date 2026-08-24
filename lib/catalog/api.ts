@@ -202,6 +202,7 @@ export type CatalogDecodeResult = CatalogDecodeFailure | CatalogDecodeSuccess;
 
 export interface CatalogSidecarWriteRequest extends CatalogAssetRequest {
   readonly contents: string | null;
+  readonly expectedLastModified?: number | null;
 }
 
 export type CatalogAssetRequest = AssetRequestInput;
@@ -236,6 +237,7 @@ export type CatalogApplyMutation =
   | Extract<CatalogLiveMutation, { readonly kind: "album-delete" }>
   | Extract<CatalogLiveMutation, { readonly kind: "album-membership-replace" }>
   | Extract<CatalogLiveMutation, { readonly kind: "archive-set" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "library-state-replace" }>
   | Extract<CatalogLiveMutation, { readonly kind: "preset-upsert" }>
   | Extract<CatalogLiveMutation, { readonly kind: "preset-rename" }>
   | Extract<CatalogLiveMutation, { readonly kind: "preset-delete" }>
@@ -304,6 +306,7 @@ export interface CatalogLiveStateView {
     readonly createdAt: number;
     readonly updatedAt: number;
   }[];
+  readonly libraryStateJson: string | null;
   readonly fingerprintCoverage: CatalogV3FingerprintCoverage;
   readonly fingerprintMatches: readonly CatalogLiveFingerprintMatch[];
 }
@@ -410,7 +413,11 @@ export function parseCatalogSidecarWriteRequest(value: unknown): CatalogSidecarW
   if (contents !== null && (typeof contents !== "string" || new TextEncoder().encode(contents).byteLength > MAX_SIDECAR_BYTES)) {
     throw new Error("Sidecar contents are invalid or too large.");
   }
-  return { ...parseCatalogAssetRequest(input), contents };
+  const expectedLastModified = input.expectedLastModified;
+  if (expectedLastModified !== undefined && expectedLastModified !== null && (typeof expectedLastModified !== "number" || !Number.isFinite(expectedLastModified))) {
+    throw new Error("Sidecar expected modification time is invalid.");
+  }
+  return { ...parseCatalogAssetRequest(input), contents, expectedLastModified };
 }
 
 export function parseCatalogDecodeRequest(value: unknown): CatalogDecodeRequest {
@@ -467,6 +474,7 @@ function safeMutation(value: unknown): CatalogApplyMutation {
     case "album-delete":
     case "album-membership-replace":
     case "archive-set":
+    case "library-state-replace":
     case "preset-upsert":
     case "preset-rename":
     case "preset-delete":
@@ -854,6 +862,7 @@ export function toCatalogLiveStateView(value: CatalogLiveState): CatalogLiveStat
       isDefault: preset.payload.isDefault,
     })),
     rules: value.rules,
+    libraryStateJson: value.libraryStateJson ?? null,
     fingerprintCoverage: value.fingerprintCoverage,
     fingerprintMatches: value.fingerprintMatches,
   };

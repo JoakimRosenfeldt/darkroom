@@ -93,7 +93,7 @@ import {
 import { createRuntimeFormatCapabilityReport } from "./format-capability-service.ts";
 import type { FormatCapabilityReport, NikonRuntimePackageState } from "../lib/formats/types.ts";
 import { isRuntimeNativeRoot, type AssetScopedOperations, type RuntimeRootProjection } from "./library-runtime.ts";
-import { createOperationId, type CatalogId, type OperationId } from "../lib/catalog/ids.ts";
+import { createOperationId, type AssetId, type CatalogId, type OperationId } from "../lib/catalog/ids.ts";
 import { parseCatalogLiveQueryResult } from "../lib/catalog/live.ts";
 import {
   parseCatalogDecodeRequest,
@@ -122,6 +122,24 @@ import {
   parseAutoImportConfigureRequest,
   parseAutoImportControlRequest,
 } from "../lib/import/auto-import-api.ts";
+import {
+  parseMetadataAnalysisOperationRequest,
+  parseMetadataAnalysisRequest,
+  type MetadataAnalysisItem,
+  type MetadataAnalysisProgress,
+  type MetadataAnalysisRequest,
+  type MetadataAnalysisResult,
+} from "../lib/library/metadata-analysis.ts";
+import { entryAnalysisCacheSignature } from "../lib/library/model.ts";
+import {
+  analyzeMetadataTargets,
+  type MetadataAnalysisTarget,
+} from "./metadata-analysis-service.ts";
+import { fingerprintNoFollowFile } from "./catalog-fingerprint-service.ts";
+import {
+  parseExactDuplicateTrashRequest,
+  type ExactDuplicateTrashItemResult,
+} from "../lib/library/duplicate-actions.ts";
 
 registerAiModelScheme();
 
@@ -684,7 +702,7 @@ function registerIpcHandlers(): void {
   const nativeAssetAccess = new NativeAssetAccess();
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),
-    writeSidecar: (location, contents) => nativeAssetAccess.writeSidecar(location, contents),
+    writeSidecar: (location, contents, expectedLastModified) => nativeAssetAccess.writeSidecar(location, contents, expectedLastModified),
     trash: async (location) => {
       const absolutePath = await nativeAssetAccess.resolvePath(location);
       await trashFiles([absolutePath]);
@@ -721,6 +739,103 @@ function registerIpcHandlers(): void {
     startupRecovery,
   });
   const coordinator = catalogCoordinator;
+  interface MetadataAnalysisJob {
+    readonly request: MetadataAnalysisRequest;
+    readonly controller: AbortController;
+  }
+  const metadataAnalysisJobs = new Map<OperationId, MetadataAnalysisJob>();
+  const sendMetadataProgress = (progress: MetadataAnalysisProgress): void => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send("darkroom:catalog-metadata-analysis-progress", progress);
+  };
+  const metadataFailure = (
+    entryId: AssetId,
+    size: number,
+    modifiedAt: number,
+  ): MetadataAnalysisItem => ({
+    entryId,
+    analysis: {
+      cacheSignature: entryAnalysisCacheSignature(size, modifiedAt),
+      size,
+      modifiedAt,
+      captureTimeKey: null,
+      captureTimeDisplay: null,
+      captureTimeProvenance: null,
+      cameraMake: null,
+      cameraModel: null,
+      lens: null,
+      iso: null,
+      focalLength: null,
+      location: { city: null, state: null, country: null },
+      hasGps: null,
+      error: "The source file is unavailable for metadata analysis.",
+      analyzedAt: Date.now(),
+    },
+  });
+  const runMetadataAnalysis = async (
+    request: MetadataAnalysisRequest,
+    signal: AbortSignal,
+  ): Promise<MetadataAnalysisResult> => {
+    const state = await coordinator.queryLive({
+      catalogId: request.catalogId,
+      sessionId: request.sessionId,
+      expectedRevision: null,
+    });
+    const assets = new Map<AssetId, (typeof state.assets)[number]>(
+      state.assets.map((asset) => [asset.assetId, asset]),
+    );
+    const roots = new Map(
+      coordinatorRuntime.getNativeSessionRoots()
+        .filter(isRuntimeNativeRoot)
+        .filter((root) => root.catalogId === request.catalogId)
+        .map((root) => [root.rootId, root]),
+    );
+    const targets: MetadataAnalysisTarget[] = [];
+    const resolutionFailures: MetadataAnalysisItem[] = [];
+    for (const entryId of request.entryIds) {
+      if (signal.aborted) break;
+      const asset = assets.get(entryId);
+      const size = asset?.observation?.byteLength ?? 0;
+      const modifiedAt = asset?.observation?.modifiedAt ?? 0;
+      const root = asset ? roots.get(asset.rootId) : undefined;
+      if (!asset || !root || asset.health !== "present") {
+        resolutionFailures.push(metadataFailure(entryId, size, modifiedAt));
+        continue;
+      }
+      try {
+        const filePath = await nativeAssetAccess.resolvePath({
+          catalogId: request.catalogId,
+          assetId: entryId,
+          rootId: asset.rootId,
+          canonicalRootPath: root.nativePath,
+          relativePath: asset.relativePath,
+        });
+        targets.push({ entryId, filePath, size, modifiedAt });
+      } catch {
+        resolutionFailures.push(metadataFailure(entryId, size, modifiedAt));
+      }
+    }
+    const baseCompleted = resolutionFailures.length;
+    const total = request.entryIds.length;
+    const progress = (current: MetadataAnalysisProgress): MetadataAnalysisProgress => ({
+      ...current,
+      total,
+      completed: baseCompleted + current.completed,
+      failed: baseCompleted + current.failed,
+      cancelled: signal.aborted || current.cancelled,
+    });
+    const analyzed = await analyzeMetadataTargets(
+      request,
+      targets,
+      signal,
+      (current) => sendMetadataProgress(progress(current)),
+    );
+    const finalProgress = progress(analyzed);
+    return {
+      ...finalProgress,
+      items: [...resolutionFailures, ...analyzed.items],
+    };
+  };
   let manualImportBinding: {
     readonly catalogId: CatalogId;
     readonly sessionId: SessionId;
@@ -1457,6 +1572,95 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-trash-asset", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     await coordinator.trashAsset(value);
+  });
+  ipcMain.handle("darkroom:catalog-trash-exact-duplicates", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseExactDuplicateTrashRequest(value);
+    const state = await coordinator.queryLive({
+      catalogId: request.catalogId,
+      sessionId: request.sessionId,
+      expectedRevision: null,
+    });
+    const roots = new Map(
+      coordinatorRuntime.getNativeSessionRoots()
+        .filter(isRuntimeNativeRoot)
+        .filter((root) => root.catalogId === request.catalogId)
+        .map((root) => [root.rootId, root.nativePath] as const),
+    );
+    const assets = new Map(state.assets.map((asset) => [asset.assetId, asset]));
+    const resolveAssetPath = async (entryId: AssetId): Promise<string> => {
+      const asset = assets.get(entryId);
+      if (!asset || asset.health !== "present") throw new Error("Duplicate member is no longer present.");
+      const canonicalRootPath = roots.get(asset.rootId);
+      if (!canonicalRootPath) throw new Error("Duplicate member root is unavailable.");
+      return nativeAssetAccess.resolvePath({
+        catalogId: request.catalogId,
+        assetId: asset.assetId,
+        rootId: asset.rootId,
+        canonicalRootPath,
+        relativePath: asset.relativePath,
+      });
+    };
+    const keeperPath = await resolveAssetPath(request.keeperId);
+    const keeper = await fingerprintNoFollowFile(keeperPath);
+    if (keeper.status !== "valid" || keeper.sha256 === null || keeper.observation === null) {
+      throw new Error("The keeper could not be verified before trashing duplicates.");
+    }
+    const items: ExactDuplicateTrashItemResult[] = [];
+    for (const entryId of request.targetIds) {
+      try {
+        const targetPath = await resolveAssetPath(entryId);
+        const target = await fingerprintNoFollowFile(targetPath);
+        if (
+          target.status !== "valid" ||
+          target.sha256 !== keeper.sha256 ||
+          target.observation?.size !== keeper.observation.size
+        ) {
+          throw new Error("File changed or is no longer byte-identical to the keeper.");
+        }
+        await trashFiles([targetPath]);
+        items.push({ entryId, trashed: true, error: null });
+      } catch (reason) {
+        items.push({
+          entryId,
+          trashed: false,
+          error: reason instanceof Error ? reason.message : "Could not move file to the OS trash.",
+        });
+      }
+    }
+    return { items };
+  });
+  ipcMain.handle("darkroom:catalog-analyze-metadata", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseMetadataAnalysisRequest(value);
+    if (metadataAnalysisJobs.has(request.operationId)) {
+      throw new Error("Metadata analysis operation is already active.");
+    }
+    const conflict = [...metadataAnalysisJobs.values()].find(
+      (job) => job.request.catalogId === request.catalogId,
+    );
+    if (conflict) throw new Error("Metadata analysis is already active for this catalog.");
+    const job: MetadataAnalysisJob = { request, controller: new AbortController() };
+    metadataAnalysisJobs.set(request.operationId, job);
+    try {
+      return await runMetadataAnalysis(request, job.controller.signal);
+    } finally {
+      if (metadataAnalysisJobs.get(request.operationId) === job) {
+        metadataAnalysisJobs.delete(request.operationId);
+      }
+    }
+  });
+  ipcMain.handle("darkroom:catalog-cancel-metadata-analysis", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const request = parseMetadataAnalysisOperationRequest(value);
+    const job = metadataAnalysisJobs.get(request.operationId);
+    if (
+      job &&
+      job.request.catalogId === request.catalogId &&
+      job.request.sessionId === request.sessionId
+    ) {
+      job.controller.abort();
+    }
   });
   ipcMain.handle("darkroom:get-format-capability-report", async (event) => {
     assertTrustedRenderer(event);

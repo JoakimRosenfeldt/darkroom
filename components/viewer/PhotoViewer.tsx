@@ -151,7 +151,12 @@ function captureSummary(metadata: Record<string, unknown>): string[] {
 export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   const router = useRouter();
   const setSelectedEntryId = useLibraryStore((state) => state.setSelectedEntryId);
+  const activeSelectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
+  const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
+  const setStackCover = useLibraryStore((state) => state.setStackCover);
+  const reorderStackEntry = useLibraryStore((state) => state.reorderStackEntry);
+  const removeEntriesFromStack = useLibraryStore((state) => state.removeEntriesFromStack);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
@@ -189,6 +194,7 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
   );
   const mirrorDevelopDocument = useLibraryStore((state) => state.mirrorDevelopDocument);
   const hydrateEntryMetadata = useLibraryStore((state) => state.hydrateEntryMetadata);
+  const hydrateEntryKeywords = useLibraryStore((state) => state.hydrateEntryKeywords);
   const mirrorDocument = useCallback(
     (
       document: Parameters<typeof mirrorDevelopDocument>[1],
@@ -204,12 +210,19 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     ) => hydrateEntryMetadata(entry.id, patch, sourceUpdatedAt),
     [entry.id, hydrateEntryMetadata],
   );
+  const hydrateKeywords = useCallback(
+    (flat: readonly string[], hierarchical: readonly string[]) => {
+      hydrateEntryKeywords(entry.id, flat, hierarchical);
+    },
+    [entry.id, hydrateEntryKeywords],
+  );
 
   useDevelopSettingsSync({
     entry,
     metadata,
     mirrorDocument,
     hydrateMetadata,
+    hydrateKeywords,
   });
   const developSettings = useDevelopStore(
     (state) => state.sessions[entry.id]?.document.settings ?? DEFAULT_DEVELOP_SETTINGS,
@@ -253,12 +266,23 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
     ? Math.max(1, Math.round(decoded.height * cropDraft.height))
     : null;
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
+  const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
 
   useEffect(() => {
     if (!useLibraryStore.getState().selectedEntryIds.includes(entry.id)) {
       setSelectedEntryId(entry.id);
     }
   }, [entry.id, setSelectedEntryId]);
+
+  useEffect(() => {
+    if (
+      activeSelectedEntryId &&
+      activeSelectedEntryId !== entry.id &&
+      entries.some((item) => item.id === activeSelectedEntryId)
+    ) {
+      router.replace(`/photo?id=${encodeURIComponent(activeSelectedEntryId)}`);
+    }
+  }, [activeSelectedEntryId, entries, entry.id, router]);
 
   useEffect(() => {
     let active = true;
@@ -646,6 +670,17 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
                 </button>
                 <button
                   type="button"
+                  disabled={activeIndex < 0 || activeIndex >= entries.length - 1}
+                  onClick={() => {
+                    const candidate = entries[activeIndex + 1];
+                    if (candidate) router.push(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
+                  }}
+                  className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
+                >
+                  Compare
+                </button>
+                <button
+                  type="button"
                   onClick={() => setExportOpen(true)}
                   className="h-8 rounded-lg bg-lr-accent px-3.5 text-xs font-medium text-[#14202a] transition hover:bg-lr-accent-hover"
                 >
@@ -867,6 +902,25 @@ export function PhotoViewer({ entry, entries }: PhotoViewerProps) {
             />
           ) : null}
         </div>
+
+        {currentStack ? (
+          <div className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-t border-lr-border-subtle bg-lr-panel px-3" aria-label="Stack members">
+            <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-lr-text-faint">Stack {currentStack.entryIds.length}</span>
+            {currentStack.entryIds.map((entryId, index) => {
+              const member = entries.find((item) => item.id === entryId);
+              if (!member) return null;
+              return (
+                <div key={entryId} className={`flex shrink-0 items-center rounded border ${entryId === entry.id ? "border-lr-accent bg-lr-selection" : "border-lr-border-subtle"}`}>
+                  <button type="button" onClick={() => selectPhoto(entryId)} className="max-w-32 truncate px-2 py-1 text-[10px] text-lr-text-muted">{member.name}</button>
+                  <button type="button" disabled={index === 0} onClick={() => reorderStackEntry(currentStack.id, entryId, -1)} aria-label={`Move ${member.name} earlier`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">←</button>
+                  <button type="button" disabled={index === currentStack.entryIds.length - 1} onClick={() => reorderStackEntry(currentStack.id, entryId, 1)} aria-label={`Move ${member.name} later`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">→</button>
+                  <button type="button" onClick={() => setStackCover(currentStack.id, entryId)} aria-label={`Use ${member.name} as stack cover`} className={`px-1 text-[10px] ${currentStack.coverEntryId === entryId ? "text-lr-accent" : "text-lr-text-faint"}`}>◆</button>
+                  <button type="button" onClick={() => removeEntriesFromStack(currentStack.id, [entryId])} aria-label={`Remove ${member.name} from stack`} className="px-1.5 text-[10px] text-lr-text-faint hover:text-lr-danger">×</button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
         <Filmstrip
           entries={entries}

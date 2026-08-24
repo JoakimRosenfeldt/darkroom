@@ -16,6 +16,8 @@ const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
 const CRS_NS = "http://ns.adobe.com/camera-raw-settings/1.0/";
 const XMP_NS = "http://ns.adobe.com/xap/1.0/";
+const DC_NS = "http://purl.org/dc/elements/1.1/";
+const LR_NS = "http://ns.adobe.com/lightroom/1.0/";
 export const DARKROOM_NS = "http://darkroom.app/ns/1.0/";
 const MASKING_LOCAL_NAME = "MaskingData";
 
@@ -69,6 +71,85 @@ function createXmpDocument(): XMLDocument {
     `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="${RDF_NS}"><rdf:Description xmlns:crs="${CRS_NS}" xmlns:xmp="${XMP_NS}" xmlns:darkroom="${DARKROOM_NS}"/></rdf:RDF></x:xmpmeta>`,
     "application/xml",
   );
+}
+
+function setArrayProperty(
+  doc: XMLDocument,
+  description: Element,
+  namespace: string,
+  qualifiedName: string,
+  values: readonly string[],
+): void {
+  const localName = qualifiedName.slice(qualifiedName.indexOf(":") + 1);
+  for (const child of Array.from(description.children)) {
+    if (child.namespaceURI === namespace && child.localName === localName) child.remove();
+  }
+  const property = doc.createElementNS(namespace, qualifiedName);
+  const bag = doc.createElementNS(RDF_NS, "rdf:Bag");
+  for (const value of [...new Set(values.map((item) => item.trim()).filter(Boolean))]) {
+    const item = doc.createElementNS(RDF_NS, "rdf:li");
+    item.textContent = value;
+    bag.append(item);
+  }
+  property.append(bag);
+  description.append(property);
+}
+
+function arrayProperty(description: Element, namespace: string, localName: string): string[] {
+  const property = Array.from(description.children).find(
+    (child) => child.namespaceURI === namespace && child.localName === localName,
+  );
+  if (!property) return [];
+  const container = Array.from(property.children).find((child) => child.namespaceURI === RDF_NS);
+  if (!container || container.localName !== "Bag") {
+    throw new Error(`${property.tagName} uses an unsupported XMP array container.`);
+  }
+  const items = Array.from(container.children);
+  if (items.some((item) => item.namespaceURI !== RDF_NS || item.localName !== "li" || item.children.length > 0)) {
+    throw new Error(`${property.tagName} contains unsupported structured keyword values.`);
+  }
+  return [...new Set(items
+    .map((item) => item.textContent?.trim() ?? "")
+    .filter(Boolean))];
+}
+
+export interface ParsedKeywordXmp {
+  readonly flat: readonly string[];
+  readonly hierarchical: readonly string[];
+}
+
+export function parseKeywordXmp(xml: string): ParsedKeywordXmp {
+  const description = descriptionFor(parseXmpDocument(xml));
+  const hierarchical = arrayProperty(description, LR_NS, "hierarchicalSubject");
+  if (hierarchical.some((path) => path.split("|").some((part) => part.trim() === ""))) {
+    throw new Error("lr:hierarchicalSubject contains an unsupported empty keyword path segment.");
+  }
+  return {
+    flat: arrayProperty(description, DC_NS, "subject"),
+    hierarchical,
+  };
+}
+
+export function serializeKeywordXmp(
+  existingContents: string | null,
+  flat: readonly string[],
+  hierarchical: readonly string[],
+): string {
+  const doc = existingContents ? parseXmpDocument(existingContents) : createXmpDocument();
+  const description = descriptionFor(doc);
+  if (existingContents) {
+    arrayProperty(description, DC_NS, "subject");
+    arrayProperty(description, LR_NS, "hierarchicalSubject");
+  }
+  description.setAttributeNS(XMLNS_NS, "xmlns:dc", DC_NS);
+  description.setAttributeNS(XMLNS_NS, "xmlns:lr", LR_NS);
+  setArrayProperty(doc, description, DC_NS, "dc:subject", flat);
+  setArrayProperty(doc, description, LR_NS, "lr:hierarchicalSubject", hierarchical);
+  const serialized = new XMLSerializer().serializeToString(doc);
+  if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
+    throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  }
+  return serialized;
 }
 
 function descriptionFor(doc: XMLDocument): Element {

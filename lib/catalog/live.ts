@@ -196,6 +196,7 @@ export interface CatalogLiveState {
   readonly operations: readonly CatalogLiveOperation[];
   readonly presets: readonly CatalogLivePreset[];
   readonly rules: readonly CatalogLiveRule[];
+  readonly libraryStateJson?: string | null;
   readonly fingerprintCoverage: CatalogV3FingerprintCoverage;
   readonly fingerprintMatches: readonly CatalogLiveFingerprintMatch[];
 }
@@ -341,6 +342,7 @@ export type CatalogLiveMutation =
   | { readonly kind: "album-delete"; readonly albumId: string }
   | { readonly kind: "album-membership-replace"; readonly albumId: string; readonly assetIds: readonly AssetId[] }
   | { readonly kind: "archive-set"; readonly assetId: AssetId; readonly archived: boolean }
+  | { readonly kind: "library-state-replace"; readonly stateJson: string }
   | { readonly kind: "fingerprint-set"; readonly fingerprint: CatalogLiveFingerprintTransition }
   | {
       readonly kind: "preset-upsert";
@@ -579,6 +581,20 @@ function parseMetadataPatch(value: unknown): CatalogLiveMetadataPatch {
   };
 }
 
+function parseLibraryStateJson(value: unknown, path: string): string {
+  const json = stringValue(value, path);
+  if (new TextEncoder().encode(json).byteLength > 16 * 1024 * 1024) {
+    return fail(`${path} is too large`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return fail(`${path} is invalid`);
+  }
+  return isRecord(parsed) ? json : fail(`${path} must contain an object`);
+}
+
 function parseOperationPayload(value: unknown): CatalogLiveOperationPayload {
   const input = record(value, "operation payload");
   if (input.version !== CATALOG_LIVE_PAYLOAD_VERSION) return fail("operation payload version is invalid");
@@ -697,6 +713,9 @@ function parseState(value: unknown): CatalogLiveState {
   const operations = Array.isArray(input.operations) ? input.operations.map(parseOperationOutput) : fail("live operations are invalid");
   const presets = Array.isArray(input.presets) ? input.presets.map(parsePresetOutput) : fail("live presets are invalid");
   const rules = Array.isArray(input.rules) ? input.rules.map(parseRuleOutput) : fail("live rules are invalid");
+  const libraryStateJson = input.libraryStateJson === undefined || input.libraryStateJson === null
+    ? null
+    : parseLibraryStateJson(input.libraryStateJson, "live libraryStateJson");
   const fingerprintCoverage = parseFingerprintCoverage(input.fingerprintCoverage);
   const fingerprintMatches = Array.isArray(input.fingerprintMatches)
     ? input.fingerprintMatches.map(parseFingerprintMatch)
@@ -717,6 +736,7 @@ function parseState(value: unknown): CatalogLiveState {
     operations,
     presets,
     rules,
+    libraryStateJson,
     fingerprintCoverage,
     fingerprintMatches,
   };
@@ -954,6 +974,8 @@ function parseMutation(value: unknown): CatalogLiveMutation {
     }
     case "archive-set":
       return { kind, assetId: parseAssetId(input.assetId), archived: booleanValue(input.archived, "archived") };
+    case "library-state-replace":
+      return { kind, stateJson: parseLibraryStateJson(input.stateJson, "library state") };
     case "fingerprint-set":
       return { kind, fingerprint: parseFingerprint(input.fingerprint) };
     case "preset-upsert":

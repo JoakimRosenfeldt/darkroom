@@ -20,6 +20,10 @@ interface UseDevelopSettingsSyncOptions {
     metadataPatch?: SidecarMetadataPatch,
   ) => void;
   hydrateMetadata: (patch: SidecarMetadataPatch, sourceUpdatedAt: number) => void;
+  hydrateKeywords?: (
+    flat: readonly string[],
+    hierarchical: readonly string[],
+  ) => void;
 }
 
 interface PendingWrite {
@@ -143,6 +147,7 @@ export function useDevelopSettingsSync({
   metadata,
   mirrorDocument,
   hydrateMetadata,
+  hydrateKeywords,
 }: UseDevelopSettingsSyncOptions): void {
   const session = useDevelopStore((state) => state.sessions[entry.id]);
   const documentRevision = session?.documentRevision;
@@ -177,6 +182,7 @@ export function useDevelopSettingsSync({
         persistence.sidecarContentsKnown = true;
         persistence.failedWrite = null;
         if (sidecar) {
+          hydrateKeywords?.(sidecar.keywords.flat, sidecar.keywords.hierarchical);
           const metadataSnapshot = metadataRef.current;
           const documentIsNewer = sidecar.lastModified > metadataSnapshot.developUpdatedAt;
           const metadataIsNewer = sidecar.lastModified > metadataSnapshot.updatedAt;
@@ -224,6 +230,7 @@ export function useDevelopSettingsSync({
     entry.id,
     hydrateEntry,
     hydrateMetadata,
+    hydrateKeywords,
     markMetadataHydrated,
     mirrorDocument,
     setSidecarStatus,

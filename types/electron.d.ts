@@ -78,6 +78,16 @@ import type {
   AutoImportControlRequest,
   AutoImportStatus,
 } from "../lib/import/auto-import-api";
+import type {
+  MetadataAnalysisOperationRequest,
+  MetadataAnalysisProgress,
+  MetadataAnalysisRequest,
+  MetadataAnalysisResult,
+} from "../lib/library/metadata-analysis";
+import type {
+  ExactDuplicateTrashRequest,
+  ExactDuplicateTrashResult,
+} from "../lib/library/duplicate-actions";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -119,6 +129,10 @@ export interface DarkroomAPI {
   catalogWriteSidecar(request: CatalogSidecarWriteRequest): Promise<void>;
   catalogDecodeAsset(request: CatalogAssetRequest, decode: CatalogDecodeRequest): Promise<CatalogDecodeResult>;
   catalogTrashAsset(request: CatalogAssetRequest): Promise<void>;
+  catalogTrashExactDuplicates(request: ExactDuplicateTrashRequest): Promise<ExactDuplicateTrashResult>;
+  catalogAnalyzeMetadata(request: MetadataAnalysisRequest): Promise<MetadataAnalysisResult>;
+  catalogCancelMetadataAnalysis(request: MetadataAnalysisOperationRequest): Promise<void>;
+  onCatalogMetadataAnalysisProgress(listener: (progress: MetadataAnalysisProgress) => void): Unsubscribe;
   onCatalogEvent(listener: (event: CatalogEvent) => void): Unsubscribe;
   getFormatCapabilityReport(): Promise<FormatCapabilityReport>;
   catalogFingerprintStatus(request: CatalogFingerprintBackfillRequest): Promise<CatalogFingerprintBackfillProgress | null>;

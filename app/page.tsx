@@ -3,25 +3,14 @@
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
+import { DuplicateWorkspace } from "@/components/library/DuplicateWorkspace";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
 import { LibraryToolbar } from "@/components/shell/LibraryToolbar";
 import { SidePanel } from "@/components/shell/SidePanel";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import { FolderPickerButton } from "@/components/shell/FolderPickerButton";
-import {
-  filterByCuration,
-  filterByFormat,
-  sortLibraryEntries,
-} from "@/lib/library/curation";
-import {
-  filterByAlbum,
-  filterByFolderPath,
-} from "@/lib/library/folders";
-import {
-  filterArchivedEntries,
-  filterOnlyArchivedEntries,
-} from "@/lib/library/archive";
 import { useLibraryGridShortcuts } from "@/hooks/useEntryMetadataShortcuts";
+import { useLibraryResult } from "@/hooks/useLibraryResult";
 import { useAlbumPickerShortcut } from "@/hooks/useAlbumPickerShortcut";
 import { useLibraryContextMenu } from "@/hooks/useLibraryContextMenu";
 import { useLibraryStore } from "@/stores/library-store";
@@ -40,12 +29,12 @@ export default function HomePage() {
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const folderName = useLibraryStore((state) => state.folderName);
-  const albums = useLibraryStore((state) => state.albums);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
   const importState = useLibraryStore((state) => state.importState);
   const importStatus = useLibraryStore((state) => state.importStatus);
   const importError = useLibraryStore((state) => state.importError);
+  const metadataAnalysis = useLibraryStore((state) => state.metadataAnalysis);
   const cancelFolderOperation = useLibraryStore(
     (state) => state.cancelFolderOperation,
   );
@@ -53,6 +42,8 @@ export default function HomePage() {
     (state) => state.applyMetadataToEntries,
   );
   const setCatalogView = useLibraryStore((state) => state.setCatalogView);
+  const reconcileSelection = useLibraryStore((state) => state.reconcileSelection);
+  const cancelMetadataAnalysis = useLibraryStore((state) => state.cancelMetadataAnalysis);
 
   useEffect(() => {
     if (catalogView.type === "archive" && archivedEntryIds.length === 0) {
@@ -61,52 +52,34 @@ export default function HomePage() {
   }, [archivedEntryIds.length, catalogView.type, setCatalogView]);
 
   const [viewSettings, updateViewSettings] = useLibraryViewSettings();
-  const { sort, filter, curationFilter, thumbSize, viewMode } = viewSettings;
+  const {
+    sort,
+    sortDirection,
+    filter,
+    curationFilter,
+    textQuery,
+    facets,
+    thumbSize,
+    viewMode,
+    autoAdvance,
+  } = viewSettings;
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
 
-  const libraryEntries = useMemo(
-    () => filterArchivedEntries(entries, archivedEntryIds),
-    [entries, archivedEntryIds],
-  );
-
+  const libraryResult = useLibraryResult();
   const visibleEntries = useMemo(() => {
-    let scoped =
-      catalogView.type === "archive"
-        ? filterOnlyArchivedEntries(entries, archivedEntryIds)
-        : libraryEntries;
-
-    if (catalogView.type === "folder") {
-      scoped = filterByFolderPath(scoped, catalogView.path);
-    } else if (catalogView.type === "album") {
-      const album = albums.find((item) => item.id === catalogView.albumId);
-      scoped = filterByAlbum(scoped, album);
-    }
-
-    return sortLibraryEntries(
-      filterByFormat(
-        filterByCuration(scoped, entryMetadata, curationFilter),
-        filter,
-      ),
-      entryMetadata,
-      sort,
+    const byId = new Map<string, (typeof entries)[number]>(
+      entries.map((entry) => [entry.id, entry]),
     );
-  }, [
-    entries,
-    archivedEntryIds,
-    libraryEntries,
-    entryMetadata,
-    albums,
-    catalogView,
-    curationFilter,
-    filter,
-    sort,
-  ]);
+    return libraryResult.visibleEntryIds
+      .map((id) => byId.get(id))
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+  }, [entries, libraryResult.visibleEntryIds]);
+  const visibleOrder = [...libraryResult.visibleEntryIds];
 
-  const visibleOrder = useMemo(
-    () => visibleEntries.map((entry) => entry.id),
-    [visibleEntries],
-  );
+  useEffect(() => {
+    reconcileSelection(libraryResult.visibleEntryIds);
+  }, [libraryResult.revision, libraryResult.visibleEntryIds, reconcileSelection]);
 
   const { openContextMenu, contextMenu, actionOverlayOpen } =
     useLibraryContextMenu(visibleOrder, setExportEntryIds);
@@ -146,23 +119,38 @@ export default function HomePage() {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <LibraryToolbar
-            photoCount={visibleEntries.length}
+            photoCount={libraryResult.photoCount}
             sort={sort}
+            sortDirection={sortDirection}
             filter={filter}
             curationFilter={curationFilter}
+            textQuery={textQuery}
+            facets={facets}
+            facetCounts={libraryResult.facetCounts}
             thumbSize={thumbSize}
             viewMode={viewMode}
             onSortChange={(next) => updateViewSettings({ sort: next })}
+            onSortDirectionChange={(next) => updateViewSettings({ sortDirection: next })}
             onFilterChange={(next) => updateViewSettings({ filter: next })}
             onCurationFilterChange={(next) =>
               updateViewSettings({ curationFilter: next })
             }
+            onTextQueryChange={(next) => updateViewSettings({ textQuery: next })}
+            onFacetsChange={(next) => updateViewSettings({ facets: next })}
             onThumbSizeChange={(next) =>
               updateViewSettings({ thumbSize: next })
             }
             onViewModeChange={(next) =>
               updateViewSettings({ viewMode: next })
             }
+            autoAdvance={autoAdvance}
+            onAutoAdvanceChange={(next) => updateViewSettings({ autoAdvance: next })}
+            onCompare={() => {
+              const [candidateId, selectId] = selectedEntryIds;
+              if (candidateId && selectId) {
+                router.push(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
+              }
+            }}
             onExport={() => setExportEntryIds(selectedEntryIds)}
           />
 
@@ -210,12 +198,39 @@ export default function HomePage() {
                     {importStatus}
                   </div>
                 ) : null}
+                {metadataAnalysis ? (
+                  <div className="flex items-center gap-3 border-b border-lr-border-subtle bg-lr-panel px-3 py-1.5 text-xs text-lr-text-muted" role="status">
+                    <span>
+                      {metadataAnalysis.cancelled ? "Stopping metadata analysis" : "Analyzing metadata"}
+                      {` · ${metadataAnalysis.completed}/${metadataAnalysis.total}`}
+                      {metadataAnalysis.failed > 0 ? ` · ${metadataAnalysis.failed} unavailable` : ""}
+                    </span>
+                    {!metadataAnalysis.cancelled ? (
+                      <button
+                        type="button"
+                        onClick={cancelMetadataAnalysis}
+                        className="text-lr-text transition hover:text-lr-accent"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {importError ? (
                   <div className="border-b border-lr-border-subtle bg-lr-panel px-3 py-1.5 text-xs text-red-400">
                     {importError}
                   </div>
                 ) : null}
-                {viewMode === "dynamic" ? (
+                {catalogView.type === "duplicates" ? (
+                  <DuplicateWorkspace />
+                ) : visibleEntries.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                    <p className="text-sm text-lr-text-muted">No photos match this view.</p>
+                    <p className="max-w-sm text-xs text-lr-text-faint">
+                      {textQuery ? `Nothing matched “${textQuery}”. Clear search or adjust filters.` : "Adjust the active filters or choose another collection."}
+                    </p>
+                  </div>
+                ) : viewMode === "dynamic" ? (
                   <DynamicPhotoGrid
                     entries={visibleEntries}
                     rowHeight={thumbSize}
@@ -384,6 +399,7 @@ function LibraryCurationBar({
                 key={label}
                 type="button"
                 title={`${label} label`}
+                aria-label={`${label} color label`}
                 onClick={() =>
                   onApply(selectedEntryIds, {
                     colorLabel:

@@ -129,7 +129,7 @@ export interface LibraryRuntimeOptions {
 
 export interface AssetScopedOperations {
   readonly readSidecar: (location: NativeAssetLocation) => Promise<AssetSidecarResult | null>;
-  readonly writeSidecar: (location: NativeAssetLocation, contents: string | null) => Promise<void>;
+  readonly writeSidecar: (location: NativeAssetLocation, contents: string | null, expectedLastModified?: number | null) => Promise<void>;
   readonly trash: (location: NativeAssetLocation) => Promise<void>;
   readonly decode: (location: NativeAssetLocation, request: unknown) => Promise<unknown>;
 }
@@ -532,7 +532,7 @@ export class LibraryRuntime {
     const input: AssetSidecarWriteRequest = parseAssetSidecarWriteRequestInput(value);
     const location = await this.assetLocation(input);
     this.requireSession(input.catalogId, input.sessionId);
-    await operations.writeSidecar(location, input.contents);
+    await operations.writeSidecar(location, input.contents, input.expectedLastModified);
     this.requireSession(input.catalogId, input.sessionId);
   }
 
