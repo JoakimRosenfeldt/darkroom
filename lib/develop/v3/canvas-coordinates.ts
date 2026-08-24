@@ -92,7 +92,12 @@ export function mapV3CanvasOutputToCanonical(
   return {
     kind: "mapped",
     point,
-    insideDestination: point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1,
+    insideDestination:
+      postOptics.insideDestination
+      && point.x >= 0
+      && point.x <= 1
+      && point.y >= 0
+      && point.y <= 1,
   };
 }
 
