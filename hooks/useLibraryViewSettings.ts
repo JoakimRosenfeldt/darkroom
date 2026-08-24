@@ -11,8 +11,10 @@ import {
   EMPTY_LIBRARY_FACETS,
   type EditedFacetValue,
   type LibraryFacets,
+  type MetadataAvailabilityFacetValue,
   type NumericFacetRange,
 } from "@/lib/library/query";
+import type { MetadataSyncStatus } from "@/lib/metadata/types";
 
 export interface LibraryViewSettings {
   readonly sort: SortOption;
@@ -73,12 +75,26 @@ function parseFacets(value: unknown): LibraryFacets {
   const edited = stringArray(value.edited).filter(
     (item): item is EditedFacetValue => item === "edited" || item === "unedited",
   );
+  const metadataAvailability = stringArray(value.metadataAvailability).filter(
+    (item): item is MetadataAvailabilityFacetValue => (
+      item === "ready" || item === "pending" || item === "warning" || item === "error"
+    ),
+  );
+  const metadataSync = stringArray(value.metadataSync).filter(
+    (item): item is MetadataSyncStatus => (
+      item === "clean" || item === "catalog-only" || item === "sidecar-only" ||
+      item === "pending" || item === "conflict" || item === "error" || item === "disabled"
+    ),
+  );
   return {
     cameras: stringArray(value.cameras),
     lenses: stringArray(value.lenses),
     iso: numericRange(value.iso),
     focalLength: numericRange(value.focalLength),
     locations: stringArray(value.locations),
+    captureYears: stringArray(value.captureYears),
+    metadataAvailability,
+    metadataSync,
     edited,
     albums: stringArray(value.albums),
     keywords: stringArray(value.keywords),

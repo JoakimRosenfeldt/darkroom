@@ -52,11 +52,8 @@ export function DevelopSidePanels({
         </aside>
       ) : activePanel === "info" ? (
         <MetadataPanel
-          metadata={decoded.metadata}
-          fileName={entry.name}
-          profileId={entry.profileId}
-          formatId={entry.formatId}
-          formatAvailability={entry.formatAvailability}
+          entry={entry}
+          decodedMetadata={decoded.metadata}
         />
       ) : activePanel === "masking" ? (
         <MaskingPanel

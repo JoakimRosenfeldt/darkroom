@@ -1,5 +1,12 @@
 import type { EntryMetadata } from "../catalog/types";
 import type { LibraryEntry } from "../fs/types";
+import {
+  effectiveMetadataValue,
+  metadataValue,
+  type MetadataOverride,
+  type MetadataSyncStatus,
+  type MetadataValue,
+} from "../metadata/types";
 import type {
   EntryAnalysis,
   Keyword,
@@ -18,6 +25,7 @@ export interface NumericFacetRange {
 
 export type EditedFacetValue = "edited" | "unedited";
 export type KeywordFacetMode = "exact" | "descendants" | "ancestors";
+export type MetadataAvailabilityFacetValue = "ready" | "pending" | "warning" | "error";
 
 export interface LibraryFacets {
   readonly cameras: readonly string[];
@@ -25,6 +33,9 @@ export interface LibraryFacets {
   readonly iso: NumericFacetRange;
   readonly focalLength: NumericFacetRange;
   readonly locations: readonly string[];
+  readonly captureYears: readonly string[];
+  readonly metadataAvailability: readonly MetadataAvailabilityFacetValue[];
+  readonly metadataSync: readonly MetadataSyncStatus[];
   readonly edited: readonly EditedFacetValue[];
   readonly albums: readonly string[];
   readonly keywords: readonly string[];
@@ -44,6 +55,9 @@ export interface LibraryFacetCounts {
   readonly iso: NumericFacetSummary;
   readonly focalLength: NumericFacetSummary;
   readonly locations: Readonly<Record<string, number>>;
+  readonly captureYears: Readonly<Record<string, number>>;
+  readonly metadataAvailability: Readonly<Record<MetadataAvailabilityFacetValue, number>>;
+  readonly metadataSync: Readonly<Record<MetadataSyncStatus, number>>;
   readonly edited: Readonly<Record<EditedFacetValue, number>>;
   readonly albums: Readonly<Record<string, number>>;
   readonly keywords: Readonly<Record<string, number>>;
@@ -55,6 +69,9 @@ export const EMPTY_LIBRARY_FACETS: LibraryFacets = {
   iso: { min: null, max: null, includeUnknown: false },
   focalLength: { min: null, max: null, includeUnknown: false },
   locations: [],
+  captureYears: [],
+  metadataAvailability: [],
+  metadataSync: [],
   edited: [],
   albums: [],
   keywords: [],
@@ -72,6 +89,9 @@ export interface QueryIndexRecord {
   readonly iso: number | null;
   readonly focalLength: number | null;
   readonly location: string | null;
+  readonly captureYear: string | null;
+  readonly metadataAvailability: MetadataAvailabilityFacetValue;
+  readonly metadataSync: MetadataSyncStatus;
   readonly edited: boolean;
   readonly albumIds: ReadonlySet<string>;
   readonly albumNames: readonly string[];
@@ -103,6 +123,32 @@ function displayCamera(analysis: EntryAnalysis | undefined): string | null {
     .join(" ")
     .trim();
   return camera.length > 0 ? camera : null;
+}
+
+function effectiveValue<T>(
+  source: MetadataValue<T> | undefined,
+  override: MetadataOverride<T> | undefined,
+  catalogValue: T | null,
+): T | null {
+  if (override !== undefined) {
+    return source === undefined
+      ? override.kind === "set" ? override.value : null
+      : effectiveMetadataValue(source, override);
+  }
+  return catalogValue ?? (source === undefined ? null : metadataValue(source));
+}
+
+export function effectiveCaptureTimeKey(
+  workspace: LibraryWorkspaceState,
+  entryId: string,
+): number | null {
+  const analysis = workspace.analysisByEntryId[entryId];
+  const override = workspace.metadataOverridesByEntryId[entryId]?.captureTime;
+  if (override?.kind === "set") return override.value.sortKey;
+  if (override?.kind === "clear") return null;
+  return metadataValue(analysis?.source?.capture.time ?? { kind: "absent" })?.sortKey ??
+    analysis?.captureTimeKey ??
+    null;
 }
 
 export function displayLocation(analysis: EntryAnalysis | undefined): string | null {
@@ -183,6 +229,9 @@ export function buildQueryIndex(
   const records = new Map<string, QueryIndexRecord>();
   for (const entry of entries) {
     const analysis = workspace.analysisByEntryId[entry.id];
+    const source = analysis?.source;
+    const overrides = workspace.metadataOverridesByEntryId[entry.id];
+    const catalogMetadata = metadata[entry.id];
     const camera = displayCamera(analysis);
     const lens = analysis?.lens ?? null;
     const location = displayLocation(analysis);
@@ -201,11 +250,35 @@ export function buildQueryIndex(
       keyword.name,
       ...keyword.synonyms,
     ]);
+    const title = effectiveValue(source?.description.title, overrides?.title, catalogMetadata?.title ?? null);
+    const caption = effectiveValue(source?.description.caption, overrides?.caption, catalogMetadata?.caption ?? null);
+    const copyright = effectiveValue(source?.description.copyright, overrides?.copyright, catalogMetadata?.copyright ?? null);
+    const descriptiveKeywords = effectiveValue(
+      source?.description.keywords,
+      overrides?.keywords,
+      catalogMetadata?.keywords ?? null,
+    ) ?? [];
+    const captureTimeKey = effectiveCaptureTimeKey(workspace, entry.id);
+    const captureYear = captureTimeKey === null
+      ? null
+      : String(new Date(captureTimeKey).getUTCFullYear());
+    const metadataAvailability: MetadataAvailabilityFacetValue = analysis === undefined
+      ? "pending"
+      : analysis.error !== null
+        ? "error"
+        : (source?.warnings.length ?? 0) > 0
+          ? "warning"
+          : "ready";
+    const metadataSync = workspace.metadataSyncByEntryId[entry.id]?.status ?? "clean";
     const searchableText = normalizeSearchText([
       entry.name,
       entry.relativePath,
       camera,
       lens,
+      title,
+      caption,
+      copyright,
+      ...descriptiveKeywords,
       ...albumNames,
       ...keywordPaths,
     ].filter((value): value is string => value !== null).join("\n"));
@@ -220,6 +293,9 @@ export function buildQueryIndex(
       iso: analysis?.iso ?? null,
       focalLength: analysis?.focalLength ?? null,
       location,
+      captureYear,
+      metadataAvailability,
+      metadataSync,
       edited: metadata[entry.id]?.develop !== undefined,
       albumIds,
       albumNames,
@@ -265,6 +341,17 @@ export function matchesFacets(
     !matchesNumericRange(record.focalLength, facets.focalLength)
   ) return false;
   if (excludedFacet !== "locations" && !includesNormalized(facets.locations, record.location)) return false;
+  if (excludedFacet !== "captureYears" && !includesNormalized(facets.captureYears, record.captureYear)) return false;
+  if (
+    excludedFacet !== "metadataAvailability" &&
+    facets.metadataAvailability.length > 0 &&
+    !facets.metadataAvailability.includes(record.metadataAvailability)
+  ) return false;
+  if (
+    excludedFacet !== "metadataSync" &&
+    facets.metadataSync.length > 0 &&
+    !facets.metadataSync.includes(record.metadataSync)
+  ) return false;
   if (
     excludedFacet !== "edited" &&
     facets.edited.length > 0 &&
@@ -310,14 +397,37 @@ export function computeFacetCounts(
   const cameras: Record<string, number> = {};
   const lenses: Record<string, number> = {};
   const locations: Record<string, number> = {};
+  const captureYears: Record<string, number> = {};
   const albums: Record<string, number> = {};
   const keywords: Record<string, number> = {};
   const edited: Record<EditedFacetValue, number> = { edited: 0, unedited: 0 };
+  const metadataAvailability: Record<MetadataAvailabilityFacetValue, number> = {
+    ready: 0,
+    pending: 0,
+    warning: 0,
+    error: 0,
+  };
+  const metadataSync: Record<MetadataSyncStatus, number> = {
+    clean: 0,
+    "catalog-only": 0,
+    "sidecar-only": 0,
+    pending: 0,
+    conflict: 0,
+    error: 0,
+    disabled: 0,
+  };
 
   for (const record of records) {
     if (matchesFacets(record, facets, "cameras")) increment(cameras, record.camera);
     if (matchesFacets(record, facets, "lenses")) increment(lenses, record.lens);
     if (matchesFacets(record, facets, "locations")) increment(locations, record.location);
+    if (matchesFacets(record, facets, "captureYears")) increment(captureYears, record.captureYear);
+    if (matchesFacets(record, facets, "metadataAvailability")) {
+      metadataAvailability[record.metadataAvailability] += 1;
+    }
+    if (matchesFacets(record, facets, "metadataSync")) {
+      metadataSync[record.metadataSync] += 1;
+    }
     if (matchesFacets(record, facets, "edited")) {
       edited[record.edited ? "edited" : "unedited"] += 1;
     }
@@ -339,6 +449,9 @@ export function computeFacetCounts(
     iso: numericSummary(isoRecords.map((record) => record.iso)),
     focalLength: numericSummary(focalRecords.map((record) => record.focalLength)),
     locations,
+    captureYears,
+    metadataAvailability,
+    metadataSync,
     edited,
     albums,
     keywords,
@@ -416,6 +529,9 @@ export function hasActiveFacets(facets: LibraryFacets): boolean {
     facets.focalLength.max !== null ||
     facets.focalLength.includeUnknown ||
     facets.locations.length > 0 ||
+    facets.captureYears.length > 0 ||
+    facets.metadataAvailability.length > 0 ||
+    facets.metadataSync.length > 0 ||
     facets.edited.length > 0 ||
     facets.albums.length > 0 ||
     facets.keywords.length > 0;

@@ -700,7 +700,7 @@ function registerIpcHandlers(): void {
     upsert: (value) => catalogRegistryStore.upsert(value),
     remove: (catalogId) => catalogRegistryStore.remove(catalogId),
   };
-  const nativeAssetAccess = new NativeAssetAccess();
+  const nativeAssetAccess = new NativeAssetAccess(path.join(app.getPath("userData"), "xmp-backups"));
   const metadataCache = new MetadataCache(path.join(app.getPath("userData"), "metadata-cache"));
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),

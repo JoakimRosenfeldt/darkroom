@@ -46,6 +46,7 @@ interface EntryPersistence {
   pending: PendingWrite | null;
   queue: Promise<void>;
   sidecarContents: string | null;
+  sidecarLastModified: number | null;
   sidecarContentsKnown: boolean;
   failedWrite: Pick<PendingWrite, "documentRevision" | "metadataRevision"> | null;
   hydration: Promise<void>;
@@ -61,6 +62,7 @@ function persistenceFor(entryId: string): EntryPersistence {
     pending: null,
     queue: Promise.resolve(),
     sidecarContents: null,
+    sidecarLastModified: null,
     sidecarContentsKnown: false,
     failedWrite: null,
     hydration: Promise.resolve(),
@@ -92,12 +94,15 @@ async function writeCaptured(captured: PendingWrite): Promise<void> {
     captured.mirrorDocument(captured.document);
   }
   if (!persistence.sidecarContentsKnown) return;
-  persistence.sidecarContents = await writeDevelopSidecar(
+  const written = await writeDevelopSidecar(
     captured.entry,
     captured.document,
     captured.metadata,
     persistence.sidecarContents,
+    persistence.sidecarLastModified,
   );
+  persistence.sidecarContents = written?.contents ?? null;
+  persistence.sidecarLastModified = written?.lastModified ?? null;
   persistence.failedWrite = null;
   useDevelopStore.getState().markPersisted(
     captured.entryId,
@@ -179,6 +184,7 @@ export function useDevelopSettingsSync({
         const sidecar = await readDevelopSidecar(entry);
         if (!active) return;
         persistence.sidecarContents = sidecar?.contents ?? null;
+        persistence.sidecarLastModified = sidecar?.lastModified ?? null;
         persistence.sidecarContentsKnown = true;
         persistence.failedWrite = null;
         if (sidecar) {

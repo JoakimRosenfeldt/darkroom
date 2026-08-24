@@ -35,7 +35,8 @@ export async function writeDevelopSidecar(
   document: DevelopDocument,
   metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
   existingContents: string | null,
-): Promise<string | null> {
+  expectedLastModified: number | null,
+): Promise<{ readonly contents: string; readonly lastModified: number } | null> {
   const contents = serializeDevelopXmp(document, metadata, existingContents);
   if (contents === null) {
     return null;
@@ -43,6 +44,9 @@ export async function writeDevelopSidecar(
   await getDarkroomAPI().catalogWriteSidecar({
     ...getAssetRequest(entry),
     contents,
+    expectedLastModified,
   });
-  return contents;
+  const written = await getDarkroomAPI().catalogReadSidecar(getAssetRequest(entry));
+  if (!written) throw new Error("XMP sidecar disappeared after it was written.");
+  return written;
 }

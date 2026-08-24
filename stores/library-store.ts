@@ -74,6 +74,11 @@ import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
+import {
+  parseMetadataXmp,
+  reconcileMetadataXmp,
+  serializeMetadataXmp,
+} from "@/lib/develop/xmp";
 import { setDevelopMetadataWriter, useDevelopStore } from "@/stores/develop-store";
 
 const fsDebug = (...args: unknown[]) => console.log("[darkroom:fs]", ...args);
@@ -159,6 +164,10 @@ interface LibraryStore {
   ) => void;
   saveMetadataPreset: (preset: MetadataPreset) => void;
   deleteMetadataPreset: (presetId: string) => void;
+  publishMetadataXmp: (
+    entryId: string,
+    resolution?: "merge" | "catalog-wins" | "sidecar-wins",
+  ) => Promise<"published" | "conflict" | "reloaded">;
   mirrorDevelopDocument: (
     entryId: string,
     develop: EntryMetadata["develop"],
@@ -242,6 +251,16 @@ interface LibraryStore {
 let folderOperationGeneration = 0;
 let metadataProgressUnsubscribe: (() => void) | null = null;
 let autoAdvanceGeneration = 0;
+
+const METADATA_EDITABLE_FIELDS: readonly MetadataEditableField[] = [
+  "title", "caption", "copyright", "keywords", "captureTime", "latitude", "longitude",
+];
+
+async function sha256Text(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 const EMPTY_FINGERPRINT_COVERAGE: CatalogV3FingerprintCoverage = {
   total: 0,
@@ -972,6 +991,106 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       libraryWorkspace: { ...current.libraryWorkspace, metadataPresets },
     });
     scheduleStateSync(set, get);
+  },
+
+  publishMetadataXmp: async (entryId, resolution = "merge") => {
+    const started = get();
+    const entry = started.entries.find((item) => item.id === entryId);
+    if (!entry || started.catalogId === null || started.sessionId === null) {
+      throw new Error("Photo is unavailable.");
+    }
+    const api = getDarkroomAPI();
+    const request = getAssetRequest(entry);
+    const sidecar = await api.catalogReadSidecar(request);
+    const sidecarProjection = sidecar ? parseMetadataXmp(sidecar.contents) : {};
+    const currentSync = started.libraryWorkspace.metadataSyncByEntryId[entryId];
+    const baseline = currentSync?.baseline ?? sidecarProjection;
+    const catalogProjection = started.libraryWorkspace.metadataOverridesByEntryId[entryId] ?? {};
+    const reconciled = reconcileMetadataXmp(baseline, catalogProjection, sidecarProjection);
+    if (resolution === "merge" && reconciled.conflicts.length > 0) {
+      const latest = get();
+      set({
+        libraryWorkspace: {
+          ...latest.libraryWorkspace,
+          metadataSyncByEntryId: {
+            ...latest.libraryWorkspace.metadataSyncByEntryId,
+            [entryId]: {
+              status: "conflict",
+              sidecarSha256: sidecar ? await sha256Text(sidecar.contents) : null,
+              sidecarModifiedAt: sidecar?.lastModified ?? null,
+              catalogRevision: latest.catalogRevision,
+              baseline,
+              ownedFields: currentSync?.ownedFields ?? [],
+              conflicts: reconciled.conflicts,
+              message: `${reconciled.conflicts.length} metadata field${reconciled.conflicts.length === 1 ? "" : "s"} changed in both the catalog and XMP.`,
+              updatedAt: Date.now(),
+            },
+          },
+        },
+      });
+      scheduleStateSync(set, get);
+      return "conflict";
+    }
+    if (resolution === "sidecar-wins") {
+      get().resetMetadataFields([entryId], METADATA_EDITABLE_FIELDS);
+      get().applyMetadataOverrides([entryId], sidecarProjection);
+      const latest = get();
+      set({
+        libraryWorkspace: {
+          ...latest.libraryWorkspace,
+          metadataSyncByEntryId: {
+            ...latest.libraryWorkspace.metadataSyncByEntryId,
+            [entryId]: {
+              status: "clean",
+              sidecarSha256: sidecar ? await sha256Text(sidecar.contents) : null,
+              sidecarModifiedAt: sidecar?.lastModified ?? null,
+              catalogRevision: latest.catalogRevision,
+              baseline: sidecarProjection,
+              ownedFields: METADATA_EDITABLE_FIELDS.filter((field) => sidecarProjection[field] !== undefined),
+              conflicts: [],
+              message: "Catalog metadata reloaded from XMP.",
+              updatedAt: Date.now(),
+            },
+          },
+        },
+      });
+      scheduleStateSync(set, get);
+      return "reloaded";
+    }
+    const desired = resolution === "catalog-wins" ? catalogProjection : reconciled.merged;
+    const contents = serializeMetadataXmp(sidecar?.contents ?? null, desired);
+    await api.catalogWriteSidecar({
+      ...request,
+      contents,
+      expectedLastModified: sidecar?.lastModified ?? null,
+    });
+    const confirmed = await api.catalogReadSidecar(request);
+    if (!confirmed) throw new Error("XMP sidecar disappeared after publication.");
+    const latest = get();
+    if (latest.catalogId !== started.catalogId || latest.sessionId !== started.sessionId) {
+      throw new Error("Catalog changed before XMP publication completed.");
+    }
+    set({
+      libraryWorkspace: {
+        ...latest.libraryWorkspace,
+        metadataSyncByEntryId: {
+          ...latest.libraryWorkspace.metadataSyncByEntryId,
+          [entryId]: {
+            status: "clean",
+            sidecarSha256: await sha256Text(confirmed.contents),
+            sidecarModifiedAt: confirmed.lastModified,
+            catalogRevision: latest.catalogRevision,
+            baseline: desired,
+            ownedFields: METADATA_EDITABLE_FIELDS.filter((field) => desired[field] !== undefined),
+            conflicts: [],
+            message: "Catalog metadata published to XMP with a recovery backup.",
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    });
+    scheduleStateSync(set, get);
+    return "published";
   },
 
   mirrorDevelopDocument: (entryId, develop, sourceUpdatedAt = Date.now(), metadataPatch = {}) => {
