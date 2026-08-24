@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PhotoViewer } from "@/components/viewer/PhotoViewer";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
@@ -16,10 +16,6 @@ import { isLibraryResultId } from "@/lib/library/result-contract";
 import { isAssetId } from "@/lib/catalog/ids";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
-
-function subscribeRepository(): () => void {
-  return () => {};
-}
 
 function ResultUnavailable({ message }: { message: string }) {
   const router = useRouter();
@@ -55,10 +51,9 @@ function PhotoPageContent() {
   const photoId = isAssetId(photoParam) ? photoParam : null;
   const resultId = isLibraryResultId(resultParam) ? resultParam : null;
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
-  const query = useSyncExternalStore(
-    subscribeRepository,
+  const query = useMemo(
     () => resultId ? getLibraryResultQuery(resultId) : null,
-    () => null,
+    [resultId],
   );
   const [resolutionState, setResolutionState] = useState<{
     readonly key: string;
