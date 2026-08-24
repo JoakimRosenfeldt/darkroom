@@ -72,7 +72,7 @@ import {
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { createDefaultDevelopDocument } from "@/lib/develop/document";
+import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import {
   parseMetadataXmp,
@@ -525,7 +525,7 @@ function applyLocalMetadata(
         item.entryId,
         item.before,
         item.after,
-        item.before.develop ?? createDefaultDevelopDocument(),
+        item.before.develop ?? createDefaultV3DevelopDocument(),
       );
     }
   }

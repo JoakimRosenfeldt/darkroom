@@ -64,6 +64,7 @@ export function useDevelopSettingsSync({
   }, [entry, metadata]);
 
   useEffect(() => {
+    let active = true;
     const repository = getDevelopRepository(entry);
     const catalogDocument = repository.catalogDocument(metadataRef.current);
     activateEntry(entry.catalogId, entry.id, catalogDocument);
@@ -101,8 +102,21 @@ export function useDevelopSettingsSync({
         synchronizeSession(entry.id, snapshot);
       },
     });
-    void repository.open(metadataRef.current).catch(() => undefined);
+    void repository.open(metadataRef.current).then(async () => {
+      if (!active || session.snapshot().processKind !== "v2") return;
+      try {
+        const snapshot = await session.upgradeToCurrentProcess();
+        if (active) synchronizeSession(entry.id, snapshot);
+      } catch (error) {
+        if (!active) return;
+        setSidecarStatus(
+          "error",
+          error instanceof Error ? error.message : "Could not prepare the editor.",
+        );
+      }
+    }).catch(() => undefined);
     return () => {
+      active = false;
       detachSourceSignatureProvider();
       void repository.flush();
     };

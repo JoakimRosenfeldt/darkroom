@@ -38,9 +38,15 @@ import type {
   PersistedCrop,
 } from "@/lib/develop/v3/document";
 import type { GeometryPoint } from "@/lib/develop/v3/geometry";
+import {
+  manualMaskCoverage,
+  pointInLocalGeometryFrame,
+} from "@/lib/develop/v3/manual-edits";
 import { rgbToHsl } from "@/lib/develop/v3/point-color";
 import type { Rgb } from "@/lib/develop/v3/profiles";
+import { loadV3MaskCoverageAssets } from "@/lib/develop/v3/runtime";
 import type { SourceRecord } from "@/lib/develop/process";
+import { sourceSignaturesEqual } from "@/lib/develop/source-transform";
 import { proposeSampledWhiteBalance } from "@/lib/develop/v3/white-balance";
 import { useDevelopStore } from "@/stores/develop-store";
 
@@ -129,6 +135,9 @@ const CROP_HANDLES: readonly { readonly handle: CropHandle; readonly className: 
   { handle: "sw", className: "-bottom-1 -left-1 cursor-nesw-resize" },
   { handle: "w", className: "-left-1 top-1/2 -translate-y-1/2 cursor-ew-resize" },
 ];
+
+const MAX_MASK_OVERLAY_PIXELS = 512 * 512;
+const MASK_OVERLAY_COLOR = { red: 112, green: 215, blue: 255, alpha: 0.42 };
 
 function clampUnit(value: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -276,6 +285,23 @@ function fromTopCrop(
   };
 }
 
+function maskOverlayDimensions(width: number, height: number): DisplayDimensions {
+  const scale = Math.min(1, Math.sqrt(MAX_MASK_OVERLAY_PIXELS / (width * height)));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+interface DisplayDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 export function V3CanvasOverlay({
   document,
   source,
@@ -296,6 +322,8 @@ export function V3CanvasOverlay({
   const maskGestureRef = useRef<MaskGesture | null>(null);
   const cleanupGestureRef = useRef<CleanupGesture | null>(null);
   const cropGestureRef = useRef<CropGesture | null>(null);
+  const maskOverlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const maskOverlayRequestRef = useRef(0);
   const pointerCaptureRef = useRef<{
     readonly pointerId: number;
     readonly element: HTMLElement;
@@ -313,6 +341,93 @@ export function V3CanvasOverlay({
   const overlayVisible = sessionUi?.overlayVisible ?? true;
 
   const cropDraft = cropPreview ?? document.geometry.crop;
+
+  useEffect(() => {
+    const canvas = maskOverlayCanvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const requestId = ++maskOverlayRequestRef.current;
+    let cancelled = false;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (
+      !maskingActive ||
+      !overlayVisible ||
+      !selectedMask ||
+      selectedComponent?.kind !== "ai" ||
+      !sourceSignaturesEqual(selectedComponent.source, source.signature)
+    ) {
+      return;
+    }
+
+    const renderOverlay = async (): Promise<void> => {
+      const assets = await loadV3MaskCoverageAssets(document, source);
+      if (
+        cancelled ||
+        requestId !== maskOverlayRequestRef.current ||
+        !assets?.maskMatte(selectedComponent.assetId)
+      ) return;
+
+      const dimensions = maskOverlayDimensions(width, height);
+      const pixels = new Uint8ClampedArray(dimensions.width * dimensions.height * 4);
+      const sourceDimensions = v3OrientedDimensions(source);
+      for (let y = 0; y < dimensions.height; y += 1) {
+        if (y % 32 === 0) {
+          await nextAnimationFrame();
+          if (cancelled || requestId !== maskOverlayRequestRef.current) return;
+        }
+        for (let x = 0; x < dimensions.width; x += 1) {
+          const output = {
+            x: (x + 0.5) / dimensions.width,
+            y: 1 - (y + 0.5) / dimensions.height,
+          };
+          const mapped = mapV3CanvasOutputToCanonical(output, document, source);
+          if (mapped.kind !== "mapped" || !mapped.insideDestination) continue;
+          const coverage = manualMaskCoverage(
+            selectedMask,
+            pointInLocalGeometryFrame(document.local.geometryFrame, mapped.point),
+            sourceDimensions,
+            assets,
+          );
+          if (coverage <= 0) continue;
+          const offset = (y * dimensions.width + x) * 4;
+          pixels[offset] = MASK_OVERLAY_COLOR.red;
+          pixels[offset + 1] = MASK_OVERLAY_COLOR.green;
+          pixels[offset + 2] = MASK_OVERLAY_COLOR.blue;
+          pixels[offset + 3] = Math.round(coverage * MASK_OVERLAY_COLOR.alpha * 255);
+        }
+      }
+
+      const state = useDevelopStore.getState();
+      const session = state.sessions[source.signature.entryId];
+      if (
+        cancelled ||
+        requestId !== maskOverlayRequestRef.current ||
+        state.activeCatalogId !== source.signature.catalogId ||
+        state.activeEntryId !== source.signature.entryId ||
+        session?.persistedDocument !== document ||
+        maskOverlayCanvasRef.current !== canvas
+      ) return;
+      canvas.width = dimensions.width;
+      canvas.height = dimensions.height;
+      context.putImageData(new ImageData(pixels, dimensions.width, dimensions.height), 0, 0);
+    };
+
+    void renderOverlay();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    document,
+    height,
+    maskingActive,
+    overlayVisible,
+    selectedComponent,
+    selectedMask,
+    source,
+    width,
+  ]);
 
   useEffect(() => {
     function cancelTool(event: KeyboardEvent): void {
@@ -432,7 +547,7 @@ export function V3CanvasOverlay({
     dispatch({
       kind: "replace-v3-semantic-group",
       group: "local",
-      value: { ...document.local, geometryFrame: "canonical-v3", masks },
+      value: { ...document.local, masks },
     }, component.kind === "brush" ? "Paint mask" : `Draw ${component.kind}`);
     useDevelopStore.getState().setSelectedMask(target.maskId);
     useDevelopStore.getState().setSelectedComponent(component.id);
@@ -957,6 +1072,12 @@ export function V3CanvasOverlay({
           </div>
         </div>
       ) : null}
+
+      <canvas
+        ref={maskOverlayCanvasRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 h-full w-full"
+      />
 
       {maskingActive && overlayVisible && guideComponent ? (
         <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height} aria-hidden="true">

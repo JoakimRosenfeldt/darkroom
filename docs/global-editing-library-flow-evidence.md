@@ -139,10 +139,11 @@ Gate 0 is open. The code contracts assign one owner to each state class and sema
 The feature branch now contains the full code path described by the plan:
 
 - exact Library query and ordered-ID snapshots, including missing-entry handling and explicit refresh;
-- one version-aware Develop session and repository for v2, v3, XMP, catalog persistence, undo, redo, render, export, and batch work;
-- strict v3 documents, migration receipts, retained v2 rollback data, stale-source checks, semantic render plans, SDR RGBA8 preview, and tiled export;
+- one current-process Develop editor and one version-aware repository for legacy input, XMP, catalog persistence, undo, redo, render, export, and batch work;
+- automatic legacy-document migration with live source validation, copied mask-asset validation, persisted-revision verification, and no UI path back to the legacy process;
+- strict current documents, retained migration compatibility data, stale-source checks, semantic render plans, SDR RGBA8 preview, and tiled export;
 - input-profile and optics capability states, canonical geometry, global tone and color, live analysis, presence, detail, local masks, manual cleanup, generated-job contracts, HDR and proof capability blocks, and exact-result batch policy;
-- production UI for the v2-to-v3 comparison, v3 panels, Auto Tone, histogram and diagnostics, manual crop, masks, cleanup, white-balance and Point Color sampling, and per-photo batch selection.
+- production UI for one Crop/Edit/Mask/Info flow, Auto Tone, histogram and diagnostics, zoom, pan, hold-to-view Before, manual crop, local and AI masks, cleanup, white-balance and Point Color sampling, and per-photo batch selection.
 
 Unsupported high-bit, HDR, proof, licensed profile, depth, People, Reflection, and Dust paths remain visible and blocked. The implementation does not substitute data or silently reduce those claims.
 
@@ -154,15 +155,15 @@ The run used the seven bundled demo photos through the real Electron bridge and 
 | --- | --- |
 | Exact Library result | The Library showed all seven ordered demo entries and retained the selected first photo. |
 | Develop navigation | `city-night.jpg` opened as photo 1 of 7 with the saved filmstrip order. |
-| Viewer stability | The unstable repository snapshot loop was removed. `Try v3` returned in 34 ms and 83 ms on consecutive runs without sustained renderer CPU use. |
-| v2-to-v3 comparison | The session rendered both `Frozen v2 · fit` and `Candidate v3 · Texture +10 · fit`. It reported the reduced-source and RGBA8 capability notes. |
+| Unified editor | Develop opened directly into one current editor with Crop, Edit, Mask, and Info rail actions. No process-version choice or comparison screen was shown. |
 | Source identity | A real fractional filesystem modification time passed unchanged through the v3 source, asset, and generated-job validators after their contracts were aligned with the catalog identity. |
-| Upgrade and persistence | Accepting the exact receipt applied Texture `+10`, changed the document to v3, and reached `Saved · SDR · 8-bit output`. |
+| Automatic migration | `coastal-light.jpg` was seeded with a legacy crop, geometry, RGB curve, denoise, and sharpening document with no sidecar. Concurrent opens shared one hydration and write, migrated without user input, reached `Saved · SDR · 8-bit output`, and a direct catalog query confirmed persisted version 3 without a sidecar race. |
+| Canvas inspection | The migrated photo exposed Fit, zoom, pan, and hold-to-view Before controls in the same editor. Before used the decoded, EXIF-oriented source. |
 | Auto Tone | The accepted analysis wrote ordinary stored values: Exposure `+0.85 EV`, Contrast `-6`, Highlights `+40`, Shadows `+19`, Whites `+25`, and Blacks `-13`. Undo became available. |
-| Manual mask | A brush gesture created `Mask 1` in canonical v3 geometry and persisted it through the session. |
+| Masks | The unified Mask panel loaded a persisted brush mask and exposed rename, copy, reorder, delete, size, feather, flow, density, invert, local adjustments, and Subject/Sky actions. The local models remained undownloaded, so inference was not run. |
 | Batch scope | The dialog selected the exact seven-photo stored result and named the current semantic group. A catalog revision change blocked execution until the explicit `Refresh result` action, as required. |
 
-The screenshots under `docs/pr-screenshots/global-editing-library-flow/` record the Library, comparison, accepted v3 edit, manual mask, and exact batch selection.
+The screenshots under `docs/pr-screenshots/global-editing-library-flow/` record the Library result, unified editor, mask tools, and exact batch selection.
 
 ## Final command state
 
@@ -181,11 +182,11 @@ The implementation steps are present, but the evidence gates remain conservative
 
 - Gate 1 has live exact-result navigation evidence. A complete hard-refresh, every-filter, missing-entry matrix is still absent.
 - Gate 2 remains open because the Step 0 v2 pixel fixtures were not available.
-- Gate 3 has a passing standard-image SDR RGBA8 comparison and accepted edit. It remains open for the required v2 hashes and decoded export metadata matrix.
+- Gate 3 has a passing standard-image SDR RGBA8 migrated edit. It remains open for the required v2 hashes and decoded export metadata matrix.
 - Gates 4 through 7 have contracts, controls, render stages, persistence, and manual workflows. Their full camera, lens, geometry, color, detail, cleanup, and export fixture matrices are still absent.
 - Gates 8 and 9 remain open because the required licensed models, depth, HDR, and proof capabilities are unavailable.
 - Gate 10 has exact-selection and stale-result evidence. The full changed, skipped, and failed per-photo persistence matrix is still absent.
 - Gate 11 remains open because the plan's full fixture matrix was not supplied or run.
 - Gate 12 is evaluated from the created pull request.
 
-For the same reason, the pull request references the 23 issue contracts instead of claiming that unsupported or unverified outcomes are complete.
+For the same reason, the pull request describes the implemented capability boundaries instead of claiming that unsupported or unverified outcomes are complete.

@@ -1,5 +1,10 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
+  cachedMaskAsset,
+  cachedMaskAssetBytes,
+  type DecodedMaskAsset,
+} from "@/lib/develop/renderer";
+import {
   BASELINE_CAPABILITY_REPORT,
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_VERSION,
@@ -42,6 +47,7 @@ import {
   type DevelopDocumentV3,
 } from "./document";
 import { resolveConstrainedCrop, type CanonicalGeometry } from "./geometry";
+import type { MaskCoverageAssets } from "./manual-edits";
 import { NEUTRAL_LENS_CALIBRATION } from "./optics";
 import {
   MAX_TILE_OVERLAP,
@@ -92,18 +98,11 @@ export interface V3ExportSessionRenderRequest extends V3RuntimeRequestBase {
   readonly lossless?: boolean;
 }
 
-export interface V3FitComparisonRenderRequest extends V3RuntimeRequestBase {
-  readonly kind: "v3-fit-comparison";
-  readonly outputDimensions: PixelDimensions;
-}
-
 export type V3SessionRenderRequest =
   | V3PreviewSessionRenderRequest
   | V3ExportSessionRenderRequest;
 
-type V3RuntimeRenderRequest =
-  | V3SessionRenderRequest
-  | V3FitComparisonRenderRequest;
+type V3RuntimeRenderRequest = V3SessionRenderRequest;
 
 type RuntimeSourceColorEncoding = Extract<
   SourceColorEncoding,
@@ -305,6 +304,78 @@ function documentAssetReferences(
     .map(acceptedAssetRevision);
 }
 
+async function runtimeAssets(
+  document: DevelopDocumentV3,
+  source: SourceRecord,
+  supplied: CpuAssetAvailability | undefined,
+): Promise<CpuAssetAvailability | undefined> {
+  const legacy = document.compatibility.legacyV2;
+  const acceptedMasks = new Map<string, DevelopAssetRef>(
+    document.local.maskAssetRefs.map((reference) => [reference.assetId, reference]),
+  );
+  const retainedByDigest = new Map(
+    Object.values(legacy?.maskAssets ?? {}).map((asset) => [asset.sha256, asset]),
+  );
+  const requiredIds = new Set<string>();
+  for (const mask of document.local.masks) {
+    for (const component of mask.components) {
+      if (component.kind === "ai" && acceptedMasks.has(component.assetId)) {
+        requiredIds.add(component.assetId);
+      }
+    }
+  }
+  if (requiredIds.size === 0) return supplied;
+  const decoded = new Map<string, DecodedMaskAsset>();
+  await Promise.all([...requiredIds].map(async (assetId) => {
+    const retained = retainedByDigest.get(assetId);
+    if (retained) {
+      try {
+        decoded.set(assetId, await cachedMaskAsset(retained));
+        return;
+      } catch {
+        // Try the accepted asset store before preflight reports the matte unavailable.
+      }
+    }
+    if (typeof window === "undefined" || !window.darkroom) return;
+    const reference = acceptedMasks.get(assetId);
+    if (!reference) return;
+    try {
+      const result = await window.darkroom.developAssetRead({
+        reference,
+        sourceSignature: source.signature,
+      });
+      if (result.kind !== "ready" || result.descriptor.mimeType !== "image/png") return;
+      decoded.set(assetId, await cachedMaskAssetBytes({
+        id: assetId,
+        sha256: result.descriptor.sha256,
+        mimeType: result.descriptor.mimeType,
+        width: result.descriptor.dimensions.width,
+        height: result.descriptor.dimensions.height,
+        byteLength: result.descriptor.byteLength,
+      }, result.bytes));
+    } catch {
+      // Preflight reports an unavailable matte and blocks export.
+    }
+  }));
+  if (decoded.size === 0) return supplied;
+  return {
+    hasAsset: (assetId) => decoded.has(assetId) || (supplied?.hasAsset(assetId) ?? false),
+    maskMatte: (assetId) => decoded.get(assetId) ?? supplied?.maskMatte?.(assetId),
+  };
+}
+
+export async function loadV3MaskCoverageAssets(
+  document: DevelopDocumentV3,
+  source: SourceRecord,
+): Promise<MaskCoverageAssets | undefined> {
+  const assets = await runtimeAssets(document, source, undefined);
+  if (!assets?.maskMatte) return undefined;
+  return {
+    sourceSignature: source.signature,
+    maskMatte: assets.maskMatte,
+  };
+}
+
 function geometrySourceDimensions(source: SourceRecord): PixelDimensions {
   return source.orientation >= 5
     ? { width: source.dimensions.height, height: source.dimensions.width }
@@ -317,6 +388,7 @@ function baseOutputDimensions(
 ): PixelDimensions {
   const oriented = geometrySourceDimensions(source);
   const geometry: CanonicalGeometry = {
+    frame: document.local.geometryFrame,
     sourceWidth: oriented.width,
     sourceHeight: oriented.height,
     exifOrientation: 1,
@@ -396,36 +468,6 @@ function previewQuality(
     outputDimensions,
     viewportDimensions: viewport,
     devicePixelRatio,
-  };
-}
-
-function comparisonQuality(
-  document: DevelopDocumentV3,
-  source: SourceRecord,
-  request: V3FitComparisonRenderRequest,
-): PreviewQualityRequest | null {
-  const dimensions = request.outputDimensions;
-  const pixels = dimensions.width * dimensions.height;
-  if (
-    !Number.isSafeInteger(dimensions.width) ||
-    !Number.isSafeInteger(dimensions.height) ||
-    dimensions.width < 1 ||
-    dimensions.height < 1 ||
-    !Number.isSafeInteger(pixels) ||
-    pixels > MAX_CPU_RENDER_PIXELS
-  ) {
-    return null;
-  }
-  const outputDimensions = fitDimensions(
-    baseOutputDimensions(document, source),
-    dimensions,
-    false,
-  );
-  return {
-    kind: "fit",
-    outputDimensions,
-    viewportDimensions: dimensions,
-    devicePixelRatio: 1,
   };
 }
 
@@ -572,9 +614,7 @@ async function renderRequest(
         requestedTaps: EXPORT_ANALYSIS_TAPS,
       };
     }
-    const qualityAndDimensions = request.kind === "v3-preview"
-      ? previewQuality(document, source, request)
-      : comparisonQuality(document, source, request);
+    const qualityAndDimensions = previewQuality(document, source, request);
     if (!qualityAndDimensions) return invalidResult("Preview dimensions are invalid.");
     return {
       plan: {
@@ -624,6 +664,8 @@ export async function renderV3Runtime(
   const prepared = await renderRequest(document, sourceResult.source, request);
   if (!("plan" in prepared)) return prepared;
   if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
+  const assets = await runtimeAssets(document, sourceResult.source, request.assets);
+  if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
   return renderV3Cpu({
     image: request.image,
     document,
@@ -631,6 +673,6 @@ export async function renderV3Runtime(
     request: prepared,
     capabilities: BASELINE_CAPABILITY_REPORT,
     cancellation: request.cancellation,
-    assets: request.assets,
+    assets,
   });
 }

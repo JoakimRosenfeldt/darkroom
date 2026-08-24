@@ -3,7 +3,9 @@ import type {
   BrushStroke,
   LocalMask,
   MaskComponent,
+  SourceSignature,
 } from "../types";
+import { sourceSignaturesEqual } from "../source-transform";
 import type { CleanupEllipse, RedEyeComponent } from "./cleanup";
 import type { GeometryPoint } from "./geometry";
 import type { Rgb } from "./profiles";
@@ -13,6 +15,15 @@ export type LocalGeometryFrame = "canonical-v3" | "legacy-oriented-v2";
 export interface MaskRasterDimensions {
   readonly width: number;
   readonly height: number;
+}
+
+export interface MaskRasterMatte extends MaskRasterDimensions {
+  readonly pixels: Uint8Array;
+}
+
+export interface MaskCoverageAssets {
+  readonly sourceSignature: SourceSignature;
+  readonly maskMatte: (assetId: string) => MaskRasterMatte | undefined;
 }
 
 export function pointInLocalGeometryFrame(
@@ -173,23 +184,66 @@ function manualComponentCoverage(
   }
 }
 
+function sampleMaskMatte(
+  matte: MaskRasterMatte,
+  point: GeometryPoint,
+  threshold: number,
+): number {
+  const sourceX = clamp(point.x, 0, 1) * (matte.width - 1);
+  // Mask PNG rows are top-down, while Develop mask coordinates use a bottom-left origin.
+  const sourceY = (1 - clamp(point.y, 0, 1)) * (matte.height - 1);
+  const lowX = Math.floor(sourceX);
+  const lowY = Math.floor(sourceY);
+  const highX = Math.min(matte.width - 1, lowX + 1);
+  const highY = Math.min(matte.height - 1, lowY + 1);
+  const weightX = sourceX - lowX;
+  const weightY = sourceY - lowY;
+  const top = matte.pixels[lowY * matte.width + lowX]! * (1 - weightX) +
+    matte.pixels[lowY * matte.width + highX]! * weightX;
+  const bottom = matte.pixels[highY * matte.width + lowX]! * (1 - weightX) +
+    matte.pixels[highY * matte.width + highX]! * weightX;
+  const coverage = (top * (1 - weightY) + bottom * weightY) / 255;
+  return coverage < threshold ? 0 : coverage;
+}
+
+function componentCoverage(
+  component: MaskComponent,
+  point: GeometryPoint,
+  dimensions: MaskRasterDimensions,
+  assets: MaskCoverageAssets | undefined,
+): number | null {
+  if (component.kind !== "ai") {
+    return manualComponentCoverage(component, point, dimensions);
+  }
+  if (
+    !assets ||
+    !sourceSignaturesEqual(component.source, assets.sourceSignature)
+  ) {
+    return null;
+  }
+  const matte = assets.maskMatte(component.assetId);
+  if (!matte) return null;
+  return sampleMaskMatte(matte, point, component.inference.threshold);
+}
+
 export function manualMaskCoverage(
   mask: LocalMask,
   point: GeometryPoint,
   dimensions: MaskRasterDimensions,
+  assets?: MaskCoverageAssets,
 ): number {
   if (!mask.enabled) return 0;
   let coverage = 0;
-  let hasManualComponent = false;
+  let hasApplicableComponent = false;
   for (const component of mask.components) {
-    if (component.kind === "ai") continue;
-    hasManualComponent = true;
-    const source = manualComponentCoverage(component, point, dimensions);
+    const source = componentCoverage(component, point, dimensions, assets);
+    if (source === null) continue;
+    hasApplicableComponent = true;
     coverage = component.operation === "add"
       ? sourceOver(coverage, source)
       : coverage * (1 - source);
   }
-  if (!hasManualComponent) return 0;
+  if (!hasApplicableComponent) return 0;
   return mask.inverted ? 1 - coverage : coverage;
 }
 

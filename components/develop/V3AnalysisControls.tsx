@@ -1,7 +1,7 @@
 "use client";
 
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
-import { currentV3AnalysisBinding } from "@/components/develop/V3DevelopCanvas";
+import { currentV3AnalysisBinding } from "@/components/develop/DevelopCanvas";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";

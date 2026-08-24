@@ -8,6 +8,8 @@ import {
   type DevelopSessionCore,
   type DevelopSessionSnapshot,
 } from "@/lib/develop/session";
+import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
+import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-copy";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getLibraryResultSnapshot } from "@/lib/library/result-repository";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -46,6 +48,7 @@ export interface AppV3BatchAdapter {
 interface OpenContext {
   readonly handle: BatchOpenHandle;
   readonly entry: LibraryEntry;
+  readonly sourceSignature: V3SourceSignature;
   readonly repository: DevelopRepository;
   readonly session: DevelopSessionCore;
 }
@@ -83,6 +86,7 @@ function currentEntry(entryId: AssetId, catalogId: CatalogId): LibraryEntry | nu
 function currentV3Snapshot(
   context: OpenContext,
   expectedRevision?: string,
+  expectedSourceSignature: V3SourceSignature = context.sourceSignature,
 ): Extract<DevelopSessionSnapshot, { readonly processKind: "v3" }> {
   const snapshot = context.session.snapshot();
   if (snapshot.processKind !== "v3") {
@@ -95,7 +99,7 @@ function currentV3Snapshot(
   if (!latest || latest.health !== "present") {
     throw adapterError("source-missing", "The target source is no longer available.");
   }
-  if (!sameSignature(v3SignatureForEntry(latest), v3SignatureForEntry(context.entry))) {
+  if (!sameSignature(v3SignatureForEntry(latest), expectedSourceSignature)) {
     throw adapterError("source-changed", "The target source changed during the batch.");
   }
   return snapshot;
@@ -247,6 +251,17 @@ export function createAppV3BatchAdapter(
       entry.id,
       repository.catalogDocument(metadata),
     );
+    session.attachSourceSignatureProvider(() => {
+      const latest = currentEntry(entry.id, entry.catalogId);
+      return latest?.health === "present" ? sourceSignatureForEntry(latest) : null;
+    });
+    session.attachUpgradeAssetCopy(createV3UpgradeAssetCopyAdapter({
+      entry,
+      currentDocument: () => {
+        const snapshot = session.snapshot();
+        return snapshot.processKind === "v2" ? snapshot.document : null;
+      },
+    }));
     repository.configure(session, metadata, {
       mirrorCatalog: (input) => useLibraryStore.getState().persistDevelopState(
         entry.catalogId,
@@ -267,8 +282,29 @@ export function createAppV3BatchAdapter(
       },
     });
     await repository.open(metadata);
+    if (session.snapshot().processKind === "v2") {
+      const snapshot = await session.upgradeToCurrentProcess();
+      useDevelopStore.getState().synchronizeSession(entry.id, snapshot);
+      await session.save();
+      await repository.flush();
+      const persisted = session.snapshot();
+      if (
+        persisted.documentRevision !== persisted.persistedDocumentRevision
+      ) {
+        throw adapterError(
+          "save-not-persisted",
+          "The upgraded Develop document was not persisted. Review the XMP save status and retry.",
+        );
+      }
+    }
     const handle = { entryId, token: crypto.randomUUID() } satisfies BatchOpenHandle;
-    const context = { handle, entry, repository, session } satisfies OpenContext;
+    const context = {
+      handle,
+      entry,
+      sourceSignature: v3SignatureForEntry(entry),
+      repository,
+      session,
+    } satisfies OpenContext;
     contextsByEntry.set(entryId, context);
     contextsByToken.set(handle.token, context);
     return handle;
@@ -349,15 +385,13 @@ export function createAppV3BatchAdapter(
       const sourceContext = requireContext(source.entryId);
       const targetContext = requireContext(target.entryId);
       try {
-        const sourceSnapshot = currentV3Snapshot(sourceContext, source.documentRevision);
-        currentV3Snapshot(targetContext, target.documentRevision);
-        const currentSource = v3SignatureForEntry(sourceContext.entry);
-        const currentTarget = v3SignatureForEntry(targetContext.entry);
-        if (
-          sourceSnapshot.document.version !== 3 ||
-          !sameSignature(currentSource, source.signature) ||
-          !sameSignature(currentTarget, target.signature)
-        ) {
+        const sourceSnapshot = currentV3Snapshot(
+          sourceContext,
+          source.documentRevision,
+          source.signature,
+        );
+        currentV3Snapshot(targetContext, target.documentRevision, target.signature);
+        if (sourceSnapshot.document.version !== 3) {
           return { kind: "conflict", message: "The source or target changed during the batch." };
         }
         return { kind: "current" };
@@ -370,7 +404,7 @@ export function createAppV3BatchAdapter(
     },
     dispatch: async ({ entryId, expectedDocumentRevision, source, commands, label }) => {
       const sourceContext = requireContext(source.entryId);
-      currentV3Snapshot(sourceContext, source.documentRevision);
+      currentV3Snapshot(sourceContext, source.documentRevision, source.signature);
       const context = requireContext(entryId);
       const before = currentV3Snapshot(context, expectedDocumentRevision);
       let planned: DevelopDocumentV3 = before.document;
@@ -390,7 +424,7 @@ export function createAppV3BatchAdapter(
     },
     save: async ({ entryId, expectedDocumentRevision, source }) => {
       const sourceContext = requireContext(source.entryId);
-      currentV3Snapshot(sourceContext, source.documentRevision);
+      currentV3Snapshot(sourceContext, source.documentRevision, source.signature);
       const context = requireContext(entryId);
       const before = currentV3Snapshot(context, expectedDocumentRevision);
       await context.session.save();
@@ -419,6 +453,10 @@ export function createAppV3BatchAdapter(
         catalogRevision: options.exactResult.catalogRevision,
         entryIds: [sourceEntryId],
       };
+      const validation = await adapter.validateSelection(selection);
+      if (validation.kind !== "current") {
+        throw adapterError("selection-stale", validation.message);
+      }
       const handle = await open({ selection, entryId: sourceEntryId });
       const reconciled = await adapter.reconcile({ selection, handle });
       if (reconciled.kind !== "v3") {

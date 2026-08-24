@@ -3,6 +3,7 @@ import type {
   V3UpgradeAssetCopyAdapter,
 } from "../session";
 import type { DevelopDocument } from "../types";
+import type { V3SourceSignature } from "../process";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopAssetCandidate, DevelopAssetRef } from "./assets";
 
@@ -18,14 +19,14 @@ function decodeBase64(value: string): Uint8Array {
 }
 
 async function candidateId(input: {
-  readonly entry: LibraryEntry;
+  readonly sourceSignature: V3SourceSignature;
   readonly sourceAssetId: string;
   readonly sha256: string;
 }): Promise<string> {
   const identity = JSON.stringify([
-    input.entry.catalogId,
-    input.entry.id,
-    input.entry.assetRevision,
+    input.sourceSignature.catalogId,
+    input.sourceSignature.entryId,
+    input.sourceSignature.assetRevision,
     input.sourceAssetId,
     input.sha256,
   ]);
@@ -66,7 +67,9 @@ export function createV3UpgradeAssetCopyAdapter(input: {
     async copyRequiredAssets(request): Promise<V3AssetCopyReceipt> {
       if (
         request.catalogId !== input.entry.catalogId ||
-        request.entryId !== input.entry.id
+        request.entryId !== input.entry.id ||
+        request.sourceSignature.catalogId !== request.catalogId ||
+        request.sourceSignature.entryId !== request.entryId
       ) {
         throw new Error("The retained mask copy does not match the active source photo.");
       }
@@ -85,21 +88,14 @@ export function createV3UpgradeAssetCopyAdapter(input: {
         const candidate: DevelopAssetCandidate = {
           kind: "candidate",
           candidateId: await candidateId({
-            entry: input.entry,
+            sourceSignature: request.sourceSignature,
             sourceAssetId: copy.sourceAssetId,
             sha256: copy.expectedReference.sha256,
           }),
           descriptor: {
             kind: copy.expectedReference.kind,
             sha256: copy.expectedReference.sha256,
-            sourceSignature: {
-              entryId: input.entry.id,
-              catalogId: input.entry.catalogId,
-              assetRevision: input.entry.assetRevision,
-              relativePath: input.entry.relativePath,
-              size: input.entry.size,
-              lastModified: input.entry.lastModified,
-            },
+            sourceSignature: request.sourceSignature,
             coordinateFrameRevision: copy.expectedReference.coordinateFrameRevision,
             colorStageId: copy.expectedReference.colorStageId,
             dimensions: { width: copy.width, height: copy.height },

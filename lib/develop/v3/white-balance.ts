@@ -76,6 +76,56 @@ export function resolveManualWhiteBalance(adjustment: {
   };
 }
 
+export function resolveLegacyWhiteBalance(adjustment: {
+  readonly temperature: number;
+  readonly tint: number;
+}): WhiteBalanceValues {
+  const temperature = clamp(adjustment.temperature, -3_000, 3_000);
+  const tint = clamp(adjustment.tint, -150, 150);
+  return {
+    temperatureKelvin: Math.round(clamp(5_500 + temperature, 2_000, 50_000)),
+    tint,
+    gains: [
+      clamp(1 + temperature * 0.00008 + tint * 0.00002, 0.25, 4),
+      clamp(1 - Math.abs(tint) * 0.00003, 0.25, 4),
+      clamp(1 - temperature * 0.00008 - tint * 0.00002, 0.25, 4),
+    ],
+  };
+}
+
+export function resolveAdjustedWhiteBalance(input: {
+  readonly previousAdjustment: {
+    readonly temperature: number;
+    readonly tint: number;
+  };
+  readonly previousValues: WhiteBalanceValues;
+  readonly adjustment: {
+    readonly temperature: number;
+    readonly tint: number;
+  };
+}): WhiteBalanceValues {
+  const previousManual = resolveManualWhiteBalance(input.previousAdjustment);
+  const nextManual = resolveManualWhiteBalance(input.adjustment);
+  return {
+    temperatureKelvin: Math.round(clamp(
+      input.previousValues.temperatureKelvin +
+        nextManual.temperatureKelvin - previousManual.temperatureKelvin,
+      2_000,
+      50_000,
+    )),
+    tint: clamp(
+      input.previousValues.tint + nextManual.tint - previousManual.tint,
+      -150,
+      150,
+    ),
+    gains: [
+      clamp(input.previousValues.gains[0] * nextManual.gains[0] / previousManual.gains[0], 0.25, 4),
+      clamp(input.previousValues.gains[1] * nextManual.gains[1] / previousManual.gains[1], 0.25, 4),
+      clamp(input.previousValues.gains[2] * nextManual.gains[2] / previousManual.gains[2], 0.25, 4),
+    ],
+  };
+}
+
 function normalizedGains(red: number, green: number, blue: number): Rgb {
   if (red <= 0 || green <= 0 || blue <= 0) return [1, 1, 1];
   return [

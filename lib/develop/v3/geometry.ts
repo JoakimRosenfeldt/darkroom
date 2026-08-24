@@ -13,6 +13,7 @@ export const CANONICAL_GEOMETRY_REVISION =
   `${COORDINATE_FRAME_REVISION}:geometry-1`;
 
 export type QuarterTurns = 0 | 1 | 2 | 3;
+export type GeometryFrame = "canonical-v3" | "legacy-oriented-v2";
 export type Homography = readonly [
   number, number, number,
   number, number, number,
@@ -46,6 +47,7 @@ export interface AcceptedUprightTransform {
 }
 
 export interface CanonicalGeometry {
+  readonly frame: GeometryFrame;
   readonly sourceWidth: number;
   readonly sourceHeight: number;
   readonly exifOrientation: ExifOrientation;
@@ -72,6 +74,13 @@ export function manualPerspectiveHomography(
 ): Homography {
   const horizontalScale = clamp(horizontal, -100, 100) * 0.002;
   const verticalScale = clamp(vertical, -100, 100) * 0.002;
+  return perspectiveHomography(horizontalScale, verticalScale);
+}
+
+function perspectiveHomography(
+  horizontalScale: number,
+  verticalScale: number,
+): Homography {
   return [
     1,
     horizontalScale,
@@ -83,6 +92,20 @@ export function manualPerspectiveHomography(
     0,
     1,
   ];
+}
+
+export function manualPerspectiveHomographyForFrame(
+  horizontal: number,
+  vertical: number,
+  frame: GeometryFrame,
+): Homography {
+  if (frame === "canonical-v3") {
+    return manualPerspectiveHomography(horizontal, vertical);
+  }
+  const matrix = perspectiveHomography(horizontal * 0.002, vertical * 0.002);
+  const inverse = invertHomography(matrix);
+  if (!inverse) throw new Error("The legacy manual perspective transform is singular.");
+  return inverse;
 }
 
 export type GeometryMapResult =
@@ -217,21 +240,35 @@ function invertUserOrientation(
   }, orientation.quarterTurns);
 }
 
+function rotateAround(
+  point: GeometryPoint,
+  angleDegrees: number,
+  aspectRatio: number,
+  center: GeometryPoint,
+): GeometryPoint {
+  const angle = finiteOr(angleDegrees, 0) * Math.PI / 180;
+  if (angle === 0) return point;
+  const x = (point.x - center.x) * aspectRatio;
+  const y = point.y - center.y;
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  return {
+    x: center.x + (x * cosine - y * sine) / aspectRatio,
+    y: center.y + x * sine + y * cosine,
+  };
+}
+
 function rotateAroundCenter(
   point: GeometryPoint,
   angleDegrees: number,
   aspectRatio: number,
 ): GeometryPoint {
-  const angle = clamp(angleDegrees, -180, 180) * Math.PI / 180;
-  if (angle === 0) return point;
-  const x = (point.x - 0.5) * aspectRatio;
-  const y = point.y - 0.5;
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  return {
-    x: 0.5 + (x * cosine - y * sine) / aspectRatio,
-    y: 0.5 + x * sine + y * cosine,
-  };
+  return rotateAround(
+    point,
+    clamp(angleDegrees, -180, 180),
+    aspectRatio,
+    { x: 0.5, y: 0.5 },
+  );
 }
 
 function homographyPoint(
@@ -293,6 +330,30 @@ function mapOutputToStoredWithCrop(
   const manualInverse = invertHomography(geometry.manualPerspective);
   if (!uprightInverse || !manualInverse) {
     return { kind: "unmappable", reason: "A perspective transform is singular." };
+  }
+  if (geometry.frame === "legacy-oriented-v2") {
+    if (geometry.crop.enabled) {
+      point = rotateAround(
+        point,
+        -geometry.orientation.fineAngleDegrees,
+        orientedAspectRatio(geometry),
+        {
+          x: geometry.crop.x + geometry.crop.width / 2,
+          y: geometry.crop.y + geometry.crop.height / 2,
+        },
+      );
+    }
+    const afterManual = homographyPoint(point, manualInverse);
+    if (!afterManual) {
+      return { kind: "unmappable", reason: "Perspective cannot map this coordinate." };
+    }
+    point = invertUserOrientation(afterManual, geometry.orientation);
+    const distorted = mapDistortedUv(
+      point,
+      geometry.optics.calibration.distortion,
+      geometry.optics.amounts.distortion,
+    );
+    return mapped(exifOrientedToStored(distorted, geometry.exifOrientation));
   }
   const afterUpright = homographyPoint(point, uprightInverse);
   if (!afterUpright) return { kind: "unmappable", reason: "Upright cannot map this coordinate." };
@@ -415,6 +476,30 @@ export function mapStoredToOutput(
     geometry.optics.calibration.distortion,
     geometry.optics.amounts.distortion,
   );
+  if (geometry.frame === "legacy-oriented-v2") {
+    point = applyUserOrientation(point, geometry.orientation);
+    const afterManual = homographyPoint(point, geometry.manualPerspective);
+    if (!afterManual) {
+      return { kind: "unmappable", reason: "Perspective cannot map this coordinate." };
+    }
+    point = afterManual;
+    if (geometry.crop.enabled) {
+      point = rotateAround(
+        point,
+        geometry.orientation.fineAngleDegrees,
+        orientedAspectRatio(geometry),
+        {
+          x: geometry.crop.x + geometry.crop.width / 2,
+          y: geometry.crop.y + geometry.crop.height / 2,
+        },
+      );
+    }
+    const crop = cropRect(effectiveCrop);
+    return mapped({
+      x: (point.x - crop.x) / crop.width,
+      y: (point.y - crop.y) / crop.height,
+    });
+  }
   point = applyUserOrientation(point, geometry.orientation);
   point = rotateAroundCenter(
     point,
@@ -443,6 +528,7 @@ function keyNumber(value: number): string {
 export function geometryCacheIdentity(geometry: CanonicalGeometry): string {
   const values: readonly (string | number | boolean)[] = [
     CANONICAL_GEOMETRY_REVISION,
+    geometry.frame,
     geometry.sourceWidth,
     geometry.sourceHeight,
     geometry.exifOrientation,

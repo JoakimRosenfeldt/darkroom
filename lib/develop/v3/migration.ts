@@ -12,7 +12,8 @@ import {
   createDefaultV3DevelopDocument,
   type DevelopDocumentV3,
 } from "./document";
-import type { Homography } from "./geometry";
+import { manualPerspectiveHomographyForFrame } from "./geometry";
+import { resolveLegacyWhiteBalance } from "./white-balance";
 
 export interface RequiredV2AssetCopy {
   readonly kind: "required-v2-inline-copy";
@@ -24,42 +25,10 @@ export interface RequiredV2AssetCopy {
   readonly height: number;
 }
 
-export interface V3MigrationComparisonRequest {
-  readonly kind: "same-quality-comparison-required";
-  readonly baselineVersion: 2;
-  readonly candidateVersion: 3;
-  readonly quality: "fit";
-  readonly compareGroups: readonly [
-    "tone-and-color",
-    "geometry",
-    "masks",
-    "detail-and-post-crop",
-  ];
-}
-
 export interface V3MigrationCandidate {
   readonly kind: "candidate";
   readonly document: DevelopDocumentV3;
   readonly requiredAssetCopies: readonly RequiredV2AssetCopy[];
-  readonly comparison: V3MigrationComparisonRequest;
-  readonly persistence: "requires-explicit-acceptance";
-  readonly acceptanceCommand: "upgrade-and-first-v3-edit";
-}
-
-function manualPerspectiveMatrix(horizontal: number, vertical: number): Homography {
-  const horizontalScale = horizontal * 0.002;
-  const verticalScale = vertical * 0.002;
-  return [
-    1,
-    horizontalScale,
-    -horizontalScale * 0.5,
-    verticalScale,
-    1,
-    -verticalScale * 0.5,
-    0,
-    0,
-    1,
-  ];
 }
 
 function assetReference(asset: MaskRasterAsset): DevelopAssetRef {
@@ -146,11 +115,7 @@ export function createV3MigrationCandidate(
           temperature: basic.temperature,
           tint: basic.tint,
         },
-        resolved: {
-          temperatureKelvin: 5_500 + basic.temperature,
-          tint: basic.tint,
-          gains: [1, 1, 1],
-        },
+        resolved: resolveLegacyWhiteBalance(basic),
       },
       global: {
         vibrance: basic.vibrance,
@@ -160,7 +125,7 @@ export function createV3MigrationCandidate(
     },
     optics: {
       ...defaults.optics,
-      manualDistortion: crop.distortion,
+      manualDistortion: crop.distortion * 0.1,
     },
     geometry: {
       ...defaults.geometry,
@@ -169,9 +134,13 @@ export function createV3MigrationCandidate(
         fineAngleDegrees: crop.angle,
       },
       manualPerspective: {
-        horizontal: crop.perspectiveX,
-        vertical: crop.perspectiveY,
-        matrix: manualPerspectiveMatrix(crop.perspectiveX, crop.perspectiveY),
+        horizontal: -crop.perspectiveX,
+        vertical: -crop.perspectiveY,
+        matrix: manualPerspectiveHomographyForFrame(
+          crop.perspectiveX,
+          crop.perspectiveY,
+          "legacy-oriented-v2",
+        ),
       },
       upright: {
         ...defaults.geometry.upright,
@@ -233,19 +202,5 @@ export function createV3MigrationCandidate(
     kind: "candidate",
     document,
     requiredAssetCopies: copies,
-    comparison: {
-      kind: "same-quality-comparison-required",
-      baselineVersion: 2,
-      candidateVersion: 3,
-      quality: "fit",
-      compareGroups: [
-        "tone-and-color",
-        "geometry",
-        "masks",
-        "detail-and-post-crop",
-      ],
-    },
-    persistence: "requires-explicit-acceptance",
-    acceptanceCommand: "upgrade-and-first-v3-edit",
   };
 }

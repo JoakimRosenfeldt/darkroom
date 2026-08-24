@@ -513,7 +513,12 @@ async function copyCrop(input: {
       crop: structuredClone(validation.crop),
     },
   };
-  const applied = applyCommands(input.current, [command]);
+  const frameCommand: V3EditCommand = {
+    kind: "patch-v3-semantic-group",
+    group: "local",
+    patch: { geometryFrame: input.source.document.local.geometryFrame },
+  };
+  const applied = applyCommands(input.current, [command, frameCommand]);
   const changed = nonEmptyCommands(applied.changedCommands);
   return changed
     ? { kind: "changed", document: applied.document, commands: changed, note: null }
@@ -568,7 +573,10 @@ function copyLocal(source: DevelopDocumentV3, current: DevelopDocumentV3): Group
   const command: V3EditCommand = {
     kind: "replace-v3-semantic-group",
     group: "local",
-    value: portable.value,
+    value: {
+      ...portable.value,
+      geometryFrame: current.local.geometryFrame,
+    },
   };
   const note = portable.stripped
     ? groupSkip(

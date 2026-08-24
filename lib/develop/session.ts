@@ -1,5 +1,4 @@
 import type { EntryMetadata } from "@/lib/catalog/types";
-import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   applyDevelopCommand,
   replayDevelopPatches,
@@ -7,17 +6,18 @@ import {
   type DevelopPatch,
 } from "@/lib/develop/commands";
 import {
-  FrozenV2Renderer,
   renderFrozenV2,
   type FrozenV2ExportRequest,
   type FrozenV2PrepareRequest,
   type FrozenV2PreviewRequest,
 } from "@/lib/develop/frozen-v2-backend";
-import type { DevelopDiagnostic, PixelDimensions } from "@/lib/develop/process";
+import type {
+  DevelopDiagnostic,
+  V3SourceSignature,
+} from "@/lib/develop/process";
 import type {
   CropSettings,
   DevelopDocument,
-  GlobalDevelopPluginId,
   SourceSignature,
 } from "@/lib/develop/types";
 import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
@@ -37,28 +37,15 @@ import type {
 import {
   createV3MigrationCandidate,
   type RequiredV2AssetCopy,
-  type V3MigrationCandidate,
 } from "@/lib/develop/v3/migration";
 import type { DevelopAssetRef } from "@/lib/develop/v3/assets";
-import {
-  MAX_CPU_RENDER_PIXELS,
-  type CpuAnalysisTapResult,
-  type CpuBackendBlockingDiagnostic,
-  type CpuBackendDiagnostic,
-  type CpuBackendValidationIssue,
-  type CpuRenderResult,
-} from "@/lib/develop/v3/cpu-backend";
+import type { CpuRenderResult } from "@/lib/develop/v3/cpu-backend";
 import {
   renderV3Runtime,
   type V3SessionRenderRequest,
 } from "@/lib/develop/v3/runtime";
-import type { CancellationProbe } from "@/lib/develop/v3/source";
 import type { RawExportRenderResult } from "@/lib/export/types";
-import type { LibraryEntry } from "@/lib/fs/types";
-import {
-  sourceSignatureForEntry,
-  sourceSignaturesEqual,
-} from "@/lib/develop/source-transform";
+import { sourceSignaturesEqual } from "@/lib/develop/source-transform";
 import type { RenderPreparation } from "@/lib/develop/renderer";
 
 const HISTORY_LIMIT = 100;
@@ -122,12 +109,6 @@ export type DevelopHistoryEntry =
       readonly editGroup: string | null;
     }
   | {
-      readonly kind: "process-upgrade";
-      readonly label: string;
-      readonly before: DevelopDocument;
-      readonly after: DevelopDocumentV3;
-    }
-  | {
       readonly kind: "metadata";
       readonly label: string;
       readonly before: DevelopMetadataValues;
@@ -189,70 +170,10 @@ export interface V3UpgradeAssetCopyAdapter {
   copyRequiredAssets(input: {
     readonly catalogId: string;
     readonly entryId: string;
+    readonly sourceSignature: V3SourceSignature;
     readonly copies: readonly RequiredV2AssetCopy[];
   }): Promise<V3AssetCopyReceipt>;
 }
-
-export type UpgradeAndFirstV3EditCommand = {
-  readonly kind: "upgrade-and-first-v3-edit";
-  readonly acceptance: V3MigrationAcceptanceReceipt;
-  readonly edit: V3EditCommand;
-};
-
-export interface V3MigrationAcceptanceReceipt {
-  readonly kind: "same-quality-comparison-accepted";
-  readonly sourceDocumentRevision: number;
-  readonly baselineVersion: 2;
-  readonly candidateVersion: 3;
-  readonly quality: "fit";
-  readonly sourceSignature: Readonly<SourceSignature>;
-  readonly firstEdit: V3EditCommand;
-  readonly acceptedGroups: readonly [
-    "tone-and-color",
-    "geometry",
-    "masks",
-    "detail-and-post-crop",
-  ];
-}
-
-export interface V3UpgradeComparisonRequest {
-  readonly kind: "v3-upgrade-comparison";
-  readonly entry: LibraryEntry;
-  readonly image: DevelopImage;
-  readonly firstEdit: V3EditCommand;
-  readonly outputDimensions: PixelDimensions;
-  readonly cancellation?: CancellationProbe;
-}
-
-export interface V3UpgradeComparisonFrame {
-  readonly pixels: Uint8Array;
-  readonly dimensions: PixelDimensions;
-}
-
-export type V3UpgradeComparisonResult =
-  | {
-      readonly kind: "compared";
-      readonly baseline: V3UpgradeComparisonFrame;
-      readonly candidate: V3UpgradeComparisonFrame;
-      readonly candidateDiagnostics: readonly CpuBackendDiagnostic[];
-      readonly candidateAnalysis: readonly CpuAnalysisTapResult[];
-      readonly acceptance: V3MigrationAcceptanceReceipt;
-    }
-  | {
-      readonly kind: "blocked";
-      readonly diagnostics: readonly [
-        CpuBackendBlockingDiagnostic,
-        ...CpuBackendBlockingDiagnostic[],
-      ];
-    }
-  | {
-      readonly kind: "invalid";
-      readonly issues: readonly [
-        CpuBackendValidationIssue | { readonly kind: "comparison-invalid"; readonly reason: string },
-        ...(CpuBackendValidationIssue | { readonly kind: "comparison-invalid"; readonly reason: string })[],
-      ];
-    }
-  | { readonly kind: "cancelled" };
 
 export type DevelopSessionControlCommand =
   | { readonly kind: "undo" }
@@ -262,14 +183,12 @@ export type DevelopSessionControlCommand =
 export type DevelopSessionCommand =
   | DevelopCommand
   | V3EditCommand
-  | UpgradeAndFirstV3EditCommand
   | DevelopSessionControlCommand;
 
 export type DevelopSessionCommandErrorCode =
   | "asset-copy-required"
   | "asset-copy-failed"
   | "asset-copy-invalid"
-  | "comparison-required"
   | "invalid-document"
   | "process-mismatch"
   | "read-only"
@@ -302,19 +221,12 @@ export interface DevelopSession {
   readonly catalogId: string;
   readonly entryId: string;
   snapshot(): DevelopSessionSnapshot;
-  dispatch(
-    command: UpgradeAndFirstV3EditCommand,
-    label?: string,
-  ): Promise<DevelopSessionSnapshot>;
-  dispatch(
-    command: Exclude<DevelopSessionCommand, UpgradeAndFirstV3EditCommand>,
-    label?: string,
-  ): DevelopSessionSnapshot;
+  dispatch(command: DevelopSessionCommand, label?: string): DevelopSessionSnapshot;
+  upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot>;
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
   render(request: FrozenV2ExportRequest): Promise<RawExportRenderResult>;
   render(request: V3SessionRenderRequest): Promise<CpuRenderResult>;
-  render(request: V3UpgradeComparisonRequest): Promise<V3UpgradeComparisonResult>;
   attachSourceSignatureProvider(
     provider: (() => Readonly<SourceSignature> | null) | null,
   ): () => void;
@@ -439,50 +351,6 @@ function invalidV3Render(reason: string): CpuRenderResult {
   };
 }
 
-function invalidUpgradeComparison(reason: string): V3UpgradeComparisonResult {
-  return {
-    kind: "invalid",
-    issues: [{ kind: "comparison-invalid", reason }],
-  };
-}
-
-function migrationAcceptance(
-  sourceDocumentRevision: number,
-  candidate: V3MigrationCandidate,
-  sourceSignature: Readonly<SourceSignature>,
-  firstEdit: V3EditCommand,
-): V3MigrationAcceptanceReceipt {
-  return {
-    kind: "same-quality-comparison-accepted",
-    sourceDocumentRevision,
-    baselineVersion: candidate.comparison.baselineVersion,
-    candidateVersion: candidate.comparison.candidateVersion,
-    quality: candidate.comparison.quality,
-    sourceSignature,
-    firstEdit,
-    acceptedGroups: candidate.comparison.compareGroups,
-  };
-}
-
-export function createDevelopPluginCommand(
-  document: DevelopDocument,
-  pluginId: GlobalDevelopPluginId,
-  patch: unknown,
-): DevelopCommand {
-  const values = typeof patch === "object" && patch !== null ? patch : {};
-  switch (pluginId) {
-    case "basic": return { kind: "replace-global", pluginId, value: Object.assign({}, document.settings.basic, values) };
-    case "crop": return { kind: "replace-global", pluginId, value: Object.assign({}, document.settings.crop, values) };
-    case "curve": return { kind: "replace-global", pluginId, value: Object.assign({}, document.settings.curve, values) };
-    case "mixer": return { kind: "replace-global", pluginId, value: Object.assign({}, document.settings.mixer, values) };
-    case "effects": return { kind: "replace-global", pluginId, value: Object.assign({}, document.settings.effects, values) };
-    default: {
-      const exhaustive: never = pluginId;
-      return exhaustive;
-    }
-  }
-}
-
 export class DevelopSessionCore implements DevelopSession {
   readonly catalogId: string;
   readonly entryId: string;
@@ -585,20 +453,9 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   dispatch(
-    command: UpgradeAndFirstV3EditCommand,
-    label?: string,
-  ): Promise<DevelopSessionSnapshot>;
-  dispatch(
-    command: Exclude<DevelopSessionCommand, UpgradeAndFirstV3EditCommand>,
-    label?: string,
-  ): DevelopSessionSnapshot;
-  dispatch(
     command: DevelopSessionCommand,
     label = "Edit",
-  ): DevelopSessionSnapshot | Promise<DevelopSessionSnapshot> {
-    if (command.kind === "upgrade-and-first-v3-edit") {
-      return this.#upgradeAndFirstEdit(command, label);
-    }
+  ): DevelopSessionSnapshot {
     if (command.kind === "undo") {
       this.undo();
       return this.snapshot();
@@ -704,55 +561,35 @@ export class DevelopSessionCore implements DevelopSession {
     return this.snapshot();
   }
 
-  async #upgradeAndFirstEdit(
-    command: UpgradeAndFirstV3EditCommand,
-    label: string,
-  ): Promise<DevelopSessionSnapshot> {
+  async upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot> {
     if (this.#state.process.kind === "read-only-newer") {
       throw new DevelopSessionCommandError("read-only", this.#state.process.reason.message);
     }
-    if (this.#state.process.document.version !== 2) {
-      throw new DevelopSessionCommandError(
-        "process-mismatch",
-        "Only frozen v2 documents can be upgraded.",
-      );
-    }
+    if (this.#state.process.document.version === 3) return this.snapshot();
     const sourceDocument = this.#state.process.document;
     const sourceDocumentRevision = this.#state.documentRevision;
     const candidate = createV3MigrationCandidate(sourceDocument);
-    const acceptance = command.acceptance;
     const currentSourceSignature = this.#sourceSignatureProvider?.() ?? null;
     if (
-      acceptance.kind !== "same-quality-comparison-accepted" ||
-      acceptance.sourceDocumentRevision !== sourceDocumentRevision ||
-      acceptance.baselineVersion !== candidate.comparison.baselineVersion ||
-      acceptance.candidateVersion !== candidate.comparison.candidateVersion ||
-      acceptance.quality !== candidate.comparison.quality ||
       currentSourceSignature === null ||
-      !sourceSignaturesEqual(acceptance.sourceSignature, currentSourceSignature) ||
-      JSON.stringify(acceptance.firstEdit) !== JSON.stringify(command.edit) ||
-      acceptance.acceptedGroups.length !== candidate.comparison.compareGroups.length ||
-      candidate.comparison.compareGroups.some(
-        (group, index) => acceptance.acceptedGroups[index] !== group,
-      )
+      currentSourceSignature.catalogId === undefined ||
+      currentSourceSignature.assetRevision === undefined
     ) {
       throw new DevelopSessionCommandError(
-        "comparison-required",
-        "Accept the fit-quality v2/v3 comparison for this exact revision before upgrading.",
+        "upgrade-stale",
+        "The photo is unavailable. Reconnect it before opening the editor.",
       );
     }
-    const edited = applyV3EditCommand(candidate.document, command.edit);
-    if (!edited.changed) {
-      throw new DevelopSessionCommandError(
-        "invalid-document",
-        "The first v3 edit must change the migration candidate.",
-      );
-    }
+    const upgradeSourceSignature: V3SourceSignature = {
+      ...currentSourceSignature,
+      catalogId: currentSourceSignature.catalogId,
+      assetRevision: currentSourceSignature.assetRevision,
+    };
     if (candidate.requiredAssetCopies.length > 0) {
       if (!this.#assetCopy) {
         throw new DevelopSessionCommandError(
           "asset-copy-required",
-          "Copy the retained v2 mask assets before accepting this upgrade.",
+          "The stored mask assets could not be prepared for editing.",
         );
       }
       let receipt: V3AssetCopyReceipt;
@@ -760,6 +597,7 @@ export class DevelopSessionCore implements DevelopSession {
         receipt = await this.#assetCopy.copyRequiredAssets({
           catalogId: this.catalogId,
           entryId: this.entryId,
+          sourceSignature: upgradeSourceSignature,
           copies: candidate.requiredAssetCopies,
         });
       } catch (error) {
@@ -794,21 +632,13 @@ export class DevelopSessionCore implements DevelopSession {
     ) {
       throw new DevelopSessionCommandError(
         "upgrade-stale",
-        "The v2 document changed during upgrade. Compare and accept the current revision again.",
+        "The photo or its edits changed while the editor was opening. Reopen the photo.",
       );
     }
-    this.#state.undo = boundedHistory([
-      ...this.#state.undo,
-      {
-        kind: "process-upgrade",
-        label,
-        before: sourceDocument,
-        after: edited.document,
-      },
-    ]);
-    this.#state.process = { kind: "editable", document: edited.document };
+    this.#state.process = { kind: "editable", document: candidate.document };
     this.#state.documentRevision += 1;
-    this.#state.redo = [];
+    this.#state.undo = this.#state.undo.filter((entry) => entry.kind === "metadata");
+    this.#state.redo = this.#state.redo.filter((entry) => entry.kind === "metadata");
     this.#state.transientEdit = null;
     return this.snapshot();
   }
@@ -835,7 +665,7 @@ export class DevelopSessionCore implements DevelopSession {
       throw new DevelopSessionCommandError("process-mismatch", "V2 undo history is not applicable.");
     }
     if (
-      (history.kind === "v3-document" || history.kind === "process-upgrade") &&
+      history.kind === "v3-document" &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V3 undo history is not applicable.");
@@ -862,10 +692,6 @@ export class DevelopSessionCore implements DevelopSession {
         this.#state.documentRevision += 1;
         return null;
       }
-      case "process-upgrade":
-        this.#state.process = { kind: "editable", document: history.before };
-        this.#state.documentRevision += 1;
-        return null;
       case "metadata":
         this.#state.metadataRevision += 1;
         return { entryId: this.entryId, values: history.before };
@@ -880,7 +706,7 @@ export class DevelopSessionCore implements DevelopSession {
     const history = this.#state.redo.at(-1);
     if (!history) return null;
     if (
-      (history.kind === "document" || history.kind === "process-upgrade") &&
+      history.kind === "document" &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 2)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V2 redo history is not applicable.");
@@ -913,10 +739,6 @@ export class DevelopSessionCore implements DevelopSession {
         this.#state.documentRevision += 1;
         return null;
       }
-      case "process-upgrade":
-        this.#state.process = { kind: "editable", document: history.after };
-        this.#state.documentRevision += 1;
-        return null;
       case "metadata":
         this.#state.metadataRevision += 1;
         return { entryId: this.entryId, values: history.after };
@@ -966,137 +788,21 @@ export class DevelopSessionCore implements DevelopSession {
     return this.snapshot();
   }
 
-  async #renderUpgradeComparison(
-    request: V3UpgradeComparisonRequest,
-  ): Promise<V3UpgradeComparisonResult> {
-    const snapshot = this.snapshot();
-    if (snapshot.processKind === "read-only-newer") {
-      return { kind: "blocked", diagnostics: [snapshot.readOnly.diagnostic] };
-    }
-    if (snapshot.processKind !== "v2") {
-      return invalidUpgradeComparison("Upgrade comparison requires an editable v2 document.");
-    }
-    if (
-      request.entry.catalogId !== this.catalogId ||
-      request.entry.id !== this.entryId
-    ) {
-      return invalidUpgradeComparison("The comparison source does not belong to this session.");
-    }
-    const bounds = request.outputDimensions;
-    const pixelCount = bounds.width * bounds.height;
-    if (
-      !Number.isSafeInteger(bounds.width) ||
-      !Number.isSafeInteger(bounds.height) ||
-      bounds.width < 1 ||
-      bounds.height < 1 ||
-      !Number.isSafeInteger(pixelCount) ||
-      pixelCount > MAX_CPU_RENDER_PIXELS
-    ) {
-      return invalidUpgradeComparison("Comparison dimensions exceed the fit preview limit.");
-    }
-    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
-
-    const sourceDocument = snapshot.document;
-    const sourceDocumentRevision = snapshot.documentRevision;
-    const candidate = createV3MigrationCandidate(sourceDocument);
-    const editedCandidate = applyV3EditCommand(candidate.document, request.firstEdit);
-    if (!editedCandidate.changed) {
-      return invalidUpgradeComparison("The first v3 edit must change the migration candidate.");
-    }
-    const sourceSignature = sourceSignatureForEntry(request.entry);
-    let baseline: RawExportRenderResult;
-    const renderer = new FrozenV2Renderer(document.createElement("canvas"), true);
-    try {
-      baseline = await renderFrozenV2(sourceDocument, {
-        kind: "export",
-        image: request.image,
-        sourceSignature,
-        size: {
-          mode: "fit",
-          width: bounds.width,
-          height: bounds.height,
-          neverUpscale: true,
-        },
-        renderer,
-      });
-    } catch (error) {
-      return invalidUpgradeComparison(
-        error instanceof Error ? error.message : "Could not render the v2 comparison frame.",
-      );
-    } finally {
-      renderer.dispose();
-    }
-    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
-
-    const candidateResult = await renderV3Runtime(editedCandidate.document, {
-      kind: "v3-fit-comparison",
-      entry: request.entry,
-      image: request.image,
-      outputDimensions: bounds,
-      cancellation: request.cancellation,
-    });
-    if (candidateResult.kind !== "rendered") return candidateResult;
-    if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
-    const current = this.snapshot();
-    if (
-      current.processKind !== "v2" ||
-      current.documentRevision !== sourceDocumentRevision ||
-      current.document !== sourceDocument
-    ) {
-      return invalidUpgradeComparison(
-        "The v2 document changed during comparison. Compare the current revision again.",
-      );
-    }
-    if (
-      baseline.width !== candidateResult.dimensions.width ||
-      baseline.height !== candidateResult.dimensions.height
-    ) {
-      return invalidUpgradeComparison(
-        "The v2 and v3 candidates did not resolve to identical fit dimensions.",
-      );
-    }
-    return {
-      kind: "compared",
-      baseline: {
-        pixels: baseline.pixels,
-        dimensions: { width: baseline.width, height: baseline.height },
-      },
-      candidate: {
-        pixels: candidateResult.pixels.pixels,
-        dimensions: candidateResult.dimensions,
-      },
-      candidateDiagnostics: candidateResult.diagnostics,
-      candidateAnalysis: candidateResult.analysis,
-      acceptance: migrationAcceptance(
-        sourceDocumentRevision,
-        candidate,
-        sourceSignature,
-        request.firstEdit,
-      ),
-    };
-  }
-
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
   render(request: FrozenV2ExportRequest): Promise<RawExportRenderResult>;
   render(request: V3SessionRenderRequest): Promise<CpuRenderResult>;
-  render(request: V3UpgradeComparisonRequest): Promise<V3UpgradeComparisonResult>;
   render(
     request:
       | FrozenV2PrepareRequest
       | FrozenV2PreviewRequest
       | FrozenV2ExportRequest
-      | V3SessionRenderRequest
-      | V3UpgradeComparisonRequest,
+      | V3SessionRenderRequest,
   ): Promise<
     | RenderPreparation
     | RawExportRenderResult
     | CpuRenderResult
-    | V3UpgradeComparisonResult
   > {
-    if (request.kind === "v3-upgrade-comparison") {
-      return this.#renderUpgradeComparison(request);
-    }
     const snapshot = this.snapshot();
     if (request.kind === "v3-preview" || request.kind === "v3-export") {
       if (snapshot.processKind === "read-only-newer") {

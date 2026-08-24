@@ -1,5 +1,11 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
+  CURVE_LUT_SIZE,
+  sampleCurve as sampleLegacyV2Curve,
+} from "../plugins/curve";
+import { sourceSignaturesEqual } from "../source-transform";
+import type { BasicSettings } from "../types";
+import {
   type AnalysisTapId,
   type DevelopCapabilityReport,
   type DevelopDiagnostic,
@@ -35,7 +41,10 @@ import {
 import {
   applyDevelopSharpeningPixel,
 } from "./detail";
-import type { DevelopDocumentV3 } from "./document";
+import {
+  V2_TO_V3_MAPPING_REVISION,
+  type DevelopDocumentV3,
+} from "./document";
 import {
   IDENTITY_HOMOGRAPHY,
   mapOutputToStored,
@@ -51,6 +60,8 @@ import {
   mapRepairSourcePoint,
   pointInLocalGeometryFrame,
   repairCoverage,
+  type MaskCoverageAssets,
+  type MaskRasterMatte,
 } from "./manual-edits";
 import { applyMonochrome, NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
 import {
@@ -60,6 +71,11 @@ import {
   NEUTRAL_LENS_CALIBRATION,
   type LensCalibration,
 } from "./optics";
+import {
+  applyLegacyV2DetailPixel,
+  legacyV2DetailIsActive,
+  legacyV2DetailSampleRadius,
+} from "./legacy-v2-detail";
 import {
   applyPointColor,
   hslToRgb,
@@ -223,6 +239,7 @@ export type CpuRenderResult =
 
 export interface CpuAssetAvailability {
   readonly hasAsset: (assetId: string) => boolean;
+  readonly maskMatte?: (assetId: string) => MaskRasterMatte | undefined;
 }
 
 export interface CpuRenderInput {
@@ -523,6 +540,28 @@ function assetPresent(input: CpuRenderInput, assetId: string): boolean {
   }
 }
 
+function assetMaskMatte(
+  input: CpuRenderInput,
+  assetId: string,
+): MaskRasterMatte | undefined {
+  try {
+    const matte = input.assets?.maskMatte?.(assetId);
+    if (
+      !matte ||
+      !Number.isSafeInteger(matte.width) ||
+      !Number.isSafeInteger(matte.height) ||
+      matte.width < 1 ||
+      matte.height < 1 ||
+      matte.pixels.length < matte.width * matte.height
+    ) {
+      return undefined;
+    }
+    return matte;
+  } catch {
+    return undefined;
+  }
+}
+
 function unsupportedEditDiagnostics(input: CpuRenderInput): {
   readonly notices: CpuBackendDiagnostic[];
   readonly blocking: CpuBackendBlockingDiagnostic[];
@@ -568,6 +607,15 @@ function unsupportedEditDiagnostics(input: CpuRenderInput): {
     if (!mask.enabled || localAdjustmentIsNeutral(mask)) continue;
     for (const component of mask.components) {
       if (component.kind !== "ai") continue;
+      if (!sourceSignaturesEqual(component.source, input.source.signature)) {
+        reportUnsupported(
+          "local-adjustments",
+          component.id,
+          "The AI mask matte belongs to an older source revision.",
+        );
+        continue;
+      }
+      if (assetMaskMatte(input, component.assetId)) continue;
       reportUnsupported(
         "local-adjustments",
         component.id,
@@ -760,6 +808,7 @@ function opticsStageGeometry(
   calibration: LensCalibration,
 ): CanonicalGeometry {
   return {
+    frame: "canonical-v3",
     sourceWidth: input.source.dimensions.width,
     sourceHeight: input.source.dimensions.height,
     exifOrientation: input.source.orientation,
@@ -788,15 +837,22 @@ function userStageGeometry(
   document: DevelopDocumentV3,
   dimensions: PixelDimensions,
 ): CanonicalGeometry {
+  const legacy = document.local.geometryFrame === "legacy-oriented-v2";
   return {
+    frame: document.local.geometryFrame,
     sourceWidth: dimensions.width,
     sourceHeight: dimensions.height,
     exifOrientation: 1,
-    optics: { calibration: NEUTRAL_LENS_CALIBRATION, amounts: {
-      distortion: 0,
-      illumination: 0,
-      lateralChromaticAberration: 0,
-    } },
+    optics: {
+      calibration: legacy
+        ? manualLensCalibration(document)
+        : NEUTRAL_LENS_CALIBRATION,
+      amounts: {
+        distortion: legacy && document.optics.manualDistortion !== 0 ? 1 : 0,
+        illumination: 0,
+        lateralChromaticAberration: 0,
+      },
+    },
     orientation: document.geometry.orientation,
     manualPerspective: document.geometry.manualPerspective.matrix,
     upright: document.geometry.upright,
@@ -808,7 +864,12 @@ function userStageGeometry(
 function createGeometryContext(input: CpuRenderInput): GeometryContext {
   const oriented = orientedDimensions(input.source);
   const user = userStageGeometry(input.document, oriented);
-  const optics = opticsStageGeometry(input, manualLensCalibration(input.document));
+  const optics = opticsStageGeometry(
+    input,
+    input.document.local.geometryFrame === "legacy-oriented-v2"
+      ? NEUTRAL_LENS_CALIBRATION
+      : manualLensCalibration(input.document),
+  );
   return {
     user,
     userCrop: resolveConstrainedCrop(user),
@@ -919,16 +980,24 @@ function mappedRenderPoint(
     context.user,
     context.userCrop,
   );
-  if (userMapped.kind !== "mapped" || !userMapped.insideDestination) return null;
-  const canonical = mapDistortedUv(
+  if (userMapped.kind !== "mapped") return null;
+  const legacy = input.document.local.geometryFrame === "legacy-oriented-v2";
+  if (!legacy && !userMapped.insideDestination) return null;
+  const mappedCanonical = mapDistortedUv(
     userMapped.point,
     context.optics.optics.calibration.distortion,
     context.optics.optics.amounts.distortion,
   );
-  if (
-    canonical.x < 0 || canonical.x > 1 ||
-    canonical.y < 0 || canonical.y > 1
-  ) return null;
+  if (!legacy && (
+    mappedCanonical.x < 0 || mappedCanonical.x > 1 ||
+    mappedCanonical.y < 0 || mappedCanonical.y > 1
+  )) return null;
+  const canonical = legacy
+    ? {
+        x: clamp(mappedCanonical.x, 0, 1),
+        y: clamp(mappedCanonical.y, 0, 1),
+      }
+    : mappedCanonical;
   return { postOptics: userMapped.point, canonical };
 }
 
@@ -939,9 +1008,15 @@ function writeRgb(data: Float32Array, pixel: number, rgb: Rgb): void {
   data[offset + 2] = rgb[2];
 }
 
+function usesFrozenV2Rendering(document: DevelopDocumentV3): boolean {
+  return document.compatibility.mappingRevision === V2_TO_V3_MAPPING_REVISION &&
+    document.compatibility.legacyV2 !== null;
+}
+
 function denoiseIsActive(document: DevelopDocumentV3): boolean {
-  return document.detail.noiseReduction.noiseReduction !== 0 ||
-    document.detail.noiseReduction.colorNoiseReduction !== 0;
+  return !usesFrozenV2Rendering(document) &&
+    (document.detail.noiseReduction.noiseReduction !== 0 ||
+      document.detail.noiseReduction.colorNoiseReduction !== 0);
 }
 
 function sampleOpticsStage(
@@ -1248,6 +1323,10 @@ function applyManualLocalAdjustments(
   );
   if (masks.length === 0) return true;
   const dimensions = orientedDimensions(input.source);
+  const assets = {
+    sourceSignature: input.source.signature,
+    maskMatte: (assetId: string) => assetMaskMatte(input, assetId),
+  };
   for (let y = 0; y < geometry.image.height; y += 1) {
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
     for (let x = 0; x < geometry.image.width; x += 1) {
@@ -1261,6 +1340,7 @@ function applyManualLocalAdjustments(
           mask,
           pointInLocalGeometryFrame(input.document.local.geometryFrame, mapped.canonical),
           dimensions,
+          assets,
         );
         if (coverage <= 0) continue;
         result = blendRgb(
@@ -1335,7 +1415,7 @@ function curveIsIdentity(points: DevelopDocumentV3["tone"]["curves"]["rgb"]): bo
   return points.every((point) => Math.abs(point.x - point.y) <= Number.EPSILON);
 }
 
-function sampleCurve(
+function sampleLinearCurve(
   value: number,
   points: DevelopDocumentV3["tone"]["curves"]["rgb"],
 ): number {
@@ -1353,6 +1433,26 @@ function sampleCurve(
   return points[points.length - 1]?.y ?? bounded;
 }
 
+function sampleDocumentCurve(
+  value: number,
+  points: DevelopDocumentV3["tone"]["curves"]["rgb"],
+  document: DevelopDocumentV3,
+): number {
+  if (!usesFrozenV2Rendering(document)) {
+    return sampleLinearCurve(value, points);
+  }
+  const position = clamp(value, 0, 1) * (CURVE_LUT_SIZE - 1);
+  const low = Math.floor(position);
+  const high = Math.min(low + 1, CURVE_LUT_SIZE - 1);
+  const lowSample = Math.fround(
+    sampleLegacyV2Curve(points, low / (CURVE_LUT_SIZE - 1)),
+  );
+  const highSample = Math.fround(
+    sampleLegacyV2Curve(points, high / (CURVE_LUT_SIZE - 1)),
+  );
+  return Math.fround(lowSample + (highSample - lowSample) * (position - low));
+}
+
 function applyCurves(rgb: Rgb, document: DevelopDocumentV3): Rgb {
   const curves = document.tone.curves;
   if (
@@ -1362,14 +1462,14 @@ function applyCurves(rgb: Rgb, document: DevelopDocumentV3): Rgb {
     return rgb;
   }
   const master: Rgb = [
-    sampleCurve(rgb[0], curves.rgb),
-    sampleCurve(rgb[1], curves.rgb),
-    sampleCurve(rgb[2], curves.rgb),
+    sampleDocumentCurve(rgb[0], curves.rgb, document),
+    sampleDocumentCurve(rgb[1], curves.rgb, document),
+    sampleDocumentCurve(rgb[2], curves.rgb, document),
   ];
   return [
-    sampleCurve(master[0], curves.red),
-    sampleCurve(master[1], curves.green),
-    sampleCurve(master[2], curves.blue),
+    sampleDocumentCurve(master[0], curves.red, document),
+    sampleDocumentCurve(master[1], curves.green, document),
+    sampleDocumentCurve(master[2], curves.blue, document),
   ];
 }
 
@@ -1440,6 +1540,288 @@ function applyPointwiseStages(
     }
   }
   return true;
+}
+
+const LEGACY_BASIC_FIELDS = [
+  "exposure",
+  "contrast",
+  "highlights",
+  "shadows",
+  "whites",
+  "blacks",
+  "temperature",
+  "tint",
+  "vibrance",
+  "saturation",
+] as const satisfies readonly (keyof BasicSettings)[];
+
+function emptyBasicSettings(): BasicSettings {
+  return {
+    exposure: 0,
+    contrast: 0,
+    highlights: 0,
+    shadows: 0,
+    whites: 0,
+    blacks: 0,
+    temperature: 0,
+    tint: 0,
+    vibrance: 0,
+    saturation: 0,
+  };
+}
+
+function legacyLocalAdjustments(
+  input: CpuRenderInput,
+  point: GeometryPoint,
+  dimensions: PixelDimensions,
+  assets: MaskCoverageAssets,
+): BasicSettings {
+  const adjustment = emptyBasicSettings();
+  for (const mask of input.document.local.masks) {
+    if (!mask.enabled || localAdjustmentIsNeutral(mask)) continue;
+    const coverage = manualMaskCoverage(mask, point, dimensions, assets);
+    if (coverage <= 0) continue;
+    for (const field of LEGACY_BASIC_FIELDS) {
+      adjustment[field] += mask.adjustments[field] * coverage;
+    }
+  }
+  return adjustment;
+}
+
+function legacyWhiteBalanceGains(temperature: number, tint: number): Rgb {
+  return [
+    clamp(1 + temperature * 0.00008 + tint * 0.00002, 0.25, 4),
+    clamp(1 - Math.abs(tint) * 0.00003, 0.25, 4),
+    clamp(1 - temperature * 0.00008 - tint * 0.00002, 0.25, 4),
+  ];
+}
+
+function applyLegacyLocalWhiteBalance(
+  rgb: Rgb,
+  document: DevelopDocumentV3,
+  adjustment: Pick<BasicSettings, "temperature" | "tint">,
+): Rgb {
+  if (adjustment.temperature === 0 && adjustment.tint === 0) return rgb;
+  const whiteBalance = document.color.whiteBalance;
+  if (whiteBalance.mode !== "legacy-custom") {
+    const gains = legacyWhiteBalanceGains(adjustment.temperature, adjustment.tint);
+    return [rgb[0] * gains[0], rgb[1] * gains[1], rgb[2] * gains[2]];
+  }
+  const combined = legacyWhiteBalanceGains(
+    whiteBalance.adjustment.temperature + adjustment.temperature,
+    whiteBalance.adjustment.tint + adjustment.tint,
+  );
+  return [
+    rgb[0] * combined[0] / whiteBalance.resolved.gains[0],
+    rgb[1] * combined[1] / whiteBalance.resolved.gains[1],
+    rgb[2] * combined[2] / whiteBalance.resolved.gains[2],
+  ];
+}
+
+interface LegacyToneResult {
+  readonly pointColorInput: Rgb;
+  readonly output: Rgb;
+}
+
+function applyLegacyToneStages(
+  input: CpuRenderInput,
+  source: Rgb,
+  mapped: MappedRenderPoint | null,
+  dimensions: PixelDimensions,
+  assets: MaskCoverageAssets,
+): LegacyToneResult {
+  const global = input.document.color.global;
+  const basic = input.document.tone.basic;
+  const local = mapped
+    ? legacyLocalAdjustments(
+        input,
+        pointInLocalGeometryFrame(
+          input.document.local.geometryFrame,
+          mapped.canonical,
+        ),
+        dimensions,
+        assets,
+      )
+    : emptyBasicSettings();
+  const balanced = applyLegacyLocalWhiteBalance(source, input.document, local);
+  const pointColorInput = applyCurves(
+    applyLocalBasicAdjustment(balanced, {
+      exposure: basic.exposure + local.exposure,
+      contrast: basic.contrast + local.contrast,
+      highlights: basic.highlights + local.highlights,
+      shadows: basic.shadows + local.shadows,
+      whites: basic.whites + local.whites,
+      blacks: basic.blacks + local.blacks,
+      temperature: 0,
+      tint: 0,
+      vibrance: global.vibrance + local.vibrance,
+      saturation: global.saturation + local.saturation,
+    }),
+    input.document,
+  );
+  return {
+    pointColorInput,
+    output: applyColorAfterPointColorInput(pointColorInput, input.document),
+  };
+}
+
+function applyLegacyPointwiseStages(
+  input: CpuRenderInput,
+  geometry: GeometryRenderResult,
+  region: RenderRegion,
+  pointColorInputPixels: Float32Array | null,
+): boolean {
+  const dimensions = orientedDimensions(input.source);
+  const assets = {
+    sourceSignature: input.source.signature,
+    maskMatte: (assetId: string) => assetMaskMatte(input, assetId),
+  };
+  for (let y = 0; y < geometry.image.height; y += 1) {
+    if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
+    for (let x = 0; x < geometry.image.width; x += 1) {
+      const pixel = y * geometry.image.width + x;
+      const source = readRgb(geometry.image, pixel);
+      const mapped = mappedRenderPoint(input, geometry.context, region, x, y);
+      const result = applyLegacyToneStages(
+        input,
+        source,
+        mapped,
+        dimensions,
+        assets,
+      );
+      if (pointColorInputPixels) {
+        writeRgb(pointColorInputPixels, pixel, result.pointColorInput);
+      }
+      writeRgb(geometry.image.data, pixel, result.output);
+    }
+  }
+  return true;
+}
+
+function sampleLegacyTonedOutput(
+  input: CpuRenderInput,
+  geometry: GeometryRenderResult,
+  region: RenderRegion,
+  transfer: TransferFunction,
+  x: number,
+  y: number,
+  fallback: Rgb,
+  dimensions: PixelDimensions,
+  assets: MaskCoverageAssets,
+): Rgb {
+  const output = input.request.plan.qualityAndDimensions.outputDimensions;
+  const boundedX = clamp(region.x + x + 0.5, 0, output.width) - region.x - 0.5;
+  const boundedY = clamp(region.y + y + 0.5, 0, output.height) - region.y - 0.5;
+  const mapped = mappedRenderPoint(
+    input,
+    geometry.context,
+    region,
+    boundedX,
+    boundedY,
+  );
+  if (!mapped) return fallback;
+  const source = sampleOpticsStage(
+    input,
+    mapped.postOptics,
+    transfer,
+    geometry.context.optics,
+    geometry.context.opticsCrop,
+  );
+  return source
+    ? applyLegacyToneStages(
+        input,
+        source,
+        mapped,
+        dimensions,
+        assets,
+      ).output
+    : fallback;
+}
+
+function applyLegacyDetail(
+  input: CpuRenderInput,
+  geometry: GeometryRenderResult,
+  region: RenderRegion,
+  transfer: TransferFunction,
+): FloatRgbImage | null {
+  const settings = input.document.detail;
+  if (!legacyV2DetailIsActive(settings)) return geometry.image;
+  const target = new Float32Array(geometry.image.data.length);
+  const radius = legacyV2DetailSampleRadius(settings);
+  const dimensions = orientedDimensions(input.source);
+  const assets = {
+    sourceSignature: input.source.signature,
+    maskMatte: (assetId: string) => assetMaskMatte(input, assetId),
+  };
+  for (let y = 0; y < geometry.image.height; y += 1) {
+    if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) {
+      return null;
+    }
+    for (let x = 0; x < geometry.image.width; x += 1) {
+      const pixel = y * geometry.image.width + x;
+      const center = readRgb(geometry.image, pixel);
+      const right = sampleLegacyTonedOutput(
+        input,
+        geometry,
+        region,
+        transfer,
+        x + radius,
+        y,
+        center,
+        dimensions,
+        assets,
+      );
+      const left = sampleLegacyTonedOutput(
+        input,
+        geometry,
+        region,
+        transfer,
+        x - radius,
+        y,
+        center,
+        dimensions,
+        assets,
+      );
+      const down = sampleLegacyTonedOutput(
+        input,
+        geometry,
+        region,
+        transfer,
+        x,
+        y + radius,
+        center,
+        dimensions,
+        assets,
+      );
+      const up = sampleLegacyTonedOutput(
+        input,
+        geometry,
+        region,
+        transfer,
+        x,
+        y - radius,
+        center,
+        dimensions,
+        assets,
+      );
+      const average: Rgb = [
+        (right[0] + left[0] + down[0] + up[0]) * 0.25,
+        (right[1] + left[1] + down[1] + up[1]) * 0.25,
+        (right[2] + left[2] + down[2] + up[2]) * 0.25,
+      ];
+      writeRgb(
+        target,
+        pixel,
+        applyLegacyV2DetailPixel(center, average, settings),
+      );
+    }
+  }
+  return {
+    width: geometry.image.width,
+    height: geometry.image.height,
+    channels: 3,
+    data: target,
+  };
 }
 
 type SpatialPixelOperation = (
@@ -1684,11 +2066,21 @@ function executeRegion(
   const pointColorInputPixels = outputIsExport(
     input.request.plan.qualityAndDimensions,
   ) ? null : new Float32Array(region.width * region.height * 3);
-  if (!applyPointwiseStages(input, geometry.image, pointColorInputPixels)) return null;
-  if (!applyManualLocalAdjustments(input, geometry, region)) return null;
-  const presence = applyPresence(input, geometry.image);
+  const frozenV2 = usesFrozenV2Rendering(input.document);
+  let pointwise: FloatRgbImage;
+  if (frozenV2) {
+    if (!applyLegacyPointwiseStages(input, geometry, region, pointColorInputPixels)) return null;
+    const detailed = applyLegacyDetail(input, geometry, region, transfer);
+    if (!detailed) return null;
+    pointwise = detailed;
+  } else {
+    if (!applyPointwiseStages(input, geometry.image, pointColorInputPixels)) return null;
+    if (!applyManualLocalAdjustments(input, geometry, region)) return null;
+    pointwise = geometry.image;
+  }
+  const presence = applyPresence(input, pointwise);
   if (!presence) return null;
-  const sharpened = applySharpening(input, presence);
+  const sharpened = frozenV2 ? presence : applySharpening(input, presence);
   if (!sharpened) return null;
   if (!applyPostCrop(input, sharpened, region)) return null;
   const pixels = encodeRgba8(input, sharpened, geometry.alpha);

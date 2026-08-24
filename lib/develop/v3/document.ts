@@ -21,7 +21,7 @@ import type {
   DevelopSharpeningSettings,
   StandardDenoiseSettings,
 } from "./detail";
-import type { Homography, UserOrientation } from "./geometry";
+import type { GeometryFrame, Homography, UserOrientation } from "./geometry";
 import { IDENTITY_HOMOGRAPHY } from "./geometry";
 import type { MonochromeSettings } from "./monochrome";
 import { NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
@@ -124,7 +124,7 @@ export interface PersistedGeometry {
 }
 
 export interface PersistedLocalEdits {
-  readonly geometryFrame: "canonical-v3" | "legacy-oriented-v2";
+  readonly geometryFrame: GeometryFrame;
   readonly masks: readonly LocalMask[];
   readonly maskAssetRefs: readonly DevelopAssetRef[];
 }

@@ -7,6 +7,7 @@ export type DevelopPanelId = "crop" | "edit" | "masking" | "info";
 interface DevelopPanelRailProps {
   activePanel: DevelopPanelId | null;
   onSelect: (panel: DevelopPanelId) => void;
+  editingDisabled?: boolean;
 }
 
 const PANELS: Array<{ id: DevelopPanelId; label: string; short: string; icon: typeof IconSliders }> = [
@@ -16,7 +17,11 @@ const PANELS: Array<{ id: DevelopPanelId; label: string; short: string; icon: ty
   { id: "info", label: "Info", short: "NFO", icon: IconInfo },
 ];
 
-export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProps) {
+export function DevelopPanelRail({
+  activePanel,
+  onSelect,
+  editingDisabled = false,
+}: DevelopPanelRailProps) {
   return (
     <nav
       className="flex w-14 shrink-0 flex-col items-center gap-1.5 border-l border-lr-border-subtle bg-lr-panel py-3"
@@ -24,6 +29,7 @@ export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProp
     >
       {PANELS.map(({ id, label, short, icon: Icon }) => {
         const isActive = activePanel === id;
+        const disabled = editingDisabled && id !== "info";
         return (
           <button
             key={id}
@@ -31,10 +37,13 @@ export function DevelopPanelRail({ activePanel, onSelect }: DevelopPanelRailProp
             title={label}
             aria-label={label}
             aria-pressed={isActive}
+            disabled={disabled}
             onClick={() => onSelect(id)}
             className={[
               "flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-[9px] text-[8px] tracking-[0.06em] transition",
-              isActive
+              disabled
+                ? "cursor-not-allowed text-lr-text-faint opacity-40"
+                : isActive
                 ? "bg-lr-panel-raised text-lr-text"
                 : "text-lr-text-dim hover:bg-lr-panel-raised hover:text-lr-text-muted",
             ].join(" ")}

@@ -273,7 +273,7 @@ export function V3BatchDialog({
               Batch Develop settings
             </h2>
             <p className="mt-1 text-[11px] leading-4 text-lr-text-faint">
-              Source: {sourceEntry.name}. Saves v3 Develop settings only. Export and output intent are unavailable here.
+              Source: {sourceEntry.name}. Saves Develop settings only. Export and output intent are unavailable here.
             </p>
           </div>
           <button
@@ -366,13 +366,13 @@ export function V3BatchDialog({
               ) : null}
               <label className="flex items-start gap-2">
                 <input type="radio" name="batch-scope" checked={scopeMode === "full"} disabled={runState.kind === "running"} onChange={() => setScopeMode("full")} className="mt-0.5 accent-lr-accent" />
-                <span>Full v3 document</span>
+                <span>Full Develop document</span>
               </label>
               {scopeMode === "full" ? (
                 <label className="ml-5 flex items-start gap-2 rounded border border-lr-border-subtle bg-lr-panel-raised/50 p-2">
                   <input type="checkbox" checked={fullConfirmed} disabled={runState.kind === "running"} onChange={(event) => setFullConfirmed(event.target.checked)} className="mt-0.5 size-3.5 accent-lr-accent" />
                   <span className="text-[10px] leading-4 text-lr-text-faint">
-                    I understand this replaces every supported v3 Develop group. Source-specific and unavailable groups will be reported as skipped.
+                    I understand this replaces every supported Develop group. Source-specific and unavailable groups will be reported as skipped.
                   </span>
                 </label>
               ) : null}

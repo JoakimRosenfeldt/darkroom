@@ -56,13 +56,19 @@ function createV3CanvasUserGeometry(
 ): CanonicalGeometry {
   const dimensions = v3OrientedDimensions(source);
   return {
+    frame: document.local.geometryFrame,
     sourceWidth: dimensions.width,
     sourceHeight: dimensions.height,
     exifOrientation: 1,
     optics: {
-      calibration: NEUTRAL_LENS_CALIBRATION,
+      calibration: document.local.geometryFrame === "legacy-oriented-v2"
+        ? manualLensCalibration(document)
+        : NEUTRAL_LENS_CALIBRATION,
       amounts: {
-        distortion: 0,
+        distortion: document.local.geometryFrame === "legacy-oriented-v2" &&
+            document.optics.manualDistortion !== 0
+          ? 1
+          : 0,
         illumination: 0,
         lateralChromaticAberration: 0,
       },
@@ -83,6 +89,7 @@ export function mapV3CanvasOutputToCanonical(
   const user = createV3CanvasUserGeometry(document, source);
   const postOptics = mapOutputToStored(output, user, resolveConstrainedCrop(user));
   if (postOptics.kind !== "mapped") return postOptics;
+  if (document.local.geometryFrame === "legacy-oriented-v2") return postOptics;
   const calibration = manualLensCalibration(document);
   const point = mapDistortedUv(
     postOptics.point,
@@ -106,13 +113,16 @@ export function mapV3CanonicalToCanvasOutput(
   document: DevelopDocumentV3,
   source: SourceRecord,
 ): GeometryMapResult {
+  const user = createV3CanvasUserGeometry(document, source);
+  if (document.local.geometryFrame === "legacy-oriented-v2") {
+    return mapStoredToOutput(canonical, user, resolveConstrainedCrop(user));
+  }
   const calibration = manualLensCalibration(document);
   const postOptics = invertDistortedUv(
     canonical,
     calibration.distortion,
     document.optics.manualDistortion === 0 ? 0 : 1,
   );
-  const user = createV3CanvasUserGeometry(document, source);
   return mapStoredToOutput(postOptics, user, resolveConstrainedCrop(user));
 }
 

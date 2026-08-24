@@ -1,10 +1,7 @@
 import { create } from "zustand";
 import type { EntryMetadata } from "@/lib/catalog/types";
-import type { DevelopCommand } from "@/lib/develop/commands";
-import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import {
   clearDevelopSessions,
-  createDevelopPluginCommand,
   activateDevelopSession,
   getDevelopSession,
   getOrCreateDevelopSession,
@@ -16,17 +13,13 @@ import {
   type DevelopSessionSnapshot,
 } from "@/lib/develop/session";
 import type {
-  DevelopDocument,
-  DevelopSettings,
-  GlobalDevelopPluginId,
-} from "@/lib/develop/types";
-import type {
   V3EditCommand,
   V3SemanticGroupId,
 } from "@/lib/develop/v3/commands";
-import type {
-  PersistedDevelopDocument,
-  StoredDevelopDocument,
+import {
+  createDefaultV3DevelopDocument,
+  type PersistedDevelopDocument,
+  type StoredDevelopDocument,
 } from "@/lib/develop/v3/document";
 
 export type SidecarStatus = "idle" | "loading" | "saving" | "saved" | "error";
@@ -46,7 +39,6 @@ export interface DevelopSessionState {
   processKind: DevelopSessionSnapshot["processKind"];
   persistedDocument: PersistedDevelopDocument | null;
   readOnly: DevelopReadOnlyReason | null;
-  document: DevelopDocument;
   documentRevision: number;
   persistedDocumentRevision: number;
   metadataRevision: number;
@@ -82,16 +74,10 @@ function adapterState(
   const persistedDocument = snapshot.processKind === "read-only-newer"
     ? null
     : snapshot.document;
-  const document = snapshot.processKind === "v2"
-    ? snapshot.document
-    : snapshot.processKind === "v3" && snapshot.document.compatibility.legacyV2
-      ? snapshot.document.compatibility.legacyV2
-      : createDefaultDevelopDocument();
   return {
     processKind: snapshot.processKind,
     persistedDocument,
     readOnly: snapshot.readOnly,
-    document,
     documentRevision: snapshot.documentRevision,
     persistedDocumentRevision: snapshot.persistedDocumentRevision,
     metadataRevision: snapshot.metadataRevision,
@@ -107,7 +93,6 @@ interface DevelopStore {
   activeCatalogId: string | null;
   activeEntryId: string | null;
   sessions: Record<string, DevelopSessionState>;
-  showOriginal: boolean;
   activateEntry: (
     catalogId: string,
     entryId: string,
@@ -119,16 +104,9 @@ interface DevelopStore {
     document: DevelopSessionOpenDocument,
   ) => void;
   synchronizeSession: (entryId: string, snapshot: DevelopSessionSnapshot) => void;
-  dispatch: (command: DevelopCommand, label?: string) => void;
   dispatchV3: (command: V3EditCommand, label?: string) => void;
   resetV3Group: (group: V3SemanticGroupId) => void;
   resetV3All: () => void;
-  updatePlugin: <T extends GlobalDevelopPluginId>(
-    pluginId: T,
-    patch: Partial<DevelopSettings[T]>,
-  ) => void;
-  resetPlugin: (pluginId: GlobalDevelopPluginId) => void;
-  resetAll: () => void;
   beginEditGroup: (label: string) => void;
   endEditGroup: () => void;
   undo: () => void;
@@ -147,7 +125,6 @@ interface DevelopStore {
     metadataRevision: number,
   ) => void;
   clearLibrarySessions: () => void;
-  setShowOriginal: (showOriginal: boolean) => void;
   setSidecarStatus: (status: SidecarStatus, error?: string | null) => void;
   setSelectedMask: (maskId: string | null) => void;
   setSelectedComponent: (componentId: string | null) => void;
@@ -172,7 +149,6 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   activeCatalogId: null,
   activeEntryId: null,
   sessions: {},
-  showOriginal: false,
 
   activateEntry: (catalogId, entryId, document) => set((state) => {
     const session = getOrCreateDevelopSession(catalogId, entryId, document);
@@ -184,7 +160,6 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
         ...state.sessions,
         [entryId]: adapterState(session.snapshot(), state.sessions[entryId]?.ui),
       },
-      showOriginal: false,
     };
   }),
 
@@ -198,16 +173,6 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       ? replaceCoreState(state, entryId, snapshot)
       : state),
 
-  dispatch: (command, label = "Edit") => set((state) => {
-    const entryId = state.activeEntryId;
-    const catalogId = state.activeCatalogId;
-    if (!catalogId || !entryId) return state;
-    const session = getDevelopSession(catalogId, entryId);
-    if (!session) return state;
-    if (session.snapshot().processKind !== "v2") return state;
-    return replaceCoreState(state, entryId, session.dispatch(command, label));
-  }),
-
   dispatchV3: (command, label = "Edit") => set((state) => {
     const entryId = state.activeEntryId;
     const catalogId = state.activeCatalogId;
@@ -220,27 +185,8 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     get().dispatchV3(
       { kind: "reset-v3-semantic-group", group },
       `Reset ${group}`,
-    ),
+  ),
   resetV3All: () => get().dispatchV3({ kind: "reset-v3-all" }, "Reset all"),
-
-  updatePlugin: (pluginId, patch) => {
-    const state = get();
-    const catalogId = state.activeCatalogId;
-    const entryId = state.activeEntryId;
-    const session = catalogId && entryId
-      ? getDevelopSession(catalogId, entryId)
-      : null;
-    if (!session) return;
-    const snapshot = session.snapshot();
-    if (snapshot.processKind !== "v2") return;
-    state.dispatch(
-      createDevelopPluginCommand(snapshot.document, pluginId, patch),
-      `Adjust ${pluginId}`,
-    );
-  },
-  resetPlugin: (pluginId) =>
-    get().dispatch({ kind: "reset-plugin", pluginId }, `Reset ${pluginId}`),
-  resetAll: () => get().dispatch({ kind: "reset-all" }, "Reset all"),
 
   beginEditGroup: (label) => set((state) => {
     const entryId = state.activeEntryId;
@@ -297,7 +243,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     entryId,
     before,
     after,
-    document = createDefaultDevelopDocument(),
+    document = createDefaultV3DevelopDocument(),
   ) => set((state) => {
     const session = getOrCreateDevelopSession(
       catalogId,
@@ -339,10 +285,8 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       activeCatalogId: null,
       activeEntryId: null,
       sessions: {},
-      showOriginal: false,
     });
   },
-  setShowOriginal: (showOriginal) => set({ showOriginal }),
   setSidecarStatus: (sidecarStatus, sidecarError = null) => set((state) => {
     const entryId = state.activeEntryId;
     const current = entryId ? state.sessions[entryId] : undefined;
@@ -414,8 +358,4 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
 
 export function activeDevelopSession(state: DevelopStore): DevelopSessionState | null {
   return state.activeEntryId ? state.sessions[state.activeEntryId] ?? null : null;
-}
-
-export function activeDevelopDocument(state: DevelopStore): DevelopDocument {
-  return activeDevelopSession(state)?.document ?? createDefaultDevelopDocument();
 }

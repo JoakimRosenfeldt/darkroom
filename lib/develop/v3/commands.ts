@@ -187,7 +187,10 @@ function applyDirectV3Command(
     }
     case "reset-v3-semantic-group": {
       const defaults = createDefaultV3DevelopDocument();
-      const next = replaceGroup(document, command.group, groupValue(defaults, command.group));
+      const value = command.group === "local"
+        ? { ...defaults.local, geometryFrame: document.local.geometryFrame }
+        : groupValue(defaults, command.group);
+      const next = replaceGroup(document, command.group, value);
       return changedResult(document, next, [command.group]);
     }
     case "reset-v3-all": {

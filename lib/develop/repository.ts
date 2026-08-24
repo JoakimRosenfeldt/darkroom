@@ -1,5 +1,4 @@
 import { COLOR_LABELS, type EntryMetadata } from "@/lib/catalog/types";
-import { createDefaultDevelopDocument } from "@/lib/develop/document";
 import type {
   DevelopSaveResult,
   DevelopSessionOpenDocument,
@@ -16,8 +15,9 @@ import {
   decodePersistedDevelopDocument,
   MAX_V3_PAYLOAD_BYTES,
 } from "@/lib/develop/v3/codec";
-import type {
-  PersistedDevelopDocument,
+import {
+  createDefaultV3DevelopDocument,
+  type PersistedDevelopDocument,
 } from "@/lib/develop/v3/document";
 import {
   MAX_DEVELOP_XMP_PAYLOAD_BYTES,
@@ -294,6 +294,7 @@ export class DevelopRepository {
   #pending: PendingWrite | null = null;
   #queue: Promise<void> = Promise.resolve();
   #hydration: Promise<void> = Promise.resolve();
+  #opening: Promise<void> | null = null;
   #sidecarContents: string | null = null;
   #sidecarLastModified: number | null = null;
   #sidecarContentsKnown = false;
@@ -326,12 +327,13 @@ export class DevelopRepository {
 
   catalogDocument(metadata: EntryMetadata): DevelopSessionOpenDocument {
     return openDevelopSessionDocument(
-      metadata.develop ?? createDefaultDevelopDocument(),
+      metadata.develop ?? createDefaultV3DevelopDocument(),
     );
   }
 
   open(metadata: EntryMetadata): Promise<void> {
     this.#metadata = metadata;
+    if (this.#opening) return this.#opening;
     this.#adapters?.setStatus("loading");
     const hydrate = async (): Promise<void> => {
       await this.#queue;
@@ -342,7 +344,7 @@ export class DevelopRepository {
         this.#sidecarLastModified = sidecar?.lastModified ?? null;
         this.#sidecarContentsKnown = true;
         this.#failedWrite = null;
-        await this.#reconcile(sidecar, metadata);
+        await this.#reconcile(sidecar, this.#metadata ?? metadata);
         this.#adapters?.setStatus("saved");
       } catch (error) {
         this.#adapters?.setStatus(
@@ -352,8 +354,14 @@ export class DevelopRepository {
         throw error;
       }
     };
-    this.#hydration = hydrate();
-    return this.#hydration;
+    const opening = hydrate();
+    this.#hydration = opening;
+    this.#opening = opening;
+    const clearOpening = (): void => {
+      if (this.#opening === opening) this.#opening = null;
+    };
+    void opening.then(clearOpening, clearOpening);
+    return opening;
   }
 
   async #reconcile(
