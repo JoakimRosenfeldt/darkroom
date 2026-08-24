@@ -53,7 +53,8 @@ const MAX_DECODE_EDGE = 2_560;
 const MAX_DECODE_DIMENSION = 65_535;
 const MAX_DECODE_BYTES = 512 * 1024 * 1024;
 const MAX_MUTATION_BYTES = 512 * 1024;
-const MAX_MUTATION_BATCH_BYTES = 4 * 1024 * 1024;
+const MAX_STATE_MUTATION_BYTES = 34 * 1024 * 1024;
+const MAX_MUTATION_BATCH_BYTES = 34 * 1024 * 1024;
 
 function isRecord(value: unknown): value is RecordValue {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -452,16 +453,22 @@ export function parseCatalogQueryRequest(value: unknown): CatalogQueryRequest {
 }
 
 function parsedSizedMutation(value: unknown): CatalogLiveMutation {
+  const parsed = parseCatalogLiveMutation(value);
   let serialized: string;
   try {
     serialized = JSON.stringify(value);
   } catch {
     throw new Error("Catalog mutation is not serializable.");
   }
-  if (serialized === undefined || new TextEncoder().encode(serialized).byteLength > MAX_MUTATION_BYTES) {
+  const maximum = parsed.kind === "library-state-replace" ||
+      (parsed.kind === "metadata-patch" &&
+        (parsed.patch.developJson !== undefined || parsed.patch.rawXmp !== undefined))
+    ? MAX_STATE_MUTATION_BYTES
+    : MAX_MUTATION_BYTES;
+  if (serialized === undefined || new TextEncoder().encode(serialized).byteLength > maximum) {
     throw new Error("Catalog mutation is too large.");
   }
-  return parseCatalogLiveMutation(value);
+  return parsed;
 }
 
 function safeMutation(value: unknown): CatalogApplyMutation {

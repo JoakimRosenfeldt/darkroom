@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LibraryEntry } from "@/lib/fs/types";
 import {
   AiInferenceError,
   runAiMaskInference,
@@ -12,11 +11,13 @@ import type {
   AiModelProgress,
   AiModelState,
 } from "@/lib/ai/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import type { AiInferenceResult } from "@/lib/ai/worker-types";
 import {
   MAX_COMPONENTS_PER_MASK,
   MAX_MASKS,
 } from "@/lib/develop/document";
+import { COORDINATE_FRAME_REVISION, type V3SourceSignature } from "@/lib/develop/process";
+import { parseSha256Digest } from "@/lib/develop/render-contract";
 import {
   sourceSignatureKey,
   sourceSignaturesEqual,
@@ -24,57 +25,107 @@ import {
 import type {
   AiMaskComponent,
   LocalMask,
-  SourceSignature,
+  MaskComponent,
+  NonEmpty,
 } from "@/lib/develop/types";
-import type { RenderDiagnostic } from "@/lib/develop/renderer";
+import type {
+  DevelopAssetCandidate,
+  DevelopAssetRef,
+} from "@/lib/develop/v3/assets";
+import type {
+  DevelopDocumentV3,
+  PersistedLocalEdits,
+} from "@/lib/develop/v3/document";
 import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import type { LibraryEntry } from "@/lib/fs/types";
+import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
 import { useDevelopStore } from "@/stores/develop-store";
+import { useLibraryStore } from "@/stores/library-store";
 
 interface AiMaskActionsProps {
-  entry: LibraryEntry;
-  sourceSignature: SourceSignature;
-  diagnostics: readonly RenderDiagnostic[];
+  readonly entry: LibraryEntry;
+  readonly document: DevelopDocumentV3;
 }
 
 type AiTarget = {
-  maskId: string;
-  componentId: string;
+  readonly maskId: string;
+  readonly componentId: string;
 };
 
 type AiRequest = {
-  modelId: AiModelId;
-  maskId: string | null;
-  target: AiTarget | null;
-  forceWasm: boolean;
+  readonly modelId: AiModelId;
+  readonly maskId: string | null;
+  readonly target: AiTarget | null;
+  readonly forceWasm: boolean;
 };
 
 type AiJob =
   | {
-      kind: "downloading";
-      modelId: AiModelId;
-      receivedBytes: number;
-      totalBytes: number;
+      readonly kind: "downloading";
+      readonly modelId: AiModelId;
+      readonly receivedBytes: number;
+      readonly totalBytes: number;
     }
   | {
-      kind: "inferring";
-      modelId: AiModelId;
-      stage: AiInferenceProgress["stage"];
-      progress: number;
-      forceWasm: boolean;
+      readonly kind: "inferring";
+      readonly modelId: AiModelId;
+      readonly stage: AiInferenceProgress["stage"];
+      readonly progress: number;
+      readonly forceWasm: boolean;
     };
 
 type ActiveJob = {
-  token: string;
-  controller: AbortController;
-  modelId: AiModelId;
-  downloading: boolean;
+  readonly token: string;
+  readonly controller: AbortController;
+  readonly modelId: AiModelId;
+  readonly downloading: boolean;
 };
+
+interface StagedMaskAsset {
+  readonly candidate: DevelopAssetCandidate;
+  readonly reference: DevelopAssetRef;
+  readonly nowMs: number;
+  readonly recoveryUntilMs: number;
+}
+
+interface PreparedMaskUpdate {
+  readonly local: PersistedLocalEdits;
+  readonly maskId: string;
+  readonly componentId: string;
+}
+
+interface CurrentDocument {
+  readonly document: DevelopDocumentV3;
+  readonly revision: number;
+}
 
 const MODEL_IDS: readonly AiModelId[] = ["subject", "sky"];
 const MODEL_LABELS: Record<AiModelId, string> = {
   subject: "Subject",
   sky: "Sky",
 };
+const RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
+function sourceSignatureForEntry(entry: LibraryEntry): V3SourceSignature {
+  return {
+    entryId: entry.id,
+    catalogId: entry.catalogId,
+    assetRevision: entry.assetRevision,
+    relativePath: entry.relativePath,
+    size: entry.size,
+    lastModified: entry.lastModified,
+  };
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) {
@@ -122,36 +173,62 @@ function isCancelled(error: unknown): boolean {
   return error instanceof AiInferenceError && error.code === "cancelled";
 }
 
-function selectedAiTarget(
-  entryId: string,
-  diagnostics: readonly RenderDiagnostic[],
-): AiTarget | null {
+function currentDocument(entry: LibraryEntry): CurrentDocument | null {
   const state = useDevelopStore.getState();
-  const session = state.sessions[entryId];
-  const maskId = session?.ui.selectedMaskId;
-  const componentId = session?.ui.selectedComponentId;
-  if (!maskId || !componentId) return null;
-  const component = session.document.settings.masking.masks
-    .find((mask) => mask.id === maskId)
-    ?.components.find((item) => item.id === componentId);
-  if (component?.kind !== "ai") return null;
-  if (!diagnostics.some((diagnostic) => diagnostic.maskId === maskId && diagnostic.componentId === componentId)) {
-    return null;
-  }
-  return { maskId, componentId };
+  const session = state.sessions[entry.id];
+  const document = session?.persistedDocument;
+  return state.activeCatalogId === entry.catalogId &&
+      state.activeEntryId === entry.id &&
+      session?.processKind === "v3" &&
+      document?.version === 3
+    ? { document, revision: session.documentRevision }
+    : null;
 }
 
-function newMaskForAi(
-  maskId: string,
-  component: AiMaskComponent,
-  masks: readonly LocalMask[],
-): LocalMask {
+function liveSourceMatches(
+  entry: LibraryEntry,
+  sourceSignature: V3SourceSignature,
+): boolean {
+  const library = useLibraryStore.getState();
+  const liveEntry = library.catalogId === entry.catalogId
+    ? library.entries.find((item) => item.id === entry.id)
+    : undefined;
+  return Boolean(
+    liveEntry &&
+    sourceSignaturesEqual(sourceSignatureForEntry(liveEntry), sourceSignature),
+  );
+}
+
+function requestApplies(
+  document: DevelopDocumentV3,
+  request: AiRequest,
+): boolean {
+  if (request.target) {
+    const mask = document.local.masks.find(
+      (item) => item.id === request.target?.maskId,
+    );
+    return mask?.components.some(
+      (component) => component.id === request.target?.componentId && component.kind === "ai",
+    ) ?? false;
+  }
+  if (request.maskId) {
+    const mask = document.local.masks.find((item) => item.id === request.maskId);
+    return Boolean(mask && mask.components.length < MAX_COMPONENTS_PER_MASK);
+  }
+  return document.local.masks.length < MAX_MASKS;
+}
+
+function nextMaskName(masks: readonly LocalMask[]): string {
   const names = new Set(masks.map((mask) => mask.name));
   let index = 1;
   while (names.has(`Mask ${index}`)) index += 1;
+  return `Mask ${index}`;
+}
+
+function newMask(maskId: string, component: AiMaskComponent, masks: readonly LocalMask[]): LocalMask {
   return {
     id: maskId,
-    name: `Mask ${index}`,
+    name: nextMaskName(masks),
     enabled: true,
     inverted: false,
     components: [component],
@@ -159,11 +236,180 @@ function newMaskForAi(
   };
 }
 
-export function AiMaskActions({
-  entry,
-  sourceSignature,
-  diagnostics,
-}: AiMaskActionsProps) {
+function replaceComponent(
+  components: NonEmpty<MaskComponent>,
+  targetId: string,
+  replacement: AiMaskComponent,
+): NonEmpty<MaskComponent> {
+  const [first, ...rest] = components;
+  return [
+    first.id === targetId ? replacement : first,
+    ...rest.map((component) => component.id === targetId ? replacement : component),
+  ];
+}
+
+function referencedMaskAssets(
+  masks: readonly LocalMask[],
+  current: readonly DevelopAssetRef[],
+  accepted: DevelopAssetRef,
+): readonly DevelopAssetRef[] {
+  const used = new Set(
+    masks.flatMap((mask) => mask.components.flatMap((component) =>
+      component.kind === "ai" ? [component.assetId] : []
+    )),
+  );
+  const references = current
+    .filter((reference) => used.has(reference.assetId))
+    .map((reference) => reference.assetId === accepted.assetId ? accepted : reference);
+  return used.has(accepted.assetId) &&
+      !references.some((reference) => reference.assetId === accepted.assetId)
+    ? [...references, accepted]
+    : references;
+}
+
+function prepareMaskUpdate(
+  document: DevelopDocumentV3,
+  request: AiRequest,
+  result: AiInferenceResult,
+  reference: DevelopAssetRef,
+  sourceSignature: V3SourceSignature,
+): PreparedMaskUpdate | null {
+  if (!requestApplies(document, request)) return null;
+  const targetMask = request.target
+    ? document.local.masks.find((mask) => mask.id === request.target?.maskId)
+    : null;
+  const targetComponent = request.target
+    ? targetMask?.components.find((component) => component.id === request.target?.componentId)
+    : null;
+  const component: AiMaskComponent = {
+    kind: "ai",
+    id: request.target?.componentId ?? crypto.randomUUID(),
+    operation: targetComponent?.operation ?? "add",
+    selector: result.component.selector,
+    assetId: reference.assetId,
+    model: result.component.model,
+    source: sourceSignature,
+    inference: result.component.inference,
+  };
+
+  let masks: readonly LocalMask[];
+  let maskId: string;
+  if (request.target) {
+    maskId = request.target.maskId;
+    masks = document.local.masks.map((mask) => mask.id === request.target?.maskId
+      ? {
+          ...mask,
+          components: replaceComponent(
+            mask.components,
+            request.target.componentId,
+            component,
+          ),
+        }
+      : mask);
+  } else if (request.maskId) {
+    maskId = request.maskId;
+    masks = document.local.masks.map((mask) => mask.id === request.maskId
+      ? { ...mask, components: [...mask.components, component] }
+      : mask);
+  } else {
+    maskId = crypto.randomUUID();
+    masks = [...document.local.masks, newMask(maskId, component, document.local.masks)];
+  }
+
+  return {
+    local: {
+      ...document.local,
+      masks,
+      maskAssetRefs: referencedMaskAssets(
+        masks,
+        document.local.maskAssetRefs,
+        reference,
+      ),
+    },
+    maskId,
+    componentId: component.id,
+  };
+}
+
+async function stageMaskAsset(
+  result: AiInferenceResult,
+  sourceSignature: V3SourceSignature,
+): Promise<StagedMaskAsset> {
+  if (
+    result.asset.id !== result.asset.sha256 ||
+    result.asset.width !== result.component.inference.width ||
+    result.asset.height !== result.component.inference.height
+  ) {
+    throw new Error("The generated mask metadata does not match its pixels.");
+  }
+  const digest = parseSha256Digest(result.asset.sha256);
+  const reference: DevelopAssetRef = {
+    assetId: digest,
+    kind: "mask-matte",
+    sha256: digest,
+    producerRevision: result.component.model.revision,
+    coordinateFrameRevision: COORDINATE_FRAME_REVISION,
+    colorStageId: "local-adjustments",
+  };
+  const candidate: DevelopAssetCandidate = {
+    kind: "candidate",
+    candidateId: `ai-mask-${crypto.randomUUID()}`,
+    descriptor: {
+      kind: "mask-matte",
+      sha256: digest,
+      sourceSignature,
+      coordinateFrameRevision: COORDINATE_FRAME_REVISION,
+      colorStageId: "local-adjustments",
+      dimensions: {
+        width: result.asset.width,
+        height: result.asset.height,
+      },
+      byteLength: result.asset.byteLength,
+      mimeType: "image/png",
+      producerId: `darkroom-ai-${result.component.model.id}`,
+      producerRevision: result.component.model.revision,
+    },
+  };
+  const bytes = decodeBase64(result.asset.pngBase64);
+  const nowMs = Date.now();
+  const recoveryUntilMs = nowMs + RECOVERY_WINDOW_MS;
+  const stored = await getDarkroomAPI().developAssetPut({
+    candidate,
+    bytes,
+    nowMs,
+    recoveryUntilMs,
+  });
+  if (stored.kind === "rejected") throw new Error(stored.message);
+  return {
+    candidate: stored.candidate,
+    reference,
+    nowMs,
+    recoveryUntilMs,
+  };
+}
+
+async function transitionMaskAsset(
+  staged: StagedMaskAsset,
+  lifecycle: "accepted" | "stale",
+): Promise<void> {
+  const transitioned = await getDarkroomAPI().developAssetTransition({
+    candidate: staged.candidate,
+    lifecycle,
+    reference: lifecycle === "accepted" ? staged.reference : null,
+    nowMs: staged.nowMs,
+    recoveryUntilMs: staged.recoveryUntilMs,
+  });
+  if (transitioned.kind === "missing" || transitioned.kind === "conflict") {
+    throw new Error(transitioned.message);
+  }
+}
+
+export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
+  const sourceSignature = useMemo(
+    () => sourceSignatureForEntry(entry),
+    [entry],
+  );
+  const sourceKey = sourceSignatureKey(sourceSignature);
   const [modelStates, setModelStates] = useState<Partial<Record<AiModelId, AiModelState>>>({});
   const [job, setJob] = useState<AiJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,36 +420,41 @@ export function AiMaskActions({
   const [lastRequest, setLastRequest] = useState<AiRequest | null>(null);
   const activeJobRef = useRef<ActiveJob | null>(null);
   const mountedRef = useRef(true);
-  const sourceKey = sourceSignatureKey(sourceSignature);
-  const activeSession = useDevelopStore((state) => (
-    state.activeEntryId === entry.id ? state.sessions[entry.id] ?? null : null
-  ));
-  const dispatch = useDevelopStore((state) => state.dispatch);
+  const sessionUi = useDevelopStore((state) => {
+    const session = state.activeEntryId === entry.id ? state.sessions[entry.id] : undefined;
+    return session?.ui ?? null;
+  });
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
   const setSelectedMask = useDevelopStore((state) => state.setSelectedMask);
   const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
   const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
+  const selectedMask = document.local.masks.find(
+    (mask) => mask.id === sessionUi?.selectedMaskId,
+  ) ?? null;
+  const selectedComponent = selectedMask?.components.find(
+    (component) => component.id === sessionUi?.selectedComponentId,
+  ) ?? null;
 
   const refreshModels = useCallback(async (): Promise<void> => {
     if (!isElectronApp()) return;
-    const api = getDarkroomAPI();
     try {
+      const api = getDarkroomAPI();
       const states = await Promise.all(MODEL_IDS.map(async (modelId) => (
         [modelId, await api.getAiModelState(modelId)] as const
       )));
-      if (!mountedRef.current) return;
-      setModelStates(Object.fromEntries(states) as Partial<Record<AiModelId, AiModelState>>);
+      if (mountedRef.current) setModelStates(Object.fromEntries(states));
     } catch (refreshError) {
       if (mountedRef.current) {
-        setError(refreshError instanceof Error ? refreshError.message : "AI model status is unavailable.");
+        setError(refreshError instanceof Error
+          ? refreshError.message
+          : "AI model status is unavailable.");
       }
     }
   }, []);
 
   useEffect(() => {
     mountedRef.current = true;
-    const refreshTimer = window.setTimeout(() => {
-      void refreshModels();
-    }, 0);
+    const refreshTimer = window.setTimeout(() => void refreshModels(), 0);
     return () => {
       window.clearTimeout(refreshTimer);
       mountedRef.current = false;
@@ -214,7 +465,7 @@ export function AiMaskActions({
         void getDarkroomAPI().cancelAiModelDownload(active.modelId).catch(() => undefined);
       }
     };
-  }, [entry.id, sourceKey, refreshModels]);
+  }, [entry.id, refreshModels, sourceKey]);
 
   const cancelJob = useCallback(async (): Promise<void> => {
     const active = activeJobRef.current;
@@ -246,64 +497,82 @@ export function AiMaskActions({
     activeJobRef.current?.token === active.token &&
     activeJobRef.current.modelId === active.modelId &&
     useDevelopStore.getState().activeEntryId === entry.id &&
-    sourceSignatureKey(sourceSignature) === sourceKey
-  ), [entry.id, sourceKey, sourceSignature]);
+    liveSourceMatches(entry, sourceSignature)
+  ), [entry, sourceSignature]);
 
-  const completeResult = useCallback((request: AiRequest, result: Awaited<ReturnType<typeof runAiMaskInference>>): boolean => {
-    const state = useDevelopStore.getState();
-    const session = state.sessions[entry.id];
-    if (!session || state.activeEntryId !== entry.id) return false;
+  const completeResult = useCallback(async (
+    request: AiRequest,
+    result: AiInferenceResult,
+    active: ActiveJob,
+  ): Promise<string | null> => {
     if (
+      result.component.selector !== request.modelId ||
+      result.component.model.id !== request.modelId ||
       !sourceSignaturesEqual(result.sourceSignature, sourceSignature) ||
       !sourceSignaturesEqual(result.component.source, sourceSignature)
     ) {
-      return false;
+      return "The source photo changed before the AI result was ready.";
+    }
+    if (!liveSourceMatches(entry, sourceSignature)) {
+      return "The source photo changed before the AI result was ready.";
+    }
+    const beforeStore = currentDocument(entry);
+    if (!beforeStore || !requestApplies(beforeStore.document, request)) {
+      return request.target
+        ? "The mask component changed before the AI result was ready."
+        : "The mask limit was reached before the AI result was ready.";
     }
 
-    const component: AiMaskComponent = {
-      ...result.component,
-      id: request.target?.componentId ?? crypto.randomUUID(),
-      operation: "add",
-      assetId: result.asset.id,
-    };
-    const selectedMask = request.maskId
-      ? session.document.settings.masking.masks.find((mask) => mask.id === request.maskId)
-      : undefined;
-    if (request.target) {
-      if (!selectedMask?.components.some((item) => item.id === request.target?.componentId)) return false;
-      const before = session.document;
-      dispatch({
-        kind: "update-ai-mask",
-        maskId: request.target.maskId,
-        componentId: request.target.componentId,
-        component,
-        asset: result.asset,
-      }, "Update AI mask");
-      return useDevelopStore.getState().sessions[entry.id]?.document !== before;
+    const staged = await stageMaskAsset(result, sourceSignature);
+    if (!liveSourceMatches(entry, sourceSignature)) {
+      await transitionMaskAsset(staged, "stale").catch(() => undefined);
+      return "The source photo changed before the AI result was saved.";
     }
-
-    if (request.maskId && !selectedMask) return false;
-    if (!request.maskId && session.document.settings.masking.masks.length >= MAX_MASKS) return false;
-    const newMask = request.maskId
-      ? null
-      : newMaskForAi(crypto.randomUUID(), component, session.document.settings.masking.masks);
-    const before = session.document;
+    if (!currentJob(active)) {
+      await transitionMaskAsset(staged, "stale").catch(() => undefined);
+      return null;
+    }
+    const latest = currentDocument(entry);
+    if (!latest || !requestApplies(latest.document, request)) {
+      await transitionMaskAsset(staged, "stale").catch(() => undefined);
+      return request.target
+        ? "The mask component changed before the AI result was ready."
+        : "The mask limit was reached before the AI result was ready.";
+    }
+    const update = prepareMaskUpdate(
+      latest.document,
+      request,
+      result,
+      staged.reference,
+      sourceSignature,
+    );
+    if (!update) {
+      await transitionMaskAsset(staged, "stale").catch(() => undefined);
+      return "The mask changed before the AI result was ready.";
+    }
+    await transitionMaskAsset(staged, "accepted");
+    if (!liveSourceMatches(entry, sourceSignature)) {
+      return "The source photo changed while the AI mask was being saved. Run it again.";
+    }
+    if (!currentJob(active)) return null;
+    const afterAccept = currentDocument(entry);
+    if (
+      !afterAccept ||
+      afterAccept.revision !== latest.revision ||
+      afterAccept.document !== latest.document
+    ) {
+      return "The mask changed while the AI result was being saved. Run it again.";
+    }
     dispatch({
-      kind: "complete-ai-mask",
-      maskId: request.maskId,
-      newMask,
-      component,
-      asset: result.asset,
-    }, "Create AI mask");
-    const changed = useDevelopStore.getState().sessions[entry.id]?.document !== before;
-    if (changed) {
-      const maskId = request.maskId ?? newMask?.id ?? null;
-      setSelectedMask(maskId);
-      setSelectedComponent(component.id);
-      setOverlayVisible(true);
-    }
-    return changed;
-  }, [dispatch, entry.id, setOverlayVisible, setSelectedComponent, setSelectedMask, sourceSignature]);
+      kind: "replace-v3-semantic-group",
+      group: "local",
+      value: update.local,
+    }, request.target ? "Regenerate AI mask" : "Create AI mask");
+    setSelectedMask(update.maskId);
+    setSelectedComponent(update.componentId);
+    setOverlayVisible(true);
+    return null;
+  }, [currentJob, dispatch, entry, setOverlayVisible, setSelectedComponent, setSelectedMask, sourceSignature]);
 
   const infer = useCallback(async (request: AiRequest, active: ActiveJob): Promise<void> => {
     if (!currentJob(active)) return;
@@ -334,8 +603,10 @@ export function AiMaskActions({
         },
       });
       if (!currentJob(active)) return;
-      if (!completeResult(request, result)) {
-        setError(request.target ? "The selected mask changed before the AI result was ready." : "The mask limit was reached before the AI result was ready.");
+      const completionError = await completeResult(request, result, active);
+      if (!currentJob(active)) return;
+      if (completionError) {
+        setError(completionError);
         return;
       }
       setFallbackReason(result.fallbackReason ?? null);
@@ -343,13 +614,19 @@ export function AiMaskActions({
       setLastRequest(null);
       setError(null);
       setSuccess(request.target
-        ? `${MODEL_LABELS[request.modelId]} mask updated.`
+        ? `${MODEL_LABELS[request.modelId]} mask regenerated.`
         : `${MODEL_LABELS[request.modelId]} mask added.`);
     } catch (inferenceError) {
       if (!currentJob(active) || active.controller.signal.aborted || isCancelled(inferenceError)) return;
       setLastRequest(request);
       setError(inferenceError instanceof Error ? inferenceError.message : "AI inference failed.");
-      setCanForceCpu(!request.forceWasm && inferenceError instanceof AiInferenceError && (inferenceError.code === "runtime" || inferenceError.code === "inference" || Boolean(inferenceError.fallbackReason)));
+      setCanForceCpu(
+        !request.forceWasm &&
+        inferenceError instanceof AiInferenceError &&
+        (inferenceError.code === "runtime" ||
+          inferenceError.code === "inference" ||
+          Boolean(inferenceError.fallbackReason)),
+      );
       setSuccess(null);
     } finally {
       if (activeJobRef.current?.token === active.token) {
@@ -384,16 +661,17 @@ export function AiMaskActions({
       });
       setModelStates((states) => {
         const current = states[request.modelId];
-        if (!current) return states;
-        return {
-          ...states,
-          [request.modelId]: {
-            status: "downloading",
-            model: current.model,
-            receivedBytes: progress.receivedBytes,
-            totalBytes: progress.totalBytes,
-          },
-        };
+        return current
+          ? {
+              ...states,
+              [request.modelId]: {
+                status: "downloading",
+                model: current.model,
+                receivedBytes: progress.receivedBytes,
+                totalBytes: progress.totalBytes,
+              },
+            }
+          : states;
       });
     });
     try {
@@ -401,14 +679,18 @@ export function AiMaskActions({
       if (!currentJob(active)) return;
       const state = await api.getAiModelState(request.modelId);
       if (state.status !== "ready") {
-        throw new Error(state.status === "error" ? state.message : "The AI model was not ready after download.");
+        throw new Error(state.status === "error"
+          ? state.message
+          : "The AI model was not ready after download.");
       }
       setModelStates((states) => ({ ...states, [request.modelId]: state }));
       await infer(request, active);
     } catch (downloadError) {
       if (!currentJob(active) || active.controller.signal.aborted) return;
       setLastRequest(request);
-      setError(downloadError instanceof Error ? downloadError.message : "AI model download failed.");
+      setError(downloadError instanceof Error
+        ? downloadError.message
+        : "AI model download failed.");
       setSuccess(null);
       activeJobRef.current = null;
       setJob(null);
@@ -428,20 +710,20 @@ export function AiMaskActions({
     setSuccess(null);
     setCanForceCpu(false);
     setLastRequest(request);
-    const api = getDarkroomAPI();
     try {
-      const state = await api.getAiModelState(request.modelId);
+      const state = await getDarkroomAPI().getAiModelState(request.modelId);
       if (!mountedRef.current || useDevelopStore.getState().activeEntryId !== entry.id) return;
       setModelStates((states) => ({ ...states, [request.modelId]: state }));
       if (state.status === "ready") {
-        const active = beginJob(request.modelId, false);
-        await infer(request, active);
+        await infer(request, beginJob(request.modelId, false));
         return;
       }
       setConsentRequest(request);
       if (state.status === "error") setError(state.message);
     } catch (stateError) {
-      setError(stateError instanceof Error ? stateError.message : "AI model status is unavailable.");
+      setError(stateError instanceof Error
+        ? stateError.message
+        : "AI model status is unavailable.");
     }
   }, [beginJob, consentRequest, entry.id, infer, job]);
 
@@ -451,100 +733,104 @@ export function AiMaskActions({
     if (request) void downloadAndInfer(request);
   }, [consentRequest, downloadAndInfer]);
 
-  const retrySelected = useCallback((forceWasm: boolean) => {
-    const target = selectedAiTarget(entry.id, diagnostics);
-    if (!target) {
-      setError("Select the stale AI component to update it.");
-      return;
-    }
-    const session = useDevelopStore.getState().sessions[entry.id];
-    const mask = session?.document.settings.masking.masks.find((item) => item.id === target.maskId);
-    const component = mask?.components.find((item) => item.id === target.componentId);
-    if (!component || component.kind !== "ai") return;
-    void startRequest({
-      modelId: component.selector,
-      maskId: target.maskId,
-      target,
-      forceWasm,
-    });
-  }, [diagnostics, entry.id, startRequest]);
-
   const retryLastRequest = useCallback((forceWasm: boolean) => {
-    if (!lastRequest) return;
-    void startRequest({ ...lastRequest, forceWasm });
+    if (lastRequest) void startRequest({ ...lastRequest, forceWasm });
   }, [lastRequest, startRequest]);
 
   const removeModel = useCallback(async (modelId: AiModelId): Promise<void> => {
-    if (job?.modelId === modelId) return;
-    if (!isElectronApp()) return;
+    if (job?.modelId === modelId || !isElectronApp()) return;
     try {
       await getDarkroomAPI().removeAiModel(modelId);
       setSuccess(`${MODEL_LABELS[modelId]} model removed from this device.`);
       await refreshModels();
     } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Could not remove the cached model.");
+      setError(removeError instanceof Error
+        ? removeError.message
+        : "Could not remove the cached model.");
     }
   }, [job?.modelId, refreshModels]);
-
-  const selectedDiagnostic = useMemo(() => {
-    const maskId = activeSession?.ui.selectedMaskId;
-    const componentId = activeSession?.ui.selectedComponentId;
-    return diagnostics.find((diagnostic) => diagnostic.maskId === maskId && diagnostic.componentId === componentId) ?? null;
-  }, [activeSession, diagnostics]);
 
   if (!isElectronApp()) {
     return (
       <div className="space-y-2">
-        <div>
-          <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>
-          <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">Subject and Sky masking run locally in the Darkroom desktop app.</p>
-        </div>
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>
+        <p className="text-[10px] leading-relaxed text-lr-text-faint">
+          Subject and Sky masking run locally in the Darkroom desktop app.
+        </p>
       </div>
     );
   }
 
   const busy = job !== null;
-  const selectedMaskId = activeSession?.ui.selectedMaskId ?? null;
-  const selectedMaskForAi = selectedMaskId
-    ? activeSession?.document.settings.masking.masks.find((mask) => mask.id === selectedMaskId) ?? null
-    : null;
-  const canCreateNewMask = selectedMaskForAi
-    ? selectedMaskForAi.components.length < MAX_COMPONENTS_PER_MASK
-    : (activeSession?.document.settings.masking.masks.length ?? 0) < MAX_MASKS;
+  const canAdd = selectedMask
+    ? selectedMask.components.length < MAX_COMPONENTS_PER_MASK
+    : document.local.masks.length < MAX_MASKS;
+  const selectedAi = selectedComponent?.kind === "ai" ? selectedComponent : null;
+  const staleSelectedAi = selectedAi
+    ? !sourceSignaturesEqual(selectedAi.source, sourceSignature)
+    : false;
 
   return (
-    <div className="space-y-3">
+    <div className="mb-3 space-y-3 border-b border-lr-border-subtle pb-3">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>
-          <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">Local inference. Models stay in Darkroom&apos;s offline cache.</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-lr-text-faint">
+            Runs locally. Downloaded models stay available offline.
+          </p>
         </div>
         {busy ? <span className="rounded bg-lr-selection px-1.5 py-1 text-[9px] text-lr-accent">Working</span> : null}
       </div>
 
       <div className="grid grid-cols-2 gap-1.5">
-        {MODEL_IDS.map((modelId) => {
-          const state = modelStates[modelId];
-          const disabled = busy || !canCreateNewMask;
-          return (
-            <button
-              key={modelId}
-              type="button"
-              disabled={disabled}
-              onClick={() => void startRequest({ modelId, maskId: selectedMaskId, target: null, forceWasm: false })}
-              className="flex min-h-[52px] items-center gap-2 rounded-lg border border-lr-border-subtle px-2.5 py-2 text-left text-[10px] text-lr-text-muted hover:border-lr-accent/60 hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <span className="font-mono text-[9px] font-semibold tracking-[0.08em] text-lr-accent">
-                {modelId === "subject" ? "SUB" : "SKY"}
+        {MODEL_IDS.map((modelId) => (
+          <button
+            key={modelId}
+            type="button"
+            disabled={busy || !canAdd}
+            onClick={() => void startRequest({
+              modelId,
+              maskId: selectedMask?.id ?? null,
+              target: null,
+              forceWasm: false,
+            })}
+            className="flex min-h-[52px] items-center gap-2 rounded-lg border border-lr-border-subtle px-2.5 py-2 text-left text-[10px] text-lr-text-muted hover:border-lr-accent/60 hover:bg-lr-panel-raised hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span className="font-mono text-[9px] font-semibold tracking-[0.08em] text-lr-accent">
+              {modelId === "subject" ? "SUB" : "SKY"}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-medium">{MODEL_LABELS[modelId]}</span>
+              <span className="mt-0.5 block truncate text-[9px] text-lr-text-faint">
+                {modelStateLabel(modelStates[modelId])}
               </span>
-              <span className="min-w-0">
-                <span className="block font-medium">{MODEL_LABELS[modelId]}</span>
-                <span className="mt-0.5 block truncate text-[9px] text-lr-text-faint">{modelStateLabel(state)}</span>
-              </span>
-            </button>
-          );
-        })}
+            </span>
+          </button>
+        ))}
       </div>
+
+      {selectedAi ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className={`text-[10px] ${staleSelectedAi ? "text-lr-danger" : "text-lr-text-faint"}`}>
+            {staleSelectedAi
+              ? `${MODEL_LABELS[selectedAi.selector]} mask is stale.`
+              : `${MODEL_LABELS[selectedAi.selector]} mask selected.`}
+          </p>
+          <ActionButton
+            disabled={busy}
+            onClick={() => void startRequest({
+              modelId: selectedAi.selector,
+              maskId: selectedMask?.id ?? null,
+              target: selectedMask
+                ? { maskId: selectedMask.id, componentId: selectedAi.id }
+                : null,
+              forceWasm: false,
+            })}
+          >
+            Regenerate
+          </ActionButton>
+        </div>
+      ) : null}
 
       {job?.kind === "downloading" ? (
         <div className="rounded-md border border-lr-border-subtle bg-lr-panel-raised/60 p-2">
@@ -572,34 +858,16 @@ export function AiMaskActions({
         </div>
       ) : null}
 
-      {selectedDiagnostic ? (
-        <div className="rounded-md border border-amber-500/30 bg-amber-950/20 p-2 text-[10px] text-amber-100">
-          <p>{selectedDiagnostic.message}</p>
+      {lastRequest && error ? (
+        <StatusCard title="AI masking did not complete" tone="danger">
+          <p>Your existing mask is unchanged.</p>
           <div className="mt-2 flex gap-2">
-            <button type="button" disabled={busy} onClick={() => retrySelected(false)} className="rounded border border-amber-400/40 px-2 py-1 text-[10px] hover:bg-amber-900/30 disabled:opacity-40">
-              {selectedDiagnostic.kind === "stale-ai" ? "Update" : "Regenerate"}
-            </button>
-            {canForceCpu ? (
-              <button type="button" disabled={busy} onClick={() => retrySelected(true)} className="rounded border border-amber-400/40 px-2 py-1 text-[10px] hover:bg-amber-900/30 disabled:opacity-40">Switch to CPU</button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {lastRequest && error && !selectedDiagnostic ? (
-        <div className="rounded-md border border-red-500/30 bg-red-950/20 p-2 text-[10px] text-red-100">
-          <p>AI masking did not complete. Your existing edits are unchanged.</p>
-          <div className="mt-2 flex gap-2">
-            <button type="button" disabled={busy} onClick={() => retryLastRequest(false)} className="rounded border border-red-400/40 px-2 py-1 text-[10px] hover:bg-red-900/30 disabled:opacity-40">
-              Retry
-            </button>
+            <ActionButton disabled={busy} onClick={() => retryLastRequest(false)}>Retry</ActionButton>
             {canForceCpu && !lastRequest.forceWasm ? (
-              <button type="button" disabled={busy} onClick={() => retryLastRequest(true)} className="rounded border border-red-400/40 px-2 py-1 text-[10px] hover:bg-red-900/30 disabled:opacity-40">
-                Switch to CPU
-              </button>
+              <ActionButton disabled={busy} onClick={() => retryLastRequest(true)}>Use CPU</ActionButton>
             ) : null}
           </div>
-        </div>
+        </StatusCard>
       ) : null}
 
       {fallbackReason ? <p className="text-[10px] text-lr-text-faint">{fallbackReason}</p> : null}
@@ -609,17 +877,24 @@ export function AiMaskActions({
       <details className="border-t border-lr-border-subtle pt-2">
         <summary className="cursor-pointer text-[10px] text-lr-text-faint hover:text-lr-text-muted">Model cache</summary>
         <div className="mt-2 space-y-1.5">
-        {MODEL_IDS.map((modelId) => {
-          const state = modelStates[modelId];
-          const ready = state?.status === "ready";
-          const active = job?.modelId === modelId;
-          return (
-            <div key={modelId} className="flex items-center justify-between gap-2 text-[10px]">
-              <span className="min-w-0 truncate text-lr-text-faint">{MODEL_LABELS[modelId]} · {state ? formatBytes(state.model.bytes) : "…"}</span>
-              <button type="button" disabled={!ready || active} onClick={() => void removeModel(modelId)} className="shrink-0 text-lr-text-muted underline decoration-lr-border-subtle underline-offset-2 hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-35">Remove</button>
-            </div>
-          );
-        })}
+          {MODEL_IDS.map((modelId) => {
+            const state = modelStates[modelId];
+            return (
+              <div key={modelId} className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="min-w-0 truncate text-lr-text-faint">
+                  {MODEL_LABELS[modelId]} · {state ? formatBytes(state.model.bytes) : "…"}
+                </span>
+                <button
+                  type="button"
+                  disabled={state?.status !== "ready" || job?.modelId === modelId}
+                  onClick={() => void removeModel(modelId)}
+                  className="shrink-0 text-lr-text-muted underline decoration-lr-border-subtle underline-offset-2 hover:text-lr-text disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
         </div>
       </details>
 
@@ -627,13 +902,16 @@ export function AiMaskActions({
         <div role="dialog" aria-modal="true" aria-labelledby="ai-consent-title" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-lg border border-lr-border-subtle bg-lr-panel p-4 shadow-2xl">
             {(() => {
-              const state = modelStates[consentRequest.modelId];
-              const disclosure = state?.model;
-              if (!disclosure) return <p className="text-[11px] text-lr-text-muted">Checking model details…</p>;
+              const disclosure = modelStates[consentRequest.modelId]?.model;
+              if (!disclosure) {
+                return <p className="text-[11px] text-lr-text-muted">Checking model details…</p>;
+              }
               return (
                 <>
                   <h2 id="ai-consent-title" className="text-sm font-medium text-lr-text">Download {MODEL_LABELS[consentRequest.modelId]} model?</h2>
-                  <p className="mt-2 text-[11px] leading-relaxed text-lr-text-muted">{disclosure.purpose} Darkroom will download {disclosure.bytes.toLocaleString()} bytes ({formatBytes(disclosure.bytes)}) once and keep the verified file in its private cache for offline use.</p>
+                  <p className="mt-2 text-[11px] leading-relaxed text-lr-text-muted">
+                    {disclosure.purpose} Darkroom will download {disclosure.bytes.toLocaleString()} bytes ({formatBytes(disclosure.bytes)}) once and keep the verified file in its private cache for offline use.
+                  </p>
                   <dl className="mt-3 space-y-1 text-[10px] text-lr-text-faint">
                     <div className="flex justify-between gap-3"><dt>Revision</dt><dd className="font-mono text-right">{disclosure.revision}</dd></div>
                     <div className="flex justify-between gap-3"><dt>Source</dt><dd><a href={disclosure.sourceUrl} onClick={(event) => { event.preventDefault(); void getDarkroomAPI().openAiModelLink(disclosure.id, "source").catch((openError: unknown) => setError(openError instanceof Error ? openError.message : "Could not open the model source page.")); }} className="text-lr-accent underline">Project release</a></dd></div>

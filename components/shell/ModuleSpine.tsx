@@ -9,20 +9,19 @@ type Module = "library" | "develop";
 interface ModuleSpineProps {
   activeModule?: Module;
   developPhotoId?: string;
+  onOpenDevelop?: (entryId: string) => void;
 }
 
 export function ModuleSpine({
   activeModule = "library",
   developPhotoId,
+  onOpenDevelop,
 }: ModuleSpineProps) {
   const entries = useLibraryStore((state) => state.entries);
   const selectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const needsFolderAccess = useLibraryStore((state) => state.needsFolderAccess);
-  const hasPhotos = entries.length > 0 && !needsFolderAccess;
   const developTargetId = developPhotoId ?? selectedEntryId ?? entries[0]?.id;
-  const developHref = developTargetId
-    ? `/photo?id=${encodeURIComponent(developTargetId)}`
-    : "/photo";
+  const hasPhotos = developTargetId !== undefined && !needsFolderAccess;
 
   const modules = [
     {
@@ -37,8 +36,8 @@ export function ModuleSpine({
       id: "develop" as const,
       label: "DEV",
       title: "Develop",
-      href: developHref,
-      enabled: hasPhotos,
+      href: "/",
+      enabled: hasPhotos && (onOpenDevelop !== undefined || activeModule === "develop"),
       icon: IconSliders,
     },
   ];
@@ -78,7 +77,27 @@ export function ModuleSpine({
           </>
         );
 
-        return module.enabled ? (
+        return isActive ? (
+          <span
+            key={module.id}
+            className={className}
+            title={module.title}
+            aria-current="page"
+          >
+            {content}
+          </span>
+        ) : module.enabled && module.id === "develop" && onOpenDevelop && developTargetId ? (
+          <button
+            key={module.id}
+            type="button"
+            onClick={() => onOpenDevelop(developTargetId)}
+            className={className}
+            title={module.title}
+            aria-current={isActive ? "page" : undefined}
+          >
+            {content}
+          </button>
+        ) : module.enabled ? (
           <Link
             key={module.id}
             href={module.href}

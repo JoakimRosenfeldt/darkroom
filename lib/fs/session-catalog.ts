@@ -42,7 +42,7 @@ import {
 import type { FormatCapabilityReport } from "../formats/types";
 import type { CatalogV3FingerprintCoverage } from "../catalog/v3";
 import { createEntryMetadata } from "../catalog/defaults";
-import { parseDevelopDocument } from "../develop/document";
+import { decodePersistedDevelopDocument } from "../develop/v3/codec";
 import { parseImportTemplate, parseJsonValue, type JsonValue } from "../import/domain";
 import type { LibraryEntry } from "./types";
 import { getDarkroomAPI } from "./platform";
@@ -269,9 +269,13 @@ function metadataFromAsset(
   if (source.developJson !== null) {
     try {
       const parsed: unknown = JSON.parse(source.developJson);
-      develop = parseDevelopDocument(parsed);
-    } catch {
-      develop = undefined;
+      const decoded = decodePersistedDevelopDocument(parsed);
+      if (decoded.kind === "invalid") {
+        throw new Error(`Catalog Develop document is invalid: ${decoded.message}`);
+      }
+      develop = decoded.kind === "editable" ? decoded.document : decoded.raw;
+    } catch (error) {
+      throw new Error("Catalog Develop JSON could not be decoded.", { cause: error });
     }
   }
   return createEntryMetadata({

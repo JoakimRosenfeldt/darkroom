@@ -32,6 +32,7 @@ import type { ColorLabel, PickStatus, StarRating } from "./types.ts";
 
 export const CATALOG_LIVE_PAYLOAD_VERSION = 1 as const;
 export const CATALOG_LIVE_MAX_MUTATIONS = 250;
+const MAX_EMBEDDED_JSON_BYTES = 16 * 1024 * 1024;
 
 export type CatalogLiveOperationState =
   | "planned"
@@ -556,6 +557,9 @@ function parseMetadataPatch(value: unknown): CatalogLiveMetadataPatch {
     developJson: optionalValue(input, "developJson", (item) => {
       if (item === null) return null;
       const parsed = stringValue(item, "metadata.developJson");
+      if (new TextEncoder().encode(parsed).byteLength > MAX_EMBEDDED_JSON_BYTES) {
+        return fail("metadata.developJson is too large");
+      }
       try { JSON.parse(parsed); } catch { return fail("metadata.developJson is invalid"); }
       return parsed;
     }),
@@ -583,7 +587,7 @@ function parseMetadataPatch(value: unknown): CatalogLiveMetadataPatch {
 
 function parseLibraryStateJson(value: unknown, path: string): string {
   const json = stringValue(value, path);
-  if (new TextEncoder().encode(json).byteLength > 16 * 1024 * 1024) {
+  if (new TextEncoder().encode(json).byteLength > MAX_EMBEDDED_JSON_BYTES) {
     return fail(`${path} is too large`);
   }
   let parsed: unknown;
@@ -833,6 +837,9 @@ function parseMetadataOutput(value: unknown): CatalogV3AssetMetadata {
     developJson: (() => {
       if (input.developJson === null) return null;
       const parsed = stringValue(input.developJson, "live metadata.developJson");
+      if (new TextEncoder().encode(parsed).byteLength > MAX_EMBEDDED_JSON_BYTES) {
+        return fail("live metadata.developJson is too large");
+      }
       try { JSON.parse(parsed); } catch { return fail("live metadata.developJson is invalid"); }
       return parsed;
     })(),

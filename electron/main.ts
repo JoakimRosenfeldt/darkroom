@@ -64,6 +64,13 @@ import {
   parseCatalogAdminSessionRequest,
 } from "../lib/catalog/admin.ts";
 import { NativeAssetAccess } from "./native-asset-access.ts";
+import { DevelopAssetStore } from "./develop-asset-store.ts";
+import {
+  parseDevelopAssetGcRequest,
+  parseDevelopAssetPutRequest,
+  parseDevelopAssetReadRequest,
+  parseDevelopAssetTransitionRequest,
+} from "../lib/develop/v3/asset-store.ts";
 import { CatalogWatcherReconcileAdapter } from "./catalog-watcher-adapter.ts";
 import { WatcherReconciliationService } from "./watcher-reconciliation.ts";
 import {
@@ -701,6 +708,9 @@ function registerIpcHandlers(): void {
     remove: (catalogId) => catalogRegistryStore.remove(catalogId),
   };
   const nativeAssetAccess = new NativeAssetAccess(path.join(app.getPath("userData"), "xmp-backups"));
+  const developAssetStore = new DevelopAssetStore(
+    path.join(app.getPath("userData"), "develop-assets-v3"),
+  );
   const metadataCache = new MetadataCache(path.join(app.getPath("userData"), "metadata-cache"));
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),
@@ -1566,6 +1576,27 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-read-asset", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return coordinator.readAsset(value);
+  });
+  ipcMain.handle("darkroom:develop-asset-put", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developAssetStore.put(parseDevelopAssetPutRequest(value));
+  });
+  ipcMain.handle(
+    "darkroom:develop-asset-transition",
+    async (event, value: unknown) => {
+      assertTrustedRenderer(event);
+      return developAssetStore.transition(
+        parseDevelopAssetTransitionRequest(value),
+      );
+    },
+  );
+  ipcMain.handle("darkroom:develop-asset-read", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developAssetStore.read(parseDevelopAssetReadRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developAssetStore.collectGarbage(parseDevelopAssetGcRequest(value));
   });
   ipcMain.handle("darkroom:catalog-read-asset-head", async (event, value: unknown) => {
     assertTrustedRenderer(event);

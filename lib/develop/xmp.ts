@@ -18,6 +18,15 @@ import type {
 } from "@/lib/metadata/types";
 import { parseMetadataOverrides } from "@/lib/metadata/types";
 import { serializeLightroomMaskInterchangeManifest } from "@/lib/develop/lightroom-mask-adapter";
+import {
+  decodePersistedDevelopDocument,
+  encodeV3DevelopDocument,
+  MAX_V3_PAYLOAD_BYTES,
+} from "@/lib/develop/v3/codec";
+import type {
+  PersistedDevelopDocument,
+  StoredDevelopDocument,
+} from "@/lib/develop/v3/document";
 
 const RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
@@ -30,12 +39,16 @@ const PHOTOSHOP_NS = "http://ns.adobe.com/photoshop/1.0/";
 export const DARKROOM_NS = "http://darkroom.app/ns/1.0/";
 const MASKING_LOCAL_NAME = "MaskingData";
 const LIGHTROOM_MASK_MANIFEST_LOCAL_NAME = "LightroomMaskInterchange";
+const V3_DOCUMENT_LOCAL_NAME = "DevelopDocumentV3";
+export const MAX_DEVELOP_XMP_PAYLOAD_BYTES = MAX_DEVELOP_PAYLOAD_BYTES +
+  Math.ceil(MAX_V3_PAYLOAD_BYTES * 4 / 3) +
+  128 * 1024;
 
 export interface ParsedDevelopXmp {
-  document: DevelopDocument;
+  document: StoredDevelopDocument;
   rating?: EntryMetadata["rating"];
   colorLabel: EntryMetadata["colorLabel"] | undefined;
-  source: "xmp-v1" | "xmp-v2";
+  source: "xmp-v1" | "xmp-v2" | "xmp-v3" | "xmp-newer";
 }
 
 function collectDevelopProps(settings: DevelopSettings): XmpProps {
@@ -253,7 +266,10 @@ export function serializeMetadataXmp(existingContents: string | null, overrides:
   if (overrides.latitude) setAttributeProperty(description, EXIF_NS, "exif:GPSLatitude", overrides.latitude.kind === "set" ? String(overrides.latitude.value) : null);
   if (overrides.longitude) setAttributeProperty(description, EXIF_NS, "exif:GPSLongitude", overrides.longitude.kind === "set" ? String(overrides.longitude.value) : null);
   const serialized = new XMLSerializer().serializeToString(doc);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  const maximum = xmpPayloadLimit(serialized);
+  if (new TextEncoder().encode(serialized).byteLength > maximum) {
+    throw new Error(`XMP sidecar exceeds the ${Math.floor(maximum / (1024 * 1024))} MiB size limit.`);
+  }
   return serialized;
 }
 
@@ -317,8 +333,9 @@ export function serializeKeywordXmp(
   setArrayProperty(doc, description, DC_NS, "dc:subject", flat);
   setArrayProperty(doc, description, LR_NS, "lr:hierarchicalSubject", hierarchical);
   const serialized = new XMLSerializer().serializeToString(doc);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
-    throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  const maximum = xmpPayloadLimit(serialized);
+  if (new TextEncoder().encode(serialized).byteLength > maximum) {
+    throw new Error(`XMP sidecar exceeds the ${Math.floor(maximum / (1024 * 1024))} MiB size limit.`);
   }
   return serialized;
 }
@@ -330,13 +347,20 @@ function descriptionFor(doc: XMLDocument): Element {
 }
 
 function parseXmpDocument(xml: string): XMLDocument {
-  if (new TextEncoder().encode(xml).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
-    throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  const maximum = xmpPayloadLimit(xml);
+  if (new TextEncoder().encode(xml).byteLength > maximum) {
+    throw new Error(`XMP sidecar exceeds the ${Math.floor(maximum / (1024 * 1024))} MiB size limit.`);
   }
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("Could not parse XMP sidecar.");
   descriptionFor(doc);
   return doc;
+}
+
+function xmpPayloadLimit(xml: string): number {
+  return xml.includes(V3_DOCUMENT_LOCAL_NAME)
+    ? MAX_DEVELOP_XMP_PAYLOAD_BYTES
+    : MAX_DEVELOP_PAYLOAD_BYTES;
 }
 
 function utf8ToBase64(value: string): string {
@@ -369,11 +393,12 @@ function maskingPayload(document: DevelopDocument): string {
 }
 
 export function serializeDevelopXmp(
-  document: DevelopDocument,
+  document: PersistedDevelopDocument,
   metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
   existingContents: string | null,
 ): string | null {
   if (
+    document.version === 2 &&
     existingContents === null &&
     isDefaultDevelopSettings(document.settings) &&
     metadata.rating === 0 &&
@@ -385,8 +410,13 @@ export function serializeDevelopXmp(
   description.setAttributeNS(XMLNS_NS, "xmlns:crs", CRS_NS);
   description.setAttributeNS(XMLNS_NS, "xmlns:xmp", XMP_NS);
   description.setAttributeNS(XMLNS_NS, "xmlns:darkroom", DARKROOM_NS);
-  for (const [key, value] of Object.entries(collectDevelopProps(document.settings))) {
-    setProp(doc, description, key, value);
+  const v2Projection = document.version === 2
+    ? document
+    : document.compatibility.legacyV2;
+  if (v2Projection) {
+    for (const [key, value] of Object.entries(collectDevelopProps(v2Projection.settings))) {
+      setProp(doc, description, key, value);
+    }
   }
   description.setAttributeNS(XMP_NS, "xmp:Rating", String(metadata.rating));
   if (metadata.colorLabel) description.setAttributeNS(XMP_NS, "xmp:Label", metadata.colorLabel);
@@ -394,17 +424,84 @@ export function serializeDevelopXmp(
     description.removeAttributeNS(XMP_NS, "Label");
     description.removeAttribute("xmp:Label");
   }
-  description.setAttributeNS(DARKROOM_NS, "darkroom:MaskingData", maskingPayload(document));
-  description.setAttributeNS(
-    DARKROOM_NS,
-    `darkroom:${LIGHTROOM_MASK_MANIFEST_LOCAL_NAME}`,
-    utf8ToBase64(serializeLightroomMaskInterchangeManifest(document)),
-  );
+  if (v2Projection) {
+    description.setAttributeNS(
+      DARKROOM_NS,
+      "darkroom:MaskingData",
+      maskingPayload(v2Projection),
+    );
+    description.setAttributeNS(
+      DARKROOM_NS,
+      `darkroom:${LIGHTROOM_MASK_MANIFEST_LOCAL_NAME}`,
+      utf8ToBase64(serializeLightroomMaskInterchangeManifest(v2Projection)),
+    );
+  }
+  if (document.version === 3) {
+    const sidecarDocument = {
+      ...document,
+      compatibility: {
+        ...document.compatibility,
+        legacyV2: null,
+      },
+    };
+    description.setAttributeNS(
+      DARKROOM_NS,
+      `darkroom:${V3_DOCUMENT_LOCAL_NAME}`,
+      utf8ToBase64(encodeV3DevelopDocument(sidecarDocument)),
+    );
+  } else {
+    description.removeAttributeNS(DARKROOM_NS, V3_DOCUMENT_LOCAL_NAME);
+    description.removeAttribute(`darkroom:${V3_DOCUMENT_LOCAL_NAME}`);
+  }
   const serialized = new XMLSerializer().serializeToString(doc);
-  if (new TextEncoder().encode(serialized).byteLength > MAX_DEVELOP_PAYLOAD_BYTES) {
-    throw new Error("XMP sidecar exceeds the 16 MiB size limit.");
+  const maximum = document.version === 3
+    ? MAX_DEVELOP_XMP_PAYLOAD_BYTES
+    : MAX_DEVELOP_PAYLOAD_BYTES;
+  if (new TextEncoder().encode(serialized).byteLength > maximum) {
+    throw new Error(`XMP sidecar exceeds the ${Math.floor(maximum / (1024 * 1024))} MiB size limit.`);
   }
   return serialized;
+}
+
+function parseV3XmpDocument(
+  description: Element,
+  v2Projection: () => DevelopDocument,
+): Pick<ParsedDevelopXmp, "document" | "source"> | null {
+  const encoded = description.getAttributeNS(DARKROOM_NS, V3_DOCUMENT_LOCAL_NAME);
+  if (!encoded) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(base64ToUtf8(encoded));
+  } catch (error) {
+    throw new Error("Could not parse darkroom:DevelopDocumentV3.", { cause: error });
+  }
+  const decoded = decodePersistedDevelopDocument(payload);
+  if (decoded.kind === "invalid") {
+    throw new Error(`darkroom:DevelopDocumentV3 is invalid: ${decoded.message}`);
+  }
+  if (decoded.kind === "read-only-newer") {
+    return { document: decoded.raw, source: "xmp-newer" };
+  }
+  if (decoded.document.version !== 3) {
+    throw new Error("darkroom:DevelopDocumentV3 must contain a v3 document.");
+  }
+  if (
+    decoded.document.compatibility.mappingRevision !== null &&
+    decoded.document.compatibility.legacyV2 === null
+  ) {
+    const restored = decodePersistedDevelopDocument({
+      ...decoded.document,
+      compatibility: {
+        ...decoded.document.compatibility,
+        legacyV2: v2Projection(),
+      },
+    });
+    if (restored.kind !== "editable" || restored.document.version !== 3) {
+      throw new Error("darkroom:DevelopDocumentV3 rollback projection is invalid.");
+    }
+    return { document: restored.document, source: "xmp-v3" };
+  }
+  return { document: decoded.document, source: "xmp-v3" };
 }
 
 function extractProps(description: Element): XmpProps {
@@ -476,8 +573,14 @@ export function parseDevelopXmp(xml: string): ParsedDevelopXmp {
   const patch: Partial<DevelopSettings> = {};
   for (const plugin of DEVELOP_PLUGINS) patch[plugin.id] = plugin.xmp.read(props) as never;
   const settings = createDevelopSettings(patch);
+  let v2: ReturnType<typeof parseMaskingDocument> | null = null;
+  const v2Projection = () => {
+    v2 ??= parseMaskingDocument(description, settings);
+    return v2.document;
+  };
+  const v3 = parseV3XmpDocument(description, v2Projection);
   return {
-    ...parseMaskingDocument(description, settings),
+    ...(v3 ?? (v2 ?? parseMaskingDocument(description, settings))),
     rating: parseRating(typeof props["xmp:Rating"] === "string" ? props["xmp:Rating"] : undefined),
     colorLabel: parseColorLabel(typeof props["xmp:Label"] === "string" ? props["xmp:Label"] : undefined),
   };

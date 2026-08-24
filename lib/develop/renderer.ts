@@ -562,10 +562,19 @@ class StaleRenderError extends Error {
   }
 }
 
-interface DecodedMaskAsset {
-  width: number;
-  height: number;
-  pixels: Uint8Array;
+export interface DecodedMaskAsset {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: Uint8Array;
+}
+
+export interface MaskAssetDescriptor {
+  readonly id: string;
+  readonly sha256: string;
+  readonly mimeType: "image/png";
+  readonly width: number;
+  readonly height: number;
+  readonly byteLength: number;
 }
 
 type SourceRgb = Uint8Array | Uint16Array | Uint8ClampedArray;
@@ -654,17 +663,10 @@ function readPngUint32(bytes: Uint8Array, offset: number): number {
     bytes[offset + 3]!;
 }
 
-function decodeAssetBase64(asset: MaskRasterAsset): Uint8Array {
-  let binary: string;
-  try {
-    binary = atob(asset.pngBase64);
-  } catch {
-    throw new MaskAssetError("corrupt-asset", asset.id, "The embedded mask is not valid Base64.");
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
+function validateMaskAssetBytes(
+  asset: MaskAssetDescriptor,
+  bytes: Uint8Array,
+): Uint8Array {
   if (bytes.byteLength !== asset.byteLength) {
     throw new MaskAssetError(
       "corrupt-asset",
@@ -695,14 +697,31 @@ function decodeAssetBase64(asset: MaskRasterAsset): Uint8Array {
   return bytes;
 }
 
+function decodeAssetBase64(asset: MaskRasterAsset): Uint8Array {
+  let binary: string;
+  try {
+    binary = atob(asset.pngBase64);
+  } catch {
+    throw new MaskAssetError("corrupt-asset", asset.id, "The embedded mask is not valid Base64.");
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return validateMaskAssetBytes(asset, bytes);
+}
+
 function hexDigest(buffer: ArrayBuffer): string {
   return [...new Uint8Array(buffer)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
 }
 
-async function decodeMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset> {
-  const bytes = decodeAssetBase64(asset);
+async function decodeMaskAssetBytes(
+  asset: MaskAssetDescriptor,
+  encodedBytes: Uint8Array,
+): Promise<DecodedMaskAsset> {
+  const bytes = validateMaskAssetBytes(asset, encodedBytes);
   if (typeof crypto === "undefined" || !crypto.subtle) {
     throw new MaskAssetError("corrupt-asset", asset.id, "Mask verification is unavailable in this environment.");
   }
@@ -744,6 +763,10 @@ async function decodeMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset
   }
 }
 
+function decodeMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset> {
+  return decodeMaskAssetBytes(asset, decodeAssetBase64(asset));
+}
+
 function touchMaskAssetDecodeCache(key: string, promise: Promise<DecodedMaskAsset>): void {
   MASK_ASSET_DECODE_CACHE.delete(key);
   MASK_ASSET_DECODE_CACHE.set(key, promise);
@@ -770,14 +793,17 @@ function trimMaskAssetDecodeCache(): void {
   }
 }
 
-function cachedMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset> {
+function cachedMaskAssetDecode(
+  asset: MaskAssetDescriptor,
+  decode: () => Promise<DecodedMaskAsset>,
+): Promise<DecodedMaskAsset> {
   const key = `${asset.id}:${asset.sha256}:${asset.byteLength}:${asset.width}x${asset.height}`;
   const current = MASK_ASSET_DECODE_CACHE.get(key);
   if (current) {
     touchMaskAssetDecodeCache(key, current);
     return current;
   }
-  const decoded = decodeMaskAsset(asset);
+  const decoded = decode();
   const expectedBytes = asset.width * asset.height;
   MASK_ASSET_DECODE_CACHE_BYTES.set(key, expectedBytes);
   maskAssetDecodeCacheBytes += expectedBytes;
@@ -803,6 +829,17 @@ function cachedMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset> {
     },
   );
   return decoded;
+}
+
+export function cachedMaskAsset(asset: MaskRasterAsset): Promise<DecodedMaskAsset> {
+  return cachedMaskAssetDecode(asset, () => decodeMaskAsset(asset));
+}
+
+export function cachedMaskAssetBytes(
+  asset: MaskAssetDescriptor,
+  bytes: Uint8Array,
+): Promise<DecodedMaskAsset> {
+  return cachedMaskAssetDecode(asset, () => decodeMaskAssetBytes(asset, bytes));
 }
 
 function clampedCropSettings(crop: CropSettings): CropSettings {

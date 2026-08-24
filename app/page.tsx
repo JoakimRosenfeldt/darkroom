@@ -68,6 +68,7 @@ export default function HomePage() {
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
   const [metadataEntryIds, setMetadataEntryIds] = useState<string[] | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
 
   const libraryResult = useLibraryResult();
   const visibleEntries = useMemo(() => {
@@ -80,12 +81,31 @@ export default function HomePage() {
   }, [entries, libraryResult.visibleEntryIds]);
   const visibleOrder = [...libraryResult.visibleEntryIds];
 
+  function openInDevelop(id: string) {
+    if (libraryResult.query === null) {
+      setViewerError("The active catalog is still loading. Try opening the photo again.");
+      return;
+    }
+    try {
+      const session = createViewerSession({
+        query: libraryResult.query,
+        orderedEntryIds: libraryResult.viewerEntryIds,
+        activeEntryId: id,
+        selectedEntryIds,
+      });
+      setViewerError(null);
+      router.push(viewerPhotoHref(id, session.id));
+    } catch (error) {
+      setViewerError(error instanceof Error ? error.message : "The Library result could not be saved.");
+    }
+  }
+
   useEffect(() => {
     reconcileSelection(libraryResult.visibleEntryIds);
   }, [libraryResult.revision, libraryResult.visibleEntryIds, reconcileSelection]);
 
   const { openContextMenu, contextMenu, actionOverlayOpen } =
-    useLibraryContextMenu(visibleOrder, setExportEntryIds);
+    useLibraryContextMenu(visibleOrder, setExportEntryIds, openInDevelop);
 
   const {
     albumPicker,
@@ -105,15 +125,7 @@ export default function HomePage() {
     visibleOrder,
     selectedEntryId,
     selectedEntryIds,
-    onOpen: (id) => {
-      const session = createViewerSession({
-        queryRevision: libraryResult.revision,
-        orderedEntryIds: libraryResult.viewerEntryIds,
-        activeEntryId: id,
-        selectedEntryIds,
-      });
-      router.push(viewerPhotoHref(id, session.id));
-    },
+    onOpen: openInDevelop,
     disabled: overlayOpen || actionOverlayOpen || exportEntryIds !== null,
     metadataShortcutsDisabled: catalogView.type === "archive",
   });
@@ -123,12 +135,25 @@ export default function HomePage() {
       {contextMenu}
       {albumPicker}
       {removePopup}
-      <ModuleSpine activeModule="library" />
+      <ModuleSpine
+        activeModule="library"
+        developPhotoId={
+          selectedEntryId && libraryResult.viewerEntryIds.includes(selectedEntryId)
+            ? selectedEntryId
+            : libraryResult.viewerEntryIds[0]
+        }
+        onOpenDevelop={openInDevelop}
+      />
 
       <div className="flex min-h-0 flex-1">
         <SidePanel />
 
         <div className="flex min-w-0 flex-1 flex-col">
+          {viewerError ? (
+            <div role="alert" className="border-b border-red-400/20 bg-red-950/25 px-3 py-1.5 text-xs text-red-200">
+              {viewerError}
+            </div>
+          ) : null}
           <LibraryToolbar
             photoCount={libraryResult.photoCount}
             sort={sort}

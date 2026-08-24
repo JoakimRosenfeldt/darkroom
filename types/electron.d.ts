@@ -88,6 +88,16 @@ import type {
   ExactDuplicateTrashRequest,
   ExactDuplicateTrashResult,
 } from "../lib/library/duplicate-actions";
+import type {
+  DevelopAssetGcRequest,
+  DevelopAssetGcResult,
+  DevelopAssetPutRequest,
+  DevelopAssetPutResult,
+  DevelopAssetReadRequest,
+  DevelopAssetReadResult,
+  DevelopAssetTransitionRequest,
+  DevelopAssetTransitionResult,
+} from "../lib/develop/v3/asset-store";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -123,6 +133,14 @@ export interface DarkroomAPI {
   catalogAutoImportCancel(request: AutoImportCancelRequest): Promise<AutoImportStatus>;
   catalogAutoImportOpenIngress(request: CatalogSessionRequest): Promise<void>;
   catalogReadAsset(request: CatalogAssetRequest): Promise<ArrayBuffer>;
+  developAssetPut(request: DevelopAssetPutRequest): Promise<DevelopAssetPutResult>;
+  developAssetTransition(
+    request: DevelopAssetTransitionRequest,
+  ): Promise<DevelopAssetTransitionResult>;
+  developAssetRead(request: DevelopAssetReadRequest): Promise<DevelopAssetReadResult>;
+  developAssetCollectGarbage(
+    request: DevelopAssetGcRequest,
+  ): Promise<DevelopAssetGcResult>;
   catalogReadAssetHead(request: CatalogAssetHeadRequest): Promise<ArrayBuffer>;
   catalogStatAsset(request: CatalogAssetRequest): Promise<{ readonly size: number; readonly lastModified: number }>;
   catalogReadSidecar(request: CatalogAssetRequest): Promise<{ readonly contents: string; readonly lastModified: number } | null>;

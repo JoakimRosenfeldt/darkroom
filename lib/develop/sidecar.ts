@@ -2,12 +2,15 @@ import type { EntryMetadata } from "@/lib/catalog/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { DevelopDocument } from "@/lib/develop/types";
+import type {
+  PersistedDevelopDocument,
+  StoredDevelopDocument,
+} from "@/lib/develop/v3/document";
 import { parseDevelopXmp, parseKeywordXmp, serializeDevelopXmp } from "@/lib/develop/xmp";
 
 export interface DevelopSidecar {
   contents: string;
-  document: DevelopDocument;
+  document: StoredDevelopDocument;
   lastModified: number;
   rating?: EntryMetadata["rating"];
   colorLabel: EntryMetadata["colorLabel"] | undefined;
@@ -32,7 +35,7 @@ export async function readDevelopSidecar(
 
 export async function writeDevelopSidecar(
   entry: LibraryEntry,
-  document: DevelopDocument,
+  document: PersistedDevelopDocument,
   metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
   existingContents: string | null,
   expectedLastModified: number | null,

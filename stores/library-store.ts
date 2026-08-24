@@ -72,7 +72,7 @@ import {
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { createDefaultDevelopDocument } from "@/lib/develop/document";
+import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import {
   parseMetadataXmp,
@@ -102,6 +102,12 @@ export interface MetadataAnalysisState {
 
 type SidecarMetadataPatch = Partial<Pick<EntryMetadata, "rating" | "colorLabel">>;
 
+interface DevelopCatalogPersistence {
+  readonly document?: EntryMetadata["develop"];
+  readonly sourceUpdatedAt: number;
+  readonly metadataPatch: SidecarMetadataPatch;
+}
+
 export type CatalogView =
   | { type: "all" }
   | { type: "folder"; path: string | null }
@@ -128,6 +134,7 @@ interface LibraryStore {
   catalogManagerOpen: boolean;
   catalogView: CatalogView;
   importState: ImportState;
+  hasBootstrapped: boolean;
   importStatus: string | null;
   importError: string | null;
   metadataAnalysis: MetadataAnalysisState | null;
@@ -138,6 +145,11 @@ interface LibraryStore {
   selectionAnchorId: string | null;
   entryMetadata: Record<string, EntryMetadata>;
   setSelectedEntryId: (id: string | null) => void;
+  restoreViewerSelection: (
+    selectedEntryIds: readonly string[],
+    activeEntryId: string,
+    focusedEntryId: string | null,
+  ) => void;
   clearSelection: () => void;
   selectEntry: (
     id: string,
@@ -174,6 +186,11 @@ interface LibraryStore {
     sourceUpdatedAt?: number,
     metadataPatch?: SidecarMetadataPatch,
   ) => void;
+  persistDevelopState: (
+    catalogId: string,
+    entryId: string,
+    input: DevelopCatalogPersistence,
+  ) => Promise<void>;
   hydrateEntryMetadata: (
     entryId: string,
     patch: SidecarMetadataPatch,
@@ -431,44 +448,47 @@ function applyHydratedState(
   });
 }
 
+async function persistStateSync(
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): Promise<void> {
+  const catalogId = get().catalogId;
+  const sessionId = get().sessionId;
+  if (catalogId === null || sessionId === null) {
+    throw new Error("Open the original catalog before saving Develop settings.");
+  }
+  const { entryMetadata, albums, archivedEntryIds, libraryWorkspace } = get();
+  try {
+    const revision = await scheduleCatalogStateSync(
+      entryMetadata,
+      albums,
+      archivedEntryIds,
+      libraryWorkspace,
+    );
+    if (get().catalogId === catalogId && get().sessionId === sessionId) {
+      set({ catalogRevision: revision });
+    }
+  } catch (error) {
+    if (get().catalogId === catalogId && get().sessionId === sessionId) {
+      try {
+        const state = await queryActiveCatalog();
+        if (get().catalogId === catalogId && get().sessionId === sessionId) {
+          applyHydratedState(state, set, get);
+        }
+      } catch {
+        // The original sync error remains the actionable failure.
+      }
+      set({ importError: formatPickerError(error) });
+    }
+    throw error;
+  }
+}
+
 function scheduleStateSync(
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
 ): void {
-  const catalogId = get().catalogId;
-  const sessionId = get().sessionId;
-  if (catalogId === null || sessionId === null) {
-    return;
-  }
-  const { entryMetadata, albums, archivedEntryIds, libraryWorkspace } = get();
-  void scheduleCatalogStateSync(
-    entryMetadata,
-    albums,
-    archivedEntryIds,
-    libraryWorkspace,
-  ).then(
-    (revision) => {
-      if (get().catalogId === catalogId && get().sessionId === sessionId) {
-        set({ catalogRevision: revision });
-      }
-    },
-    (error: unknown) => {
-      if (get().catalogId !== catalogId || get().sessionId !== sessionId) {
-        return;
-      }
-      void queryActiveCatalog().then(
-        (state) => {
-          if (get().catalogId === catalogId && get().sessionId === sessionId) {
-            applyHydratedState(state, set, get);
-          }
-          set({ importError: formatPickerError(error) });
-        },
-        () => {
-          set({ importError: formatPickerError(error) });
-        },
-      );
-    },
-  );
+  void persistStateSync(set, get).catch(() => undefined);
 }
 
 function applyLocalMetadata(
@@ -497,13 +517,17 @@ function applyLocalMetadata(
     history.push({ entryId, before, after });
   }
   set({ entryMetadata: updated });
-  for (const item of history) {
-    useDevelopStore.getState().recordMetadataEdit(
-      item.entryId,
-      item.before,
-      item.after,
-      item.before.develop ?? createDefaultDevelopDocument(),
-    );
+  const catalogId = get().catalogId;
+  if (catalogId) {
+    for (const item of history) {
+      useDevelopStore.getState().recordMetadataEdit(
+        catalogId,
+        item.entryId,
+        item.before,
+        item.after,
+        item.before.develop ?? createDefaultV3DevelopDocument(),
+      );
+    }
   }
   scheduleStateSync(set, get);
   if (shouldAutoAdvance) {
@@ -850,6 +874,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   catalogManagerOpen: false,
   catalogView: { type: "all" },
   importState: "idle",
+  hasBootstrapped: false,
   importStatus: null,
   importError: null,
   metadataAnalysis: null,
@@ -864,6 +889,21 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     selectedEntryId: id,
     selectedEntryIds: id ? [id] : [],
     selectionAnchorId: id,
+  }),
+
+  restoreViewerSelection: (selectedEntryIds, activeEntryId, focusedEntryId) => set((state) => {
+    const restoredEntryIds = [...new Set(selectedEntryIds)];
+    if (
+      state.selectedEntryId === activeEntryId &&
+      state.selectionAnchorId === focusedEntryId &&
+      state.selectedEntryIds.length === restoredEntryIds.length &&
+      state.selectedEntryIds.every((entryId, index) => entryId === restoredEntryIds[index])
+    ) return state;
+    return {
+      selectedEntryId: activeEntryId,
+      selectedEntryIds: restoredEntryIds,
+      selectionAnchorId: focusedEntryId,
+    };
   }),
 
   clearSelection: () => set({ selectedEntryIds: [], selectedEntryId: null, selectionAnchorId: null }),
@@ -1112,6 +1152,40 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       },
     });
     scheduleStateSync(set, get);
+  },
+
+  persistDevelopState: async (catalogId, entryId, input) => {
+    if (get().catalogId !== catalogId) {
+      throw new Error("Reopen the original catalog before saving Develop settings.");
+    }
+    const { entryMetadata } = get();
+    const current = getEntryMetadata(entryMetadata, entryId);
+    const metadataChanged =
+      (input.metadataPatch.rating !== undefined &&
+        input.metadataPatch.rating !== current.rating) ||
+      (input.metadataPatch.colorLabel !== undefined &&
+        input.metadataPatch.colorLabel !== current.colorLabel);
+    if (input.document || metadataChanged) {
+      const developUpdatedAt = input.document
+        ? Math.max(input.sourceUpdatedAt, current.developUpdatedAt + 1)
+        : current.developUpdatedAt;
+      const updatedAt = metadataChanged
+        ? Math.max(input.sourceUpdatedAt, current.updatedAt + 1)
+        : current.updatedAt;
+      set({
+        entryMetadata: {
+          ...entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...current,
+            ...input.metadataPatch,
+            ...(input.document ? { develop: input.document } : {}),
+            developUpdatedAt,
+            updatedAt,
+          }),
+        },
+      });
+    }
+    await persistStateSync(set, get);
   },
 
   hydrateEntryMetadata: (entryId, patch, sourceUpdatedAt) => {
@@ -2221,6 +2295,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   bootstrapLibrary: async () => {
     fsDebug("bootstrapLibrary: start");
+    set({ hasBootstrapped: false });
     try {
       const result = await bootstrapCatalog();
       if (!result.session) {
@@ -2259,6 +2334,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       await finishImport(generation, () => activateCatalog(activation), "restore", set, get);
     } catch (error) {
       set({ importError: formatPickerError(error), needsFolderAccess: true });
+    } finally {
+      set({ hasBootstrapped: true });
     }
   },
 }));

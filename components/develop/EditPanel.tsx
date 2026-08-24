@@ -1,15 +1,70 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
+import { MAX_MASKS } from "@/lib/develop/document";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
-import type { MixerColor } from "@/lib/develop/types";
-import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
-import { useDevelopStore } from "@/stores/develop-store";
+import type {
+  BasicSettings,
+  LocalMask,
+  MaskComponent,
+  MixerColor,
+  NonEmpty,
+} from "@/lib/develop/types";
 import {
-  COLOR_SLIDER_TRACKS,
-  SliderRow,
-} from "@/components/develop/SliderRow";
+  applyCleanupCommand,
+  type CleanupCommand,
+  type CleanupComponent,
+} from "@/lib/develop/v3/cleanup";
+import { MAX_POINT_COLOR_SAMPLES } from "@/lib/develop/v3/point-color";
+import { currentGeneratedJobCapability } from "@/lib/develop/v3/generated-jobs";
+import type {
+  DevelopDocumentV3,
+  PersistedWhiteBalanceMode,
+} from "@/lib/develop/v3/document";
+import {
+  manualPerspectiveHomographyForFrame,
+  type QuarterTurns,
+} from "@/lib/develop/v3/geometry";
+import { resolveAdjustedWhiteBalance } from "@/lib/develop/v3/white-balance";
+import type { ColorGradingWheel } from "@/lib/develop/v3/color-grading";
+import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
+import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
+import type { LibraryEntry } from "@/lib/fs/types";
+import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
+import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
+import type {
+  V3CanvasDiagnostic,
+  V3CanvasTool,
+} from "@/components/develop/DevelopCanvas";
+import {
+  V3AutoToneControl,
+  V3HistogramPanel,
+} from "@/components/develop/V3AnalysisControls";
+import { AiMaskActions } from "@/components/develop/AiMaskActions";
+import { V3CleanupComponentEditor } from "@/components/develop/V3CleanupComponentEditor";
+import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
+import {
+  ActionButton,
+  PanelSection,
+  SectionLabel,
+  SelectRow,
+  StatusCard,
+  ToggleRow,
+} from "@/components/develop/V3PanelControls";
+import { useDevelopStore } from "@/stores/develop-store";
+
+type V3Tab = "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
+type MixerMode = "hue" | "saturation" | "luminance";
+type GradingRange = "shadows" | "midtones" | "highlights";
+
+const TABS: readonly { readonly id: V3Tab; readonly label: string }[] = [
+  { id: "light", label: "Light" },
+  { id: "color", label: "Color" },
+  { id: "detail", label: "Detail" },
+  { id: "output", label: "Output" },
+];
 
 const MIXER_LABELS: Record<MixerColor, string> = {
   red: "Red",
@@ -20,33 +75,6 @@ const MIXER_LABELS: Record<MixerColor, string> = {
   blue: "Blue",
   purple: "Purple",
   magenta: "Magenta",
-};
-
-type MixerMode = "hue" | "saturation" | "luminance" | "all";
-type EditTab = "light" | "color" | "detail";
-
-const EDIT_TABS: Array<{ id: EditTab; label: string }> = [
-  { id: "light", label: "Light" },
-  { id: "color", label: "Color" },
-  { id: "detail", label: "Detail" },
-];
-
-const MIXER_MODES: Array<{ id: MixerMode; label: string }> = [
-  { id: "hue", label: "Hue" },
-  { id: "saturation", label: "Saturation" },
-  { id: "luminance", label: "Luminance" },
-  { id: "all", label: "All" },
-];
-
-const COLOR_HEX: Record<MixerColor, string> = {
-  red: "#d64d52",
-  orange: "#df8438",
-  yellow: "#d9c83f",
-  green: "#55a85c",
-  aqua: "#4cb8b5",
-  blue: "#4d78c9",
-  purple: "#8b63c5",
-  magenta: "#c35b9e",
 };
 
 const HUE_TRACKS: Record<MixerColor, string> = {
@@ -60,340 +88,1275 @@ const HUE_TRACKS: Record<MixerColor, string> = {
   magenta: "linear-gradient(90deg, #8b63c5, #c35b9e, #d64d52)",
 };
 
-interface EditPanelProps {
-  onResetAll: () => void;
+function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
+  if (panel === "crop") return "geometry";
+  if (panel === "masking") return "masking";
+  if (panel === "cleanup") return "cleanup";
+  return null;
 }
 
-export function EditPanel({ onResetAll }: EditPanelProps) {
-  const [activeTab, setActiveTab] = useState<EditTab>("light");
-  const sidecarError = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.ui.sidecarError ?? null;
+function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
+  switch (tab) {
+    case "light": return "tone";
+    case "color": return "curve-and-color";
+    case "detail": return "detail";
+    case "geometry": return "geometry-and-crop";
+    case "masking": return "local-adjustments";
+    case "cleanup": return "cleanup";
+    case "output": return "output-intent";
+    default: {
+      const exhaustive: never = tab;
+      return exhaustive;
+    }
+  }
+}
+
+export interface V3BatchContext {
+  readonly sourceEntry: LibraryEntry;
+  readonly entries: readonly LibraryEntry[];
+  readonly resultId: string;
+  readonly catalogRevision: number;
+  readonly resultEntryIds: readonly string[];
+  readonly missingEntryIds: readonly string[];
+}
+
+function saveLabel(input: {
+  readonly sidecarStatus: string;
+  readonly documentRevision: number;
+  readonly persistedDocumentRevision: number;
+  readonly metadataRevision: number;
+  readonly persistedMetadataRevision: number;
+}): string {
+  if (input.sidecarStatus === "saving") return "Saving…";
+  if (input.sidecarStatus === "error") return "Save failed";
+  return input.documentRevision === input.persistedDocumentRevision &&
+      input.metadataRevision === input.persistedMetadataRevision
+    ? "Saved"
+    : "Unsaved changes";
+}
+
+export function EditPanel({
+  activePanel,
+  batch,
+  analysis,
+  diagnostics,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly activePanel: DevelopPanelId | null;
+  readonly batch: V3BatchContext;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly diagnostics: readonly V3CanvasDiagnostic[];
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
+  const session = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId] : undefined;
   });
+  const resetAll = useDevelopStore((state) => state.resetV3All);
+  const [activeTab, setActiveTab] = useState<V3Tab>(
+    tabForPanel(activePanel) ?? "light",
+  );
+  const [batchOpen, setBatchOpen] = useState(false);
+
+  const document = session?.persistedDocument;
+  if (!session || session.processKind !== "v3" || document?.version !== 3) {
+    return null;
+  }
+
+  const status = saveLabel({
+    sidecarStatus: session.ui.sidecarStatus,
+    documentRevision: session.documentRevision,
+    persistedDocumentRevision: session.persistedDocumentRevision,
+    metadataRevision: session.metadataRevision,
+    persistedMetadataRevision: session.persistedMetadataRevision,
+  });
+  const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
 
   return (
-    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-      <div className="flex min-h-[49px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
+    <>
+      <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="flex min-h-[58px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-            Develop
+            {panelTitle}
           </h2>
-          {sidecarError ? (
-            <p
-              className="mt-0.5 break-words text-[10px] leading-4 text-lr-danger"
-              title={sidecarError}
-            >
-              XMP: {sidecarError}
+          <p className="mt-0.5 text-[10px] text-lr-text-faint">
+            {status} · SDR · 8-bit output
+          </p>
+          {session.ui.sidecarError ? (
+            <p className="mt-0.5 break-words text-[10px] leading-4 text-lr-danger">
+              XMP: {session.ui.sidecarError}
             </p>
           ) : null}
         </div>
         <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onResetAll}
-          className="rounded-[7px] border border-lr-border-subtle px-2.5 py-1.5 text-[11px] text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
-        >
-          Reset all
-        </button>
+        <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
+        <ActionButton onClick={resetAll}>Reset all</ActionButton>
       </div>
 
-      <div
-        className="flex gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
-        role="tablist"
-        aria-label="Develop sections"
+      {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
+        <div
+          className="grid grid-cols-4 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
+          role="tablist"
+          aria-label="Develop sections"
+        >
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`rounded-[7px] px-1 py-1.5 text-[10px] transition ${
+                activeTab === tab.id
+                  ? "bg-lr-panel-raised text-lr-text"
+                  : "text-lr-text-muted hover:bg-lr-panel-raised/60 hover:text-lr-text"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
+        {activeTab === "color" ? <ColorTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
+        {activeTab === "detail" ? <DetailTab document={document} /> : null}
+        {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
+        {activeTab === "masking" ? (
+          <MaskingTab document={document} entry={batch.sourceEntry} />
+        ) : null}
+        {activeTab === "cleanup" ? <CleanupTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
+        {activeTab === "output" ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
+      </div>
+      </aside>
+      {batchOpen ? (
+        <V3BatchDialog
+          sourceEntry={batch.sourceEntry}
+          entries={batch.entries}
+          resultId={batch.resultId}
+          catalogId={batch.sourceEntry.catalogId}
+          catalogRevision={batch.catalogRevision}
+          resultEntryIds={batch.resultEntryIds}
+          missingEntryIds={batch.missingEntryIds}
+          currentGroup={batchGroupForTab(activeTab)}
+          onClose={() => setBatchOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function LightTab({
+  document,
+  analysis,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+}) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const basic = document.tone.basic;
+
+  const updateBasic = (
+    field: keyof DevelopDocumentV3["tone"]["basic"],
+    value: number,
+  ) => dispatch({
+    kind: "replace-v3-semantic-group",
+    group: "tone",
+    value: { ...document.tone, basic: { ...basic, [field]: value } },
+  }, "Adjust tone");
+
+  return (
+    <>
+      <PanelSection
+        title="Tone"
+        headerActions={<V3AutoToneControl analysis={analysis} document={document} />}
+        onReset={() => reset("tone")}
       >
-        {EDIT_TABS.map((tab) => (
+        <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} suffix=" EV" onChange={(value) => updateBasic("exposure", value)} />
+        <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(value) => updateBasic("contrast", value)} />
+        <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(value) => updateBasic("highlights", value)} />
+        <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(value) => updateBasic("shadows", value)} />
+        <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={(value) => updateBasic("whites", value)} />
+        <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(value) => updateBasic("blacks", value)} />
+      </PanelSection>
+
+      <PanelSection title="Presence" onReset={() => reset("presence")}>
+        <SliderRow label="Texture" value={document.presence.texture} min={-100} max={100} onChange={(texture) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, texture } }, "Adjust texture")} />
+        <SliderRow label="Clarity" value={document.presence.clarity} min={-100} max={100} onChange={(clarity) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, clarity } }, "Adjust clarity")} />
+        <SliderRow label="Dehaze" value={document.presence.dehaze} min={-100} max={100} onChange={(dehaze) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, dehaze } }, "Adjust dehaze")} />
+      </PanelSection>
+
+      <PanelSection title="Tone curve">
+        <ToneCurveEditor
+          settings={document.tone.curves}
+          onChange={(curves) => dispatch({
+            kind: "replace-v3-semantic-group",
+            group: "tone",
+            value: { ...document.tone, curves },
+          }, "Adjust tone curve")}
+        />
+      </PanelSection>
+    </>
+  );
+}
+
+function whiteBalanceMode(value: string): PersistedWhiteBalanceMode | null {
+  switch (value) {
+    case "current":
+    case "camera":
+    case "custom":
+    case "sampled":
+    case "auto":
+    case "legacy-custom":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function profileDescription(document: DevelopDocumentV3): string {
+  const selection = document.color.inputProfile.selection;
+  if (selection.kind === "decoder-default") {
+    return "Decoder-provided color. No licensed camera profile registry is installed.";
+  }
+  if (selection.kind === "unavailable") return selection.reason;
+  return `${selection.profileId} · revision ${selection.profileRevision}. Stored calibration only; no registry lookup is available.`;
+}
+
+function ColorTab({
+  document,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const [mixerMode, setMixerMode] = useState<MixerMode>("hue");
+  const [autoStatus, setAutoStatus] = useState<string | null>(null);
+  const color = document.color;
+
+  const replaceColor = (value: DevelopDocumentV3["color"], label: string) =>
+    dispatch({ kind: "replace-v3-semantic-group", group: "color", value }, label);
+
+  const setWhiteBalanceMode = (raw: string) => {
+    const mode = whiteBalanceMode(raw);
+    if (!mode) return;
+    if (mode === "auto") {
+      setAutoStatus("Auto WB is unavailable until renderer analysis is connected. The document was not changed.");
+      return;
+    }
+    if (mode === "sampled") {
+      setAutoStatus("Click a neutral source area in the canvas. Press Escape to cancel.");
+      onCanvasToolChange(canvasTool.kind === "white-balance"
+        ? { kind: "none" }
+        : { kind: "white-balance" });
+      return;
+    }
+    setAutoStatus(null);
+    replaceColor({
+      ...color,
+      whiteBalance: { ...color.whiteBalance, mode },
+    }, "Change white balance mode");
+  };
+
+  const requestAutoWhiteBalance = () => {
+    setAutoStatus("Auto WB is unavailable until renderer analysis is connected. The document was not changed.");
+  };
+
+  const updateWhiteBalance = (field: "temperature" | "tint", value: number) => {
+    const adjustment = { ...color.whiteBalance.adjustment, [field]: value };
+    replaceColor({
+      ...color,
+      whiteBalance: {
+        ...color.whiteBalance,
+        mode: "custom",
+        adjustment,
+        resolved: resolveAdjustedWhiteBalance({
+          previousAdjustment: color.whiteBalance.adjustment,
+          previousValues: color.whiteBalance.resolved,
+          adjustment,
+        }),
+      },
+    }, "Adjust white balance");
+  };
+
+  return (
+    <PanelSection title="Color" onReset={() => reset("color")}>
+      <SectionLabel>White balance</SectionLabel>
+      <SelectRow label="Mode" value={color.whiteBalance.mode} onChange={setWhiteBalanceMode}>
+        <option value="current">Current</option>
+        <option value="camera">As shot</option>
+        <option value="custom">Custom</option>
+        <option value="sampled">Sample from canvas</option>
+        <option value="auto" disabled>Auto requested · unavailable</option>
+        <option value="legacy-custom">Imported custom</option>
+      </SelectRow>
+      <SliderRow label="Temperature" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000} suffix=" K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(value) => updateWhiteBalance("temperature", value)} />
+      <SliderRow label="Tint" value={color.whiteBalance.adjustment.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(value) => updateWhiteBalance("tint", value)} />
+      <div className="mt-2 flex items-center gap-2">
+        <ActionButton onClick={() => onCanvasToolChange(canvasTool.kind === "white-balance" ? { kind: "none" } : { kind: "white-balance" })}>
+          {canvasTool.kind === "white-balance" ? "Cancel sampler" : "Sample neutral"}
+        </ActionButton>
+        <ActionButton onClick={requestAutoWhiteBalance}>Request Auto</ActionButton>
+        <p className="text-[9px] leading-3 text-lr-text-faint">
+          Resolved: {color.whiteBalance.resolved.temperatureKelvin} K
+        </p>
+      </div>
+      {autoStatus ? <p role="status" className="mt-2 text-[10px] leading-4 text-lr-accent">{autoStatus}</p> : null}
+
+      <SectionLabel>Global color</SectionLabel>
+      <SliderRow label="Vibrance" value={color.global.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => replaceColor({ ...color, global: { ...color.global, vibrance } }, "Adjust vibrance")} />
+      <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation")} />
+
+      <SectionLabel>Input profile</SectionLabel>
+      <StatusCard title="Profile status">{profileDescription(document)}</StatusCard>
+
+      <PointColorControls
+        document={document}
+        replaceColor={replaceColor}
+        canvasTool={canvasTool}
+        onCanvasToolChange={onCanvasToolChange}
+      />
+      <MixerControls document={document} mode={mixerMode} setMode={setMixerMode} replaceColor={replaceColor} />
+      <MonochromeControls document={document} replaceColor={replaceColor} />
+      <ColorGradingControls document={document} replaceColor={replaceColor} />
+    </PanelSection>
+  );
+}
+
+function PointColorControls({
+  document,
+  replaceColor,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  document: DevelopDocumentV3;
+  replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
+  canvasTool: V3CanvasTool;
+  onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
+  const settings = document.color.pointColor;
+  const update = (id: string, patch: Partial<(typeof settings.adjustments)[number]>) =>
+    replaceColor({
+      ...document.color,
+      pointColor: {
+        adjustments: settings.adjustments.map((adjustment) =>
+          adjustment.id === id ? { ...adjustment, ...patch } : adjustment
+        ),
+      },
+    }, "Adjust Point Color");
+
+  return (
+    <>
+      <div className="mb-1.5 mt-3 flex items-center gap-2">
+        <SectionLabel>Point Color</SectionLabel>
+        <div className="flex-1" />
+        <ActionButton
+          disabled={settings.adjustments.length >= MAX_POINT_COLOR_SAMPLES}
+          onClick={() => onCanvasToolChange(canvasTool.kind === "point-color"
+            ? { kind: "none" }
+            : { kind: "point-color" })}
+        >
+          {canvasTool.kind === "point-color" ? "Cancel sample" : "Sample canvas"}
+        </ActionButton>
+        <ActionButton
+          disabled={settings.adjustments.length >= MAX_POINT_COLOR_SAMPLES}
+          onClick={() => replaceColor({
+            ...document.color,
+            pointColor: {
+              adjustments: [...settings.adjustments, {
+                id: crypto.randomUUID(),
+                enabled: true,
+                sourceHueDegrees: 0,
+                sourceSaturation: 0.5,
+                sourceLuminance: 0.5,
+                hueRangeDegrees: 30,
+                saturationRange: 0.25,
+                luminanceRange: 0.25,
+                falloff: 0.5,
+                hueShiftDegrees: 0,
+                saturationShift: 0,
+                luminanceShift: 0,
+              }],
+            },
+          }, "Add Point Color")}
+        >
+          Add numeric point
+        </ActionButton>
+      </div>
+      <p className="mb-1.5 text-[10px] leading-4 text-lr-text-faint">
+        Canvas sampling records the clicked SDR color. Numeric points start from neutral mid-color values.
+      </p>
+      {settings.adjustments.length === 0 ? (
+        <p className="text-[10px] leading-4 text-lr-text-faint">No Point Color samples.</p>
+      ) : settings.adjustments.map((adjustment, index) => (
+        <div key={adjustment.id} className="mb-2 rounded-[7px] border border-lr-border-subtle p-2">
+          <div className="mb-1 flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-[10px] text-lr-text-muted">
+              <input type="checkbox" checked={adjustment.enabled} onChange={(event) => update(adjustment.id, { enabled: event.target.checked })} className="size-3 accent-lr-accent" />
+              Sample {index + 1}
+            </label>
+            <div className="flex-1" />
+            <button type="button" onClick={() => replaceColor({ ...document.color, pointColor: { adjustments: settings.adjustments.filter((item) => item.id !== adjustment.id) } }, "Remove Point Color")} className="text-[10px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+          </div>
+          <SliderRow label="Source hue" value={adjustment.sourceHueDegrees} min={0} max={360} onChange={(sourceHueDegrees) => update(adjustment.id, { sourceHueDegrees })} />
+          <SliderRow label="Source sat." value={adjustment.sourceSaturation} min={0} max={1} step={0.01} onChange={(sourceSaturation) => update(adjustment.id, { sourceSaturation })} />
+          <SliderRow label="Source lum." value={adjustment.sourceLuminance} min={0} max={1} step={0.01} onChange={(sourceLuminance) => update(adjustment.id, { sourceLuminance })} />
+          <SliderRow label="Hue range" value={adjustment.hueRangeDegrees} min={1} max={180} onChange={(hueRangeDegrees) => update(adjustment.id, { hueRangeDegrees })} />
+          <SliderRow label="Sat. range" value={adjustment.saturationRange} min={0.01} max={1} step={0.01} onChange={(saturationRange) => update(adjustment.id, { saturationRange })} />
+          <SliderRow label="Lum. range" value={adjustment.luminanceRange} min={0.01} max={1} step={0.01} onChange={(luminanceRange) => update(adjustment.id, { luminanceRange })} />
+          <SliderRow label="Falloff" value={adjustment.falloff} min={0} max={1} step={0.01} onChange={(falloff) => update(adjustment.id, { falloff })} />
+          <SliderRow label="Hue shift" value={adjustment.hueShiftDegrees} min={-180} max={180} onChange={(hueShiftDegrees) => update(adjustment.id, { hueShiftDegrees })} />
+          <SliderRow label="Sat. shift" value={adjustment.saturationShift} min={-1} max={1} step={0.01} onChange={(saturationShift) => update(adjustment.id, { saturationShift })} />
+          <SliderRow label="Lum. shift" value={adjustment.luminanceShift} min={-1} max={1} step={0.01} onChange={(luminanceShift) => update(adjustment.id, { luminanceShift })} />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function MixerControls({
+  document,
+  mode,
+  setMode,
+  replaceColor,
+}: {
+  document: DevelopDocumentV3;
+  mode: MixerMode;
+  setMode: (mode: MixerMode) => void;
+  replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
+}) {
+  const mixer = document.color.mixer;
+  return (
+    <>
+      <SectionLabel>Color mixer</SectionLabel>
+      <div className="mb-1.5 flex gap-1" role="group" aria-label="Color mixer property">
+        {(["hue", "saturation", "luminance"] as const).map((item) => (
+          <ActionButton key={item} pressed={mode === item} onClick={() => setMode(item)}>
+            {item === "hue" ? "Hue" : item === "saturation" ? "Saturation" : "Luminance"}
+          </ActionButton>
+        ))}
+      </div>
+      {MIXER_COLORS.map((color) => (
+        <SliderRow
+          key={color}
+          label={MIXER_LABELS[color]}
+          value={mixer[color][mode]}
+          min={-100}
+          max={100}
+          track={mode === "hue" ? HUE_TRACKS[color] : undefined}
+          onChange={(value) => replaceColor({
+            ...document.color,
+            mixer: { ...mixer, [color]: { ...mixer[color], [mode]: value } },
+          }, `Adjust ${MIXER_LABELS[color]} ${mode}`)}
+        />
+      ))}
+    </>
+  );
+}
+
+function MonochromeControls({
+  document,
+  replaceColor,
+}: {
+  document: DevelopDocumentV3;
+  replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
+}) {
+  const monochrome = document.color.monochrome;
+  return (
+    <>
+      <SectionLabel>Monochrome</SectionLabel>
+      <ToggleRow label="Black & white" checked={monochrome.enabled} detail="Neutral built-in profile" onChange={(enabled) => replaceColor({ ...document.color, monochrome: { ...monochrome, enabled } }, "Toggle monochrome")} />
+      {monochrome.enabled ? MIXER_COLORS.map((channel) => (
+        <SliderRow key={channel} label={MIXER_LABELS[channel]} value={monochrome.mixer[channel]} min={-100} max={100} onChange={(value) => replaceColor({ ...document.color, monochrome: { ...monochrome, mixer: { ...monochrome.mixer, [channel]: value } } }, `Adjust monochrome ${channel}`)} />
+      )) : null}
+    </>
+  );
+}
+
+function ColorGradingControls({
+  document,
+  replaceColor,
+}: {
+  document: DevelopDocumentV3;
+  replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
+}) {
+  const grading = document.color.grading;
+  const updateWheel = (range: GradingRange, patch: Partial<ColorGradingWheel>) =>
+    replaceColor({
+      ...document.color,
+      grading: { ...grading, [range]: { ...grading[range], ...patch } },
+    }, `Adjust ${range} grading`);
+  return (
+    <>
+      <SectionLabel>Color grading</SectionLabel>
+      {(["shadows", "midtones", "highlights"] as const).map((range) => (
+        <div key={range} className="mb-1.5">
+          <p className="text-[9px] font-medium capitalize text-lr-text-faint">{range}</p>
+          <SliderRow label="Hue" value={grading[range].hueDegrees} min={0} max={360} onChange={(hueDegrees) => updateWheel(range, { hueDegrees })} />
+          <SliderRow label="Saturation" value={grading[range].saturation} min={0} max={100} onChange={(saturation) => updateWheel(range, { saturation })} />
+          <SliderRow label="Luminance" value={grading[range].luminance} min={-100} max={100} onChange={(luminance) => updateWheel(range, { luminance })} />
+        </div>
+      ))}
+      <SliderRow label="Blending" value={grading.blending} min={0} max={100} onChange={(blending) => replaceColor({ ...document.color, grading: { ...grading, blending } }, "Adjust grading blending")} />
+      <SliderRow label="Balance" value={grading.balance} min={-100} max={100} onChange={(balance) => replaceColor({ ...document.color, grading: { ...grading, balance } }, "Adjust grading balance")} />
+    </>
+  );
+}
+
+function opticsProfileStatus(document: DevelopDocumentV3): string {
+  const profile = document.optics.profile;
+  if (profile.kind === "off") return "Off. No licensed lens profile registry is installed.";
+  if (profile.kind === "automatic") return "Automatic profile requested, but no lens profile registry is installed.";
+  return `${profile.profileId} is stored, but this build cannot verify it against a lens profile registry.`;
+}
+
+function DetailTab({ document }: { document: DevelopDocumentV3 }) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const optics = document.optics;
+  const noise = document.detail.noiseReduction;
+  const sharpening = document.detail.sharpening;
+  const postCrop = document.effects.postCrop;
+
+  return (
+    <>
+      <PanelSection title="Optics" onReset={() => reset("optics")}>
+        <StatusCard title="Lens profile" tone={optics.profile.kind === "off" ? "neutral" : "warning"}>
+          {opticsProfileStatus(document)}
+        </StatusCard>
+        <SectionLabel>Manual correction</SectionLabel>
+        <SliderRow label="Distortion" value={optics.manualDistortion} min={-100} max={100} onChange={(manualDistortion) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, manualDistortion } }, "Adjust distortion")} />
+        <SliderRow label="Defringe" value={optics.defringe.amount} min={0} max={100} onChange={(amount) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, amount } } }, "Adjust defringe")} />
+        <SliderRow label="Purple hue" value={optics.defringe.purpleHueDegrees} min={0} max={360} onChange={(purpleHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, purpleHueDegrees } } }, "Adjust purple defringe hue")} />
+        <SliderRow label="Green hue" value={optics.defringe.greenHueDegrees} min={0} max={360} onChange={(greenHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, greenHueDegrees } } }, "Adjust green defringe hue")} />
+        <SliderRow label="Hue range" value={optics.defringe.hueRangeDegrees} min={1} max={60} onChange={(hueRangeDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, hueRangeDegrees } } }, "Adjust defringe range")} />
+      </PanelSection>
+
+      <PanelSection title="Detail" onReset={() => reset("detail")}>
+        <SectionLabel>Noise reduction</SectionLabel>
+        {([
+          ["noiseReduction", "Luminance"],
+          ["noiseDetail", "Detail"],
+          ["noiseContrast", "Contrast"],
+          ["colorNoiseReduction", "Color"],
+          ["colorNoiseDetail", "Color detail"],
+          ["colorNoiseSmoothness", "Smoothness"],
+        ] as const).map(([field, label]) => (
+          <SliderRow key={field} label={label} value={noise[field]} min={0} max={100} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, noiseReduction: { ...noise, [field]: value } } }, `Adjust ${label.toLowerCase()} noise reduction`)} />
+        ))}
+        <SectionLabel>Sharpening</SectionLabel>
+        <SliderRow label="Amount" value={sharpening.sharpening} min={0} max={100} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpening: value } } }, "Adjust sharpening")} />
+        <SliderRow label="Radius" value={sharpening.sharpenRadius} min={0.5} max={3} step={0.1} onChange={(sharpenRadius) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenRadius } } }, "Adjust sharpen radius")} />
+        <SliderRow label="Detail" value={sharpening.sharpenDetail} min={0} max={100} onChange={(sharpenDetail) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenDetail } } }, "Adjust sharpen detail")} />
+        <SliderRow label="Masking" value={sharpening.sharpenMasking} min={0} max={100} onChange={(sharpenMasking) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenMasking } } }, "Adjust sharpen masking")} />
+      </PanelSection>
+
+      <PanelSection title="Post-crop effects" onReset={() => reset("effects")}>
+        {([
+          ["vignette", "Vignette", -100, 100],
+          ["vignetteMidpoint", "Midpoint", 0, 100],
+          ["vignetteRoundness", "Roundness", -100, 100],
+          ["vignetteFeather", "Feather", 0, 100],
+          ["vignetteHighlights", "Highlights", 0, 100],
+          ["grain", "Grain", 0, 100],
+          ["grainSize", "Size", 0, 100],
+          ["grainRoughness", "Roughness", 0, 100],
+        ] as const).map(([field, label, minimum, maximum]) => (
+          <SliderRow key={field} label={label} value={postCrop[field]} min={minimum} max={maximum} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "effects", value: { postCrop: { ...postCrop, [field]: value } } }, `Adjust ${label.toLowerCase()}`)} />
+        ))}
+      </PanelSection>
+    </>
+  );
+}
+
+function rotateQuarterTurns(value: QuarterTurns, direction: "left" | "right"): QuarterTurns {
+  switch (value) {
+    case 0: return direction === "left" ? 3 : 1;
+    case 1: return direction === "left" ? 0 : 2;
+    case 2: return direction === "left" ? 1 : 3;
+    case 3: return direction === "left" ? 2 : 0;
+    default: {
+      const exhaustive: never = value;
+      return exhaustive;
+    }
+  }
+}
+
+function nonEmptyComponents(items: readonly MaskComponent[]): NonEmpty<MaskComponent> | null {
+  const first = items[0];
+  return first === undefined ? null : [first, ...items.slice(1)];
+}
+
+function maskComponentLabel(component: MaskComponent): string {
+  switch (component.kind) {
+    case "brush": return "Brush";
+    case "linear-gradient": return "Linear gradient";
+    case "radial-gradient": return "Radial gradient";
+    case "ai": return component.selector === "subject" ? "Subject matte" : "Sky matte";
+    default: {
+      const exhaustive: never = component;
+      return exhaustive;
+    }
+  }
+}
+
+function MaskingTab({
+  document,
+  entry,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly entry: LibraryEntry;
+}) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const sessionUi = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId]?.ui ?? null : null;
+  });
+  const setSelectedMask = useDevelopStore((state) => state.setSelectedMask);
+  const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
+  const setTool = useDevelopStore((state) => state.setMaskTool);
+  const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
+  const masks = document.local.masks;
+  const selectedMask = masks.find((mask) => mask.id === sessionUi?.selectedMaskId) ?? null;
+  const selectedComponent = selectedMask?.components.find(
+    (component) => component.id === sessionUi?.selectedComponentId,
+  ) ?? null;
+  const activeTool = sessionUi?.tool ?? "none";
+
+  function replaceMasks(nextMasks: readonly LocalMask[], label: string): void {
+    const usedAssets = new Set(nextMasks.flatMap((mask) =>
+      mask.components.flatMap((component) => component.kind === "ai"
+        ? [component.assetId]
+        : [])
+    ));
+    dispatch({
+      kind: "replace-v3-semantic-group",
+      group: "local",
+      value: {
+        ...document.local,
+        masks: nextMasks,
+        maskAssetRefs: document.local.maskAssetRefs.filter((reference) =>
+          usedAssets.has(reference.assetId)
+        ),
+      },
+    }, label);
+  }
+
+  function replaceMask(next: LocalMask, label: string): void {
+    replaceMasks(masks.map((mask) => mask.id === next.id ? next : mask), label);
+  }
+
+  function deleteMask(mask: LocalMask): void {
+    const index = masks.findIndex((item) => item.id === mask.id);
+    const next = masks[index + 1] ?? masks[index - 1] ?? null;
+    replaceMasks(masks.filter((item) => item.id !== mask.id), "Delete mask");
+    setSelectedMask(next?.id ?? null);
+    setSelectedComponent(next?.components[0]?.id ?? null);
+    setTool("none");
+  }
+
+  function duplicateMask(mask: LocalMask): void {
+    if (masks.length >= MAX_MASKS) return;
+    const components = nonEmptyComponents(mask.components.map((component) => ({
+      ...structuredClone(component),
+      id: crypto.randomUUID(),
+    })));
+    if (!components) return;
+    const names = new Set(masks.map((item) => item.name));
+    const baseName = `${mask.name} copy`;
+    let name = baseName;
+    let suffix = 2;
+    while (names.has(name)) {
+      name = `${baseName} ${suffix}`;
+      suffix += 1;
+    }
+    const copy: LocalMask = {
+      ...structuredClone(mask),
+      id: crypto.randomUUID(),
+      name,
+      components,
+    };
+    const index = masks.findIndex((item) => item.id === mask.id);
+    replaceMasks([
+      ...masks.slice(0, index + 1),
+      copy,
+      ...masks.slice(index + 1),
+    ], "Duplicate mask");
+    setSelectedMask(copy.id);
+    setSelectedComponent(copy.components[0].id);
+    setTool("none");
+  }
+
+  function moveMask(mask: LocalMask, direction: -1 | 1): void {
+    const index = masks.findIndex((item) => item.id === mask.id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= masks.length) return;
+    const reordered = [...masks];
+    [reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!];
+    replaceMasks(reordered, "Reorder masks");
+  }
+
+  function replaceSelectedComponent(next: MaskComponent, label: string): void {
+    if (!selectedMask) return;
+    const components = nonEmptyComponents(selectedMask.components.map((component) =>
+      component.id === next.id ? next : component
+    ));
+    if (!components) return;
+    replaceMask({ ...selectedMask, components }, label);
+  }
+
+  function selectMask(mask: LocalMask): void {
+    setSelectedMask(mask.id);
+    setSelectedComponent(mask.components[0]?.id ?? null);
+    setOverlayVisible(true);
+    setTool("none");
+  }
+
+  function activateTool(tool: "brush" | "linear-gradient" | "radial-gradient"): void {
+    const reuse = selectedComponent?.kind === tool;
+    if (!reuse) setSelectedComponent(null);
+    setTool(activeTool === tool && reuse ? "none" : tool);
+    setOverlayVisible(true);
+  }
+
+  function removeComponent(component: MaskComponent): void {
+    if (!selectedMask) return;
+    const remaining = nonEmptyComponents(
+      selectedMask.components.filter((item) => item.id !== component.id),
+    );
+    if (!remaining) {
+      deleteMask(selectedMask);
+      return;
+    }
+    replaceMask({ ...selectedMask, components: remaining }, "Delete mask component");
+    setSelectedComponent(remaining[0].id);
+  }
+
+  function updateAdjustment(field: keyof BasicSettings, value: number): void {
+    if (!selectedMask) return;
+    replaceMask({
+      ...selectedMask,
+      adjustments: { ...selectedMask.adjustments, [field]: value },
+    }, `Adjust mask ${field}`);
+  }
+
+  const adjustmentRows: readonly {
+    readonly field: keyof BasicSettings;
+    readonly label: string;
+    readonly minimum: number;
+    readonly maximum: number;
+    readonly step?: number;
+    readonly suffix?: string;
+  }[] = [
+    { field: "exposure", label: "Exposure", minimum: -5, maximum: 5, step: 0.05, suffix: " EV" },
+    { field: "contrast", label: "Contrast", minimum: -100, maximum: 100 },
+    { field: "highlights", label: "Highlights", minimum: -100, maximum: 100 },
+    { field: "shadows", label: "Shadows", minimum: -100, maximum: 100 },
+    { field: "whites", label: "Whites", minimum: -100, maximum: 100 },
+    { field: "blacks", label: "Blacks", minimum: -100, maximum: 100 },
+    { field: "temperature", label: "Temperature", minimum: -100, maximum: 100 },
+    { field: "tint", label: "Tint", minimum: -100, maximum: 100 },
+    { field: "vibrance", label: "Vibrance", minimum: -100, maximum: 100 },
+    { field: "saturation", label: "Saturation", minimum: -100, maximum: 100 },
+  ];
+
+  return (
+    <PanelSection title="Masks" onReset={() => reset("local")}>
+      <AiMaskActions entry={entry} document={document} />
+      <div className="mb-2 flex items-center gap-1.5">
+        <ActionButton
+          disabled={masks.length >= MAX_MASKS}
+          onClick={() => {
+            setSelectedMask(null);
+            setSelectedComponent(null);
+            setOverlayVisible(true);
+            setTool("brush");
+          }}
+        >
+          New mask
+        </ActionButton>
+        <ActionButton onClick={() => setOverlayVisible(!(sessionUi?.overlayVisible ?? false))}>
+          {sessionUi?.overlayVisible ? "Hide overlay" : "Show overlay"}
+        </ActionButton>
+        <span className="ml-auto font-mono text-[9px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
+      </div>
+      <div className="mb-3 grid grid-cols-3 gap-1">
+        {(["brush", "linear-gradient", "radial-gradient"] as const).map((tool) => (
           <button
-            key={tab.id}
+            key={tool}
             type="button"
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={[
-              "flex-1 rounded-[7px] px-1 py-2 text-[11px] transition",
-              activeTab === tab.id
-                ? "bg-lr-panel-raised text-lr-text"
-                : "text-lr-text-muted hover:bg-lr-panel-raised/60 hover:text-lr-text",
-            ].join(" ")}
+            aria-pressed={activeTool === tool}
+            onClick={() => activateTool(tool)}
+            className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === tool ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised"}`}
           >
-            {tab.label}
+            {tool === "brush" ? "Brush" : tool === "linear-gradient" ? "Linear" : "Radial"}
           </button>
         ))}
       </div>
+      {masks.length === 0 ? (
+        <StatusCard title="No masks">Choose a tool, then draw on the photo.</StatusCard>
+      ) : (
+        <ol className="mb-3 space-y-1.5">
+          {masks.map((mask, index) => (
+            <li key={mask.id} className={`rounded-md border p-2 ${mask.id === selectedMask?.id ? "border-lr-accent/60 bg-lr-selection/40" : "border-lr-border-subtle"}`}>
+              <div className="flex items-center gap-1.5">
+                <button type="button" onClick={() => selectMask(mask)} className="min-w-0 flex-1 truncate text-left text-[11px] text-lr-text">
+                  {index + 1}. {mask.name}
+                </button>
+                <input
+                  type="checkbox"
+                  aria-label={`Enable ${mask.name}`}
+                  checked={mask.enabled}
+                  onChange={(event) => replaceMask({ ...mask, enabled: event.target.checked }, "Toggle mask")}
+                  className="size-3 accent-lr-accent"
+                />
+              </div>
+              {mask.id === selectedMask?.id ? (
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center gap-1">
+                    <input
+                      aria-label="Mask name"
+                      value={mask.name}
+                      onFocus={() => beginEditGroup("Rename mask")}
+                      onBlur={endEditGroup}
+                      onChange={(event) => replaceMask({ ...mask, name: event.target.value }, "Rename mask")}
+                      className="min-w-0 flex-1 rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[10px] text-lr-text outline-none focus:border-lr-accent"
+                    />
+                    <button type="button" disabled={index === 0} onClick={() => moveMask(mask, -1)} aria-label={`Move ${mask.name} up`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">↑</button>
+                    <button type="button" disabled={index === masks.length - 1} onClick={() => moveMask(mask, 1)} aria-label={`Move ${mask.name} down`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">↓</button>
+                    <button type="button" disabled={masks.length >= MAX_MASKS} onClick={() => duplicateMask(mask)} className="text-[9px] text-lr-text-faint hover:text-lr-text disabled:opacity-30">Copy</button>
+                    <button type="button" onClick={() => deleteMask(mask)} className="text-[9px] text-lr-text-faint hover:text-lr-danger">Delete</button>
+                  </div>
+                  <ToggleRow label="Invert" checked={mask.inverted} onChange={(inverted) => replaceMask({ ...mask, inverted }, "Invert mask")} />
+                  {mask.components.map((component, componentIndex) => (
+                    <div key={component.id} className="flex items-center gap-1 rounded bg-lr-panel/60 px-2 py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedComponent(component.id);
+                          setTool(component.kind === "ai" ? "none" : component.kind);
+                          setOverlayVisible(true);
+                        }}
+                        className={`min-w-0 flex-1 truncate text-left text-[10px] ${component.id === selectedComponent?.id ? "text-lr-accent" : "text-lr-text-muted"}`}
+                      >
+                        {componentIndex + 1}. {maskComponentLabel(component)}
+                      </button>
+                      {component.kind !== "ai" ? (
+                        <button
+                          type="button"
+                          disabled={componentIndex === 0}
+                          onClick={() => replaceMask({
+                            ...mask,
+                            components: nonEmptyComponents(mask.components.map((item) => item.id === component.id ? { ...item, operation: item.operation === "add" ? "subtract" : "add" } : item)) ?? mask.components,
+                          }, "Change mask operation")}
+                          className="text-[9px] uppercase text-lr-text-faint disabled:opacity-30"
+                        >
+                          {component.operation}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => removeComponent(component)} className="text-[9px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+                    </div>
+                  ))}
+                  {selectedComponent?.kind === "brush" ? (
+                    <div className="border-t border-lr-border-subtle pt-2">
+                      <SectionLabel>Brush</SectionLabel>
+                      {(["size", "feather", "flow", "density"] as const).map((field) => (
+                        <SliderRow
+                          key={field}
+                          label={field[0]!.toUpperCase() + field.slice(1)}
+                          value={selectedComponent[field] * 100}
+                          min={field === "size" ? 1 : 0}
+                          max={100}
+                          onChange={(value) => {
+                            const nextValue = value / 100;
+                            const [first, ...rest] = selectedComponent.strokes;
+                            replaceSelectedComponent({
+                              ...selectedComponent,
+                              [field]: nextValue,
+                              strokes: [
+                                { ...first, [field]: nextValue },
+                                ...rest.map((stroke) => ({ ...stroke, [field]: nextValue })),
+                              ],
+                            }, `Adjust brush ${field}`);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  {selectedComponent?.kind === "radial-gradient" ? (
+                    <div className="border-t border-lr-border-subtle pt-2">
+                      <SectionLabel>Radial gradient</SectionLabel>
+                      <SliderRow label="Width" value={selectedComponent.radiusX * 100} min={1} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, radiusX: value / 100 }, "Adjust radial width")} />
+                      <SliderRow label="Height" value={selectedComponent.radiusY * 100} min={1} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, radiusY: value / 100 }, "Adjust radial height")} />
+                      <SliderRow label="Rotation" value={selectedComponent.rotation} min={-180} max={180} suffix="°" onChange={(rotation) => replaceSelectedComponent({ ...selectedComponent, rotation }, "Adjust radial rotation")} />
+                      <SliderRow label="Feather" value={selectedComponent.feather * 100} min={0} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, feather: value / 100 }, "Adjust radial feather")} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+      {selectedMask ? (
+        <>
+          <SectionLabel>Local adjustments</SectionLabel>
+          {adjustmentRows.map(({ field, label, minimum, maximum, step, suffix }) => (
+            <SliderRow
+              key={field}
+              label={label}
+              value={selectedMask.adjustments[field]}
+              min={minimum}
+              max={maximum}
+              step={step}
+              suffix={suffix}
+              onChange={(value) => updateAdjustment(field, value)}
+            />
+          ))}
+        </>
+      ) : null}
+    </PanelSection>
+  );
+}
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        {activeTab === "light" ? (
-          <>
-            <BasicLightSection />
-            <CurveSection />
-          </>
+function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const geometry = document.geometry;
+  const crop = geometry.crop;
+  const geometryFrame = document.local.geometryFrame;
+  const legacyPerspective = geometryFrame === "legacy-oriented-v2";
+  const horizontalPerspective = legacyPerspective
+    ? -geometry.manualPerspective.horizontal
+    : geometry.manualPerspective.horizontal;
+  const verticalPerspective = legacyPerspective
+    ? -geometry.manualPerspective.vertical
+    : geometry.manualPerspective.vertical;
+  const replace = (value: DevelopDocumentV3["geometry"], label: string) =>
+    dispatch({ kind: "replace-v3-semantic-group", group: "geometry", value }, label);
+  const replacePerspective = (
+    horizontal: number,
+    vertical: number,
+    label: string,
+  ) => replace({
+    ...geometry,
+    manualPerspective: {
+      horizontal: legacyPerspective ? -horizontal : horizontal,
+      vertical: legacyPerspective ? -vertical : vertical,
+      matrix: manualPerspectiveHomographyForFrame(
+        horizontal,
+        vertical,
+        geometryFrame,
+      ),
+    },
+  }, label);
+
+  return (
+    <PanelSection title="Geometry" onReset={() => reset("geometry")}>
+      <SectionLabel>Orientation</SectionLabel>
+      <div className="mb-1.5 flex flex-wrap gap-1.5">
+        <ActionButton onClick={() => replace({ ...geometry, orientation: { ...geometry.orientation, quarterTurns: rotateQuarterTurns(geometry.orientation.quarterTurns, "left") } }, "Turn left")}>Turn left</ActionButton>
+        <ActionButton onClick={() => replace({ ...geometry, orientation: { ...geometry.orientation, quarterTurns: rotateQuarterTurns(geometry.orientation.quarterTurns, "right") } }, "Turn right")}>Turn right</ActionButton>
+      </div>
+      <ToggleRow label="Flip horizontal" checked={geometry.orientation.flipHorizontal} onChange={(flipHorizontal) => replace({ ...geometry, orientation: { ...geometry.orientation, flipHorizontal } }, "Flip horizontal")} />
+      <ToggleRow label="Flip vertical" checked={geometry.orientation.flipVertical} onChange={(flipVertical) => replace({ ...geometry, orientation: { ...geometry.orientation, flipVertical } }, "Flip vertical")} />
+      <SliderRow label="Fine angle" value={geometry.orientation.fineAngleDegrees} min={-180} max={180} step={0.1} suffix="°" onChange={(fineAngleDegrees) => replace({ ...geometry, orientation: { ...geometry.orientation, fineAngleDegrees } }, "Adjust fine angle")} />
+
+      <SectionLabel>Perspective</SectionLabel>
+      <SliderRow label="Horizontal" value={horizontalPerspective} min={-100} max={100} onChange={(horizontal) => replacePerspective(horizontal, verticalPerspective, "Adjust horizontal perspective")} />
+      <SliderRow label="Vertical" value={verticalPerspective} min={-100} max={100} onChange={(vertical) => replacePerspective(horizontalPerspective, vertical, "Adjust vertical perspective")} />
+      <StatusCard title="Upright unavailable">
+        Automatic and guided Upright require a transform provider. Use manual perspective controls.
+      </StatusCard>
+      <ToggleRow label="Constrain crop" checked={geometry.constrainCrop} onChange={(constrainCrop) => replace({ ...geometry, constrainCrop }, "Toggle constrained crop")} />
+
+      <SectionLabel>Crop state</SectionLabel>
+      <ToggleRow label="Enable crop" checked={crop.enabled} onChange={(enabled) => replace({ ...geometry, crop: { ...crop, enabled } }, "Toggle crop")} />
+      <SelectRow
+        label="Aspect"
+        value={crop.aspectPreset}
+        disabled={!crop.enabled}
+        onChange={(value) => {
+          const preset = ASPECT_RATIO_PRESETS.find((candidate) => candidate.id === value);
+          if (preset) replace({ ...geometry, crop: { ...crop, aspectPreset: preset.id } }, "Change crop aspect");
+        }}
+      >
+        {ASPECT_RATIO_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+      </SelectRow>
+      <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} disabled={!crop.enabled} onChange={(x) => replace({ ...geometry, crop: { ...crop, x } }, "Adjust crop left")} />
+      <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} disabled={!crop.enabled} onChange={(y) => replace({ ...geometry, crop: { ...crop, y } }, "Adjust crop top")} />
+      <SliderRow label="Width" value={crop.width} min={0.05} max={1 - crop.x} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(width) => replace({ ...geometry, crop: { ...crop, width } }, "Adjust crop width")} />
+      <SliderRow label="Height" value={crop.height} min={0.05} max={1 - crop.y} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(height) => replace({ ...geometry, crop: { ...crop, height } }, "Adjust crop height")} />
+      {crop.aspectPreset === "custom" ? (
+        <>
+          <SliderRow label="Custom width" value={crop.customAspectWidth} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(customAspectWidth) => replace({ ...geometry, crop: { ...crop, customAspectWidth } }, "Adjust custom crop width")} />
+          <SliderRow label="Custom height" value={crop.customAspectHeight} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(customAspectHeight) => replace({ ...geometry, crop: { ...crop, customAspectHeight } }, "Adjust custom crop height")} />
+        </>
+      ) : null}
+      <p className="mt-2 text-[10px] leading-4 text-lr-text-faint">
+        Open Crop from the Develop rail to drag the frame and handles on the photo. Each completed drag commits one crop command.
+      </p>
+    </PanelSection>
+  );
+}
+
+function defaultCleanupComponent(kind: "heal" | "clone" | "remove" | "red-eye"): CleanupComponent {
+  const id = crypto.randomUUID();
+  if (kind === "red-eye") {
+    return {
+      kind: "red-eye",
+      id,
+      enabled: true,
+      origin: "manual",
+      bounds: {
+        center: { x: 0.5, y: 0.5 },
+        radiusX: 0.06,
+        radiusY: 0.04,
+        rotationDegrees: 0,
+      },
+      pupilRadius: 0.5,
+      amount: 0.5,
+      catchlightProtection: 0.5,
+    };
+  }
+  return {
+    kind: "repair",
+    id,
+    enabled: true,
+    mode: kind,
+    target: {
+      center: { x: 0.5, y: 0.5 },
+      radiusX: 0.08,
+      radiusY: 0.08,
+      rotationDegrees: 0,
+    },
+    feather: 0.5,
+    opacity: 1,
+    source: {
+      kind: "sampled",
+      region: {
+        center: { x: 0.35, y: 0.35 },
+        radiusX: 0.08,
+        radiusY: 0.08,
+        rotationDegrees: 0,
+      },
+    },
+  };
+}
+
+function cleanupLabel(component: CleanupComponent): string {
+  if (component.kind === "red-eye") return "Red eye";
+  if (component.mode === "heal") return "Heal";
+  if (component.mode === "clone") return "Clone";
+  return component.source.kind === "sampled" ? "Remove" : "Accepted removal patch";
+}
+
+function CleanupTab({
+  document,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const commit = (command: CleanupCommand, label: string) => {
+    const result = applyCleanupCommand(document.cleanup, command);
+    if (result.kind === "changed") {
+      dispatch({ kind: "replace-v3-semantic-group", group: "cleanup", value: result.layer }, label);
+      setMessage(null);
+      return;
+    }
+    if (result.kind === "invalid") setMessage(result.reason);
+  };
+
+  const unavailable = (["people", "reflection", "dust"] as const).map((kind) =>
+    currentGeneratedJobCapability(kind)
+  );
+
+  return (
+    <PanelSection title="Manual cleanup" onReset={() => reset("cleanup")}>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("heal") }, "Add heal repair")}>Add heal</ActionButton>
+        <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("clone") }, "Add clone repair")}>Add clone</ActionButton>
+        <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("remove") }, "Add sampled removal")}>Add remove</ActionButton>
+        <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("red-eye") }, "Add red eye")}>Add red eye</ActionButton>
+      </div>
+      <p className="mb-2 text-[10px] leading-4 text-lr-text-faint">
+        Add a component, then place its target and sampled source on the canvas. Numeric controls remain available below.
+      </p>
+      {message ? <p role="alert" className="mb-2 text-[10px] text-lr-danger">{message}</p> : null}
+      {document.cleanup.components.length === 0 ? (
+        <StatusCard title="No cleanup components">Add a manual heal, clone, or red-eye component.</StatusCard>
+      ) : (
+        <ol className="space-y-1.5">
+          {document.cleanup.components.map((component, index) => (
+            <li key={component.id} className="rounded-[7px] border border-lr-border-subtle bg-lr-panel-raised/40 p-2">
+              <div className="flex items-center gap-1.5">
+                <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-lr-text-muted">
+                  <input type="checkbox" checked={component.enabled} onChange={(event) => commit({ kind: "set-enabled", componentId: component.id, enabled: event.target.checked }, `Toggle ${cleanupLabel(component)}`)} className="size-3 accent-lr-accent" />
+                  <span className="truncate">{index + 1}. {cleanupLabel(component)}</span>
+                </label>
+                <button type="button" disabled={index === 0} aria-label={`Move ${cleanupLabel(component)} up`} onClick={() => commit({ kind: "move", componentId: component.id, targetIndex: index - 1 }, `Move ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-text disabled:opacity-25">↑</button>
+                <button type="button" disabled={index === document.cleanup.components.length - 1} aria-label={`Move ${cleanupLabel(component)} down`} onClick={() => commit({ kind: "move", componentId: component.id, targetIndex: index + 1 }, `Move ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-text disabled:opacity-25">↓</button>
+                <button type="button" aria-label={`Remove ${cleanupLabel(component)}`} onClick={() => commit({ kind: "delete", componentId: component.id }, `Remove ${cleanupLabel(component)}`)} className="px-1 text-[10px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+              </div>
+              <V3CleanupComponentEditor
+                component={component}
+                onReplace={(replacement) => commit({
+                  kind: "replace",
+                  componentId: component.id,
+                  component: replacement,
+                }, `Adjust ${cleanupLabel(component)}`)}
+              />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <ActionButton onClick={() => onCanvasToolChange(
+                  canvasTool.kind === "cleanup" && canvasTool.componentId === component.id && canvasTool.region === "target"
+                    ? { kind: "none" }
+                    : { kind: "cleanup", componentId: component.id, region: "target" },
+                )}>
+                  {component.kind === "red-eye" ? "Place eye" : "Place target"}
+                </ActionButton>
+                {component.kind === "repair" && component.source.kind === "sampled" ? (
+                  <ActionButton onClick={() => onCanvasToolChange(
+                    canvasTool.kind === "cleanup" && canvasTool.componentId === component.id && canvasTool.region === "source"
+                      ? { kind: "none" }
+                      : { kind: "cleanup", componentId: component.id, region: "source" },
+                  )}>
+                    Place source
+                  </ActionButton>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      <SectionLabel>Generated cleanup</SectionLabel>
+      <div className="space-y-1.5">
+        {unavailable.map((capability) => (
+          <StatusCard key={capability.jobKind} title={`${capability.jobKind[0].toUpperCase()}${capability.jobKind.slice(1)} unavailable`}>
+            {capability.kind === "available"
+              ? "A local model is available, but generated cleanup is not connected to this panel."
+              : capability.reason} Use manual cleanup above.
+          </StatusCard>
+        ))}
+      </div>
+    </PanelSection>
+  );
+}
+
+function diagnosticMessage(diagnostic: V3CanvasDiagnostic): string {
+  return "reason" in diagnostic
+    ? diagnostic.reason
+    : diagnostic.kind.replaceAll("-", " ");
+}
+
+function OutputTab({
+  document,
+  analysis,
+  diagnostics,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly diagnostics: readonly V3CanvasDiagnostic[];
+}) {
+  const depth = currentGeneratedJobCapability("depth");
+  const lensState = document.lensBlur.kind === "enabled"
+    ? `A depth reference is stored (${document.lensBlur.depthAsset.assetId}), but this build cannot generate or validate a live depth result.`
+    : depth.kind === "available"
+      ? "A depth model exists, but the depth workflow is not connected to this panel."
+      : depth.reason;
+
+  return (
+    <>
+      <PanelSection title="Histogram & headroom">
+        <V3HistogramPanel analysis={analysis} />
+        {diagnostics.length > 0 ? (
+          <StatusCard title="Preview notes" tone="warning">
+            <ul className="space-y-1">
+              {diagnostics.map((diagnostic, index) => (
+                <li key={`${diagnostic.kind}-${index}`}>{diagnosticMessage(diagnostic)}</li>
+              ))}
+            </ul>
+          </StatusCard>
         ) : null}
-        {activeTab === "color" ? (
-          <>
-            <BasicColorSection />
-            <MixerSection />
-          </>
+      </PanelSection>
+      <PanelSection title="Lens Blur">
+        <ToggleRow label="Enable Lens Blur" checked={document.lensBlur.kind === "enabled"} disabled detail="Unavailable" onChange={() => undefined} />
+        <StatusCard title="Missing depth/model" tone="warning">
+          {lensState} Lens Blur requires an accepted current depth map.
+        </StatusCard>
+      </PanelSection>
+      <PanelSection title="HDR & proof">
+        <ToggleRow label="HDR preview" checked={false} disabled detail="SDR fallback active" onChange={() => undefined} />
+        <ToggleRow label="Soft proof" checked={false} disabled detail="Proof unavailable" onChange={() => undefined} />
+        <ToggleRow label="Gamut warning" checked={false} disabled detail="Proof unavailable" onChange={() => undefined} />
+        <StatusCard title="SDR · 8-bit output">
+          HDR display, high-bit output, ICC proof transforms, and gamut analysis are not verified in this build. Stored HDR edits are not changed here; preview and output remain explicit SDR fallback.
+        </StatusCard>
+        {document.hdr.enabled ? (
+          <p className="mt-2 text-[10px] leading-4 text-lr-danger">
+            This document requests HDR edits, but the current capability tier cannot render or export them as HDR.
+          </p>
         ) : null}
-        {activeTab === "detail" ? <EffectsSection /> : null}
+      </PanelSection>
+    </>
+  );
+}
+
+export function NewerDevelopReadOnlyPanel({
+  version,
+  reason,
+}: {
+  version: number;
+  reason: string;
+}) {
+  return (
+    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="border-b border-lr-border-subtle px-4 py-3">
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Develop</h2>
+          <span className="rounded bg-[#3c2925] px-1.5 py-0.5 font-mono text-[9px] text-lr-danger">v{version} · read-only</span>
+        </div>
+        <p className="mt-1 text-[10px] text-lr-text-faint">Not editable or saved by this app</p>
+      </div>
+      <div className="p-4">
+        <StatusCard title="Newer process" tone="danger">{reason}</StatusCard>
       </div>
     </aside>
   );
 }
 
-function PanelSection({
-  title,
-  onReset,
-  children,
-}: {
-  title: string;
-  onReset: () => void;
-  children: ReactNode;
-}) {
+export function PreparingDevelopPanel({ error }: { readonly error: string | null }) {
   return (
-    <section className="border-b border-lr-border-subtle px-4 pb-[18px] pt-3.5">
-      <div className="mb-2.5 flex items-center gap-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
-          {title}
-        </h3>
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={onReset}
-          className="text-[10px] text-lr-text-faint hover:text-lr-text"
+    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <div className="border-b border-lr-border-subtle px-4 py-3">
+        <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+          Develop
+        </h2>
+        <p
+          className={`mt-1 text-[10px] ${error ? "text-lr-danger" : "text-lr-text-faint"}`}
+          role={error ? "alert" : "status"}
         >
-          Reset
-        </button>
+          {error ?? "Preparing editor…"}
+        </p>
       </div>
-      {children}
-    </section>
-  );
-}
-
-function BasicLightSection() {
-  const basic = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.document.settings.basic ?? DEFAULT_DEVELOP_SETTINGS.basic;
-  });
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-
-  function resetLight() {
-    const defaults = DEFAULT_DEVELOP_SETTINGS.basic;
-    updatePlugin("basic", {
-      exposure: defaults.exposure,
-      contrast: defaults.contrast,
-      highlights: defaults.highlights,
-      shadows: defaults.shadows,
-      whites: defaults.whites,
-      blacks: defaults.blacks,
-    });
-  }
-
-  return (
-    <PanelSection title="Light" onReset={resetLight}>
-      <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} onChange={(exposure) => updatePlugin("basic", { exposure })} />
-      <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(contrast) => updatePlugin("basic", { contrast })} />
-      <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(highlights) => updatePlugin("basic", { highlights })} />
-      <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(shadows) => updatePlugin("basic", { shadows })} />
-      <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={(whites) => updatePlugin("basic", { whites })} />
-      <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(blacks) => updatePlugin("basic", { blacks })} />
-    </PanelSection>
-  );
-}
-
-function BasicColorSection() {
-  const basic = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.document.settings.basic ?? DEFAULT_DEVELOP_SETTINGS.basic;
-  });
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-
-  function resetColor() {
-    const defaults = DEFAULT_DEVELOP_SETTINGS.basic;
-    updatePlugin("basic", {
-      temperature: defaults.temperature,
-      tint: defaults.tint,
-      vibrance: defaults.vibrance,
-      saturation: defaults.saturation,
-    });
-  }
-
-  return (
-    <PanelSection title="White balance & color" onReset={resetColor}>
-      <SliderRow label="Temp" value={basic.temperature} min={-3000} max={3000} step={50} suffix="K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(temperature) => updatePlugin("basic", { temperature })} />
-      <SliderRow label="Tint" value={basic.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(tint) => updatePlugin("basic", { tint })} />
-      <SliderRow label="Vibrance" value={basic.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => updatePlugin("basic", { vibrance })} />
-      <SliderRow label="Saturation" value={basic.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => updatePlugin("basic", { saturation })} />
-    </PanelSection>
-  );
-}
-
-function CurveSection() {
-  const curve = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.document.settings.curve ?? DEFAULT_DEVELOP_SETTINGS.curve;
-  });
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const resetPlugin = useDevelopStore((state) => state.resetPlugin);
-
-  return (
-    <PanelSection title="Tone curve" onReset={() => resetPlugin("curve")}>
-      <ToneCurveEditor
-        settings={curve}
-        onChange={(settings) => updatePlugin("curve", settings)}
-      />
-    </PanelSection>
-  );
-}
-
-function MixerSection() {
-  const [mode, setMode] = useState<MixerMode>("hue");
-  const mixer = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.document.settings.mixer ?? DEFAULT_DEVELOP_SETTINGS.mixer;
-  });
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const resetPlugin = useDevelopStore((state) => state.resetPlugin);
-
-  const rows = (property: Exclude<MixerMode, "all">) => (
-    <div>
-      {MIXER_COLORS.map((color) => (
-        <SliderRow
-          key={color}
-          label={MIXER_LABELS[color]}
-          value={mixer[color][property]}
-          min={-100}
-          max={100}
-          track={
-            property === "hue"
-              ? HUE_TRACKS[color]
-              : property === "saturation"
-                ? `linear-gradient(90deg, #555, ${COLOR_HEX[color]})`
-                : `linear-gradient(90deg, #151515, ${COLOR_HEX[color]}, #e8e8e8)`
-          }
-          onChange={(value) =>
-            updatePlugin("mixer", {
-              [color]: { ...mixer[color], [property]: value },
-            })
-          }
-        />
-      ))}
-    </div>
-  );
-
-  return (
-    <PanelSection title="Color mixer" onReset={() => resetPlugin("mixer")}>
-      <div
-        className="mb-2.5 flex gap-0.5 rounded-lg border border-lr-border-subtle bg-lr-canvas p-0.5"
-        role="tablist"
-        aria-label="HSL adjustment"
-      >
-        {MIXER_MODES.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={mode === item.id}
-            onClick={() => setMode(item.id)}
-            className={[
-              "flex-1 rounded-md px-1 py-1.5 text-[10px]",
-              mode === item.id
-                ? "bg-lr-panel-raised text-lr-text"
-                : "text-lr-text-muted hover:text-lr-text",
-            ].join(" ")}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      {mode === "all" ? (
-        <div className="space-y-4">
-          {(["hue", "saturation", "luminance"] as const).map((property) => (
-            <section key={property}>
-              <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
-                {property}
-              </h4>
-              {rows(property)}
-            </section>
-          ))}
-        </div>
-      ) : (
-        rows(mode)
-      )}
-    </PanelSection>
-  );
-}
-
-function EffectsSection() {
-  const effects = useDevelopStore((state) => {
-    const session = state.activeEntryId
-      ? state.sessions[state.activeEntryId]
-      : undefined;
-    return session?.document.settings.effects ?? DEFAULT_DEVELOP_SETTINGS.effects;
-  });
-  const updatePlugin = useDevelopStore((state) => state.updatePlugin);
-  const defaults = DEFAULT_DEVELOP_SETTINGS.effects;
-
-  return (
-    <>
-      <PanelSection title="Sharpening" onReset={() => updatePlugin("effects", {
-        sharpening: defaults.sharpening,
-        sharpenRadius: defaults.sharpenRadius,
-        sharpenDetail: defaults.sharpenDetail,
-        sharpenMasking: defaults.sharpenMasking,
-      })}>
-        <SliderRow label="Amount" value={effects.sharpening} min={0} max={100} resetValue={defaults.sharpening} onChange={(sharpening) => updatePlugin("effects", { sharpening })} />
-        <SliderRow label="Radius" value={effects.sharpenRadius} min={0.5} max={3} step={0.1} resetValue={defaults.sharpenRadius} onChange={(sharpenRadius) => updatePlugin("effects", { sharpenRadius })} />
-        <SliderRow label="Detail" value={effects.sharpenDetail} min={0} max={100} resetValue={defaults.sharpenDetail} onChange={(sharpenDetail) => updatePlugin("effects", { sharpenDetail })} />
-        <SliderRow label="Masking" value={effects.sharpenMasking} min={0} max={100} resetValue={defaults.sharpenMasking} onChange={(sharpenMasking) => updatePlugin("effects", { sharpenMasking })} />
-      </PanelSection>
-      <PanelSection title="Noise reduction" onReset={() => updatePlugin("effects", {
-        noiseReduction: defaults.noiseReduction,
-        noiseDetail: defaults.noiseDetail,
-        noiseContrast: defaults.noiseContrast,
-        colorNoiseReduction: defaults.colorNoiseReduction,
-        colorNoiseDetail: defaults.colorNoiseDetail,
-        colorNoiseSmoothness: defaults.colorNoiseSmoothness,
-      })}>
-        <SliderRow label="Luminance" value={effects.noiseReduction} min={0} max={100} resetValue={defaults.noiseReduction} onChange={(noiseReduction) => updatePlugin("effects", { noiseReduction })} />
-        <SliderRow label="Detail" value={effects.noiseDetail} min={0} max={100} resetValue={defaults.noiseDetail} onChange={(noiseDetail) => updatePlugin("effects", { noiseDetail })} />
-        <SliderRow label="Contrast" value={effects.noiseContrast} min={0} max={100} resetValue={defaults.noiseContrast} onChange={(noiseContrast) => updatePlugin("effects", { noiseContrast })} />
-        <SliderRow label="Color" value={effects.colorNoiseReduction} min={0} max={100} resetValue={defaults.colorNoiseReduction} onChange={(colorNoiseReduction) => updatePlugin("effects", { colorNoiseReduction })} />
-        <SliderRow label="Color detail" value={effects.colorNoiseDetail} min={0} max={100} resetValue={defaults.colorNoiseDetail} onChange={(colorNoiseDetail) => updatePlugin("effects", { colorNoiseDetail })} />
-        <SliderRow label="Smoothness" value={effects.colorNoiseSmoothness} min={0} max={100} resetValue={defaults.colorNoiseSmoothness} onChange={(colorNoiseSmoothness) => updatePlugin("effects", { colorNoiseSmoothness })} />
-      </PanelSection>
-      <PanelSection title="Post-crop vignette" onReset={() => updatePlugin("effects", {
-        vignette: defaults.vignette,
-        vignetteMidpoint: defaults.vignetteMidpoint,
-        vignetteRoundness: defaults.vignetteRoundness,
-        vignetteFeather: defaults.vignetteFeather,
-        vignetteHighlights: defaults.vignetteHighlights,
-      })}>
-        <SliderRow label="Amount" value={effects.vignette} min={-100} max={100} resetValue={defaults.vignette} onChange={(vignette) => updatePlugin("effects", { vignette })} />
-        <SliderRow label="Midpoint" value={effects.vignetteMidpoint} min={0} max={100} resetValue={defaults.vignetteMidpoint} onChange={(vignetteMidpoint) => updatePlugin("effects", { vignetteMidpoint })} />
-        <SliderRow label="Roundness" value={effects.vignetteRoundness} min={-100} max={100} resetValue={defaults.vignetteRoundness} onChange={(vignetteRoundness) => updatePlugin("effects", { vignetteRoundness })} />
-        <SliderRow label="Feather" value={effects.vignetteFeather} min={0} max={100} resetValue={defaults.vignetteFeather} onChange={(vignetteFeather) => updatePlugin("effects", { vignetteFeather })} />
-        <SliderRow label="Highlights" value={effects.vignetteHighlights} min={0} max={100} resetValue={defaults.vignetteHighlights} onChange={(vignetteHighlights) => updatePlugin("effects", { vignetteHighlights })} />
-      </PanelSection>
-      <PanelSection title="Grain" onReset={() => updatePlugin("effects", {
-        grain: defaults.grain,
-        grainSize: defaults.grainSize,
-        grainRoughness: defaults.grainRoughness,
-      })}>
-        <SliderRow label="Amount" value={effects.grain} min={0} max={100} resetValue={defaults.grain} onChange={(grain) => updatePlugin("effects", { grain })} />
-        <SliderRow label="Size" value={effects.grainSize} min={0} max={100} resetValue={defaults.grainSize} onChange={(grainSize) => updatePlugin("effects", { grainSize })} />
-        <SliderRow label="Roughness" value={effects.grainRoughness} min={0} max={100} resetValue={defaults.grainRoughness} onChange={(grainRoughness) => updatePlugin("effects", { grainRoughness })} />
-      </PanelSection>
-    </>
+    </aside>
   );
 }

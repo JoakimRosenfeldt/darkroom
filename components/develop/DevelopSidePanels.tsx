@@ -1,69 +1,99 @@
 "use client";
 
-import type { ReactNode } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
-import { CropPanel } from "@/components/develop/CropPanel";
-import { EditPanel } from "@/components/develop/EditPanel";
-import { MaskingPanel } from "@/components/develop/MaskingPanel";
+import {
+  EditPanel,
+  NewerDevelopReadOnlyPanel,
+  PreparingDevelopPanel,
+} from "@/components/develop/EditPanel";
 import {
   DevelopPanelRail,
   type DevelopPanelId,
 } from "@/components/develop/DevelopPanelRail";
 import { MetadataPanel } from "@/components/viewer/MetadataPanel";
-import type { CropSettings } from "@/lib/develop/types";
+import { useDevelopStore } from "@/stores/develop-store";
+import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
+import type {
+  V3CanvasDiagnostic,
+  V3CanvasTool,
+} from "@/components/develop/DevelopCanvas";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
   entry: LibraryEntry;
   activePanel: DevelopPanelId | null;
-  cropDraft: CropSettings | null;
   onSelect: (panel: DevelopPanelId) => void;
-  onResetAll: () => void;
-  onCropChange: (crop: CropSettings, preserveFrame?: boolean) => void;
-  onCropReset: () => void;
-  maskingAiActions?: ReactNode;
+  resultId: string;
+  resultCatalogRevision: number;
+  resultEntryIds: readonly string[];
+  missingEntryIds: readonly string[];
+  resultEntries: readonly LibraryEntry[];
+  v3Analysis: readonly CpuAnalysisTapResult[];
+  v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
+  v3CanvasTool: V3CanvasTool;
+  onV3CanvasToolChange: (tool: V3CanvasTool) => void;
 }
 
 export function DevelopSidePanels({
   decoded,
   entry,
   activePanel,
-  cropDraft,
   onSelect,
-  onResetAll,
-  onCropChange,
-  onCropReset,
-  maskingAiActions,
+  resultId,
+  resultCatalogRevision,
+  resultEntryIds,
+  missingEntryIds,
+  resultEntries,
+  v3Analysis,
+  v3RenderDiagnostics,
+  v3CanvasTool,
+  onV3CanvasToolChange,
 }: DevelopSidePanelsProps) {
+  const session = useDevelopStore((state) => {
+    const entryId = state.activeEntryId;
+    return entryId ? state.sessions[entryId] : undefined;
+  });
+
+  const panel = activePanel === "info" ? (
+    <MetadataPanel
+      entry={entry}
+      decodedMetadata={decoded.metadata}
+    />
+  ) : session?.processKind === "v3" ? (
+    <EditPanel
+      key={activePanel ?? "edit"}
+      activePanel={activePanel}
+      analysis={v3Analysis}
+      diagnostics={v3RenderDiagnostics}
+      canvasTool={v3CanvasTool}
+      onCanvasToolChange={onV3CanvasToolChange}
+      batch={{
+        sourceEntry: entry,
+        entries: resultEntries,
+        resultId,
+        catalogRevision: resultCatalogRevision,
+        resultEntryIds,
+        missingEntryIds,
+      }}
+    />
+  ) : session?.processKind === "read-only-newer" && session.readOnly ? (
+    <NewerDevelopReadOnlyPanel
+      version={session.readOnly.foundVersion}
+      reason={session.readOnly.message}
+    />
+  ) : (
+    <PreparingDevelopPanel error={session?.ui.sidecarError ?? null} />
+  );
+
   return (
     <>
-      {activePanel === "crop" ? (
-        <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
-          <div className="flex-1 overflow-auto">
-            <CropPanel
-              crop={cropDraft}
-              imageWidth={decoded.width}
-              imageHeight={decoded.height}
-              onChange={onCropChange}
-              onReset={onCropReset}
-            />
-          </div>
-        </aside>
-      ) : activePanel === "info" ? (
-        <MetadataPanel
-          entry={entry}
-          decodedMetadata={decoded.metadata}
-        />
-      ) : activePanel === "masking" ? (
-        <MaskingPanel
-          aiActions={maskingAiActions}
-          onDone={() => onSelect("edit")}
-        />
-      ) : (
-        <EditPanel onResetAll={onResetAll} />
-      )}
-      <DevelopPanelRail activePanel={activePanel} onSelect={onSelect} />
+      {panel}
+      <DevelopPanelRail
+        activePanel={activePanel}
+        onSelect={onSelect}
+        editingDisabled={session?.processKind !== "v3"}
+      />
     </>
   );
 }
