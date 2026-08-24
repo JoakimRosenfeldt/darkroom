@@ -1,5 +1,9 @@
 export const MAX_AUTO_TONE_HISTOGRAM_BINS = 4_096;
 
+const TARGET_MEDIAN = 0.18;
+const TARGET_HIGHLIGHT = 0.72;
+const TARGET_WHITE = 0.95;
+
 export interface ToneStatistics {
   readonly blackPoint: number;
   readonly shadowPoint: number;
@@ -126,22 +130,57 @@ export function proposeAutoTone(input: AutoToneInput): AutoToneProposal {
     return { kind: "no-result", reason: "empty" };
   }
 
-  const range = statistics.whitePoint - statistics.blackPoint;
-  const exposure = clamp(Math.log2(0.42 / Math.max(0.02, statistics.median)), -2.5, 2.5);
-  const contrast = clamp((0.65 - range) * 80, -30, 30);
-  const shadows = clamp((0.18 - statistics.shadowPoint) * 180, -40, 40);
-  const highlights = clamp((0.82 - statistics.highlightPoint) * 180, -40, 40);
-  const blacks = clamp(
-    (0.02 - statistics.blackPoint) * 400 - statistics.clippedShadowFraction * 50,
-    -25,
+  const medianExposure = Math.log2(
+    TARGET_MEDIAN / Math.max(0.02, statistics.median),
+  );
+  const highlightExposure = Math.log2(
+    TARGET_HIGHLIGHT / Math.max(0.08, statistics.highlightPoint),
+  );
+  const whiteExposure = Math.log2(
+    TARGET_WHITE / Math.max(0.1, statistics.whitePoint),
+  );
+  const upperExposure = Math.min(
+    highlightExposure + 0.25,
+    whiteExposure + 0.15,
+  );
+  const lowerExposure = Math.min(highlightExposure - 0.5, upperExposure);
+  const exposure = clamp(
+    clamp(medianExposure, lowerExposure, upperExposure),
+    -1.5,
+    2,
+  );
+  const exposureGain = 2 ** exposure;
+  const adjustedShadow = statistics.shadowPoint * exposureGain;
+  const adjustedHighlight = statistics.highlightPoint * exposureGain;
+  const adjustedBlack = statistics.blackPoint * exposureGain;
+  const adjustedWhite = statistics.whitePoint * exposureGain;
+  const contrast = clamp(
+    (0.55 - (statistics.highlightPoint - statistics.shadowPoint) * exposureGain) * 50,
+    -15,
+    15,
+  );
+  const shadows = clamp(
+    (0.06 - adjustedShadow) * 200 + statistics.clippedShadowFraction * 25,
+    -20,
     25,
+  );
+  const highlights = clamp(
+    (TARGET_HIGHLIGHT - adjustedHighlight) * 100 -
+      statistics.clippedHighlightFraction * 25,
+    -25,
+    20,
+  );
+  const blacks = clamp(
+    (0.008 - adjustedBlack) * 400 + statistics.clippedShadowFraction * 50,
+    -15,
+    15,
   );
   const whites = clamp(
-    (0.98 - statistics.whitePoint) * 400 - statistics.clippedHighlightFraction * 50,
-    -25,
-    25,
+    (0.92 - adjustedWhite) * 160 - statistics.clippedHighlightFraction * 50,
+    -12,
+    12,
   );
-  const vibrance = clamp((0.35 - statistics.meanSaturation) * 50, -15, 20);
+  const vibrance = clamp((0.28 - statistics.meanSaturation) * 35, -8, 12);
   return {
     kind: "proposal",
     values: {

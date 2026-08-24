@@ -623,7 +623,7 @@ export function DevelopCanvas({
     <div
       ref={containerRef}
       className={[
-        "relative h-full min-h-0 w-full overflow-hidden bg-black",
+        "relative h-full min-h-0 w-full overflow-hidden",
         canvasInteractionActive || preview.kind !== "rendered"
           ? ""
           : viewTransform.scale > 1
