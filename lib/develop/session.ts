@@ -18,6 +18,7 @@ import type {
   CropSettings,
   DevelopDocument,
   GlobalDevelopPluginId,
+  SourceSignature,
 } from "@/lib/develop/types";
 import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
 import {
@@ -201,6 +202,8 @@ export interface V3MigrationAcceptanceReceipt {
   readonly baselineVersion: 2;
   readonly candidateVersion: 3;
   readonly quality: "fit";
+  readonly sourceSignature: Readonly<SourceSignature>;
+  readonly firstEdit: V3EditCommand;
   readonly acceptedGroups: readonly [
     "tone-and-color",
     "geometry",
@@ -213,6 +216,7 @@ export interface V3UpgradeComparisonRequest {
   readonly kind: "v3-upgrade-comparison";
   readonly entry: LibraryEntry;
   readonly image: DevelopImage;
+  readonly firstEdit: V3EditCommand;
   readonly outputDimensions: PixelDimensions;
   readonly cancellation?: CancellationProbe;
 }
@@ -439,6 +443,8 @@ function invalidUpgradeComparison(reason: string): V3UpgradeComparisonResult {
 function migrationAcceptance(
   sourceDocumentRevision: number,
   candidate: V3MigrationCandidate,
+  sourceSignature: Readonly<SourceSignature>,
+  firstEdit: V3EditCommand,
 ): V3MigrationAcceptanceReceipt {
   return {
     kind: "same-quality-comparison-accepted",
@@ -446,6 +452,8 @@ function migrationAcceptance(
     baselineVersion: candidate.comparison.baselineVersion,
     candidateVersion: candidate.comparison.candidateVersion,
     quality: candidate.comparison.quality,
+    sourceSignature,
+    firstEdit,
     acceptedGroups: candidate.comparison.compareGroups,
   };
 }
@@ -701,6 +709,9 @@ export class DevelopSessionCore implements DevelopSession {
       acceptance.baselineVersion !== candidate.comparison.baselineVersion ||
       acceptance.candidateVersion !== candidate.comparison.candidateVersion ||
       acceptance.quality !== candidate.comparison.quality ||
+      acceptance.sourceSignature.catalogId !== this.catalogId ||
+      acceptance.sourceSignature.entryId !== this.entryId ||
+      JSON.stringify(acceptance.firstEdit) !== JSON.stringify(command.edit) ||
       acceptance.acceptedGroups.length !== candidate.comparison.compareGroups.length ||
       candidate.comparison.compareGroups.some(
         (group, index) => acceptance.acceptedGroups[index] !== group,
@@ -966,13 +977,18 @@ export class DevelopSessionCore implements DevelopSession {
     const sourceDocument = snapshot.document;
     const sourceDocumentRevision = snapshot.documentRevision;
     const candidate = createV3MigrationCandidate(sourceDocument);
+    const editedCandidate = applyV3EditCommand(candidate.document, request.firstEdit);
+    if (!editedCandidate.changed) {
+      return invalidUpgradeComparison("The first v3 edit must change the migration candidate.");
+    }
+    const sourceSignature = sourceSignatureForEntry(request.entry);
     let baseline: RawExportRenderResult;
     const renderer = new FrozenV2Renderer(document.createElement("canvas"), true);
     try {
       baseline = await renderFrozenV2(sourceDocument, {
         kind: "export",
         image: request.image,
-        sourceSignature: sourceSignatureForEntry(request.entry),
+        sourceSignature,
         size: {
           mode: "fit",
           width: bounds.width,
@@ -990,7 +1006,7 @@ export class DevelopSessionCore implements DevelopSession {
     }
     if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
 
-    const candidateResult = await renderV3Runtime(candidate.document, {
+    const candidateResult = await renderV3Runtime(editedCandidate.document, {
       kind: "v3-fit-comparison",
       entry: request.entry,
       image: request.image,
@@ -1029,7 +1045,12 @@ export class DevelopSessionCore implements DevelopSession {
       },
       candidateDiagnostics: candidateResult.diagnostics,
       candidateAnalysis: candidateResult.analysis,
-      acceptance: migrationAcceptance(sourceDocumentRevision, candidate),
+      acceptance: migrationAcceptance(
+        sourceDocumentRevision,
+        candidate,
+        sourceSignature,
+        request.firstEdit,
+      ),
     };
   }
 

@@ -348,9 +348,14 @@ function capabilityDiagnostics(input: {
       capabilityTier: input.report.tier.id,
     });
   }
+  const selectedInputProfile = input.document.color.inputProfile.selection.kind === "selected";
   if (
     input.source.inputProfile.kind === "unavailable" ||
-    input.document.color.inputProfile.selection.kind === "unavailable"
+    input.document.color.inputProfile.selection.kind === "unavailable" ||
+    (selectedInputProfile && (
+      !capabilityAvailable(input.report, "input-profile-transform") ||
+      !capabilityAvailable(input.report, "camera-profile-dataset")
+    ))
   ) {
     blocking.push({
       kind: "input-profile-unavailable",
@@ -359,7 +364,7 @@ function capabilityDiagnostics(input: {
         ? input.source.inputProfile.reason
         : input.document.color.inputProfile.selection.kind === "unavailable"
           ? input.document.color.inputProfile.selection.reason
-          : "Input profile is unavailable.",
+          : "The stored camera profile cannot run without a verified transform and licensed profile dataset.",
     });
   }
   if (

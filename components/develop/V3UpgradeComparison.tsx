@@ -11,6 +11,10 @@ import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { V3EditCommand } from "@/lib/develop/v3/commands";
 import { createV3MigrationCandidate } from "@/lib/develop/v3/migration";
 import type { LibraryEntry } from "@/lib/fs/types";
+import {
+  sourceSignatureForEntry,
+  sourceSignaturesEqual,
+} from "@/lib/develop/source-transform";
 import { useDevelopStore } from "@/stores/develop-store";
 
 const COMPARISON_DIMENSIONS = { width: 560, height: 420 };
@@ -158,7 +162,8 @@ export function V3UpgradeComparison({
 }) {
   const editId = useId();
   const valueId = useId();
-  const identity = JSON.stringify([entry.catalogId, entry.id]);
+  const sourceSignature = sourceSignatureForEntry(entry);
+  const identity = JSON.stringify(sourceSignature);
   const storeSession = useDevelopStore((state) =>
     state.activeCatalogId === entry.catalogId
       ? state.sessions[entry.id]
@@ -189,20 +194,30 @@ export function V3UpgradeComparison({
     compared &&
     snapshot?.processKind === "v2" &&
     currentRevision === comparedRevision &&
-    snapshot.documentRevision === comparedRevision,
+    snapshot.documentRevision === comparedRevision &&
+    sourceSignaturesEqual(compared.acceptance.sourceSignature, sourceSignature),
   );
   const editIsValid = Number.isFinite(value) && value >= -100 && value <= 100 && value !== 0;
   const editLabel = FIRST_EDITS.find((option) => option.id === firstEdit)?.label ?? "Edit";
+  const currentFirstEdit = snapshot?.processKind === "v2" && editIsValid
+    ? firstEditCommand(createV3MigrationCandidate(snapshot.document).document, firstEdit, value)
+    : null;
+  const exactComparisonIsCurrent = Boolean(
+    comparisonIsCurrent &&
+    currentFirstEdit &&
+    JSON.stringify(compared?.acceptance.firstEdit) === JSON.stringify(currentFirstEdit),
+  );
 
   async function compare(): Promise<void> {
-    if (applyingRef.current) return;
+    if (applyingRef.current || !editIsValid) return;
     if (cancellationRef.current) cancellationRef.current.cancelled = true;
     const cancellation = { cancelled: false };
     cancellationRef.current = cancellation;
     setApplyState({ kind: "idle" });
     setComparison({ kind: "rendering", identity });
     const activeSession = getDevelopSession(entry.catalogId, entry.id);
-    if (!activeSession || activeSession.snapshot().processKind !== "v2") {
+    const activeSnapshot = activeSession?.snapshot() ?? null;
+    if (!activeSession || activeSnapshot?.processKind !== "v2") {
       cancellationRef.current = null;
       setComparison({
         kind: "invalid",
@@ -211,11 +226,17 @@ export function V3UpgradeComparison({
       });
       return;
     }
+    const requestedEdit = firstEditCommand(
+      createV3MigrationCandidate(activeSnapshot.document).document,
+      firstEdit,
+      value,
+    );
     try {
       const result = await activeSession.render({
         kind: "v3-upgrade-comparison",
         entry,
         image,
+        firstEdit: requestedEdit,
         outputDimensions: COMPARISON_DIMENSIONS,
         cancellation: {
           isCancelled: () => cancellation.cancelled,
@@ -247,13 +268,15 @@ export function V3UpgradeComparison({
   }
 
   async function accept(): Promise<void> {
-    if (!compared || !comparisonIsCurrent || !editIsValid || applyingRef.current) return;
+    if (!compared || !exactComparisonIsCurrent || !currentFirstEdit || applyingRef.current) return;
     const activeSession = getDevelopSession(entry.catalogId, entry.id);
     const current = activeSession?.snapshot() ?? null;
     if (
       !activeSession ||
       current?.processKind !== "v2" ||
-      current.documentRevision !== compared.acceptance.sourceDocumentRevision
+      current.documentRevision !== compared.acceptance.sourceDocumentRevision ||
+      !sourceSignaturesEqual(compared.acceptance.sourceSignature, sourceSignature) ||
+      JSON.stringify(compared.acceptance.firstEdit) !== JSON.stringify(currentFirstEdit)
     ) {
       setApplyState({
         kind: "error",
@@ -264,12 +287,11 @@ export function V3UpgradeComparison({
     applyingRef.current = true;
     setApplyState({ kind: "applying" });
     try {
-      const candidate = createV3MigrationCandidate(current.document);
       const nextSnapshot = await activeSession.dispatch(
         {
           kind: "upgrade-and-first-v3-edit",
           acceptance: compared.acceptance,
-          edit: firstEditCommand(candidate.document, firstEdit, value),
+          edit: currentFirstEdit,
         },
         `Upgrade to v3 and set ${editLabel}`,
       );
@@ -359,7 +381,7 @@ export function V3UpgradeComparison({
       <button
         type="button"
         onClick={() => void compare()}
-        disabled={applyState.kind === "applying"}
+        disabled={applyState.kind === "applying" || !editIsValid}
         className="w-full rounded bg-lr-panel px-3 py-2 text-xs font-medium text-lr-text hover:bg-lr-panel-hover disabled:cursor-not-allowed disabled:opacity-50"
       >
         {visibleComparison.kind === "rendering" ? "Restart comparison" : "Render comparison"}
@@ -382,7 +404,7 @@ export function V3UpgradeComparison({
         <>
           <div className="grid grid-cols-2 gap-2" aria-label="V2 and v3 comparison frames">
             <ComparisonCanvas frame={compared.baseline} label="Frozen v2 · fit" />
-            <ComparisonCanvas frame={compared.candidate} label="Candidate v3 · fit" />
+            <ComparisonCanvas frame={compared.candidate} label={`Candidate v3 · ${editLabel} ${value > 0 ? "+" : ""}${value} · fit`} />
           </div>
           {compared.candidateDiagnostics.length > 0 ? (
             <div className="rounded border border-lr-border-subtle bg-lr-panel/60 p-2">
@@ -394,15 +416,15 @@ export function V3UpgradeComparison({
               </ul>
             </div>
           ) : null}
-          {!comparisonIsCurrent ? (
+          {!exactComparisonIsCurrent ? (
             <p className="text-[11px] leading-4 text-lr-danger" role="alert">
-              This comparison is stale. Render the current v2 revision again.
+              The source, v2 revision, or first edit changed. Render this exact comparison again.
             </p>
           ) : null}
           <button
             type="button"
             onClick={() => void accept()}
-            disabled={!comparisonIsCurrent || !editIsValid || applyState.kind === "applying"}
+            disabled={!exactComparisonIsCurrent || applyState.kind === "applying"}
             className="w-full rounded bg-lr-accent px-3 py-2 text-xs font-semibold text-[#14202a] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {applyState.kind === "applying"

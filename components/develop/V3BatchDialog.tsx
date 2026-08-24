@@ -105,6 +105,7 @@ export function V3BatchDialog({
   const [fullConfirmed, setFullConfirmed] = useState(false);
   const [runState, setRunState] = useState<RunState>({ kind: "idle" });
   const cancelledRef = useRef(false);
+  const dialogRef = useRef<HTMLElement>(null);
   const entryById = useMemo(
     () => new Map<string, LibraryEntry>(entries.map((entry) => [entry.id, entry])),
     [entries],
@@ -112,8 +113,39 @@ export function V3BatchDialog({
   const missing = useMemo(() => new Set(missingEntryIds), [missingEntryIds]);
 
   useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const firstControl = dialogRef.current?.querySelector<HTMLElement>(
+      "button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    );
+    firstControl?.focus();
+    return () => previousFocus?.focus();
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && runState.kind !== "running") onClose();
+      if (event.key === "Escape" && runState.kind !== "running") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      ) ?? [])].filter((element) => element.offsetParent !== null);
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        return;
+      }
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -225,6 +257,7 @@ export function V3BatchDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-5">
       <section
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="v3-batch-title"

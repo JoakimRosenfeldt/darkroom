@@ -15,6 +15,7 @@ import { getLibraryResultQuery, type LibraryResultResolution } from "@/lib/libra
 import { isLibraryResultId } from "@/lib/library/result-contract";
 import { isAssetId } from "@/lib/catalog/ids";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
+import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 
 function subscribeRepository(): () => void {
   return () => {};
@@ -47,6 +48,8 @@ function PhotoPageContent() {
   const catalogRevision = useLibraryStore((state) => state.catalogRevision);
   const hasBootstrapped = useLibraryStore((state) => state.hasBootstrapped);
   const restoreViewerSelection = useLibraryStore((state) => state.restoreViewerSelection);
+  const setCatalogView = useLibraryStore((state) => state.setCatalogView);
+  const [, updateLibraryViewSettings] = useLibraryViewSettings();
   const photoParam = searchParams.get("id");
   const resultParam = searchParams.get("result");
   const photoId = isAssetId(photoParam) ? photoParam : null;
@@ -93,6 +96,17 @@ function PhotoPageContent() {
         selectedEntryIds,
       });
       if (resolution.snapshot && restoredResultIdRef.current !== resultId) {
+        if (resolution.query) {
+          setCatalogView(resolution.query.primaryScope);
+          updateLibraryViewSettings({
+            textQuery: resolution.query.textQuery,
+            facets: resolution.query.facets,
+            curationFilter: resolution.query.curationFilter,
+            filter: resolution.query.formatFilter,
+            sort: resolution.query.sort,
+            sortDirection: resolution.query.sortDirection,
+          });
+        }
         restoreViewerSelection(
           resolution.snapshot.origin.selectedEntryIds,
           resolution.snapshot.activeEntryId,
@@ -125,7 +139,9 @@ function PhotoPageContent() {
     resolutionKey,
     restoreViewerSelection,
     resultId,
+    setCatalogView,
     selectedEntryIds,
+    updateLibraryViewSettings,
   ]);
 
   useEffect(() => {
