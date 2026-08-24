@@ -223,6 +223,7 @@ function PhotoPageContent() {
       entry={entry}
       entries={resultEntries}
       resultId={resolvedSession.snapshot.id}
+      resultCatalogRevision={resolvedSession.snapshot.catalogRevision}
       resultEntryIds={resolvedSession.snapshot.orderedEntryIds}
       missingEntryIds={resolvedSession.snapshot.missingEntryIds}
       sessionMessage={

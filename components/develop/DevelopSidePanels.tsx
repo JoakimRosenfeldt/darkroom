@@ -28,6 +28,11 @@ interface DevelopSidePanelsProps {
   onCropChange: (crop: CropSettings, preserveFrame?: boolean) => void;
   onCropReset: () => void;
   maskingAiActions?: ReactNode;
+  resultId: string;
+  resultCatalogRevision: number;
+  resultEntryIds: readonly string[];
+  missingEntryIds: readonly string[];
+  resultEntries: readonly LibraryEntry[];
 }
 
 export function DevelopSidePanels({
@@ -40,6 +45,11 @@ export function DevelopSidePanels({
   onCropChange,
   onCropReset,
   maskingAiActions,
+  resultId,
+  resultCatalogRevision,
+  resultEntryIds,
+  missingEntryIds,
+  resultEntries,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -52,7 +62,18 @@ export function DevelopSidePanels({
       decodedMetadata={decoded.metadata}
     />
   ) : session?.processKind === "v3" ? (
-    <V3EditPanel key={activePanel ?? "edit"} activePanel={activePanel} />
+    <V3EditPanel
+      key={activePanel ?? "edit"}
+      activePanel={activePanel}
+      batch={{
+        sourceEntry: entry,
+        entries: resultEntries,
+        resultId,
+        catalogRevision: resultCatalogRevision,
+        resultEntryIds,
+        missingEntryIds,
+      }}
+    />
   ) : session?.processKind === "read-only-newer" && session.readOnly ? (
     <NewerDevelopReadOnlyPanel
       version={session.readOnly.foundVersion}

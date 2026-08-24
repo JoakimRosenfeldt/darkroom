@@ -22,6 +22,11 @@ import {
 import type { BrushSettings } from "@/components/develop/MaskingOverlay";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import { DevelopSidePanels } from "@/components/develop/DevelopSidePanels";
+import {
+  V3DevelopCanvas,
+  type V3CanvasDiagnostic,
+} from "@/components/develop/V3DevelopCanvas";
+import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import { AiMaskActions } from "@/components/develop/AiMaskActions";
 import type {
   MaskOverlayMode,
@@ -49,6 +54,7 @@ interface PhotoViewerProps {
   entry: LibraryEntry;
   entries: LibraryEntry[];
   resultId: string;
+  resultCatalogRevision: number;
   resultEntryIds: readonly string[];
   missingEntryIds: readonly string[];
   sessionMessage: string | null;
@@ -161,6 +167,7 @@ export function PhotoViewer({
   entry,
   entries,
   resultId,
+  resultCatalogRevision,
   resultEntryIds,
   missingEntryIds,
   sessionMessage,
@@ -196,6 +203,8 @@ export function PhotoViewer({
     density: 1,
   });
   const [renderDiagnostics, setRenderDiagnostics] = useState<readonly RenderDiagnostic[]>([]);
+  const [, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
+  const [, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [surfaceMode, setSurfaceMode] = useState<"single" | ViewerSurfaceMode>("single");
   const [linkedViewports, setLinkedViewports] = useState(true);
   const [referenceEntryId, setReferenceEntryId] = useState<string | null>(() => readReferenceEntryId(entry.catalogId));
@@ -804,7 +813,15 @@ export function PhotoViewer({
             ) : null}
 
             {decoded ? (
-              surfaceMode === "single" ? <DevelopCanvas
+              surfaceMode === "single" ? developProcessKind === "v3" ? (
+                <V3DevelopCanvas
+                  entry={entry}
+                  image={decoded}
+                  alt={entry.name}
+                  onRenderDiagnostics={setV3RenderDiagnostics}
+                  onAnalysis={setV3Analysis}
+                />
+              ) : <DevelopCanvas
                 image={decoded}
                 alt={entry.name}
                 sourceSignature={sourceSignature}
@@ -979,6 +996,11 @@ export function PhotoViewer({
             <DevelopSidePanels
               decoded={decoded}
               entry={entry}
+              resultId={resultId}
+              resultCatalogRevision={resultCatalogRevision}
+              resultEntryIds={resultEntryIds}
+              missingEntryIds={missingEntryIds}
+              resultEntries={entries}
               activePanel={activePanel}
               cropDraft={cropDraft}
               onSelect={selectDevelopPanel}

@@ -233,6 +233,24 @@ export function getLibraryResultQuery(resultId: string): LibraryResultQueryRecor
   return loadState().queries.find((query) => query.id === resultId) ?? null;
 }
 
+export function getLibraryResultSnapshot(resultId: string): LibraryResultSnapshot | null {
+  let state = loadState();
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const persisted = raw !== null && raw.length <= MAX_STORED_BYTES
+        ? parseState(JSON.parse(raw))
+        : null;
+      state = pruneState(persisted ?? emptyState());
+      memoryState = state;
+    } catch {
+      return null;
+    }
+  }
+  const snapshot = state.snapshots.find((item) => item.id === resultId);
+  return snapshot ? structuredClone(snapshot) : null;
+}
+
 function pinAndSave(
   state: RepositoryState,
   snapshot: LibraryResultSnapshot,

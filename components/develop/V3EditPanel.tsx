@@ -22,6 +22,9 @@ import {
 import { resolveManualWhiteBalance } from "@/lib/develop/v3/white-balance";
 import type { ColorGradingWheel } from "@/lib/develop/v3/color-grading";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
+import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
+import type { LibraryEntry } from "@/lib/fs/types";
+import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
 import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
 import {
@@ -75,6 +78,30 @@ function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
   return null;
 }
 
+function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
+  switch (tab) {
+    case "light": return "tone";
+    case "color": return "curve-and-color";
+    case "detail": return "detail";
+    case "geometry": return "geometry-and-crop";
+    case "cleanup": return "cleanup";
+    case "output": return "output-intent";
+    default: {
+      const exhaustive: never = tab;
+      return exhaustive;
+    }
+  }
+}
+
+export interface V3BatchContext {
+  readonly sourceEntry: LibraryEntry;
+  readonly entries: readonly LibraryEntry[];
+  readonly resultId: string;
+  readonly catalogRevision: number;
+  readonly resultEntryIds: readonly string[];
+  readonly missingEntryIds: readonly string[];
+}
+
 function saveLabel(input: {
   readonly sidecarStatus: string;
   readonly documentRevision: number;
@@ -90,7 +117,13 @@ function saveLabel(input: {
     : "Unsaved changes";
 }
 
-export function V3EditPanel({ activePanel }: { activePanel: DevelopPanelId | null }) {
+export function V3EditPanel({
+  activePanel,
+  batch,
+}: {
+  readonly activePanel: DevelopPanelId | null;
+  readonly batch: V3BatchContext;
+}) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] : undefined;
@@ -99,6 +132,7 @@ export function V3EditPanel({ activePanel }: { activePanel: DevelopPanelId | nul
   const [activeTab, setActiveTab] = useState<V3Tab>(
     tabForPanel(activePanel) ?? "light",
   );
+  const [batchOpen, setBatchOpen] = useState(false);
 
   const document = session?.persistedDocument;
   if (!session || session.processKind !== "v3" || document?.version !== 3) {
@@ -114,7 +148,8 @@ export function V3EditPanel({ activePanel }: { activePanel: DevelopPanelId | nul
   });
 
   return (
-    <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+    <>
+      <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="flex min-h-[58px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -135,6 +170,7 @@ export function V3EditPanel({ activePanel }: { activePanel: DevelopPanelId | nul
           ) : null}
         </div>
         <div className="flex-1" />
+        <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
         <ActionButton onClick={resetAll}>Reset all</ActionButton>
       </div>
 
@@ -169,7 +205,21 @@ export function V3EditPanel({ activePanel }: { activePanel: DevelopPanelId | nul
         {activeTab === "cleanup" ? <CleanupTab document={document} /> : null}
         {activeTab === "output" ? <OutputTab document={document} /> : null}
       </div>
-    </aside>
+      </aside>
+      {batchOpen ? (
+        <V3BatchDialog
+          sourceEntry={batch.sourceEntry}
+          entries={batch.entries}
+          resultId={batch.resultId}
+          catalogId={batch.sourceEntry.catalogId}
+          catalogRevision={batch.catalogRevision}
+          resultEntryIds={batch.resultEntryIds}
+          missingEntryIds={batch.missingEntryIds}
+          currentGroup={batchGroupForTab(activeTab)}
+          onClose={() => setBatchOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
