@@ -5,7 +5,6 @@ import type {
   V3SourceSignature,
 } from "../process";
 import type { ExportOutputIntent } from "../render-contract";
-import type { LocalMask, MaskComponent } from "../types";
 import {
   orderedBatchGroups,
   parseExactBatchSelection,
@@ -33,6 +32,7 @@ import {
   type PersistedInputProfile,
 } from "./document";
 import { parseSourceRecord } from "./source";
+import { maskSourceNodes, type LocalMaskV3, type MaskExpression } from "./masking";
 
 const MAX_BATCH_ERROR_CODE = 128;
 const MAX_BATCH_RESULT_MESSAGE = 1_024;
@@ -260,30 +260,33 @@ function cloneDocument(document: DevelopDocumentV3): DevelopDocumentV3 {
   return validateV3CommandDocument(document);
 }
 
-function portableComponent(component: MaskComponent): MaskComponent | null {
-  switch (component.kind) {
-    case "brush":
-    case "linear-gradient":
-    case "radial-gradient":
-      return structuredClone(component);
-    case "ai":
-      return null;
+function portableExpression(expression: MaskExpression): MaskExpression | null {
+  switch (expression.kind) {
+    case "source":
+      return expression.source.kind === "ai-matte" || expression.source.kind === "depth-range"
+        ? null
+        : structuredClone(expression);
+    case "invert": {
+      const child = portableExpression(expression.child);
+      return child ? { ...structuredClone(expression), child } : null;
+    }
+    case "combine": {
+      const left = portableExpression(expression.left);
+      const right = portableExpression(expression.right);
+      if (!left) return right;
+      if (!right) return left;
+      return { ...structuredClone(expression), left, right };
+    }
     default: {
-      const exhaustive: never = component;
+      const exhaustive: never = expression;
       return exhaustive;
     }
   }
 }
 
-function portableMask(mask: LocalMask): LocalMask | null {
-  const components = mask.components.flatMap((component) => {
-    const portable = portableComponent(component);
-    return portable ? [portable] : [];
-  });
-  const first = components[0];
-  return first
-    ? { ...structuredClone(mask), components: [first, ...components.slice(1)] }
-    : null;
+function portableMask(mask: LocalMaskV3): LocalMaskV3 | null {
+  const expression = portableExpression(mask.expression);
+  return expression ? { ...structuredClone(mask), expression } : null;
 }
 
 function portableLocal(source: DevelopDocumentV3): {
@@ -298,11 +301,11 @@ function portableLocal(source: DevelopDocumentV3): {
     return portable ? [portable] : [];
   });
   const componentCount = source.local.masks.reduce(
-    (count, mask) => count + mask.components.length,
+    (count, mask) => count + maskSourceNodes(mask.expression).length,
     0,
   );
   const portableCount = masks.reduce(
-    (count, mask) => count + mask.components.length,
+    (count, mask) => count + maskSourceNodes(mask.expression).length,
     0,
   );
   return {

@@ -19,6 +19,7 @@ import type {
   ExportSizeOptions,
 } from "@/lib/export/types";
 import { runExportBatch, type ExportBatchSummary, type ExportPhase } from "@/lib/export/runner";
+import { useDevelopJobStore } from "@/stores/develop-job-store";
 
 interface ExportDialogProps {
   entries: LibraryEntry[];
@@ -211,12 +212,26 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentEntry, setCurrentEntry] = useState<LibraryEntry | null>(null);
   const [summary, setSummary] = useState<ExportBatchSummary | null>(null);
+  const [prototypeAcknowledged, setPrototypeAcknowledged] = useState(false);
   const cancelledRef = useRef(false);
+  const jobs = useDevelopJobStore((state) => state.jobs);
+  const jobsHydrated = useDevelopJobStore((state) => state.hydrated);
+  const jobsError = useDevelopJobStore((state) => state.error);
+  const initializeJobs = useDevelopJobStore((state) => state.initialize);
+  const entryIds = useMemo(() => new Set<string>(entries.map((entry) => `${entry.catalogId}\0${entry.id}`)), [entries]);
+  const unappliedPrototypeJobs = useMemo(() => jobs.filter((job) =>
+    job.status === "accepted" && job.request.kind !== "depth" &&
+    entryIds.has(`${job.request.source.catalogId}\0${job.request.source.entryId}`)
+  ), [entryIds, jobs]);
 
   const selectedFormat = useMemo(
     () => formats.find((candidate) => candidate.id === format) ?? null,
     [formats, format],
   );
+
+  useEffect(() => {
+    return initializeJobs();
+  }, [initializeJobs]);
 
   useEffect(() => {
     if (!isElectronApp()) {
@@ -564,6 +579,15 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                   Never upscale
                 </label>
               ) : null}
+              {unappliedPrototypeJobs.length > 0 ? (
+                <label className="col-span-2 rounded border border-amber-700/40 bg-amber-950/20 p-3 text-[11px] leading-4 text-amber-200">
+                  <span className="block font-semibold">Prototype output is not applied to exported pixels</span>
+                  <span className="mt-1 block">{unappliedPrototypeJobs.length} accepted Denoise, Raw Details, Super Resolution, or Mock Remove artifact{unappliedPrototypeJobs.length === 1 ? " is" : "s are"} still waiting for renderer integration.</span>
+                  <span className="mt-2 flex items-start gap-2"><input type="checkbox" checked={prototypeAcknowledged} onChange={(event) => setPrototypeAcknowledged(event.target.checked)} className="mt-0.5 accent-lr-accent" />Export without those prototype results.</span>
+                </label>
+              ) : null}
+              {!jobsHydrated ? <p className="col-span-2 text-[10px] text-lr-text-faint">Checking prototype jobs…</p> : null}
+              {jobsError ? <p className="col-span-2 text-[10px] text-red-400">Prototype job status unavailable: {jobsError}</p> : null}
               {error ? <p className="col-span-2 text-xs text-red-400">{error}</p> : null}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-lr-border-subtle px-[18px] py-3.5">
@@ -571,7 +595,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
               <button
                 type="button"
                 onClick={() => void startExport()}
-                disabled={formatsLoading || !selectedFormat || entries.length === 0}
+                disabled={formatsLoading || !selectedFormat || entries.length === 0 || !jobsHydrated || Boolean(jobsError) || (unappliedPrototypeJobs.length > 0 && !prototypeAcknowledged)}
                 className="button-primary"
               >
                 Start export

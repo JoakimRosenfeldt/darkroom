@@ -2,15 +2,8 @@
 
 import { useState } from "react";
 import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
-import { MAX_MASKS } from "@/lib/develop/document";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
-import type {
-  BasicSettings,
-  LocalMask,
-  MaskComponent,
-  MixerColor,
-  NonEmpty,
-} from "@/lib/develop/types";
+import type { MixerColor } from "@/lib/develop/types";
 import {
   applyCleanupCommand,
   type CleanupCommand,
@@ -41,7 +34,9 @@ import {
   V3AutoToneControl,
   V3HistogramPanel,
 } from "@/components/develop/V3AnalysisControls";
-import { AiMaskActions } from "@/components/develop/AiMaskActions";
+import { MaskExpressionEditor } from "@/components/develop/MaskExpressionEditor";
+import { PrototypeOperations } from "@/components/develop/PrototypeOperations";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { V3CleanupComponentEditor } from "@/components/develop/V3CleanupComponentEditor";
 import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
@@ -136,6 +131,8 @@ function saveLabel(input: {
 }
 
 export function EditPanel({
+  decoded,
+  entry,
   activePanel,
   batch,
   analysis,
@@ -143,6 +140,8 @@ export function EditPanel({
   canvasTool,
   onCanvasToolChange,
 }: {
+  readonly decoded: DevelopImage;
+  readonly entry: LibraryEntry;
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
   readonly analysis: readonly CpuAnalysisTapResult[];
@@ -195,6 +194,8 @@ export function EditPanel({
         <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
         <ActionButton onClick={resetAll}>Reset all</ActionButton>
       </div>
+
+      <PrototypeOperations decoded={decoded} document={document} entry={entry} />
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
@@ -691,24 +692,6 @@ function rotateQuarterTurns(value: QuarterTurns, direction: "left" | "right"): Q
   }
 }
 
-function nonEmptyComponents(items: readonly MaskComponent[]): NonEmpty<MaskComponent> | null {
-  const first = items[0];
-  return first === undefined ? null : [first, ...items.slice(1)];
-}
-
-function maskComponentLabel(component: MaskComponent): string {
-  switch (component.kind) {
-    case "brush": return "Brush";
-    case "linear-gradient": return "Linear gradient";
-    case "radial-gradient": return "Radial gradient";
-    case "ai": return component.selector === "subject" ? "Subject matte" : "Sky matte";
-    default: {
-      const exhaustive: never = component;
-      return exhaustive;
-    }
-  }
-}
-
 function MaskingTab({
   document,
   entry,
@@ -716,317 +699,9 @@ function MaskingTab({
   readonly document: DevelopDocumentV3;
   readonly entry: LibraryEntry;
 }) {
-  const dispatch = useDevelopStore((state) => state.dispatchV3);
-  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
-  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
-  const reset = useDevelopStore((state) => state.resetV3Group);
-  const sessionUi = useDevelopStore((state) => {
-    const entryId = state.activeEntryId;
-    return entryId ? state.sessions[entryId]?.ui ?? null : null;
-  });
-  const setSelectedMask = useDevelopStore((state) => state.setSelectedMask);
-  const setSelectedComponent = useDevelopStore((state) => state.setSelectedComponent);
-  const setTool = useDevelopStore((state) => state.setMaskTool);
-  const setOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
-  const masks = document.local.masks;
-  const selectedMask = masks.find((mask) => mask.id === sessionUi?.selectedMaskId) ?? null;
-  const selectedComponent = selectedMask?.components.find(
-    (component) => component.id === sessionUi?.selectedComponentId,
-  ) ?? null;
-  const activeTool = sessionUi?.tool ?? "none";
-
-  function replaceMasks(nextMasks: readonly LocalMask[], label: string): void {
-    const usedAssets = new Set(nextMasks.flatMap((mask) =>
-      mask.components.flatMap((component) => component.kind === "ai"
-        ? [component.assetId]
-        : [])
-    ));
-    dispatch({
-      kind: "replace-v3-semantic-group",
-      group: "local",
-      value: {
-        ...document.local,
-        masks: nextMasks,
-        maskAssetRefs: document.local.maskAssetRefs.filter((reference) =>
-          usedAssets.has(reference.assetId)
-        ),
-      },
-    }, label);
-  }
-
-  function replaceMask(next: LocalMask, label: string): void {
-    replaceMasks(masks.map((mask) => mask.id === next.id ? next : mask), label);
-  }
-
-  function deleteMask(mask: LocalMask): void {
-    const index = masks.findIndex((item) => item.id === mask.id);
-    const next = masks[index + 1] ?? masks[index - 1] ?? null;
-    replaceMasks(masks.filter((item) => item.id !== mask.id), "Delete mask");
-    setSelectedMask(next?.id ?? null);
-    setSelectedComponent(next?.components[0]?.id ?? null);
-    setTool("none");
-  }
-
-  function duplicateMask(mask: LocalMask): void {
-    if (masks.length >= MAX_MASKS) return;
-    const components = nonEmptyComponents(mask.components.map((component) => ({
-      ...structuredClone(component),
-      id: crypto.randomUUID(),
-    })));
-    if (!components) return;
-    const names = new Set(masks.map((item) => item.name));
-    const baseName = `${mask.name} copy`;
-    let name = baseName;
-    let suffix = 2;
-    while (names.has(name)) {
-      name = `${baseName} ${suffix}`;
-      suffix += 1;
-    }
-    const copy: LocalMask = {
-      ...structuredClone(mask),
-      id: crypto.randomUUID(),
-      name,
-      components,
-    };
-    const index = masks.findIndex((item) => item.id === mask.id);
-    replaceMasks([
-      ...masks.slice(0, index + 1),
-      copy,
-      ...masks.slice(index + 1),
-    ], "Duplicate mask");
-    setSelectedMask(copy.id);
-    setSelectedComponent(copy.components[0].id);
-    setTool("none");
-  }
-
-  function moveMask(mask: LocalMask, direction: -1 | 1): void {
-    const index = masks.findIndex((item) => item.id === mask.id);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= masks.length) return;
-    const reordered = [...masks];
-    [reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!];
-    replaceMasks(reordered, "Reorder masks");
-  }
-
-  function replaceSelectedComponent(next: MaskComponent, label: string): void {
-    if (!selectedMask) return;
-    const components = nonEmptyComponents(selectedMask.components.map((component) =>
-      component.id === next.id ? next : component
-    ));
-    if (!components) return;
-    replaceMask({ ...selectedMask, components }, label);
-  }
-
-  function selectMask(mask: LocalMask): void {
-    setSelectedMask(mask.id);
-    setSelectedComponent(mask.components[0]?.id ?? null);
-    setOverlayVisible(true);
-    setTool("none");
-  }
-
-  function activateTool(tool: "brush" | "linear-gradient" | "radial-gradient"): void {
-    const reuse = selectedComponent?.kind === tool;
-    if (!reuse) setSelectedComponent(null);
-    setTool(activeTool === tool && reuse ? "none" : tool);
-    setOverlayVisible(true);
-  }
-
-  function removeComponent(component: MaskComponent): void {
-    if (!selectedMask) return;
-    const remaining = nonEmptyComponents(
-      selectedMask.components.filter((item) => item.id !== component.id),
-    );
-    if (!remaining) {
-      deleteMask(selectedMask);
-      return;
-    }
-    replaceMask({ ...selectedMask, components: remaining }, "Delete mask component");
-    setSelectedComponent(remaining[0].id);
-  }
-
-  function updateAdjustment(field: keyof BasicSettings, value: number): void {
-    if (!selectedMask) return;
-    replaceMask({
-      ...selectedMask,
-      adjustments: { ...selectedMask.adjustments, [field]: value },
-    }, `Adjust mask ${field}`);
-  }
-
-  const adjustmentRows: readonly {
-    readonly field: keyof BasicSettings;
-    readonly label: string;
-    readonly minimum: number;
-    readonly maximum: number;
-    readonly step?: number;
-    readonly suffix?: string;
-  }[] = [
-    { field: "exposure", label: "Exposure", minimum: -5, maximum: 5, step: 0.05, suffix: " EV" },
-    { field: "contrast", label: "Contrast", minimum: -100, maximum: 100 },
-    { field: "highlights", label: "Highlights", minimum: -100, maximum: 100 },
-    { field: "shadows", label: "Shadows", minimum: -100, maximum: 100 },
-    { field: "whites", label: "Whites", minimum: -100, maximum: 100 },
-    { field: "blacks", label: "Blacks", minimum: -100, maximum: 100 },
-    { field: "temperature", label: "Temperature", minimum: -100, maximum: 100 },
-    { field: "tint", label: "Tint", minimum: -100, maximum: 100 },
-    { field: "vibrance", label: "Vibrance", minimum: -100, maximum: 100 },
-    { field: "saturation", label: "Saturation", minimum: -100, maximum: 100 },
-  ];
-
   return (
-    <PanelSection title="Masks" onReset={() => reset("local")}>
-      <AiMaskActions entry={entry} document={document} />
-      <div className="mb-2 flex items-center gap-1.5">
-        <ActionButton
-          disabled={masks.length >= MAX_MASKS}
-          onClick={() => {
-            setSelectedMask(null);
-            setSelectedComponent(null);
-            setOverlayVisible(true);
-            setTool("brush");
-          }}
-        >
-          New mask
-        </ActionButton>
-        <ActionButton onClick={() => setOverlayVisible(!(sessionUi?.overlayVisible ?? false))}>
-          {sessionUi?.overlayVisible ? "Hide overlay" : "Show overlay"}
-        </ActionButton>
-        <span className="ml-auto font-mono text-[9px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
-      </div>
-      <div className="mb-3 grid grid-cols-3 gap-1">
-        {(["brush", "linear-gradient", "radial-gradient"] as const).map((tool) => (
-          <button
-            key={tool}
-            type="button"
-            aria-pressed={activeTool === tool}
-            onClick={() => activateTool(tool)}
-            className={`rounded-md border px-2 py-2 text-[10px] ${activeTool === tool ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised"}`}
-          >
-            {tool === "brush" ? "Brush" : tool === "linear-gradient" ? "Linear" : "Radial"}
-          </button>
-        ))}
-      </div>
-      {masks.length === 0 ? (
-        <StatusCard title="No masks">Choose a tool, then draw on the photo.</StatusCard>
-      ) : (
-        <ol className="mb-3 space-y-1.5">
-          {masks.map((mask, index) => (
-            <li key={mask.id} className={`rounded-md border p-2 ${mask.id === selectedMask?.id ? "border-lr-accent/60 bg-lr-selection/40" : "border-lr-border-subtle"}`}>
-              <div className="flex items-center gap-1.5">
-                <button type="button" onClick={() => selectMask(mask)} className="min-w-0 flex-1 truncate text-left text-[11px] text-lr-text">
-                  {index + 1}. {mask.name}
-                </button>
-                <input
-                  type="checkbox"
-                  aria-label={`Enable ${mask.name}`}
-                  checked={mask.enabled}
-                  onChange={(event) => replaceMask({ ...mask, enabled: event.target.checked }, "Toggle mask")}
-                  className="size-3 accent-lr-accent"
-                />
-              </div>
-              {mask.id === selectedMask?.id ? (
-                <div className="mt-2 space-y-1">
-                  <div className="flex items-center gap-1">
-                    <input
-                      aria-label="Mask name"
-                      value={mask.name}
-                      onFocus={() => beginEditGroup("Rename mask")}
-                      onBlur={endEditGroup}
-                      onChange={(event) => replaceMask({ ...mask, name: event.target.value }, "Rename mask")}
-                      className="min-w-0 flex-1 rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[10px] text-lr-text outline-none focus:border-lr-accent"
-                    />
-                    <button type="button" disabled={index === 0} onClick={() => moveMask(mask, -1)} aria-label={`Move ${mask.name} up`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">↑</button>
-                    <button type="button" disabled={index === masks.length - 1} onClick={() => moveMask(mask, 1)} aria-label={`Move ${mask.name} down`} className="px-1 text-[10px] text-lr-text-faint disabled:opacity-30">↓</button>
-                    <button type="button" disabled={masks.length >= MAX_MASKS} onClick={() => duplicateMask(mask)} className="text-[9px] text-lr-text-faint hover:text-lr-text disabled:opacity-30">Copy</button>
-                    <button type="button" onClick={() => deleteMask(mask)} className="text-[9px] text-lr-text-faint hover:text-lr-danger">Delete</button>
-                  </div>
-                  <ToggleRow label="Invert" checked={mask.inverted} onChange={(inverted) => replaceMask({ ...mask, inverted }, "Invert mask")} />
-                  {mask.components.map((component, componentIndex) => (
-                    <div key={component.id} className="flex items-center gap-1 rounded bg-lr-panel/60 px-2 py-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedComponent(component.id);
-                          setTool(component.kind === "ai" ? "none" : component.kind);
-                          setOverlayVisible(true);
-                        }}
-                        className={`min-w-0 flex-1 truncate text-left text-[10px] ${component.id === selectedComponent?.id ? "text-lr-accent" : "text-lr-text-muted"}`}
-                      >
-                        {componentIndex + 1}. {maskComponentLabel(component)}
-                      </button>
-                      {component.kind !== "ai" ? (
-                        <button
-                          type="button"
-                          disabled={componentIndex === 0}
-                          onClick={() => replaceMask({
-                            ...mask,
-                            components: nonEmptyComponents(mask.components.map((item) => item.id === component.id ? { ...item, operation: item.operation === "add" ? "subtract" : "add" } : item)) ?? mask.components,
-                          }, "Change mask operation")}
-                          className="text-[9px] uppercase text-lr-text-faint disabled:opacity-30"
-                        >
-                          {component.operation}
-                        </button>
-                      ) : null}
-                      <button type="button" onClick={() => removeComponent(component)} className="text-[9px] text-lr-text-faint hover:text-lr-danger">Remove</button>
-                    </div>
-                  ))}
-                  {selectedComponent?.kind === "brush" ? (
-                    <div className="border-t border-lr-border-subtle pt-2">
-                      <SectionLabel>Brush</SectionLabel>
-                      {(["size", "feather", "flow", "density"] as const).map((field) => (
-                        <SliderRow
-                          key={field}
-                          label={field[0]!.toUpperCase() + field.slice(1)}
-                          value={selectedComponent[field] * 100}
-                          min={field === "size" ? 1 : 0}
-                          max={100}
-                          onChange={(value) => {
-                            const nextValue = value / 100;
-                            const [first, ...rest] = selectedComponent.strokes;
-                            replaceSelectedComponent({
-                              ...selectedComponent,
-                              [field]: nextValue,
-                              strokes: [
-                                { ...first, [field]: nextValue },
-                                ...rest.map((stroke) => ({ ...stroke, [field]: nextValue })),
-                              ],
-                            }, `Adjust brush ${field}`);
-                          }}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                  {selectedComponent?.kind === "radial-gradient" ? (
-                    <div className="border-t border-lr-border-subtle pt-2">
-                      <SectionLabel>Radial gradient</SectionLabel>
-                      <SliderRow label="Width" value={selectedComponent.radiusX * 100} min={1} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, radiusX: value / 100 }, "Adjust radial width")} />
-                      <SliderRow label="Height" value={selectedComponent.radiusY * 100} min={1} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, radiusY: value / 100 }, "Adjust radial height")} />
-                      <SliderRow label="Rotation" value={selectedComponent.rotation} min={-180} max={180} suffix="°" onChange={(rotation) => replaceSelectedComponent({ ...selectedComponent, rotation }, "Adjust radial rotation")} />
-                      <SliderRow label="Feather" value={selectedComponent.feather * 100} min={0} max={100} onChange={(value) => replaceSelectedComponent({ ...selectedComponent, feather: value / 100 }, "Adjust radial feather")} />
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </li>
-          ))}
-        </ol>
-      )}
-      {selectedMask ? (
-        <>
-          <SectionLabel>Local adjustments</SectionLabel>
-          {adjustmentRows.map(({ field, label, minimum, maximum, step, suffix }) => (
-            <SliderRow
-              key={field}
-              label={label}
-              value={selectedMask.adjustments[field]}
-              min={minimum}
-              max={maximum}
-              step={step}
-              suffix={suffix}
-              onChange={(value) => updateAdjustment(field, value)}
-            />
-          ))}
-        </>
-      ) : null}
+    <PanelSection title="Masks">
+      <MaskExpressionEditor document={document} entry={entry} />
     </PanelSection>
   );
 }
@@ -1155,6 +830,7 @@ function defaultCleanupComponent(kind: "heal" | "clone" | "remove" | "red-eye"):
     },
   };
 }
+
 
 function cleanupLabel(component: CleanupComponent): string {
   if (component.kind === "red-eye") return "Red eye";

@@ -7,7 +7,6 @@ import {
 import type {
   CurveSettings,
   DevelopDocument,
-  LocalMask,
   MixerSettings,
 } from "../types";
 import type { DevelopAssetRef } from "./assets";
@@ -31,8 +30,10 @@ import { IDENTITY_MATRIX_3 } from "./profiles";
 import type { DefringeSettings, OpticsAmounts } from "./optics";
 import type { PresenceSettings } from "./presence";
 import type { WhiteBalanceValues } from "./white-balance";
+import type { LocalMaskV3 } from "./masking";
 
-export const V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-1";
+export const LEGACY_V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-1";
+export const V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-2";
 export const V2_TO_V3_MAPPING_REVISION = "darkroom-v2-to-v3-1";
 
 export interface BasicToneEdits {
@@ -125,7 +126,7 @@ export interface PersistedGeometry {
 
 export interface PersistedLocalEdits {
   readonly geometryFrame: GeometryFrame;
-  readonly masks: readonly LocalMask[];
+  readonly masks: readonly LocalMaskV3[];
   readonly maskAssetRefs: readonly DevelopAssetRef[];
 }
 

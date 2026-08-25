@@ -15,6 +15,7 @@ import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { useLibraryStore } from "@/stores/library-store";
 import { getVisibleLibraryResult } from "@/lib/library/result-session";
 import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
+import { useDevelopJobStore } from "@/stores/develop-job-store";
 
 interface PhotoTileProps {
   entry: LibraryEntry;
@@ -55,6 +56,19 @@ export const PhotoTile = memo(function PhotoTile({
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+  const prototypeJobs = useDevelopJobStore((state) => state.jobs.filter((job) =>
+    job.request.source.entryId === entry.id && job.request.source.catalogId === entry.catalogId &&
+    job.status !== "discarded"
+  ));
+  const prototypeBadge = prototypeJobs.some((job) => job.status === "queued" || job.status === "preparing" || job.status === "running" || job.status === "postprocess" || job.status === "accepting")
+    ? "Prototype working"
+    : prototypeJobs.some((job) => job.status === "awaiting-review")
+      ? "Prototype review"
+      : prototypeJobs.some((job) => job.status === "accepted")
+        ? "Prototype accepted"
+        : prototypeJobs.some((job) => job.status === "failed" || job.status === "stale" || job.status === "interrupted")
+          ? "Prototype needs attention"
+          : null;
 
   function openRecordedResult(selectedIds: readonly string[]) {
     const result = getVisibleLibraryResult();
@@ -256,6 +270,8 @@ export const PhotoTile = memo(function PhotoTile({
           {stackExpanded ? "▾" : "▸"} {stack.entryIds.length}
         </span>
       ) : null}
+
+      {prototypeBadge ? <span aria-label={prototypeBadge} className="pointer-events-none absolute left-2 top-2 z-30 rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white">{prototypeBadge}</span> : null}
 
       {selected ? (
         <div

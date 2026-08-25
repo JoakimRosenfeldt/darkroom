@@ -18,6 +18,7 @@ import type {
   V3CanvasDiagnostic,
   V3CanvasTool,
 } from "@/components/develop/DevelopCanvas";
+import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -63,6 +64,8 @@ export function DevelopSidePanels({
   ) : session?.processKind === "v3" ? (
     <EditPanel
       key={activePanel ?? "edit"}
+      decoded={decoded}
+      entry={entry}
       activePanel={activePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
@@ -94,6 +97,7 @@ export function DevelopSidePanels({
         onSelect={onSelect}
         editingDisabled={session?.processKind !== "v3"}
       />
+      <DevelopJobDrawer />
     </>
   );
 }

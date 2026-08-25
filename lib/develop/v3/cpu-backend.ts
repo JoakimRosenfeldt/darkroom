@@ -3,7 +3,6 @@ import {
   CURVE_LUT_SIZE,
   sampleCurve as sampleLegacyV2Curve,
 } from "../plugins/curve";
-import { sourceSignaturesEqual } from "../source-transform";
 import type { BasicSettings } from "../types";
 import {
   type AnalysisTapId,
@@ -63,6 +62,12 @@ import {
   type MaskCoverageAssets,
   type MaskRasterMatte,
 } from "./manual-edits";
+import {
+  accumulateLocalAdjustments,
+  applyLocalEffectAdjustments,
+  localAdjustmentsAreNeutral,
+} from "./local-adjustments";
+import { referencedMaskArtifacts } from "./masking";
 import { applyMonochrome, NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
 import {
   applyHueBoundedDefringe,
@@ -252,6 +257,7 @@ export type CpuRenderResult =
 export interface CpuAssetAvailability {
   readonly hasAsset: (assetId: string) => boolean;
   readonly maskMatte?: (assetId: string) => MaskRasterMatte | undefined;
+  readonly depthMap?: (assetId: string) => MaskRasterMatte | undefined;
 }
 
 export interface CpuRenderInput {
@@ -541,7 +547,7 @@ function documentUsesHdr(document: DevelopDocumentV3): boolean {
 }
 
 function localAdjustmentIsNeutral(mask: DevelopDocumentV3["local"]["masks"][number]): boolean {
-  return Object.values(mask.adjustments).every((value) => value === 0);
+  return localAdjustmentsAreNeutral(mask.adjustments);
 }
 
 function assetPresent(input: CpuRenderInput, assetId: string): boolean {
@@ -568,6 +574,22 @@ function assetMaskMatte(
     ) {
       return undefined;
     }
+    return matte;
+  } catch {
+    return undefined;
+  }
+}
+
+function assetDepthMap(
+  input: CpuRenderInput,
+  assetId: string,
+): MaskRasterMatte | undefined {
+  try {
+    const matte = input.assets?.depthMap?.(assetId);
+    if (
+      !matte || !Number.isSafeInteger(matte.width) || !Number.isSafeInteger(matte.height) ||
+      matte.width < 1 || matte.height < 1 || matte.pixels.length < matte.width * matte.height
+    ) return undefined;
     return matte;
   } catch {
     return undefined;
@@ -617,24 +639,18 @@ function unsupportedEditDiagnostics(input: CpuRenderInput): {
 
   for (const mask of input.document.local.masks) {
     if (!mask.enabled || localAdjustmentIsNeutral(mask)) continue;
-    for (const component of mask.components) {
-      if (component.kind !== "ai") continue;
-      if (!sourceSignaturesEqual(component.source, input.source.signature)) {
-        reportUnsupported(
-          "local-adjustments",
-          component.id,
-          "The AI mask matte belongs to an older source revision.",
-        );
-        continue;
-      }
-      if (assetMaskMatte(input, component.assetId)) continue;
+    for (const asset of referencedMaskArtifacts(mask.expression)) {
+      const available = asset.kind === "depth-map"
+        ? assetDepthMap(input, asset.assetId)
+        : assetMaskMatte(input, asset.assetId);
+      if (available) continue;
       reportUnsupported(
         "local-adjustments",
-        component.id,
-        "AI mask mattes require raster pixels that were not supplied to the CPU backend.",
+        mask.id,
+        "A mask raster requires pixels that were not supplied to the CPU backend.",
       );
-      if (!assetPresent(input, component.assetId)) {
-        reportMissing(component.assetId, component.id);
+      if (!assetPresent(input, asset.assetId)) {
+        reportMissing(asset.assetId, mask.id);
       }
     }
   }
@@ -1338,6 +1354,7 @@ function applyManualLocalAdjustments(
   const assets = {
     sourceSignature: input.source.signature,
     maskMatte: (assetId: string) => assetMaskMatte(input, assetId),
+    depthMap: (assetId: string) => assetDepthMap(input, assetId),
   };
   for (let y = 0; y < geometry.image.height; y += 1) {
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
@@ -1346,22 +1363,29 @@ function applyManualLocalAdjustments(
       if ((geometry.alpha[pixel] ?? 0) === 0) continue;
       const mapped = mappedRenderPoint(input, geometry.context, region, x, y);
       if (!mapped) continue;
-      let result = readRgb(geometry.image, pixel);
+      const result = readRgb(geometry.image, pixel);
+      const contributions = [];
       for (const mask of masks) {
         const coverage = manualMaskCoverage(
           mask,
           pointInLocalGeometryFrame(input.document.local.geometryFrame, mapped.canonical),
           dimensions,
           assets,
+          { color: result, edge: 0 },
         );
         if (coverage <= 0) continue;
-        result = blendRgb(
-          result,
-          applyLocalBasicAdjustment(result, mask.adjustments),
-          coverage,
-        );
+        contributions.push({ values: mask.adjustments, coverage });
       }
-      writeRgb(geometry.image.data, pixel, result);
+      if (contributions.length === 0) continue;
+      const adjustments = accumulateLocalAdjustments({ contributions });
+      writeRgb(
+        geometry.image.data,
+        pixel,
+        applyLocalEffectAdjustments(
+          applyLocalBasicAdjustment(result, adjustments.basic),
+          adjustments,
+        ),
+      );
     }
   }
   return true;
@@ -1594,7 +1618,7 @@ function legacyLocalAdjustments(
     const coverage = manualMaskCoverage(mask, point, dimensions, assets);
     if (coverage <= 0) continue;
     for (const field of LEGACY_BASIC_FIELDS) {
-      adjustment[field] += mask.adjustments[field] * coverage;
+      adjustment[field] += mask.adjustments.basic[field] * coverage;
     }
   }
   return adjustment;
@@ -1687,6 +1711,7 @@ function applyLegacyPointwiseStages(
   const assets = {
     sourceSignature: input.source.signature,
     maskMatte: (assetId: string) => assetMaskMatte(input, assetId),
+    depthMap: (assetId: string) => assetDepthMap(input, assetId),
   };
   for (let y = 0; y < geometry.image.height; y += 1) {
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
