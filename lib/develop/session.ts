@@ -645,7 +645,13 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   #emitCommittedCommand(command: CommittedDevelopCommand): void {
-    for (const listener of this.#committedCommandListeners) listener(command);
+    for (const listener of this.#committedCommandListeners) {
+      try {
+        listener(command);
+      } catch {
+        continue;
+      }
+    }
   }
 
   async upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot> {

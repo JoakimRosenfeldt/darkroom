@@ -153,9 +153,22 @@ function PreviewColorInput({
   readonly onPreview: (value: string) => void;
 }) {
   const editing = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
   const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const commitAcceptedColor = () => {
+      if (!editing.current) return;
+      editing.current = false;
+      endEditGroup();
+    };
+    input.addEventListener("change", commitAcceptedColor);
+    return () => input.removeEventListener("change", commitAcceptedColor);
+  }, [endEditGroup]);
 
   const begin = () => {
     if (editing.current) return;
@@ -175,15 +188,16 @@ function PreviewColorInput({
 
   return (
     <input
+      ref={inputRef}
       type="color"
       aria-label={label}
       value={value}
       onFocus={begin}
       onPointerDown={begin}
       onPointerCancel={cancel}
-      onChange={(event) => {
+      onInput={(event) => {
         begin();
-        onPreview(event.target.value);
+        onPreview(event.currentTarget.value);
       }}
       onBlur={commit}
       onKeyDown={(event) => {

@@ -134,6 +134,7 @@ interface DisplayDimensions {
 interface DrawnFrame {
   readonly backend: V3PreviewBackend;
   readonly cropActive: boolean;
+  readonly document: DevelopDocumentV3;
   readonly documentRevision: number;
   readonly mode: V3PreviewRenderMode;
   readonly viewportHeight: number;
@@ -371,6 +372,7 @@ export function DevelopCanvas({
       const drawnFrame = drawnFrameRef.current;
       const sameFrame = drawnFrame?.documentRevision ===
           renderSnapshot.documentRevision &&
+        drawnFrame.document === document &&
         drawnFrame.viewportWidth === width &&
         drawnFrame.viewportHeight === height &&
         drawnFrame.cropActive === cropActive;
@@ -467,6 +469,7 @@ export function DevelopCanvas({
             drawnFrameRef.current = {
               backend,
               cropActive,
+              document,
               documentRevision: renderSnapshot.documentRevision,
               mode,
               viewportHeight: height,
@@ -522,6 +525,7 @@ export function DevelopCanvas({
         drawnFrameRef.current = {
           backend,
           cropActive,
+          document,
           documentRevision: renderSnapshot.documentRevision,
           mode,
           viewportHeight: height,
