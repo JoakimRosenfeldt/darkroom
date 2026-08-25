@@ -181,6 +181,7 @@ export function catalogV3SchemaSql(): string {
       is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
       parent_entry_id TEXT CHECK (parent_entry_id IS NULL OR ${uuidCheck("parent_entry_id")}),
       display_name TEXT CHECK (display_name IS NULL OR (length(trim(display_name)) > 0 AND instr(display_name, char(0)) = 0)),
+      tombstoned_at REAL,
       created_at REAL NOT NULL,
       updated_at REAL NOT NULL,
       PRIMARY KEY (catalog_id, entry_id),
@@ -486,7 +487,10 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
   const hasParentEntryId = hasIdentityTables && opened.prepare(
     "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'parent_entry_id'",
   ).get() !== undefined;
-  if (hasIdentityTables && hasDisplayName && hasParentEntryId) return;
+  const hasTombstonedAt = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'tombstoned_at'",
+  ).get() !== undefined;
+  if (hasIdentityTables && hasDisplayName && hasParentEntryId && hasTombstonedAt) return;
 
   if (hasIdentityTables) {
     try {
@@ -494,6 +498,7 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
         BEGIN IMMEDIATE;
         ${hasDisplayName ? "" : "ALTER TABLE edit_entries ADD COLUMN display_name TEXT;"}
         ${hasParentEntryId ? "" : "ALTER TABLE edit_entries ADD COLUMN parent_entry_id TEXT;"}
+        ${hasTombstonedAt ? "" : "ALTER TABLE edit_entries ADD COLUMN tombstoned_at REAL;"}
         COMMIT;
       `);
     } catch (error) {
@@ -517,6 +522,7 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
       is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
       parent_entry_id TEXT,
       display_name TEXT,
+      tombstoned_at REAL,
       created_at REAL NOT NULL,
       updated_at REAL NOT NULL,
       PRIMARY KEY (catalog_id, entry_id),

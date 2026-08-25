@@ -478,7 +478,7 @@ export class CatalogLiveRepository {
         FROM album_entries AS ae
         JOIN edit_entries AS ee
           ON ee.catalog_id = ae.catalog_id AND ee.entry_id = ae.entry_id
-        WHERE ae.catalog_id = ? AND ae.album_id = ?
+        WHERE ae.catalog_id = ? AND ae.album_id = ? AND ee.tombstoned_at IS NULL
         ORDER BY ae.position
       `).all(catalogId, albumId).map((member) => {
         if (!isRow(member)) throw new Error("Catalog live album member row is invalid.");
@@ -943,10 +943,26 @@ export class CatalogLiveRepository {
     const source = this.database.prepare(`
       SELECT source_id AS sourceId
       FROM edit_entries
-      WHERE catalog_id = ? AND entry_id = ?
+      WHERE catalog_id = ? AND entry_id = ? AND tombstoned_at IS NULL
     `).get(catalogId, mutation.sourceEntryId);
     if (!isRow(source)) throw new Error("Catalog live source edit entry is missing.");
     const sourceId = parseSourceId(requiredString(source, "sourceId"));
+    const original = this.database.prepare(`
+      SELECT entry_id AS entryId
+      FROM edit_entries
+      WHERE catalog_id = ? AND source_id = ? AND is_original = 1 AND tombstoned_at IS NULL
+    `).get(catalogId, sourceId);
+    if (!isRow(original)) throw new Error("Catalog live original edit entry is missing.");
+    const parentEntryId = parseEntryId(requiredString(original, "entryId"));
+    const sourceMetadata = this.database.prepare(`
+      SELECT updated_at AS updatedAt
+      FROM entry_metadata
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, mutation.sourceEntryId);
+    if (!isRow(sourceMetadata)) throw new Error("Catalog live source edit metadata is missing.");
+    if (numberValue(sourceMetadata, "updatedAt") !== mutation.expectedSourceMetadataUpdatedAt) {
+      throw new Error("Catalog live source edit metadata changed before the copy was created.");
+    }
     this.database.prepare(`
       INSERT INTO edit_entries (
         catalog_id, entry_id, source_id, is_original, parent_entry_id, display_name, created_at, updated_at
@@ -955,7 +971,7 @@ export class CatalogLiveRepository {
       catalogId,
       mutation.entryId,
       sourceId,
-      mutation.sourceEntryId,
+      parentEntryId,
       mutation.displayName,
       mutation.createdAt,
       mutation.createdAt,
@@ -966,12 +982,19 @@ export class CatalogLiveRepository {
         develop_updated_at, updated_at, title, caption, copyright, keywords_json,
         raw_xmp, xmp_state, xmp_mtime, xmp_sha256
       )
-      SELECT catalog_id, ?, archive, pick, rating, color_label, develop_json,
-        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+      SELECT catalog_id, ?, archive, pick, rating, color_label, ?,
+        ?, ?, title, caption, copyright, keywords_json,
         NULL, 'absent', NULL, NULL
       FROM entry_metadata
       WHERE catalog_id = ? AND entry_id = ?
-    `).run(mutation.entryId, catalogId, mutation.sourceEntryId);
+    `).run(
+      mutation.entryId,
+      mutation.developJson,
+      mutation.createdAt,
+      mutation.createdAt,
+      catalogId,
+      mutation.sourceEntryId,
+    );
     if (metadata.changes !== 1) throw new Error("Catalog live source edit metadata is missing.");
 
     const albums = this.database.prepare(`
@@ -1011,7 +1034,7 @@ export class CatalogLiveRepository {
     const current = this.database.prepare(`
       SELECT is_original AS isOriginal, display_name AS displayName
       FROM edit_entries
-      WHERE catalog_id = ? AND entry_id = ?
+      WHERE catalog_id = ? AND entry_id = ? AND tombstoned_at IS NULL
     `).get(catalogId, mutation.entryId);
     if (!isRow(current)) throw new Error("Catalog live edit entry is missing.");
     if (booleanValue(current, "isOriginal")) {
@@ -1026,27 +1049,25 @@ export class CatalogLiveRepository {
     return true;
   }
 
-  private applyEditEntryDelete(catalogId: CatalogId, entryId: EntryId): boolean {
+  private applyEditEntryDelete(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-delete" }>,
+  ): boolean {
     const current = this.database.prepare(`
-      SELECT is_original AS isOriginal
+      SELECT is_original AS isOriginal, tombstoned_at AS tombstonedAt
       FROM edit_entries
       WHERE catalog_id = ? AND entry_id = ?
-    `).get(catalogId, entryId);
+    `).get(catalogId, mutation.entryId);
     if (current === undefined) return false;
     if (!isRow(current)) throw new Error("Catalog live edit entry is invalid.");
     if (booleanValue(current, "isOriginal")) {
       throw new Error("Catalog live original edit entry cannot be deleted.");
     }
-    this.database.prepare(
-      "DELETE FROM album_entries WHERE catalog_id = ? AND entry_id = ?",
-    ).run(catalogId, entryId);
-    this.database.prepare(
-      "DELETE FROM entry_metadata WHERE catalog_id = ? AND entry_id = ?",
-    ).run(catalogId, entryId);
+    if (nullableNumber(current, "tombstonedAt") !== null) return false;
     const result = this.database.prepare(
-      "DELETE FROM edit_entries WHERE catalog_id = ? AND entry_id = ? AND is_original = 0",
-    ).run(catalogId, entryId);
-    if (result.changes !== 1) throw new Error("Catalog live edit entry delete failed.");
+      "UPDATE edit_entries SET tombstoned_at = ?, updated_at = ? WHERE catalog_id = ? AND entry_id = ? AND is_original = 0 AND tombstoned_at IS NULL",
+    ).run(mutation.tombstonedAt, mutation.tombstonedAt, catalogId, mutation.entryId);
+    if (result.changes !== 1) throw new Error("Catalog live edit entry tombstone failed.");
     return true;
   }
 
@@ -1332,7 +1353,7 @@ export class CatalogLiveRepository {
       }
       case "edit-entry-create": return this.applyEditEntryCreate(catalogId, mutation);
       case "edit-entry-rename": return this.applyEditEntryRename(catalogId, mutation);
-      case "edit-entry-delete": return this.applyEditEntryDelete(catalogId, mutation.entryId);
+      case "edit-entry-delete": return this.applyEditEntryDelete(catalogId, mutation);
       case "root-upsert": return this.applyRootUpsert(catalogId, mutation.root);
       case "root-health": {
         const current = this.requireRoot(catalogId, mutation.rootId);
@@ -1514,7 +1535,7 @@ export class CatalogLiveRepository {
     if (input.expectedRevision !== null && input.expectedRevision !== catalog.revision) {
       throw new Error(`Catalog live revision ${input.expectedRevision} is stale; current revision is ${catalog.revision}.`);
     }
-    const conditions = ["a.catalog_id = ?"];
+    const conditions = ["a.catalog_id = ?", "e.tombstoned_at IS NULL"];
     const parameters: SQLInputValue[] = [input.catalogId];
     if (input.entryId !== undefined) { conditions.push("e.entry_id = ?"); parameters.push(input.entryId); }
     if (input.assetId !== undefined) { conditions.push("a.asset_id = ?"); parameters.push(input.assetId); }

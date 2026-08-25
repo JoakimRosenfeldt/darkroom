@@ -78,6 +78,7 @@ import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
+import { getDevelopSession } from "@/lib/develop/session";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import {
   parseMetadataXmp,
@@ -2207,15 +2208,40 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   createVirtualCopy: async (entryId, displayName) => {
     const started = get();
     const source = started.entries.find((entry) => entry.id === entryId);
-    if (!source) throw new Error("Photo is unavailable.");
+    if (!source || started.catalogId === null || started.sessionId === null) {
+      throw new Error("Photo is unavailable.");
+    }
+    const binding = {
+      catalogId: started.catalogId,
+      sessionId: started.sessionId,
+    };
     const familyCopies = started.entries.filter(
       (entry) => entry.sourceId === source.sourceId && entry.entryKind === "virtual",
     ).length;
     const name = displayName?.trim() || `Copy ${familyCopies + 1}`;
     try {
       await persistStateSync(set, get);
-      const workspace = get().libraryWorkspace;
-      const result = await createVirtualCopySession(parseEntryId(entryId), name);
+      const current = get();
+      if (
+        current.catalogId !== binding.catalogId ||
+        current.sessionId !== binding.sessionId
+      ) {
+        throw new Error("Catalog session changed before the virtual copy was created.");
+      }
+      const metadata = current.entryMetadata[entryId];
+      if (!metadata) throw new Error("Photo metadata is unavailable.");
+      const snapshot = getDevelopSession(binding.catalogId, entryId)?.snapshot();
+      const committedDocument = snapshot && snapshot.processKind !== "read-only-newer"
+        ? snapshot.document
+        : metadata.develop ?? null;
+      const workspace = current.libraryWorkspace;
+      const result = await createVirtualCopySession(parseEntryId(entryId), name, {
+        ...binding,
+        developJson: committedDocument === null
+          ? null
+          : JSON.stringify(committedDocument),
+        expectedSourceMetadataUpdatedAt: metadata.updatedAt,
+      });
       const libraryWorkspace = cloneWorkspaceEntryState(
         result.state.libraryWorkspace,
         workspace,
@@ -2259,7 +2285,6 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     try {
       const state = await deleteVirtualCopySession(parseEntryId(entryId));
       applyHydratedState(state, set, get);
-      await persistStateSync(set, get);
     } catch (error) {
       const message = formatPickerError(error);
       set({ importError: message });

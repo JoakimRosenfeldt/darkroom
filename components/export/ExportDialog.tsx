@@ -18,7 +18,12 @@ import type {
   ExportRevealCapability,
   ExportSizeOptions,
 } from "@/lib/export/types";
-import { runExportBatch, type ExportBatchSummary, type ExportPhase } from "@/lib/export/runner";
+import {
+  runExportBatch,
+  virtualCopyFilenameSuffix,
+  type ExportBatchSummary,
+  type ExportPhase,
+} from "@/lib/export/runner";
 import { useDevelopJobStore } from "@/stores/develop-job-store";
 
 interface ExportDialogProps {
@@ -192,7 +197,10 @@ function safeSuggestedFilename(
   const safeSuffix = suffix
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/\.\./g, "_");
-  return `${base}${safeSuffix}.${format.extensions[0] ?? "jpg"}`;
+  const filenameSuffix = entry
+    ? virtualCopyFilenameSuffix(entry, safeSuffix) ?? safeSuffix
+    : safeSuffix;
+  return `${base}${filenameSuffix}.${format.extensions[0] ?? "jpg"}`;
 }
 
 export function ExportDialog({ entries, onClose }: ExportDialogProps) {
@@ -328,7 +336,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       const destinationRequest: ExportDestinationRequest = {
         catalogId: entries[0]!.catalogId,
         sessionId: entries[0]!.sessionId,
-        assetIds: entries.map((entry) => entry.assetId),
+        assetIds: [...new Set(entries.map((entry) => entry.assetId))],
         count: entries.length,
         format: selectedFormat.id,
         suggestedFilename: safeSuggestedFilename(entries[0], suffix, selectedFormat),

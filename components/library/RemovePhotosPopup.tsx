@@ -151,6 +151,10 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
       }
 
       if (option.id === "copy") {
+        const confirmed = window.confirm(
+          `Delete ${entryIds.length === 1 ? "this virtual copy" : `${entryIds.length} virtual copies`}? The source files and other edits will stay in the catalog.`,
+        );
+        if (!confirmed) return;
         for (const entryId of entryIds) await deleteVirtualCopy(entryId);
         onClose();
       }

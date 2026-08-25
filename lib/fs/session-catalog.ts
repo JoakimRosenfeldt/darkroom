@@ -1227,8 +1227,16 @@ async function applyEditEntryLifecycle(
     CatalogApplyMutation,
     { readonly kind: "edit-entry-create" | "edit-entry-rename" | "edit-entry-delete" }
   >,
+  expectedBinding?: Pick<CatalogSyncBinding, "catalogId" | "sessionId">,
 ): Promise<HydratedCatalogState> {
   const binding = captureCatalogSyncBinding();
+  if (
+    expectedBinding &&
+    (binding.catalogId !== expectedBinding.catalogId ||
+      binding.sessionId !== expectedBinding.sessionId)
+  ) {
+    throw new Error("Catalog session changed before the edit entry update.");
+  }
   const task = mutationQueue.then(async () => {
     if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed before the edit entry update.");
     const api = getDarkroomAPI();
@@ -1262,6 +1270,12 @@ async function applyEditEntryLifecycle(
 export async function createVirtualCopy(
   sourceEntryId: EntryId,
   displayName: string,
+  input: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+    readonly developJson: string | null;
+    readonly expectedSourceMetadataUpdatedAt: number;
+  },
 ): Promise<{ readonly state: HydratedCatalogState; readonly entryId: EntryId }> {
   const entryId = createEntryId();
   const state = await applyEditEntryLifecycle({
@@ -1269,8 +1283,10 @@ export async function createVirtualCopy(
     sourceEntryId,
     entryId,
     displayName,
+    developJson: input.developJson,
+    expectedSourceMetadataUpdatedAt: input.expectedSourceMetadataUpdatedAt,
     createdAt: Date.now(),
-  });
+  }, input);
   return { state, entryId };
 }
 
@@ -1287,5 +1303,9 @@ export function renameVirtualCopy(
 }
 
 export function deleteVirtualCopy(entryId: EntryId): Promise<HydratedCatalogState> {
-  return applyEditEntryLifecycle({ kind: "edit-entry-delete", entryId });
+  return applyEditEntryLifecycle({
+    kind: "edit-entry-delete",
+    entryId,
+    tombstonedAt: Date.now(),
+  });
 }

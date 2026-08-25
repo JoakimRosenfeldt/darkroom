@@ -322,6 +322,8 @@ export type CatalogLiveMutation =
       readonly sourceEntryId: EntryId;
       readonly entryId: EntryId;
       readonly displayName: string;
+      readonly developJson: string | null;
+      readonly expectedSourceMetadataUpdatedAt: number;
       readonly createdAt: number;
     }
   | {
@@ -330,7 +332,11 @@ export type CatalogLiveMutation =
       readonly displayName: string;
       readonly updatedAt: number;
     }
-  | { readonly kind: "edit-entry-delete"; readonly entryId: EntryId }
+  | {
+      readonly kind: "edit-entry-delete";
+      readonly entryId: EntryId;
+      readonly tombstonedAt: number;
+    }
   | { readonly kind: "root-upsert"; readonly root: CatalogLiveRootInput }
   | {
       readonly kind: "root-health";
@@ -1001,6 +1007,20 @@ function parseMutation(value: unknown): CatalogLiveMutation {
         sourceEntryId: parseEntryId(input.sourceEntryId),
         entryId: parseEntryId(input.entryId),
         displayName: editEntryName(input.displayName, "displayName"),
+        developJson: input.developJson === null
+          ? null
+          : (() => {
+              const value = stringValue(input.developJson, "developJson");
+              if (new TextEncoder().encode(value).byteLength > 2 * 1024 * 1024) {
+                return fail("developJson is too large");
+              }
+              try { JSON.parse(value); } catch { return fail("developJson is invalid"); }
+              return value;
+            })(),
+        expectedSourceMetadataUpdatedAt: finiteNumber(
+          input.expectedSourceMetadataUpdatedAt,
+          "expectedSourceMetadataUpdatedAt",
+        ),
         createdAt: finiteNumber(input.createdAt, "createdAt"),
       };
     case "edit-entry-rename":
@@ -1011,7 +1031,11 @@ function parseMutation(value: unknown): CatalogLiveMutation {
         updatedAt: finiteNumber(input.updatedAt, "updatedAt"),
       };
     case "edit-entry-delete":
-      return { kind, entryId: parseEntryId(input.entryId) };
+      return {
+        kind,
+        entryId: parseEntryId(input.entryId),
+        tombstonedAt: finiteNumber(input.tombstonedAt, "tombstonedAt"),
+      };
     case "root-upsert":
       return { kind, root: parseRootInput(input.root) };
     case "root-health":

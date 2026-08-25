@@ -62,9 +62,11 @@ export function parseExportDestinationRequest(value: unknown): ExportDestination
   ) {
     throw new Error("Export destination request is invalid.");
   }
+  const count = Number(value.count);
   const assetIds = value.assetIds.map(parseAssetId);
   if (
-    assetIds.length !== value.count ||
+    assetIds.length < 1 ||
+    assetIds.length > count ||
     new Set(assetIds).size !== assetIds.length
   ) {
     throw new Error("Export selection is invalid.");
@@ -73,7 +75,7 @@ export function parseExportDestinationRequest(value: unknown): ExportDestination
     catalogId: parseCatalogId(value.catalogId),
     sessionId: parseSessionId(value.sessionId),
     assetIds,
-    count: value.count,
+    count,
     format: value.format,
     suggestedFilename: value.suggestedFilename,
   };

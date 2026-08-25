@@ -102,7 +102,7 @@ function sourceBasename(entry: LibraryEntry): string {
   return entry.name.replace(/\.[^.]+$/, "");
 }
 
-function virtualCopyFilenameSuffix(entry: LibraryEntry, suffix: string): string | null {
+export function virtualCopyFilenameSuffix(entry: LibraryEntry, suffix: string): string | null {
   if (entry.entryKind === "original") return null;
   const name = entry.displayName
     .normalize("NFKD")
@@ -110,7 +110,7 @@ function virtualCopyFilenameSuffix(entry: LibraryEntry, suffix: string): string 
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
-  return `${suffix}-${name || "copy"}`;
+  return `${suffix}-${name || "copy"}-${entry.id.slice(0, 8)}`;
 }
 
 function getMetadata(
