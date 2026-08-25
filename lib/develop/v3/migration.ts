@@ -3,10 +3,12 @@ import { COORDINATE_FRAME_REVISION } from "../process";
 import { parseSha256Digest } from "../render-contract";
 import type {
   DevelopDocument,
+  LocalMask,
   MaskComponent,
   MaskRasterAsset,
 } from "../types";
 import type { DevelopAssetRef } from "./assets";
+import { migrateLegacyMask, type LocalMaskV3 } from "./masking";
 import {
   V2_TO_V3_MAPPING_REVISION,
   createDefaultV3DevelopDocument,
@@ -62,7 +64,7 @@ function requiredAssetCopies(
 function migratedMasks(
   document: DevelopDocument,
   copies: readonly RequiredV2AssetCopy[],
-): DevelopDocument["settings"]["masking"]["masks"] {
+): readonly LocalMaskV3[] {
   const copiedAssetIds = new Map(
     copies.map((copy) => [copy.sourceAssetId, copy.expectedReference.assetId]),
   );
@@ -73,12 +75,14 @@ function migratedMasks(
           assetId: copiedAssetIds.get(component.assetId) ?? component.assetId,
         }
       : structuredClone(component);
+  const references = copies.map((copy) => copy.expectedReference);
   return document.settings.masking.masks.map((mask) => {
     const [first, ...rest] = mask.components;
-    return {
+    const migrated: LocalMask = {
       ...structuredClone(mask),
       components: [migrateComponent(first), ...rest.map(migrateComponent)],
     };
+    return migrateLegacyMask(migrated, references);
   });
 }
 

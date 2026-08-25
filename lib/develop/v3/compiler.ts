@@ -27,6 +27,7 @@ import type {
 import type { DevelopDocumentV3 } from "./document";
 import { canonicalV3DocumentHashInput } from "./document";
 import { validateRenderQualityRequest } from "./source";
+import { referencedMaskArtifacts } from "./masking";
 
 export const V3_COMPILER_VERSION = "darkroom-v3-compiler-1";
 
@@ -258,7 +259,9 @@ function assetKey(asset: ReturnType<typeof acceptedAssetRevision>): string {
 }
 
 function documentAssets(document: DevelopDocumentV3): readonly DevelopAssetRef[] {
-  const assets: DevelopAssetRef[] = [...document.local.maskAssetRefs];
+  const assets: DevelopAssetRef[] = document.local.masks.flatMap((mask) =>
+    referencedMaskArtifacts(mask.expression)
+  );
   for (const component of document.cleanup.components) {
     if (
       component.kind === "repair" &&

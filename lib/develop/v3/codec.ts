@@ -23,6 +23,7 @@ import {
   type PointColorAdjustment,
 } from "./point-color";
 import {
+  LEGACY_V3_DOCUMENT_SCHEMA_REVISION,
   V3_DOCUMENT_SCHEMA_REVISION,
   type DevelopDocumentV3,
   type HdrEdits,
@@ -39,6 +40,11 @@ import {
   type QuarantinedV3Field,
   type V3Compatibility,
 } from "./document";
+import {
+  migrateLegacyMask,
+  parseLocalMasksV3,
+  referencedMaskArtifacts,
+} from "./masking";
 import type { Homography, QuarterTurns } from "./geometry";
 import { parseLensBlurSettings } from "./lens-blur";
 import type { Matrix3, Rgb } from "./profiles";
@@ -636,9 +642,13 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
   ], state);
   if (input.version !== DEVELOP_PROCESS_VERSION) invalid("Develop document version must be 3.");
   if (input.process !== DEVELOP_PROCESS_ID) invalid("Develop document process is not darkroom-v3.");
-  if (input.schemaRevision !== V3_DOCUMENT_SCHEMA_REVISION) {
+  if (
+    input.schemaRevision !== V3_DOCUMENT_SCHEMA_REVISION &&
+    input.schemaRevision !== LEGACY_V3_DOCUMENT_SCHEMA_REVISION
+  ) {
     invalid("Develop document schema revision is not supported.");
   }
+  const isLegacySchema = input.schemaRevision === LEGACY_V3_DOCUMENT_SCHEMA_REVISION;
   const parsedCompatibility = compatibility(input.compatibility, "compatibility", state);
   const tone = record(input.tone, "tone", ["basic", "curves"], state);
   const basic = record(tone.basic, "tone.basic", [
@@ -675,16 +685,22 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
   };
   const local = record(input.local, "local", ["geometryFrame", "masks", "maskAssetRefs"], state);
   if (!Array.isArray(local.masks)) invalid("local.masks must be an array.");
-  const localMasks = parseDevelopLocalMasks(local.masks);
   const maskAssetRefs = assetReferences(local.maskAssetRefs, "local.maskAssetRefs", state);
-  if (maskAssetRefs.some((asset) => asset.kind !== "mask-matte")) {
-    invalid("local.maskAssetRefs can contain only mask mattes.");
+  if (maskAssetRefs.some((asset) => asset.kind !== "mask-matte" && asset.kind !== "depth-map")) {
+    invalid("local.maskAssetRefs can contain only mask mattes and depth maps.");
   }
+  const localMasks = isLegacySchema
+    ? parseDevelopLocalMasks(local.masks).map((mask) => migrateLegacyMask(mask, maskAssetRefs))
+    : (() => {
+        try {
+          return parseLocalMasksV3(local.masks);
+        } catch (error) {
+          return invalid(error instanceof Error ? error.message : "local.masks is invalid.");
+        }
+      })();
   const referencedMaskAssets = new Set(
     localMasks.flatMap((mask) =>
-      mask.components.flatMap((component) =>
-        component.kind === "ai" ? [component.assetId] : []
-      )
+      referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)
     ),
   );
   if (

@@ -1,14 +1,11 @@
 import type {
   BasicSettings,
-  BrushStroke,
-  LocalMask,
-  MaskComponent,
   SourceSignature,
 } from "../types";
-import { sourceSignaturesEqual } from "../source-transform";
 import type { CleanupEllipse, RedEyeComponent } from "./cleanup";
 import type { GeometryPoint } from "./geometry";
 import type { Rgb } from "./profiles";
+import { evaluateMask, type LocalMaskV3 } from "./masking";
 
 export type LocalGeometryFrame = "canonical-v3" | "legacy-oriented-v2";
 
@@ -24,6 +21,7 @@ export interface MaskRasterMatte extends MaskRasterDimensions {
 export interface MaskCoverageAssets {
   readonly sourceSignature: SourceSignature;
   readonly maskMatte: (assetId: string) => MaskRasterMatte | undefined;
+  readonly depthMap?: (assetId: string) => MaskRasterMatte | undefined;
 }
 
 export function pointInLocalGeometryFrame(
@@ -55,89 +53,6 @@ function smoothstep(minimum: number, maximum: number, value: number): number {
   return position * position * (3 - 2 * position);
 }
 
-function sourceOver(destination: number, source: number): number {
-  return source + destination * (1 - source);
-}
-
-function pointSegmentDistance(
-  pointX: number,
-  pointY: number,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-): number {
-  const dx = endX - startX;
-  const dy = endY - startY;
-  const lengthSquared = dx * dx + dy * dy;
-  const amount = lengthSquared <= Number.EPSILON
-    ? 0
-    : clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSquared, 0, 1);
-  return Math.hypot(
-    pointX - (startX + dx * amount),
-    pointY - (startY + dy * amount),
-  );
-}
-
-function brushStrokeCoverage(
-  stroke: BrushStroke,
-  point: GeometryPoint,
-  dimensions: MaskRasterDimensions,
-): number {
-  const width = Math.max(1, dimensions.width - 1);
-  const height = Math.max(1, dimensions.height - 1);
-  const pointX = point.x * width;
-  const pointY = point.y * height;
-  const radius = Math.max(0.5, stroke.size * Math.max(dimensions.width, dimensions.height) * 0.5);
-  let distance = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < stroke.points.length; index += 1) {
-    const current = stroke.points[index];
-    if (!current) continue;
-    const previous = stroke.points[Math.max(0, index - 1)] ?? current;
-    distance = Math.min(distance, pointSegmentDistance(
-      pointX,
-      pointY,
-      previous.x * width,
-      previous.y * height,
-      current.x * width,
-      current.y * height,
-    ));
-  }
-  const inner = radius * (1 - clamp(stroke.feather, 0, 1));
-  const edge = distance <= inner ? 1 : 1 - smoothstep(inner, radius, distance);
-  return clamp(edge * stroke.flow * stroke.density, 0, 1);
-}
-
-function brushCoverage(
-  component: Extract<MaskComponent, { readonly kind: "brush" }>,
-  point: GeometryPoint,
-  dimensions: MaskRasterDimensions,
-): number {
-  let coverage = 0;
-  for (const stroke of component.strokes) {
-    coverage = sourceOver(coverage, brushStrokeCoverage(stroke, point, dimensions));
-  }
-  return coverage;
-}
-
-function linearCoverage(
-  component: Extract<MaskComponent, { readonly kind: "linear-gradient" }>,
-  point: GeometryPoint,
-  dimensions: MaskRasterDimensions,
-): number {
-  const width = Math.max(1, dimensions.width - 1);
-  const height = Math.max(1, dimensions.height - 1);
-  const startX = component.start.x * width;
-  const startY = component.start.y * height;
-  const dx = (component.end.x - component.start.x) * width;
-  const dy = (component.end.y - component.start.y) * height;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared <= Number.EPSILON) return 0;
-  const amount = ((point.x * width - startX) * dx + (point.y * height - startY) * dy) /
-    lengthSquared;
-  return 1 - smoothstep(0, 1, amount);
-}
-
 function rotatedEllipseDistance(point: GeometryPoint, ellipse: CleanupEllipse): {
   readonly x: number;
   readonly y: number;
@@ -153,98 +68,24 @@ function rotatedEllipseDistance(point: GeometryPoint, ellipse: CleanupEllipse): 
   return { x, y, distance: Math.hypot(x, y) };
 }
 
-function radialCoverage(
-  component: Extract<MaskComponent, { readonly kind: "radial-gradient" }>,
-  point: GeometryPoint,
-): number {
-  if (component.radiusX <= 0 || component.radiusY <= 0) return 0;
-  const ellipse: CleanupEllipse = {
-    center: component.center,
-    radiusX: component.radiusX,
-    radiusY: component.radiusY,
-    rotationDegrees: component.rotation,
-  };
-  const distance = rotatedEllipseDistance(point, ellipse).distance;
-  return 1 - smoothstep(1 - component.feather, 1, distance);
-}
-
-function manualComponentCoverage(
-  component: Exclude<MaskComponent, { readonly kind: "ai" }>,
-  point: GeometryPoint,
-  dimensions: MaskRasterDimensions,
-): number {
-  switch (component.kind) {
-    case "brush": return brushCoverage(component, point, dimensions);
-    case "linear-gradient": return linearCoverage(component, point, dimensions);
-    case "radial-gradient": return radialCoverage(component, point);
-    default: {
-      const exhaustive: never = component;
-      return exhaustive;
-    }
-  }
-}
-
-function sampleMaskMatte(
-  matte: MaskRasterMatte,
-  point: GeometryPoint,
-  threshold: number,
-): number {
-  const sourceX = clamp(point.x, 0, 1) * (matte.width - 1);
-  // Mask PNG rows are top-down, while Develop mask coordinates use a bottom-left origin.
-  const sourceY = (1 - clamp(point.y, 0, 1)) * (matte.height - 1);
-  const lowX = Math.floor(sourceX);
-  const lowY = Math.floor(sourceY);
-  const highX = Math.min(matte.width - 1, lowX + 1);
-  const highY = Math.min(matte.height - 1, lowY + 1);
-  const weightX = sourceX - lowX;
-  const weightY = sourceY - lowY;
-  const top = matte.pixels[lowY * matte.width + lowX]! * (1 - weightX) +
-    matte.pixels[lowY * matte.width + highX]! * weightX;
-  const bottom = matte.pixels[highY * matte.width + lowX]! * (1 - weightX) +
-    matte.pixels[highY * matte.width + highX]! * weightX;
-  const coverage = (top * (1 - weightY) + bottom * weightY) / 255;
-  return coverage < threshold ? 0 : coverage;
-}
-
-function componentCoverage(
-  component: MaskComponent,
-  point: GeometryPoint,
-  dimensions: MaskRasterDimensions,
-  assets: MaskCoverageAssets | undefined,
-): number | null {
-  if (component.kind !== "ai") {
-    return manualComponentCoverage(component, point, dimensions);
-  }
-  if (
-    !assets ||
-    !sourceSignaturesEqual(component.source, assets.sourceSignature)
-  ) {
-    return null;
-  }
-  const matte = assets.maskMatte(component.assetId);
-  if (!matte) return null;
-  return sampleMaskMatte(matte, point, component.inference.threshold);
-}
-
 export function manualMaskCoverage(
-  mask: LocalMask,
+  mask: LocalMaskV3,
   point: GeometryPoint,
   dimensions: MaskRasterDimensions,
   assets?: MaskCoverageAssets,
+  analysis?: { readonly color: Rgb; readonly edge: number },
 ): number {
   if (!mask.enabled) return 0;
-  let coverage = 0;
-  let hasApplicableComponent = false;
-  for (const component of mask.components) {
-    const source = componentCoverage(component, point, dimensions, assets);
-    if (source === null) continue;
-    hasApplicableComponent = true;
-    coverage = component.operation === "add"
-      ? sourceOver(coverage, source)
-      : coverage * (1 - source);
-  }
-  if (!hasApplicableComponent) return 0;
-  return mask.inverted ? 1 - coverage : coverage;
+  return evaluateMask({
+    expression: mask.expression,
+    point,
+    dimensions,
+    sourceSignature: assets?.sourceSignature,
+    analysis,
+    artifacts: assets
+      ? { maskMatte: assets.maskMatte, depthMap: assets.depthMap }
+      : undefined,
+  }).coverage;
 }
 
 export function applyLocalBasicAdjustment(rgb: Rgb, settings: BasicSettings): Rgb {

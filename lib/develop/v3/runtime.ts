@@ -49,6 +49,7 @@ import {
 } from "./document";
 import { resolveConstrainedCrop, type CanonicalGeometry } from "./geometry";
 import type { MaskCoverageAssets } from "./manual-edits";
+import { maskSourceNodes } from "./masking";
 import { NEUTRAL_LENS_CALIBRATION } from "./optics";
 import {
   MAX_TILE_OVERLAP,
@@ -327,9 +328,9 @@ async function runtimeAssets(
   );
   const requiredIds = new Set<string>();
   for (const mask of document.local.masks) {
-    for (const component of mask.components) {
-      if (component.kind === "ai" && acceptedMasks.has(component.assetId)) {
-        requiredIds.add(component.assetId);
+    for (const node of maskSourceNodes(mask.expression)) {
+      if (node.source.kind === "ai-matte" && acceptedMasks.has(node.source.asset.assetId)) {
+        requiredIds.add(node.source.asset.assetId);
       }
     }
   }
@@ -399,8 +400,8 @@ export async function loadV3PreviewMaskMattes(
 ): Promise<readonly V3PreviewMaskMatte[]> {
   const requiredIds = new Set<string>();
   for (const mask of document.local.masks) {
-    for (const component of mask.components) {
-      if (component.kind === "ai") requiredIds.add(component.assetId);
+    for (const node of maskSourceNodes(mask.expression)) {
+      if (node.source.kind === "ai-matte") requiredIds.add(node.source.asset.assetId);
     }
   }
   if (requiredIds.size === 0) return [];

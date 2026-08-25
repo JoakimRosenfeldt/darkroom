@@ -23,12 +23,6 @@ import {
   sourceSignaturesEqual,
 } from "@/lib/develop/source-transform";
 import type {
-  AiMaskComponent,
-  LocalMask,
-  MaskComponent,
-  NonEmpty,
-} from "@/lib/develop/types";
-import type {
   DevelopAssetCandidate,
   DevelopAssetRef,
 } from "@/lib/develop/v3/assets";
@@ -36,7 +30,16 @@ import type {
   DevelopDocumentV3,
   PersistedLocalEdits,
 } from "@/lib/develop/v3/document";
-import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
+import { createDefaultLocalAdjustments } from "@/lib/develop/v3/local-adjustments";
+import {
+  appendMaskSource,
+  findMaskNode,
+  maskSourceNodes,
+  referencedMaskArtifacts,
+  replaceMaskNode,
+  type LocalMaskV3,
+  type MaskSourceNode,
+} from "@/lib/develop/v3/masking";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
@@ -207,56 +210,40 @@ function requestApplies(
     const mask = document.local.masks.find(
       (item) => item.id === request.target?.maskId,
     );
-    return mask?.components.some(
-      (component) => component.id === request.target?.componentId && component.kind === "ai",
-    ) ?? false;
+    const node = mask ? findMaskNode(mask.expression, request.target.componentId) : null;
+    return node?.kind === "source" && node.source.kind === "ai-matte";
   }
   if (request.maskId) {
     const mask = document.local.masks.find((item) => item.id === request.maskId);
-    return Boolean(mask && mask.components.length < MAX_COMPONENTS_PER_MASK);
+    return Boolean(mask && maskSourceNodes(mask.expression).length < MAX_COMPONENTS_PER_MASK);
   }
   return document.local.masks.length < MAX_MASKS;
 }
 
-function nextMaskName(masks: readonly LocalMask[]): string {
+function nextMaskName(masks: readonly LocalMaskV3[]): string {
   const names = new Set(masks.map((mask) => mask.name));
   let index = 1;
   while (names.has(`Mask ${index}`)) index += 1;
   return `Mask ${index}`;
 }
 
-function newMask(maskId: string, component: AiMaskComponent, masks: readonly LocalMask[]): LocalMask {
+function newMask(maskId: string, node: MaskSourceNode, masks: readonly LocalMaskV3[]): LocalMaskV3 {
   return {
     id: maskId,
     name: nextMaskName(masks),
     enabled: true,
-    inverted: false,
-    components: [component],
-    adjustments: structuredClone(DEFAULT_DEVELOP_SETTINGS.basic),
+    expression: node,
+    adjustments: createDefaultLocalAdjustments(),
   };
 }
 
-function replaceComponent(
-  components: NonEmpty<MaskComponent>,
-  targetId: string,
-  replacement: AiMaskComponent,
-): NonEmpty<MaskComponent> {
-  const [first, ...rest] = components;
-  return [
-    first.id === targetId ? replacement : first,
-    ...rest.map((component) => component.id === targetId ? replacement : component),
-  ];
-}
-
 function referencedMaskAssets(
-  masks: readonly LocalMask[],
+  masks: readonly LocalMaskV3[],
   current: readonly DevelopAssetRef[],
   accepted: DevelopAssetRef,
 ): readonly DevelopAssetRef[] {
   const used = new Set(
-    masks.flatMap((mask) => mask.components.flatMap((component) =>
-      component.kind === "ai" ? [component.assetId] : []
-    )),
+    masks.flatMap((mask) => referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)),
   );
   const references = current
     .filter((reference) => used.has(reference.assetId))
@@ -278,42 +265,44 @@ function prepareMaskUpdate(
   const targetMask = request.target
     ? document.local.masks.find((mask) => mask.id === request.target?.maskId)
     : null;
-  const targetComponent = request.target
-    ? targetMask?.components.find((component) => component.id === request.target?.componentId)
+  const targetNode = request.target && targetMask
+    ? findMaskNode(targetMask.expression, request.target.componentId)
     : null;
-  const component: AiMaskComponent = {
-    kind: "ai",
-    id: request.target?.componentId ?? crypto.randomUUID(),
-    operation: targetComponent?.operation ?? "add",
+  const nodeId = request.target?.componentId ?? crypto.randomUUID();
+  const node: MaskSourceNode = {
+    kind: "source",
+    id: nodeId,
+    enabled: true,
+    source: {
+    kind: "ai-matte",
     selector: result.component.selector,
-    assetId: reference.assetId,
+    asset: reference,
     model: result.component.model,
     source: sourceSignature,
-    inference: result.component.inference,
+    threshold: result.component.inference.threshold,
+    },
   };
 
-  let masks: readonly LocalMask[];
+  let masks: readonly LocalMaskV3[];
   let maskId: string;
   if (request.target) {
     maskId = request.target.maskId;
     masks = document.local.masks.map((mask) => mask.id === request.target?.maskId
       ? {
           ...mask,
-          components: replaceComponent(
-            mask.components,
-            request.target.componentId,
-            component,
-          ),
+          expression: targetNode?.kind === "source"
+            ? replaceMaskNode(mask.expression, request.target.componentId, node)
+            : mask.expression,
         }
       : mask);
   } else if (request.maskId) {
     maskId = request.maskId;
     masks = document.local.masks.map((mask) => mask.id === request.maskId
-      ? { ...mask, components: [...mask.components, component] }
+      ? { ...mask, expression: appendMaskSource(mask.expression, node, "add", crypto.randomUUID()) }
       : mask);
   } else {
     maskId = crypto.randomUUID();
-    masks = [...document.local.masks, newMask(maskId, component, document.local.masks)];
+    masks = [...document.local.masks, newMask(maskId, node, document.local.masks)];
   }
 
   return {
@@ -327,7 +316,7 @@ function prepareMaskUpdate(
       ),
     },
     maskId,
-    componentId: component.id,
+    componentId: node.id,
   };
 }
 
@@ -431,9 +420,9 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
   const selectedMask = document.local.masks.find(
     (mask) => mask.id === sessionUi?.selectedMaskId,
   ) ?? null;
-  const selectedComponent = selectedMask?.components.find(
-    (component) => component.id === sessionUi?.selectedComponentId,
-  ) ?? null;
+  const selectedComponent = selectedMask && sessionUi?.selectedComponentId
+    ? findMaskNode(selectedMask.expression, sessionUi.selectedComponentId)
+    : null;
 
   const refreshModels = useCallback(async (): Promise<void> => {
     if (!isElectronApp()) return;
@@ -763,9 +752,10 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
 
   const busy = job !== null;
   const canAdd = selectedMask
-    ? selectedMask.components.length < MAX_COMPONENTS_PER_MASK
+    ? maskSourceNodes(selectedMask.expression).length < MAX_COMPONENTS_PER_MASK
     : document.local.masks.length < MAX_MASKS;
-  const selectedAi = selectedComponent?.kind === "ai" ? selectedComponent : null;
+  const selectedAiNode = selectedComponent?.kind === "source" ? selectedComponent : null;
+  const selectedAi = selectedAiNode?.source.kind === "ai-matte" ? selectedAiNode.source : null;
   const staleSelectedAi = selectedAi
     ? !sourceSignaturesEqual(selectedAi.source, sourceSignature)
     : false;
@@ -822,7 +812,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
               modelId: selectedAi.selector,
               maskId: selectedMask?.id ?? null,
               target: selectedMask
-                ? { maskId: selectedMask.id, componentId: selectedAi.id }
+                ? { maskId: selectedMask.id, componentId: selectedAiNode?.id ?? "" }
                 : null,
               forceWasm: false,
             })}

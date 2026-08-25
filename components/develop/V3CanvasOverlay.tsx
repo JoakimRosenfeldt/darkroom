@@ -14,14 +14,21 @@ import {
   MAX_MASKS,
   MAX_POINTS_PER_STROKE,
 } from "@/lib/develop/document";
-import { DEFAULT_DEVELOP_SETTINGS } from "@/lib/develop/registry";
 import type {
   BrushStroke,
-  LocalMask,
   MaskComponent,
   NonEmpty,
   NormalizedPoint,
 } from "@/lib/develop/types";
+import { createDefaultLocalAdjustments } from "@/lib/develop/v3/local-adjustments";
+import {
+  appendMaskSource,
+  findMaskNode,
+  maskSourceNodes,
+  replaceMaskNode,
+  type LocalMaskV3,
+  type MaskSourceNode,
+} from "@/lib/develop/v3/masking";
 import {
   applyCleanupCommand,
   type CleanupComponent,
@@ -157,7 +164,7 @@ function distancePixels(
   return Math.hypot((left.x - right.x) * width, (left.y - right.y) * height);
 }
 
-function nextMaskName(masks: readonly LocalMask[]): string {
+function nextMaskName(masks: readonly LocalMaskV3[]): string {
   const names = new Set(masks.map((mask) => mask.name));
   let index = 1;
   while (names.has(`Mask ${index}`)) index += 1;
@@ -200,14 +207,52 @@ function componentWithOperation(
   }
 }
 
-function createMask(id: string, name: string, component: MaskComponent): LocalMask {
+function sourceNodeFromComponent(component: ManualMaskComponent): MaskSourceNode {
+  switch (component.kind) {
+    case "brush": return {
+      kind: "source", id: component.id, enabled: true,
+      source: { kind: "brush", strokes: component.strokes, autoMask: { kind: "off" } },
+    };
+    case "linear-gradient": return {
+      kind: "source", id: component.id, enabled: true,
+      source: { kind: "linear-gradient", start: component.start, end: component.end },
+    };
+    case "radial-gradient": return {
+      kind: "source", id: component.id, enabled: true,
+      source: {
+        kind: "radial-gradient", center: component.center, radiusX: component.radiusX,
+        radiusY: component.radiusY, rotation: component.rotation, feather: component.feather,
+      },
+    };
+    default: { const exhaustive: never = component; return exhaustive; }
+  }
+}
+
+function manualComponentForNode(node: MaskSourceNode | null): ManualMaskComponent | null {
+  if (!node) return null;
+  switch (node.source.kind) {
+    case "brush": {
+      const first = node.source.strokes[0];
+      if (!first) return null;
+      return { kind: "brush", id: node.id, operation: "add", strokes: [first, ...node.source.strokes.slice(1)], size: first.size, feather: first.feather, flow: first.flow, density: first.density };
+    }
+    case "linear-gradient": return { kind: "linear-gradient", id: node.id, operation: "add", start: node.source.start, end: node.source.end };
+    case "radial-gradient": return { kind: "radial-gradient", id: node.id, operation: "add", center: node.source.center, radiusX: node.source.radiusX, radiusY: node.source.radiusY, rotation: node.source.rotation, feather: node.source.feather };
+    case "luminance-range":
+    case "color-range":
+    case "depth-range":
+    case "ai-matte": return null;
+    default: { const exhaustive: never = node.source; return exhaustive; }
+  }
+}
+
+function createMask(id: string, name: string, component: ManualMaskComponent): LocalMaskV3 {
   return {
     id,
     name,
     enabled: true,
-    inverted: false,
-    components: [component],
-    adjustments: structuredClone(DEFAULT_DEVELOP_SETTINGS.basic),
+    expression: sourceNodeFromComponent(component),
+    adjustments: createDefaultLocalAdjustments(),
   };
 }
 
@@ -334,9 +379,14 @@ export function V3CanvasOverlay({
   const [status, setStatus] = useState<string | null>(null);
 
   const selectedMask = document.local.masks.find((mask) => mask.id === sessionUi?.selectedMaskId) ?? null;
-  const selectedComponent = selectedMask?.components.find(
-    (component) => component.id === sessionUi?.selectedComponentId,
-  ) ?? null;
+  const selectedNode = selectedMask && sessionUi?.selectedComponentId
+    ? findMaskNode(selectedMask.expression, sessionUi.selectedComponentId)
+    : null;
+  const selectedSourceNode = selectedNode?.kind === "source" ? selectedNode : null;
+  const selectedAiSource = selectedSourceNode?.source.kind === "ai-matte"
+    ? selectedSourceNode.source
+    : null;
+  const selectedComponent = manualComponentForNode(selectedSourceNode);
   const maskTool = sessionUi?.tool ?? "none";
   const overlayVisible = sessionUi?.overlayVisible ?? true;
 
@@ -355,8 +405,8 @@ export function V3CanvasOverlay({
       !maskingActive ||
       !overlayVisible ||
       !selectedMask ||
-      selectedComponent?.kind !== "ai" ||
-      !sourceSignaturesEqual(selectedComponent.source, source.signature)
+      !selectedAiSource ||
+      !sourceSignaturesEqual(selectedAiSource.source, source.signature)
     ) {
       return;
     }
@@ -366,7 +416,7 @@ export function V3CanvasOverlay({
       if (
         cancelled ||
         requestId !== maskOverlayRequestRef.current ||
-        !assets?.maskMatte(selectedComponent.assetId)
+        !assets?.maskMatte(selectedAiSource.asset.assetId)
       ) return;
 
       const dimensions = maskOverlayDimensions(width, height);
@@ -423,7 +473,7 @@ export function V3CanvasOverlay({
     height,
     maskingActive,
     overlayVisible,
-    selectedComponent,
+    selectedAiSource,
     selectedMask,
     source,
     width,
@@ -524,16 +574,17 @@ export function V3CanvasOverlay({
   }
 
   function commitMask(target: MaskTarget, component: ManualMaskComponent): void {
-    let masks: readonly LocalMask[];
+    const node = sourceNodeFromComponent(component);
+    let masks: readonly LocalMaskV3[];
     switch (target.kind) {
       case "replace":
         masks = document.local.masks.map((mask) => mask.id === target.maskId
-          ? { ...mask, components: nonEmpty(mask.components.map((item) => item.id === component.id ? component : item)) ?? mask.components }
+          ? { ...mask, expression: replaceMaskNode(mask.expression, component.id, node) }
           : mask);
         break;
       case "insert":
         masks = document.local.masks.map((mask) => mask.id === target.maskId
-          ? { ...mask, components: nonEmpty([...mask.components, component]) ?? mask.components }
+          ? { ...mask, expression: appendMaskSource(mask.expression, node, "add", crypto.randomUUID()) }
           : mask);
         break;
       case "new-mask":
@@ -563,7 +614,7 @@ export function V3CanvasOverlay({
     const existing = selectedComponent?.kind === maskTool ? selectedComponent : null;
     const target: MaskTarget | null = existing && selectedMask
       ? { kind: "replace", maskId: selectedMask.id }
-      : selectedMask && selectedMask.components.length < MAX_COMPONENTS_PER_MASK
+      : selectedMask && maskSourceNodes(selectedMask.expression).length < MAX_COMPONENTS_PER_MASK
         ? { kind: "insert", maskId: selectedMask.id }
         : !selectedMask && document.local.masks.length < MAX_MASKS
           ? { kind: "new-mask", maskId: crypto.randomUUID(), name: nextMaskName(document.local.masks) }
@@ -578,10 +629,10 @@ export function V3CanvasOverlay({
         let strokeCount = 0;
         let pointCount = 0;
         for (const mask of document.local.masks) {
-          for (const item of mask.components) {
-            if (item.kind !== "brush") continue;
-            strokeCount += item.strokes.length;
-            for (const stroke of item.strokes) pointCount += stroke.points.length;
+          for (const item of maskSourceNodes(mask.expression)) {
+            if (item.source.kind !== "brush") continue;
+            strokeCount += item.source.strokes.length;
+            for (const stroke of item.source.strokes) pointCount += stroke.points.length;
           }
         }
         if (strokeCount >= MAX_BRUSH_STROKES) {
@@ -1024,7 +1075,7 @@ export function V3CanvasOverlay({
     return paths.length > 0 ? paths.join(" ") : null;
   }
 
-  const guideComponent = maskPreview ?? (selectedComponent?.kind === "ai" ? null : selectedComponent);
+  const guideComponent = maskPreview ?? selectedComponent;
   const cleanupGuide = cleanupPreview ?? (canvasTool.kind === "cleanup"
     ? document.cleanup.components.find((component) => component.id === canvasTool.componentId) ?? null
     : null);
