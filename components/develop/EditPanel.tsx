@@ -117,11 +117,13 @@ export interface V3BatchContext {
 
 function saveLabel(input: {
   readonly sidecarStatus: string;
+  readonly previewing: boolean;
   readonly documentRevision: number;
   readonly persistedDocumentRevision: number;
   readonly metadataRevision: number;
   readonly persistedMetadataRevision: number;
 }): string {
+  if (input.previewing) return "Previewing";
   if (input.sidecarStatus === "saving") return "Saving…";
   if (input.sidecarStatus === "error") return "Save failed";
   return input.documentRevision === input.persistedDocumentRevision &&
@@ -159,13 +161,14 @@ export function EditPanel({
   );
   const [batchOpen, setBatchOpen] = useState(false);
 
-  const document = session?.persistedDocument;
+  const document = session?.previewDocument ?? session?.persistedDocument;
   if (!session || session.processKind !== "v3" || document?.version !== 3) {
     return null;
   }
 
   const status = saveLabel({
     sidecarStatus: session.ui.sidecarStatus,
+    previewing: session.transientEdit !== null,
     documentRevision: session.documentRevision,
     persistedDocumentRevision: session.persistedDocumentRevision,
     metadataRevision: session.metadataRevision,

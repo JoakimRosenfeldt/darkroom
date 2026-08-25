@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   KeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -61,7 +61,27 @@ export function ToneCurveEditor({
   const points = settings[channel];
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+  const activeEntryId = useDevelopStore((state) => state.activeEntryId);
+  const keyboardEdit = useRef(false);
   const channelInfo = CHANNELS.find((item) => item.id === channel)!;
+
+  useEffect(() => {
+    drag.current = null;
+    keyboardEdit.current = false;
+  }, [activeEntryId]);
+
+  const commitCurveEdit = () => {
+    drag.current = null;
+    keyboardEdit.current = false;
+    endEditGroup();
+  };
+
+  const cancelCurveEdit = () => {
+    drag.current = null;
+    keyboardEdit.current = false;
+    cancelEditGroup();
+  };
 
   const eventPoint = (
     clientX: number,
@@ -149,6 +169,10 @@ export function ToneCurveEditor({
     const deltaY = event.key === "ArrowDown" ? -step : event.key === "ArrowUp" ? step : 0;
     if (deltaX || deltaY) {
       event.preventDefault();
+      if (!keyboardEdit.current) {
+        keyboardEdit.current = true;
+        beginEditGroup("Adjust tone curve");
+      }
       commitPoint(index, {
         x: point.x + deltaX,
         y: Math.min(1, Math.max(0, point.y + deltaY)),
@@ -219,12 +243,16 @@ export function ToneCurveEditor({
           });
         }}
         onPointerUp={() => {
-          drag.current = null;
-          endEditGroup();
+          commitCurveEdit();
         }}
         onPointerCancel={() => {
-          drag.current = null;
-          endEditGroup();
+          cancelCurveEdit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && (drag.current || keyboardEdit.current)) {
+            event.preventDefault();
+            cancelCurveEdit();
+          }
         }}
         className="block w-full touch-none cursor-crosshair rounded-md border border-lr-border bg-[#131110]"
       >
@@ -253,6 +281,14 @@ export function ToneCurveEditor({
               aria-label={`Point ${index + 1}: input ${Math.round(point.x * 255)}, output ${Math.round(point.y * 255)}`}
               onFocus={() => setSelected(index)}
               onKeyDown={(event) => handlePointKey(event, index)}
+              onKeyUp={(event) => {
+                if (event.key.startsWith("Arrow") && keyboardEdit.current) {
+                  commitCurveEdit();
+                }
+              }}
+              onBlur={() => {
+                if (keyboardEdit.current) commitCurveEdit();
+              }}
               onDoubleClick={(event) => {
                 event.stopPropagation();
                 removePoint(index);

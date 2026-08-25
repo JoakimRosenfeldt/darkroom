@@ -456,7 +456,7 @@ export function V3CanvasOverlay({
         requestId !== maskOverlayRequestRef.current ||
         state.activeCatalogId !== source.signature.catalogId ||
         state.activeEntryId !== source.signature.entryId ||
-        session?.persistedDocument !== document ||
+        (session.previewDocument ?? session.persistedDocument) !== document ||
         maskOverlayCanvasRef.current !== canvas
       ) return;
       canvas.width = dimensions.width;

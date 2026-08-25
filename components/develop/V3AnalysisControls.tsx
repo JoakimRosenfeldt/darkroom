@@ -58,9 +58,9 @@ export function V3AutoToneControl({
   document,
   disabled = false,
 }: V3AutoToneControlProps) {
-  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
-  const dispatch = useDevelopStore((state) => state.dispatchV3);
-  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const commitCompleteState = useDevelopStore(
+    (state) => state.commitV3CompleteState,
+  );
   const activeCatalogId = useDevelopStore((state) => state.activeCatalogId);
   const activeEntryId = useDevelopStore((state) => state.activeEntryId);
   const activeSession = useDevelopStore((state) => {
@@ -104,12 +104,12 @@ export function V3AutoToneControl({
       return;
     }
     const values = proposal.values;
-    beginEditGroup("Auto Tone");
-    try {
-      dispatch({
-        kind: "replace-v3-semantic-group",
-        group: "tone",
-        value: {
+    commitCompleteState(
+      currentBinding.catalogId,
+      currentBinding.entryId,
+      {
+        ...document,
+        tone: {
           ...document.tone,
           basic: {
             exposure: values.exposure,
@@ -120,21 +120,16 @@ export function V3AutoToneControl({
             blacks: values.blacks,
           },
         },
-      }, "Auto Tone");
-      dispatch({
-        kind: "replace-v3-semantic-group",
-        group: "color",
-        value: {
+        color: {
           ...document.color,
           global: {
             vibrance: values.vibrance,
             saturation: values.saturation,
           },
         },
-      }, "Auto Tone");
-    } finally {
-      endEditGroup();
-    }
+      },
+      "Auto Tone",
+    );
   };
 
   let status = "Tone analysis has not been requested.";

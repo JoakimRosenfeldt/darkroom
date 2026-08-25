@@ -247,8 +247,9 @@ export function DevelopCanvas({
     const session = state.activeCatalogId === entry.catalogId
       ? state.sessions[entry.id]
       : undefined;
-    return session?.processKind === "v3" && session.persistedDocument?.version === 3
-      ? session.persistedDocument
+    const document = session?.previewDocument ?? session?.persistedDocument;
+    return session?.processKind === "v3" && document?.version === 3
+      ? document
       : null;
   });
   const previewMode = useDevelopStore((state) => {

@@ -156,10 +156,11 @@ export function PhotoViewer({
     persistCatalog,
     hydrateKeywords,
   });
-  const persistedV3Document = useDevelopStore((state) => {
+  const visibleV3Document = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
-    return session?.processKind === "v3" && session.persistedDocument?.version === 3
-      ? session.persistedDocument
+    const document = session?.previewDocument ?? session?.persistedDocument;
+    return session?.processKind === "v3" && document?.version === 3
+      ? document
       : null;
   });
   const developProcessKind = useDevelopStore(
@@ -176,7 +177,7 @@ export function PhotoViewer({
   const setMaskOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
   const setMaskTool = useDevelopStore((state) => state.setMaskTool);
   const [exportOpen, setExportOpen] = useState(false);
-  const headerMasks = persistedV3Document?.local.masks ?? [];
+  const headerMasks = visibleV3Document?.local.masks ?? [];
   const headerSelectedMask = headerMasks.find((mask) => mask.id === maskUi?.selectedMaskId);
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));

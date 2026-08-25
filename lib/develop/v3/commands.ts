@@ -43,7 +43,11 @@ export type V3DirectEditCommand =
   | PatchV3SemanticGroupCommand
   | { readonly kind: "reset-v3-semantic-group"; readonly group: V3SemanticGroupId }
   | { readonly kind: "reset-v3-all" }
-  | { readonly kind: "commit-v3-crop-draft"; readonly crop: PersistedCrop };
+  | { readonly kind: "commit-v3-crop-draft"; readonly crop: PersistedCrop }
+  | {
+      readonly kind: "replace-v3-complete-state";
+      readonly document: DevelopDocumentV3;
+    };
 
 export type V3EditCommand =
   | V3DirectEditCommand
@@ -67,7 +71,7 @@ export type V3CommandResult =
   | {
       readonly changed: true;
       readonly document: DevelopDocumentV3;
-      readonly patches: readonly [V3GroupPatch, ...V3GroupPatch[]];
+      readonly patches: readonly V3GroupPatch[];
     };
 
 function equal(left: unknown, right: unknown): boolean {
@@ -207,6 +211,14 @@ function applyDirectV3Command(
         crop: command.crop,
       });
       return changedResult(document, next, ["geometry"]);
+    }
+    case "replace-v3-complete-state": {
+      const next = validateV3CommandDocument(command.document);
+      if (equal(document, next)) return { changed: false, document };
+      const result = changedResult(document, next, V3_SEMANTIC_GROUP_IDS);
+      return result.changed
+        ? result
+        : { changed: true, document: next, patches: [] };
     }
     default: {
       const exhaustive: never = command;

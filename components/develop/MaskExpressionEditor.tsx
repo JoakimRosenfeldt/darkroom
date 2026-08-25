@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { BasicSettings } from "@/lib/develop/types";
 import { MAX_COMPONENTS_PER_MASK, MAX_MASKS } from "@/lib/develop/document";
@@ -75,6 +76,128 @@ function hexColor(color: readonly [number, number, number]): string {
 function colorFromHex(value: string): readonly [number, number, number] {
   const parsed = /^#[0-9a-f]{6}$/i.test(value) ? Number.parseInt(value.slice(1), 16) : 0x808080;
   return [(parsed >> 16 & 255) / 255, (parsed >> 8 & 255) / 255, (parsed & 255) / 255];
+}
+
+function MaskNameInput({
+  name,
+  onPreview,
+}: {
+  readonly name: string;
+  readonly onPreview: (name: string) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  const original = useRef(name);
+  const editing = useRef(false);
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+
+  useEffect(() => {
+    if (!editing.current) setDraft(name);
+  }, [name]);
+
+  const begin = () => {
+    if (editing.current) return;
+    editing.current = true;
+    original.current = name;
+    beginEditGroup("Rename mask");
+  };
+
+  const commit = () => {
+    if (!editing.current) return;
+    editing.current = false;
+    endEditGroup();
+  };
+
+  const cancel = () => {
+    if (!editing.current) return;
+    editing.current = false;
+    setDraft(original.current);
+    cancelEditGroup();
+  };
+
+  return (
+    <input
+      value={draft}
+      aria-label="Mask name"
+      onFocus={begin}
+      onChange={(event) => {
+        begin();
+        setDraft(event.target.value);
+        onPreview(event.target.value);
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancel();
+          event.currentTarget.blur();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+          event.currentTarget.blur();
+        }
+      }}
+      className="w-full rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[10px] text-lr-text"
+    />
+  );
+}
+
+function PreviewColorInput({
+  label,
+  value,
+  onPreview,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly onPreview: (value: string) => void;
+}) {
+  const editing = useRef(false);
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+
+  const begin = () => {
+    if (editing.current) return;
+    editing.current = true;
+    beginEditGroup(label);
+  };
+  const commit = () => {
+    if (!editing.current) return;
+    editing.current = false;
+    endEditGroup();
+  };
+  const cancel = () => {
+    if (!editing.current) return;
+    editing.current = false;
+    cancelEditGroup();
+  };
+
+  return (
+    <input
+      type="color"
+      aria-label={label}
+      value={value}
+      onFocus={begin}
+      onPointerDown={begin}
+      onPointerCancel={cancel}
+      onChange={(event) => {
+        begin();
+        onPreview(event.target.value);
+      }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancel();
+          event.currentTarget.blur();
+        } else if (event.key === "Enter") {
+          commit();
+          event.currentTarget.blur();
+        }
+      }}
+    />
+  );
 }
 
 function ExpressionTree({
@@ -183,7 +306,11 @@ export function MaskExpressionEditor({ document, entry }: Props) {
               <button type="button" onClick={() => writeMasks(masks.filter((item) => item.id !== mask.id), "Delete mask")} className="text-[9px] text-lr-danger">Delete</button>
             </div>
             {selectedMask?.id === mask.id ? <div className="mt-2 space-y-2">
-              <input value={mask.name} aria-label="Mask name" onChange={(event) => writeMask({ ...mask, name: event.target.value }, "Rename mask")} className="w-full rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[10px] text-lr-text" />
+              <MaskNameInput
+                key={`${entry.id}:${mask.id}:name`}
+                name={mask.name}
+                onPreview={(name) => writeMask({ ...mask, name }, "Rename mask")}
+              />
               <div className="flex flex-wrap gap-1">
                 <ActionButton onClick={() => writeMask({ ...mask, expression: mask.expression.kind === "invert" ? mask.expression.child : { kind: "invert", id: crypto.randomUUID(), enabled: true, child: mask.expression } }, "Invert mask")}>{mask.expression.kind === "invert" ? "Remove invert" : "Invert"}</ActionButton>
                 <ActionButton disabled={!selectedNode} onClick={() => selectedNode && writeMask({ ...mask, expression: wrapMaskNodeInGroup(mask.expression, selectedNode.id, luminanceSource(), "intersect", crypto.randomUUID()) }, "Group mask nodes")}>Group with range</ActionButton>
@@ -197,7 +324,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
       {selectedNode?.kind === "source" && selectedSource?.kind === "brush" ? <div className="mt-3 border-t border-lr-border-subtle pt-2">
         <ToggleRow label="Auto Mask, Prototype" checked={selectedSource.autoMask.kind !== "off"} onChange={(enabled) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: enabled ? { kind: "auto-mask-prototype-v1", samplePolicy: "explicit-working-rgb", samples: [[0.5, 0.5, 0.5]], radius: 0.25, algorithm: "analysis-color-edge-v1" } : { kind: "off" } } })} />
         {selectedAutoMask ? <>
-          <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <input type="color" value={hexColor(selectedAutoMask.samples[0] ?? [0.5, 0.5, 0.5])} onChange={(event) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, samplePolicy: "explicit-working-rgb", samples: [colorFromHex(event.target.value)] } } })} /></label>
+          <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:auto-mask-sample`} label="Adjust Auto Mask sample" value={hexColor(selectedAutoMask.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, samplePolicy: "explicit-working-rgb", samples: [colorFromHex(value)] } } })} /></label>
           <SliderRow label="Analysis radius" value={selectedAutoMask.radius} min={0.001} max={1} step={0.01} onChange={(radius) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, radius } } })} />
           <p className="text-[9px] text-lr-text-faint">Prototype analysis is required. It never falls back to an ordinary brush.</p>
         </> : null}
@@ -210,7 +337,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
       </div> : null}
       {selectedNode?.kind === "source" && selectedSource?.kind === "color-range" ? <div className="mt-3 border-t border-lr-border-subtle pt-2">
         <SectionLabel>Color Range</SectionLabel>
-        <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <input type="color" value={hexColor(selectedSource.samples[0] ?? [0.5, 0.5, 0.5])} onChange={(event) => replaceNode({ ...selectedNode, source: { ...selectedSource, samples: [colorFromHex(event.target.value)] } })} /></label>
+        <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:color-range-sample`} label="Adjust Color Range sample" value={hexColor(selectedSource.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, samples: [colorFromHex(value)] } })} /></label>
         <SliderRow label="Tolerance" value={selectedSource.tolerance} min={0.001} max={2} step={0.01} onChange={(tolerance) => replaceNode({ ...selectedNode, source: { ...selectedSource, tolerance } })} />
         <SliderRow label="Feather" value={selectedSource.feather} min={0} max={1} step={0.01} onChange={(feather) => replaceNode({ ...selectedNode, source: { ...selectedSource, feather } })} />
       </div> : null}
@@ -244,7 +371,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
             writeMask({ ...selectedMask, adjustments }, `Adjust mask ${definition.field}`);
           }} />;
         })}
-        <label className="mt-1 flex items-center justify-between text-[10px] text-lr-text-muted">Colorize color <input type="color" value={hexColor(selectedMask.adjustments.colorize.color)} onChange={(event) => writeMask({ ...selectedMask, adjustments: { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, color: colorFromHex(event.target.value) } } }, "Adjust mask colorize color")} /></label>
+        <label className="mt-1 flex items-center justify-between text-[10px] text-lr-text-muted">Colorize color <PreviewColorInput key={`${entry.id}:${selectedMask.id}:colorize`} label="Adjust mask colorize color" value={hexColor(selectedMask.adjustments.colorize.color)} onPreview={(value) => writeMask({ ...selectedMask, adjustments: { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, color: colorFromHex(value) } } }, "Adjust mask colorize color")} /></label>
       </div> : null}
       <button type="button" onClick={() => reset("local")} className="mt-3 text-[9px] text-lr-text-faint hover:text-lr-text">Reset masks</button>
       <span className="ml-2 font-mono text-[9px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>

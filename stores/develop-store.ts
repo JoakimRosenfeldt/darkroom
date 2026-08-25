@@ -38,6 +38,7 @@ interface DevelopSessionUi {
 export interface DevelopSessionState {
   processKind: DevelopSessionSnapshot["processKind"];
   persistedDocument: PersistedDevelopDocument | null;
+  previewDocument: PersistedDevelopDocument | null;
   readOnly: DevelopReadOnlyReason | null;
   documentRevision: number;
   persistedDocumentRevision: number;
@@ -77,6 +78,7 @@ function adapterState(
   return {
     processKind: snapshot.processKind,
     persistedDocument,
+    previewDocument: snapshot.previewDocument,
     readOnly: snapshot.readOnly,
     documentRevision: snapshot.documentRevision,
     persistedDocumentRevision: snapshot.persistedDocumentRevision,
@@ -105,10 +107,23 @@ interface DevelopStore {
   ) => void;
   synchronizeSession: (entryId: string, snapshot: DevelopSessionSnapshot) => void;
   dispatchV3: (command: V3EditCommand, label?: string) => void;
+  dispatchV3ToEntry: (
+    catalogId: string,
+    entryId: string,
+    command: V3EditCommand,
+    label?: string,
+  ) => void;
+  commitV3CompleteState: (
+    catalogId: string,
+    entryId: string,
+    document: Extract<PersistedDevelopDocument, { readonly version: 3 }>,
+    label: string,
+  ) => void;
   resetV3Group: (group: V3SemanticGroupId) => void;
   resetV3All: () => void;
   beginEditGroup: (label: string) => void;
   endEditGroup: () => void;
+  cancelEditGroup: () => void;
   undo: () => void;
   redo: () => void;
   recordMetadataEdit: (
@@ -151,13 +166,24 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   sessions: {},
 
   activateEntry: (catalogId, entryId, document) => set((state) => {
+    const previousSession = state.activeCatalogId && state.activeEntryId &&
+      (state.activeCatalogId !== catalogId || state.activeEntryId !== entryId)
+      ? getDevelopSession(state.activeCatalogId, state.activeEntryId)
+      : null;
+    const sessions = { ...state.sessions };
+    if (previousSession && state.activeEntryId) {
+      sessions[state.activeEntryId] = adapterState(
+        previousSession.cancelEditGroup(),
+        state.sessions[state.activeEntryId]?.ui,
+      );
+    }
     const session = getOrCreateDevelopSession(catalogId, entryId, document);
     activateDevelopSession(catalogId, entryId);
     return {
       activeCatalogId: catalogId,
       activeEntryId: entryId,
       sessions: {
-        ...state.sessions,
+        ...sessions,
         [entryId]: adapterState(session.snapshot(), state.sessions[entryId]?.ui),
       },
     };
@@ -181,6 +207,19 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     if (!session || session.snapshot().processKind !== "v3") return state;
     return replaceCoreState(state, entryId, session.dispatch(command, label));
   }),
+  dispatchV3ToEntry: (catalogId, entryId, command, label = "Edit") =>
+    set((state) => {
+      const session = getDevelopSession(catalogId, entryId);
+      if (!session || session.snapshot().processKind !== "v3") return state;
+      return replaceCoreState(state, entryId, session.dispatch(command, label));
+    }),
+  commitV3CompleteState: (catalogId, entryId, document, label) =>
+    get().dispatchV3ToEntry(
+      catalogId,
+      entryId,
+      { kind: "replace-v3-complete-state", document },
+      label,
+    ),
   resetV3Group: (group) =>
     get().dispatchV3(
       { kind: "reset-v3-semantic-group", group },
@@ -206,6 +245,16 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       : null;
     return entryId && session
       ? replaceCoreState(state, entryId, session.endEditGroup())
+      : state;
+  }),
+  cancelEditGroup: () => set((state) => {
+    const entryId = state.activeEntryId;
+    const catalogId = state.activeCatalogId;
+    const session = catalogId && entryId
+      ? getDevelopSession(catalogId, entryId)
+      : null;
+    return entryId && session
+      ? replaceCoreState(state, entryId, session.cancelEditGroup())
       : state;
   }),
 
