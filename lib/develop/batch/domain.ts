@@ -40,6 +40,28 @@ export interface DevelopBatchFrozenProfileContext {
   readonly context: DevelopPresetCameraProfileContext;
 }
 
+const DEVELOP_BATCH_PREPARATION_PENDING = "Camera profile preparation is pending.";
+
+export function pendingDevelopBatchOperation(
+  action: DevelopBatchAction,
+  targetEntryIds: readonly EntryId[],
+): Extract<DevelopBatchOperation, { readonly kind: "frozen" }> {
+  return {
+    kind: "frozen",
+    action,
+    profileContexts: targetEntryIds.map((entryId) => ({
+      entryId,
+      context: { kind: "unavailable", reason: DEVELOP_BATCH_PREPARATION_PENDING },
+    })),
+  };
+}
+
+export function developBatchPreparationIsPending(operation: DevelopBatchOperation): boolean {
+  return operation.kind === "frozen" && operation.profileContexts.length > 0 && operation.profileContexts.every(
+    ({ context }) => context.kind === "unavailable" && context.reason === DEVELOP_BATCH_PREPARATION_PENDING,
+  );
+}
+
 export type DevelopBatchOperation =
   | DevelopBatchAction
   | { readonly kind: "frozen"; readonly action: DevelopBatchAction; readonly profileContexts: readonly DevelopBatchFrozenProfileContext[] }
@@ -118,6 +140,23 @@ export type DevelopBatchCommand =
       readonly targetEntryIds: readonly EntryId[]; readonly operation: Exclude<DevelopBatchOperation, { readonly kind: "undo" }>;
       readonly createdAt: number;
     }
+  | {
+      readonly kind: "prepare";
+      readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
+      readonly batchKind: "sync" | "batch"; readonly sourceEntryId: EntryId | null;
+      readonly targetEntryIds: readonly EntryId[]; readonly action: DevelopBatchAction; readonly createdAt: number;
+    }
+  | {
+      readonly kind: "previous-prepare";
+      readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
+      readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[]; readonly createdAt: number;
+    }
+  | {
+      readonly kind: "complete-preparation";
+      readonly catalogId: CatalogId; readonly batchId: DevelopBatchId;
+      readonly operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>;
+    }
+  | { readonly kind: "fail-preparation"; readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly error: string }
   | {
       readonly kind: "previous";
       readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
@@ -502,6 +541,27 @@ export function parseDevelopBatchCommand(value: unknown): DevelopBatchCommand {
     const operation = parseDevelopBatchOperation(input.operation);
     if (operation.kind === "undo") fail("Develop batch freeze operation is invalid.");
     return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), batchKind: input.batchKind, sourceEntryId: input.sourceEntryId === null ? null : parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds, "Develop batch target IDs"), operation, createdAt: finite(input.createdAt, "Develop batch createdAt") };
+  }
+  if (kind === "prepare") {
+    exact(input, ["kind", "catalogId", "batchId", "operationId", "batchKind", "sourceEntryId", "targetEntryIds", "action", "createdAt"], "Develop batch prepare command");
+    if (input.batchKind !== "sync" && input.batchKind !== "batch") fail("Develop batch prepare kind is invalid.");
+    const action = parseDevelopBatchOperation(input.action);
+    if (action.kind === "undo" || action.kind === "frozen") fail("Develop batch prepare action is invalid.");
+    return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), batchKind: input.batchKind, sourceEntryId: input.sourceEntryId === null ? null : parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds, "Develop batch target IDs"), action, createdAt: finite(input.createdAt, "Develop batch createdAt") };
+  }
+  if (kind === "previous-prepare") {
+    exact(input, ["kind", "catalogId", "batchId", "operationId", "currentEntryId", "fields", "createdAt"], "Previous Develop prepare command");
+    return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), currentEntryId: parseEntryId(input.currentEntryId), fields: fields(input.fields), createdAt: finite(input.createdAt, "Previous Develop createdAt") };
+  }
+  if (kind === "complete-preparation") {
+    exact(input, ["kind", "catalogId", "batchId", "operation"], "Develop batch complete preparation command");
+    const operation = parseDevelopBatchOperation(input.operation);
+    if (operation.kind !== "frozen" || developBatchPreparationIsPending(operation)) fail("Completed Develop batch preparation is invalid.");
+    return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operation };
+  }
+  if (kind === "fail-preparation") {
+    exact(input, ["kind", "catalogId", "batchId", "error"], "Develop batch failed preparation command");
+    return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), error: text(input.error, "Develop batch preparation failure") };
   }
   if (kind === "previous") {
     exact(input, ["kind", "catalogId", "batchId", "operationId", "currentEntryId", "fields", "createdAt"], "Previous Develop command");

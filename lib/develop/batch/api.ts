@@ -2,7 +2,7 @@ import { parseCatalogId, parseEntryId, type CatalogId, type EntryId } from "../.
 import { parseSessionId, type SessionId } from "../../catalog/runtime.ts";
 import { parseDevelopPresetField, type DevelopPresetField } from "../presets/policy.ts";
 import { parseDevelopPresetId, type DevelopPresetId } from "../presets/schema.ts";
-import { parseDevelopBatchControl, parseDevelopBatchId, parseDevelopBatchReceipt, type DevelopBatchControl, type DevelopBatchId, type DevelopBatchReceipt } from "./domain.ts";
+import { parseDevelopBatchControl, parseDevelopBatchId, parseDevelopBatchOperationId, parseDevelopBatchReceipt, type DevelopBatchControl, type DevelopBatchId, type DevelopBatchOperationId, type DevelopBatchReceipt } from "./domain.ts";
 
 export type DevelopBatchSelectedOperation =
   | { readonly kind: "preset"; readonly presetId: DevelopPresetId; readonly revision: number; readonly fields: readonly DevelopPresetField[] | null; readonly amount: number }
@@ -15,10 +15,15 @@ interface BatchSessionRequest {
   readonly sessionId: SessionId;
 }
 
+interface BatchStartIdentity {
+  readonly batchId: DevelopBatchId;
+  readonly operationId: DevelopBatchOperationId;
+}
+
 export type DevelopBatchStartRequest =
-  | (BatchSessionRequest & { readonly kind: "previous"; readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[] })
-  | (BatchSessionRequest & { readonly kind: "sync"; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[]; readonly fields: readonly DevelopPresetField[] })
-  | (BatchSessionRequest & { readonly kind: "batch"; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[]; readonly operation: DevelopBatchSelectedOperation });
+  | (BatchSessionRequest & BatchStartIdentity & { readonly kind: "previous"; readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[] })
+  | (BatchSessionRequest & BatchStartIdentity & { readonly kind: "sync"; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[]; readonly fields: readonly DevelopPresetField[] })
+  | (BatchSessionRequest & BatchStartIdentity & { readonly kind: "batch"; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[]; readonly operation: DevelopBatchSelectedOperation });
 
 export interface DevelopBatchListRequest extends BatchSessionRequest {
   readonly limit: number;
@@ -63,6 +68,9 @@ function entryIds(value: unknown): readonly EntryId[] {
 function session(input: Record<string, unknown>): BatchSessionRequest {
   return { catalogId: parseCatalogId(input.catalogId), sessionId: parseSessionId(input.sessionId) };
 }
+function identity(input: Record<string, unknown>): BatchStartIdentity {
+  return { batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId) };
+}
 
 function selectedOperation(value: unknown): DevelopBatchSelectedOperation {
   const input = record(value, "Develop batch selected operation");
@@ -89,16 +97,16 @@ function selectedOperation(value: unknown): DevelopBatchSelectedOperation {
 export function parseDevelopBatchStartRequest(value: unknown): DevelopBatchStartRequest {
   const input = record(value, "Develop batch start request");
   if (input.kind === "previous") {
-    exact(input, ["kind", "catalogId", "sessionId", "currentEntryId", "fields"], "Previous Develop request");
-    return { kind: "previous", ...session(input), currentEntryId: parseEntryId(input.currentEntryId), fields: fields(input.fields) };
+    exact(input, ["kind", "catalogId", "sessionId", "batchId", "operationId", "currentEntryId", "fields"], "Previous Develop request");
+    return { kind: "previous", ...session(input), ...identity(input), currentEntryId: parseEntryId(input.currentEntryId), fields: fields(input.fields) };
   }
   if (input.kind === "sync") {
-    exact(input, ["kind", "catalogId", "sessionId", "sourceEntryId", "targetEntryIds", "fields"], "Sync Develop request");
-    return { kind: "sync", ...session(input), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds), fields: fields(input.fields) };
+    exact(input, ["kind", "catalogId", "sessionId", "batchId", "operationId", "sourceEntryId", "targetEntryIds", "fields"], "Sync Develop request");
+    return { kind: "sync", ...session(input), ...identity(input), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds), fields: fields(input.fields) };
   }
   if (input.kind === "batch") {
-    exact(input, ["kind", "catalogId", "sessionId", "sourceEntryId", "targetEntryIds", "operation"], "Batch Develop request");
-    return { kind: "batch", ...session(input), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds), operation: selectedOperation(input.operation) };
+    exact(input, ["kind", "catalogId", "sessionId", "batchId", "operationId", "sourceEntryId", "targetEntryIds", "operation"], "Batch Develop request");
+    return { kind: "batch", ...session(input), ...identity(input), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds), operation: selectedOperation(input.operation) };
   }
   return fail("Develop batch start kind is invalid.");
 }

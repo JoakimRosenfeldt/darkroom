@@ -777,6 +777,19 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
       operation: command.operation,
       createdAt: command.createdAt,
     });
+    case "prepare": return repository.prepare({
+      catalogId: command.catalogId,
+      batchId: command.batchId,
+      operationId: command.operationId,
+      kind: command.batchKind,
+      sourceEntryId: command.sourceEntryId,
+      targetEntryIds: command.targetEntryIds,
+      action: command.action,
+      createdAt: command.createdAt,
+    });
+    case "previous-prepare": return repository.preparePrevious(command);
+    case "complete-preparation": return repository.completePreparation(command.catalogId, command.batchId, command.operation);
+    case "fail-preparation": return repository.failPreparation(command.catalogId, command.batchId, command.error);
     case "previous": return repository.previous(command);
     case "previous-frozen": return repository.previousFrozen(command);
     case "undo": return repository.undo(command);

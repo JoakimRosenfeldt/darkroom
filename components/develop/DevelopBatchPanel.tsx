@@ -7,7 +7,7 @@ import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import { refreshActiveCatalog } from "@/lib/fs/session-catalog";
 import { DEVELOP_PRESET_FIELDS, type DevelopPresetField } from "@/lib/develop/presets/policy";
 import type { DevelopPresetRecord } from "@/lib/develop/presets/schema";
-import { DEVELOP_BATCH_CONTROLS, parseDevelopBatchControl, type DevelopBatchControl, type DevelopBatchReceipt } from "@/lib/develop/batch/domain";
+import { createDevelopBatchId, createDevelopBatchOperationId, developBatchPreparationIsPending, DEVELOP_BATCH_CONTROLS, parseDevelopBatchControl, type DevelopBatchControl, type DevelopBatchId, type DevelopBatchReceipt } from "@/lib/develop/batch/domain";
 import type { DevelopBatchSelectedOperation } from "@/lib/develop/batch/api";
 import { useLibraryStore } from "@/stores/library-store";
 
@@ -58,6 +58,7 @@ function actionLabel(receipt: DevelopBatchReceipt): string {
 }
 
 function stateLabel(receipt: DevelopBatchReceipt): string {
+  if (developBatchPreparationIsPending(receipt.operation) && receipt.items.some((item) => item.state.kind === "queued")) return "preparing";
   const active = receipt.items.find((item) => item.state.kind === "active");
   if (active?.state.kind === "active") return active.state.phase;
   const counts = new Map<string, number>();
@@ -79,6 +80,7 @@ export function DevelopBatchPanel({ sourceEntry, onClose }: { readonly sourceEnt
   const [receipts, setReceipts] = useState<readonly DevelopBatchReceipt[]>([]);
   const [autoSync, setAutoSync] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preparingBatchId, setPreparingBatchId] = useState<DevelopBatchId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   const available = isElectronApp();
@@ -134,12 +136,15 @@ export function DevelopBatchPanel({ sourceEntry, onClose }: { readonly sourceEnt
     if (!available || (fieldsRequired && selectedFields.length === 0)) return;
     setBusy(true);
     setError(null);
+    const batchId = createDevelopBatchId();
+    const operationId = createDevelopBatchOperationId();
+    setPreparingBatchId(batchId);
     try {
       if (mode === "previous") {
-        await getDarkroomAPI().developBatchStart({ kind: "previous", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, currentEntryId: sourceEntry.id, fields: selectedFields });
+        await getDarkroomAPI().developBatchStart({ kind: "previous", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, batchId, operationId, currentEntryId: sourceEntry.id, fields: selectedFields });
       } else if (mode === "sync") {
         if (frozenTargets.length === 0) throw new Error("Select at least one target in Library.");
-        await getDarkroomAPI().developBatchStart({ kind: "sync", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, sourceEntryId: sourceEntry.id, targetEntryIds: frozenTargets.map(parseEntryId), fields: selectedFields });
+        await getDarkroomAPI().developBatchStart({ kind: "sync", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, batchId, operationId, sourceEntryId: sourceEntry.id, targetEntryIds: frozenTargets.map(parseEntryId), fields: selectedFields });
       } else {
         if (selection.length === 0) throw new Error("Select at least one Library photo.");
         let operation: DevelopBatchSelectedOperation;
@@ -152,14 +157,25 @@ export function DevelopBatchPanel({ sourceEntry, onClose }: { readonly sourceEnt
         else {
           operation = { kind: "selected-control", control };
         }
-        await getDarkroomAPI().developBatchStart({ kind: "batch", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, sourceEntryId: sourceEntry.id, targetEntryIds: selection.map(parseEntryId), operation });
+        await getDarkroomAPI().developBatchStart({ kind: "batch", catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, batchId, operationId, sourceEntryId: sourceEntry.id, targetEntryIds: selection.map(parseEntryId), operation });
       }
       await refresh();
       await refreshActiveCatalog();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The batch could not start.");
     } finally {
+      setPreparingBatchId(null);
       setBusy(false);
+    }
+  };
+
+  const cancelPreparation = async (): Promise<void> => {
+    if (preparingBatchId === null) return;
+    try {
+      await getDarkroomAPI().developBatchCancel({ catalogId: sourceEntry.catalogId, sessionId: sourceEntry.sessionId, batchId: preparingBatchId });
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Batch preparation could not be cancelled.");
     }
   };
 
@@ -211,7 +227,7 @@ export function DevelopBatchPanel({ sourceEntry, onClose }: { readonly sourceEnt
             {mode === "batch" ? <label className="mb-3 block text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-muted">Operation<select value={batchAction} onChange={(event) => setBatchAction(batchActionFromValue(event.target.value))} className="mt-1.5 w-full rounded border border-lr-border bg-lr-panel-raised px-2 py-2 text-xs text-lr-text"><option value="section-reset">Reset selected sections</option><option value="clipboard">Paste settings</option><option value="preset">Apply preset</option><option value="selected-control">Copy selected control</option></select></label> : null}
             {mode === "batch" && batchAction === "preset" ? <label className="mb-3 block text-[10px] text-lr-text-muted">Preset<select value={presetId} onChange={(event) => setPresetId(event.target.value)} className="mt-1.5 w-full rounded border border-lr-border bg-lr-panel-raised px-2 py-2 text-xs text-lr-text">{presets.map((preset) => <option key={`${preset.presetId}:${preset.revision}`} value={preset.presetId}>{preset.name} · r{preset.revision}</option>)}</select></label> : null}
             {mode === "batch" && batchAction === "selected-control" ? <label className="mb-3 block text-[10px] text-lr-text-muted">Control<select value={control} onChange={(event) => setControl(parseDevelopBatchControl(event.target.value))} className="mt-1.5 w-full rounded border border-lr-border bg-lr-panel-raised px-2 py-2 text-xs text-lr-text">{DEVELOP_BATCH_CONTROLS.map((item) => <option key={item} value={item}>{CONTROL_LABELS[item]}</option>)}</select></label> : <fieldset><legend className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-muted">Fields</legend><div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2">{DEVELOP_PRESET_FIELDS.map((field) => <label key={field} className="flex items-center gap-2 text-[11px] text-lr-text"><input type="checkbox" checked={fields.has(field)} onChange={() => setFields((current) => { const next = new Set(current); if (next.has(field)) next.delete(field); else next.add(field); return next; })} className="accent-lr-accent" />{FIELD_LABELS[field]}</label>)}</div></fieldset>}
-            <div className="mt-4 flex items-center gap-2"><button type="button" onClick={() => void run()} disabled={!available || busy || (fieldsRequired && selectedFields.length === 0)} className="rounded bg-lr-accent px-3 py-2 text-[11px] font-semibold text-lr-bg disabled:opacity-40">{busy ? "Working…" : mode === "previous" ? "Apply Previous" : mode === "sync" ? `Sync ${frozenTargets.length}` : `Run on ${selection.length}`}</button><button type="button" onClick={() => void toggleAutoSync()} disabled={!available || busy || selectedFields.length === 0} aria-pressed={autoSync} className="rounded border border-lr-border px-3 py-2 text-[11px] text-lr-text">Auto Sync {autoSync ? "On" : "Off"}</button></div>
+            <div className="mt-4 flex items-center gap-2"><button type="button" onClick={() => void run()} disabled={!available || busy || (fieldsRequired && selectedFields.length === 0)} className="rounded bg-lr-accent px-3 py-2 text-[11px] font-semibold text-lr-bg disabled:opacity-40">{busy ? "Working…" : mode === "previous" ? "Apply Previous" : mode === "sync" ? `Sync ${frozenTargets.length}` : `Run on ${selection.length}`}</button>{preparingBatchId !== null ? <button type="button" onClick={() => void cancelPreparation()} className="rounded border border-lr-danger/60 px-3 py-2 text-[11px] text-lr-danger">Cancel preparation</button> : <button type="button" onClick={() => void toggleAutoSync()} disabled={!available || busy || selectedFields.length === 0} aria-pressed={autoSync} className="rounded border border-lr-border px-3 py-2 text-[11px] text-lr-text">Auto Sync {autoSync ? "On" : "Off"}</button>}</div>
             {error ? <p role="alert" className="mt-3 text-[11px] leading-4 text-lr-danger">{error}</p> : null}
           </section>
           <section className="min-h-0 overflow-auto px-5 py-4" aria-label="Durable batch jobs">

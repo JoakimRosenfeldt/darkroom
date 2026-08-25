@@ -8,6 +8,8 @@ import {
   DEVELOP_BATCH_SCHEMA_VERSION,
   canonicalDevelopBatchJson,
   createDevelopBatchOperationId,
+  developBatchPreparationIsPending,
+  pendingDevelopBatchOperation,
   parseDevelopBatchCreateInput,
   parseDevelopBatchId,
   parseDevelopBatchItemState,
@@ -15,6 +17,7 @@ import {
   parseDevelopBatchOperationId,
   parseDevelopBatchReceipt,
   type DevelopBatchCreateInput,
+  type DevelopBatchAction,
   type DevelopBatchId,
   type DevelopBatchItemState,
   type DevelopBatchOperation,
@@ -95,6 +98,7 @@ export class DevelopBatchRepository {
     this.history = new DevelopHistoryRepository(database);
     this.executeOperation = executeOperation;
     this.reclaimActive();
+    this.reclaimPreparation();
   }
 
   private transaction<T>(run: () => T): T {
@@ -122,6 +126,23 @@ export class DevelopBatchRepository {
       SET state_json = '{"kind":"queued"}', before_revision_id = NULL, after_revision_id = NULL
       WHERE json_extract(state_json, '$.kind') = 'active'
     `).run();
+  }
+
+  private reclaimPreparation(): void {
+    const interrupted = stateJson({ kind: "failed", error: "Camera profile preparation was interrupted.", retryable: true });
+    const jobs = this.database.prepare(`
+      SELECT catalog_id AS catalogId, batch_id AS batchId, operation_json AS operationJson
+      FROM develop_batch_jobs WHERE cancellation_requested = 0
+    `).all();
+    for (const value of jobs) {
+      const job = row(value, "Develop batch preparing job");
+      const operation = parseDevelopBatchOperation(JSON.parse(string(job, "operationJson")) as unknown);
+      if (!developBatchPreparationIsPending(operation)) continue;
+      this.database.prepare(`
+        UPDATE develop_batch_items SET state_json = ?, updated_at = ?
+        WHERE catalog_id = ? AND batch_id = ? AND json_extract(state_json, '$.kind') = 'queued'
+      `).run(interrupted, Date.now(), string(job, "catalogId"), string(job, "batchId"));
+    }
   }
 
   private activeHead(catalogId: CatalogId, entryId: EntryId): DevelopRevisionId {
@@ -216,14 +237,15 @@ export class DevelopBatchRepository {
 
   resumableBatchIds(): readonly { readonly catalogId: CatalogId; readonly batchId: DevelopBatchId }[] {
     return this.database.prepare(`
-      SELECT DISTINCT job.catalog_id AS catalogId, job.batch_id AS batchId
+      SELECT DISTINCT job.catalog_id AS catalogId, job.batch_id AS batchId, job.operation_json AS operationJson
       FROM develop_batch_jobs AS job
       JOIN develop_batch_items AS item ON item.catalog_id = job.catalog_id AND item.batch_id = job.batch_id
       WHERE job.cancellation_requested = 0 AND json_extract(item.state_json, '$.kind') = 'queued'
       ORDER BY job.created_at, job.batch_id
-    `).all().map((value) => {
+    `).all().flatMap((value) => {
       const item = row(value, "Develop batch resumable job");
-      return { catalogId: parseCatalogId(string(item, "catalogId")), batchId: parseDevelopBatchId(string(item, "batchId")) };
+      const operation = parseDevelopBatchOperation(JSON.parse(string(item, "operationJson")) as unknown);
+      return developBatchPreparationIsPending(operation) ? [] : [{ catalogId: parseCatalogId(string(item, "catalogId")), batchId: parseDevelopBatchId(string(item, "batchId")) }];
     });
   }
 
@@ -307,6 +329,103 @@ export class DevelopBatchRepository {
     });
   }
 
+  prepare(input: Omit<DevelopBatchFreezeInput, "operation"> & { readonly action: DevelopBatchAction }): DevelopBatchReceipt {
+    const existing = this.existingReceipt(input.catalogId, input.operationId);
+    if (existing !== null) {
+      const matches = existing.batchId === input.batchId && existing.kind === input.kind
+        && existing.sourceEntryId === input.sourceEntryId && existing.createdAt === input.createdAt
+        && canonicalDevelopBatchJson(existing.targetEntryIds) === canonicalDevelopBatchJson(input.targetEntryIds)
+        && canonicalDevelopBatchJson(operationAction(existing.operation)) === canonicalDevelopBatchJson(input.action);
+      if (!matches) throw new Error("Develop batch preparation operation ID conflicts with a different request.");
+      return existing;
+    }
+    return this.freeze({ ...input, operation: pendingDevelopBatchOperation(input.action, input.targetEntryIds) });
+  }
+
+  completePreparation(
+    catalogIdValue: CatalogId,
+    batchIdValue: DevelopBatchId,
+    operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>,
+  ): DevelopBatchReceipt {
+    const catalogId = parseCatalogId(catalogIdValue), batchId = parseDevelopBatchId(batchIdValue);
+    return this.transaction(() => {
+      const receipt = this.get(catalogId, batchId);
+      if (receipt.cancellationRequested) return receipt;
+      if (!developBatchPreparationIsPending(receipt.operation)) {
+        if (canonicalDevelopBatchJson(receipt.operation) !== canonicalDevelopBatchJson(operation)) throw new Error("Develop batch preparation conflicts with its completed operation.");
+        return receipt;
+      }
+      if (canonicalDevelopBatchJson(operationAction(receipt.operation)) !== canonicalDevelopBatchJson(operation.action)) throw new Error("Develop batch preparation changed its action.");
+      if (operation.profileContexts.length !== receipt.targetEntryIds.length || operation.profileContexts.some((context, index) => context.entryId !== receipt.targetEntryIds[index])) throw new Error("Develop batch preparation changed its targets.");
+      if (receipt.items.some((item) => item.state.kind !== "queued")) throw new Error("Develop batch preparation is not resumable.");
+      const now = Date.now();
+      this.database.prepare("UPDATE develop_batch_jobs SET operation_json = ?, updated_at = ? WHERE catalog_id = ? AND batch_id = ?")
+        .run(canonicalDevelopBatchJson(operation), now, catalogId, batchId);
+      this.database.prepare("UPDATE develop_batch_items SET updated_at = ? WHERE catalog_id = ? AND batch_id = ?").run(now, catalogId, batchId);
+      return this.get(catalogId, batchId);
+    });
+  }
+
+  failPreparation(catalogIdValue: CatalogId, batchIdValue: DevelopBatchId, error: string): DevelopBatchReceipt {
+    const catalogId = parseCatalogId(catalogIdValue), batchId = parseDevelopBatchId(batchIdValue);
+    return this.transaction(() => {
+      const receipt = this.get(catalogId, batchId);
+      if (receipt.cancellationRequested || !developBatchPreparationIsPending(receipt.operation)) return receipt;
+      const now = Date.now();
+      const failed = stateJson({ kind: "failed", error: safeError(error), retryable: true });
+      this.database.prepare(`
+        UPDATE develop_batch_items SET state_json = ?, updated_at = ?
+        WHERE catalog_id = ? AND batch_id = ? AND json_extract(state_json, '$.kind') = 'queued'
+      `).run(failed, now, catalogId, batchId);
+      this.database.prepare("UPDATE develop_batch_jobs SET updated_at = ? WHERE catalog_id = ? AND batch_id = ?").run(now, catalogId, batchId);
+      return this.get(catalogId, batchId);
+    });
+  }
+
+  private previousSource(catalogId: CatalogId, currentEntryId: EntryId): { readonly entryId: EntryId; readonly revisionId: DevelopRevisionId } {
+    const source = this.database.prepare(`
+      SELECT h.entry_id AS entryId, h.revision_id AS revisionId
+      FROM develop_history_heads AS h
+      JOIN develop_history_revisions AS revision
+        ON revision.catalog_id = h.catalog_id AND revision.entry_id = h.entry_id
+       AND revision.revision_id = h.revision_id
+      JOIN edit_entries AS e ON e.catalog_id = h.catalog_id AND e.entry_id = h.entry_id
+      WHERE h.catalog_id = ? AND h.entry_id <> ? AND e.tombstoned_at IS NULL
+      ORDER BY revision.rowid DESC, h.entry_id LIMIT 1
+    `).get(catalogId, currentEntryId);
+    if (source === undefined) throw new Error("No previous committed Develop entry is available.");
+    const sourceRow = row(source, "Previous Develop source");
+    return { entryId: parseEntryId(string(sourceRow, "entryId")), revisionId: parseDevelopRevisionId(string(sourceRow, "revisionId")) };
+  }
+
+  preparePrevious(input: {
+    readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
+    readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[]; readonly createdAt: number;
+  }): DevelopBatchReceipt {
+    const existing = this.existingReceipt(input.catalogId, input.operationId);
+    if (existing !== null) {
+      const matches = existing.batchId === input.batchId && existing.kind === "previous"
+        && existing.createdAt === input.createdAt && existing.targetEntryIds.length === 1
+        && existing.targetEntryIds[0] === input.currentEntryId
+        && canonicalDevelopBatchJson(operationAction(existing.operation)) === canonicalDevelopBatchJson({ kind: "copy-fields", fields: input.fields });
+      if (!matches) throw new Error("Previous Develop preparation operation ID conflicts with a different request.");
+      return existing;
+    }
+    const source = this.previousSource(input.catalogId, input.currentEntryId);
+    return this.create({
+      schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION,
+      catalogId: input.catalogId,
+      batchId: input.batchId,
+      operationId: input.operationId,
+      kind: "previous",
+      sourceEntryId: source.entryId,
+      sourceRevisionId: source.revisionId,
+      targets: [{ entryId: input.currentEntryId, expectedRevisionId: this.activeHead(input.catalogId, input.currentEntryId) }],
+      operation: pendingDevelopBatchOperation({ kind: "copy-fields", fields: input.fields }, [input.currentEntryId]),
+      createdAt: input.createdAt,
+    });
+  }
+
   previous(input: {
     readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
     readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[]; readonly createdAt: number;
@@ -320,22 +439,11 @@ export class DevelopBatchRepository {
       if (!matches) throw new Error("Previous Develop operation ID conflicts with a different request.");
       return existing;
     }
-    const source = this.database.prepare(`
-      SELECT h.entry_id AS entryId, h.revision_id AS revisionId
-      FROM develop_history_heads AS h
-      JOIN develop_history_revisions AS revision
-        ON revision.catalog_id = h.catalog_id AND revision.entry_id = h.entry_id
-       AND revision.revision_id = h.revision_id
-      JOIN edit_entries AS e ON e.catalog_id = h.catalog_id AND e.entry_id = h.entry_id
-      WHERE h.catalog_id = ? AND h.entry_id <> ? AND e.tombstoned_at IS NULL
-      ORDER BY revision.rowid DESC, h.entry_id LIMIT 1
-    `).get(input.catalogId, input.currentEntryId);
-    if (source === undefined) throw new Error("No previous committed Develop entry is available.");
-    const sourceRow = row(source, "Previous Develop source");
+    const source = this.previousSource(input.catalogId, input.currentEntryId);
     return this.create({
       schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
-      operationId: input.operationId, kind: "previous", sourceEntryId: parseEntryId(string(sourceRow, "entryId")),
-      sourceRevisionId: parseDevelopRevisionId(string(sourceRow, "revisionId")),
+      operationId: input.operationId, kind: "previous", sourceEntryId: source.entryId,
+      sourceRevisionId: source.revisionId,
       targets: [{ entryId: input.currentEntryId, expectedRevisionId: this.activeHead(input.catalogId, input.currentEntryId) }],
       operation: { kind: "copy-fields", fields: input.fields }, createdAt: input.createdAt,
     });
@@ -354,22 +462,11 @@ export class DevelopBatchRepository {
       if (!matches) throw new Error("Previous Develop operation ID conflicts with a different request.");
       return existing;
     }
-    const source = this.database.prepare(`
-      SELECT h.entry_id AS entryId, h.revision_id AS revisionId
-      FROM develop_history_heads AS h
-      JOIN develop_history_revisions AS revision
-        ON revision.catalog_id = h.catalog_id AND revision.entry_id = h.entry_id
-       AND revision.revision_id = h.revision_id
-      JOIN edit_entries AS e ON e.catalog_id = h.catalog_id AND e.entry_id = h.entry_id
-      WHERE h.catalog_id = ? AND h.entry_id <> ? AND e.tombstoned_at IS NULL
-      ORDER BY revision.rowid DESC, h.entry_id LIMIT 1
-    `).get(input.catalogId, input.currentEntryId);
-    if (source === undefined) throw new Error("No previous committed Develop entry is available.");
-    const sourceRow = row(source, "Previous Develop source");
+    const source = this.previousSource(input.catalogId, input.currentEntryId);
     return this.create({
       schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
-      operationId: input.operationId, kind: "previous", sourceEntryId: parseEntryId(string(sourceRow, "entryId")),
-      sourceRevisionId: parseDevelopRevisionId(string(sourceRow, "revisionId")),
+      operationId: input.operationId, kind: "previous", sourceEntryId: source.entryId,
+      sourceRevisionId: source.revisionId,
       targets: [{ entryId: input.currentEntryId, expectedRevisionId: this.activeHead(input.catalogId, input.currentEntryId) }],
       operation: input.operation, createdAt: input.createdAt,
     });
