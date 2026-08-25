@@ -8,10 +8,13 @@ import {
   cancelCatalogScan,
   clearSessionCatalog,
   closeActiveCatalog,
+  createVirtualCopy as createVirtualCopySession,
   createCatalog as createCatalogSession,
+  deleteVirtualCopy as deleteVirtualCopySession,
   getActiveCatalogView,
   queryActiveCatalog,
   relinkCatalogRoot as relinkCatalogRootSession,
+  renameVirtualCopy as renameVirtualCopySession,
   removeCatalog as removeCatalogSession,
   renameActiveCatalog,
   scanCatalogRoot,
@@ -28,6 +31,7 @@ import type {
   CatalogSummary,
 } from "@/lib/catalog/api";
 import {
+  parseEntryId,
   createOperationId,
   type AssetId,
   type CatalogId,
@@ -247,6 +251,9 @@ interface LibraryStore {
   excludeEntries: (entryIds: string[]) => void;
   restoreExcludedEntries: (entryIds: string[]) => void;
   trashExactDuplicates: (keeperId: string, targetIds: string[]) => Promise<ExactDuplicateTrashResult>;
+  createVirtualCopy: (entryId: string, displayName?: string) => Promise<string>;
+  renameVirtualCopy: (entryId: string, displayName: string) => Promise<void>;
+  deleteVirtualCopy: (entryId: string) => Promise<void>;
   deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
   createCatalog: (displayName: string) => Promise<void>;
   addCatalogRoot: () => Promise<void>;
@@ -388,6 +395,41 @@ function pruneWorkspaceForEntries(
   };
 }
 
+function cloneWorkspaceEntryState(
+  workspace: LibraryWorkspaceState,
+  sourceWorkspace: LibraryWorkspaceState,
+  sourceEntryId: string,
+  entryId: string,
+): LibraryWorkspaceState {
+  const metadataOverrides = sourceWorkspace.metadataOverridesByEntryId[sourceEntryId];
+  const entryKeywordIds = sourceWorkspace.entryKeywordIds[sourceEntryId];
+  const analysis = sourceWorkspace.analysisByEntryId[sourceEntryId];
+  const archiveMembership = sourceWorkspace.archiveMemberships.find(
+    (item) => item.entryId === sourceEntryId,
+  );
+  return {
+    ...workspace,
+    metadataOverridesByEntryId: metadataOverrides === undefined
+      ? workspace.metadataOverridesByEntryId
+      : {
+          ...workspace.metadataOverridesByEntryId,
+          [entryId]: structuredClone(metadataOverrides),
+        },
+    entryKeywordIds: entryKeywordIds === undefined
+      ? workspace.entryKeywordIds
+      : { ...workspace.entryKeywordIds, [entryId]: [...entryKeywordIds] },
+    analysisByEntryId: analysis === undefined
+      ? workspace.analysisByEntryId
+      : { ...workspace.analysisByEntryId, [entryId]: structuredClone(analysis) },
+    archiveMemberships: archiveMembership === undefined
+      ? workspace.archiveMemberships
+      : [
+          ...workspace.archiveMemberships,
+          { ...structuredClone(archiveMembership), entryId },
+        ],
+  };
+}
+
 interface CatalogSessionBinding {
   readonly catalogId: CatalogId;
   readonly sessionId: SessionId;
@@ -414,6 +456,7 @@ function removeEntriesForAssets(
   binding: CatalogSessionBinding,
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
+  sync = true,
 ): void {
   if (assetIds.size === 0) return;
   requireCatalogSession(
@@ -444,7 +487,7 @@ function removeEntriesForAssets(
       current.selectionAnchorId,
     ),
   });
-  scheduleStateSync(set, get);
+  if (sync) scheduleStateSync(set, get);
 }
 
 function keywordPath(
@@ -2161,6 +2204,69 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     return result;
   },
 
+  createVirtualCopy: async (entryId, displayName) => {
+    const started = get();
+    const source = started.entries.find((entry) => entry.id === entryId);
+    if (!source) throw new Error("Photo is unavailable.");
+    const familyCopies = started.entries.filter(
+      (entry) => entry.sourceId === source.sourceId && entry.entryKind === "virtual",
+    ).length;
+    const name = displayName?.trim() || `Copy ${familyCopies + 1}`;
+    try {
+      await persistStateSync(set, get);
+      const workspace = get().libraryWorkspace;
+      const result = await createVirtualCopySession(parseEntryId(entryId), name);
+      const libraryWorkspace = cloneWorkspaceEntryState(
+        result.state.libraryWorkspace,
+        workspace,
+        entryId,
+        result.entryId,
+      );
+      applyHydratedState(result.state, set, get);
+      set({
+        libraryWorkspace,
+        selectedEntryId: result.entryId,
+        selectedEntryIds: [result.entryId],
+        selectionAnchorId: result.entryId,
+      });
+      await persistStateSync(set, get);
+      return result.entryId;
+    } catch (error) {
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
+    }
+  },
+
+  renameVirtualCopy: async (entryId, displayName) => {
+    const entry = get().entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind !== "virtual") throw new Error("Virtual copy is unavailable.");
+    const name = displayName.trim();
+    if (!name) throw new Error("Virtual copy name is required.");
+    try {
+      const state = await renameVirtualCopySession(parseEntryId(entryId), name);
+      applyHydratedState(state, set, get);
+    } catch (error) {
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
+    }
+  },
+
+  deleteVirtualCopy: async (entryId) => {
+    const entry = get().entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind !== "virtual") throw new Error("Virtual copy is unavailable.");
+    try {
+      const state = await deleteVirtualCopySession(parseEntryId(entryId));
+      applyHydratedState(state, set, get);
+      await persistStateSync(set, get);
+    } catch (error) {
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
+    }
+  },
+
   deleteEntriesFromDisk: async (entryIds) => {
     if (entryIds.length === 0) return;
     const current = get();
@@ -2173,29 +2279,33 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     };
     const selected = current.entries.filter((entry) => entryIds.includes(entry.id));
     const targets = [...new Map(selected.map((entry) => [entry.assetId, entry])).values()];
-    try {
-      await Promise.all(targets.map((entry) => getDarkroomAPI().catalogTrashAsset(getAssetRequest(entry))));
-    } catch (error) {
-      requireCatalogSession(
-        binding,
-        get,
-        "Catalog changed while photos were being removed. Reopen the original catalog to reconcile the results.",
-      );
-      const message = formatPickerError(error);
-      set({ importError: message });
-      throw new Error(message);
-    }
-    requireCatalogSession(
-      binding,
-      get,
-      "Catalog changed after photos were removed. Reopen the original catalog to reconcile the results.",
+    const api = getDarkroomAPI();
+    const outcomes = await Promise.allSettled(
+      targets.map(async (entry) => api.catalogTrashAsset(getAssetRequest(entry))),
     );
+    const removedAssetIds = new Set(outcomes.flatMap((outcome, index) => {
+      const target = targets[index];
+      return outcome.status === "fulfilled" && target ? [target.assetId] : [];
+    }));
+    const failed = outcomes.length - removedAssetIds.size;
+    if (!catalogSessionIsCurrent(binding, get)) {
+      throw new Error(
+        `Catalog changed after photo removal completed: ${removedAssetIds.size} moved, ${failed} failed. Reopen the original catalog to reconcile the results.`,
+      );
+    }
     removeEntriesForAssets(
-      new Set(targets.map((entry) => entry.assetId)),
+      removedAssetIds,
       binding,
       set,
       get,
+      false,
     );
+    if (removedAssetIds.size > 0) await persistStateSync(set, get);
+    if (failed > 0) {
+      const message = `${failed} photo${failed === 1 ? "" : "s"} could not be moved to Trash; ${removedAssetIds.size} succeeded.`;
+      set({ importError: message });
+      throw new Error(message);
+    }
   },
 
   createCatalog: async (displayName) => {

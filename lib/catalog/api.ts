@@ -235,6 +235,9 @@ export interface CatalogQueryRequest extends CatalogSessionRequest {
 
 export type CatalogApplyMutation =
   | Extract<CatalogLiveMutation, { readonly kind: "rename-catalog" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-create" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-rename" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-delete" }>
   | Extract<CatalogLiveMutation, { readonly kind: "metadata-patch" }>
   | Extract<CatalogLiveMutation, { readonly kind: "album-create" }>
   | Extract<CatalogLiveMutation, { readonly kind: "album-rename" }>
@@ -478,6 +481,9 @@ function safeMutation(value: unknown): CatalogApplyMutation {
   const parsed = parsedSizedMutation(value);
   switch (parsed.kind) {
     case "rename-catalog":
+    case "edit-entry-create":
+    case "edit-entry-rename":
+    case "edit-entry-delete":
     case "metadata-patch":
     case "album-create":
     case "album-rename":

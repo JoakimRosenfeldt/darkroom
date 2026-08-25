@@ -28,7 +28,7 @@ import type {
   CatalogBackupPolicy,
   CatalogBackupPolicyState,
 } from "../catalog/admin";
-import { createPresetId, parseEntryId, parseSourceId, type AssetId, type CatalogId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
+import { createEntryId, createPresetId, parseEntryId, parseSourceId, type AssetId, type CatalogId, type EntryId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
 import type {
   LibraryOperationStatus,
   ScanProgressPhase,
@@ -301,11 +301,10 @@ function entryFromAsset(
     ? getFormatCapabilityForFileName(name)
     : getFormatCapability(asset.formatId);
   const entryId = asset.entryId ?? parseEntryId(asset.assetId);
-  return {
+  const base = {
     id: entryId,
     sourceId: asset.sourceId ?? parseSourceId(asset.assetId),
     assetId: asset.assetId,
-    entryKind: asset.entryKind ?? (String(entryId) === String(asset.assetId) ? "original" : "virtual"),
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     rootId: asset.rootId,
@@ -320,7 +319,15 @@ function entryFromAsset(
     formatAvailability: formatAvailability(asset.formatId, name),
     fingerprintStatus: asset.fingerprintStatus,
     fingerprintSha256: asset.fingerprintSha256,
+    entryCreatedAt: asset.entryCreatedAt ?? 0,
   };
+  const entryKind = asset.entryKind ?? (String(entryId) === String(asset.assetId) ? "original" : "virtual");
+  if (entryKind === "original") {
+    return { ...base, entryKind, parentEntryId: null, displayName: null };
+  }
+  if (!asset.displayName) throw new Error("Catalog virtual copy name is missing.");
+  if (!asset.parentEntryId) throw new Error("Catalog virtual copy parent is missing.");
+  return { ...base, entryKind, parentEntryId: asset.parentEntryId, displayName: asset.displayName };
 }
 
 function hydrate(
@@ -1213,4 +1220,72 @@ export function scheduleCatalogStateSync(
   );
   mutationQueue = task.then(() => undefined, () => undefined);
   return task;
+}
+
+async function applyEditEntryLifecycle(
+  mutation: Extract<
+    CatalogApplyMutation,
+    { readonly kind: "edit-entry-create" | "edit-entry-rename" | "edit-entry-delete" }
+  >,
+): Promise<HydratedCatalogState> {
+  const binding = captureCatalogSyncBinding();
+  const task = mutationQueue.then(async () => {
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed before the edit entry update.");
+    const api = getDarkroomAPI();
+    const view = await api.catalogQuery({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: null,
+    });
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed during the edit entry update.");
+    const result = await api.catalogApply({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: view.catalog.revision,
+      mutations: [mutation],
+    });
+    const nextView = await api.catalogQuery({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: result.revision,
+    });
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed after the edit entry update.");
+    const session = requireSession();
+    activeView = nextView;
+    updateSessionRevision(nextView.catalog.revision);
+    return hydrate(nextView, session);
+  });
+  mutationQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+export async function createVirtualCopy(
+  sourceEntryId: EntryId,
+  displayName: string,
+): Promise<{ readonly state: HydratedCatalogState; readonly entryId: EntryId }> {
+  const entryId = createEntryId();
+  const state = await applyEditEntryLifecycle({
+    kind: "edit-entry-create",
+    sourceEntryId,
+    entryId,
+    displayName,
+    createdAt: Date.now(),
+  });
+  return { state, entryId };
+}
+
+export function renameVirtualCopy(
+  entryId: EntryId,
+  displayName: string,
+): Promise<HydratedCatalogState> {
+  return applyEditEntryLifecycle({
+    kind: "edit-entry-rename",
+    entryId,
+    displayName,
+    updatedAt: Date.now(),
+  });
+}
+
+export function deleteVirtualCopy(entryId: EntryId): Promise<HydratedCatalogState> {
+  return applyEditEntryLifecycle({ kind: "edit-entry-delete", entryId });
 }

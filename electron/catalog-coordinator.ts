@@ -897,6 +897,7 @@ export class CatalogCoordinator {
     return {
       catalogId: input.catalogId,
       expectedRevision: input.expectedRevision,
+      ...(input.entryId === undefined ? {} : { entryId: input.entryId }),
       ...(input.assetId === undefined ? {} : { assetId: input.assetId }),
       ...(input.rootId === undefined ? {} : { rootId: input.rootId }),
       ...(input.fingerprintSha256 === undefined ? {} : { fingerprintSha256: input.fingerprintSha256 }),

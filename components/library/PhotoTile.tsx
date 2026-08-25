@@ -237,7 +237,7 @@ export const PhotoTile = memo(function PhotoTile({
       {!compact ? (
         <div className="absolute inset-x-0 bottom-0 flex items-end gap-2 bg-gradient-to-t from-[#0f0d0c]/95 via-[#0f0d0c]/65 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text">
-            {entry.name}
+            {entry.entryKind === "virtual" ? `${entry.name} · ${entry.displayName}` : entry.name}
           </p>
           {showFormatLabel ? (
             <p className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-lr-accent">
@@ -271,7 +271,13 @@ export const PhotoTile = memo(function PhotoTile({
         </span>
       ) : null}
 
-      {prototypeBadge ? <span aria-label={prototypeBadge} className="pointer-events-none absolute left-2 top-2 z-30 rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white">{prototypeBadge}</span> : null}
+      {entry.entryKind === "virtual" ? (
+        <span className="pointer-events-none absolute left-2 top-2 z-30 max-w-[70%] truncate rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white">
+          {entry.displayName}
+        </span>
+      ) : null}
+
+      {prototypeBadge ? <span aria-label={prototypeBadge} className={`pointer-events-none absolute left-2 z-30 rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white ${entry.entryKind === "virtual" ? "top-9" : "top-2"}`}>{prototypeBadge}</span> : null}
 
       {selected ? (
         <div
@@ -312,7 +318,7 @@ export const PhotoTile = memo(function PhotoTile({
                 selected ? "text-lr-text" : "text-lr-text-faint",
               ].join(" ")}
             >
-              {entry.name}
+              {entry.entryKind === "virtual" ? `${entry.name} · ${entry.displayName}` : entry.name}
             </span>
             {metadata && metadata.rating > 0 ? (
               <span className="shrink-0 text-[9px] text-lr-accent">

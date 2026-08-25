@@ -179,6 +179,8 @@ export function catalogV3SchemaSql(): string {
       entry_id TEXT NOT NULL CHECK (${entryIdCheck}),
       source_id TEXT NOT NULL CHECK (${sourceIdCheck}),
       is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
+      parent_entry_id TEXT CHECK (parent_entry_id IS NULL OR ${uuidCheck("parent_entry_id")}),
+      display_name TEXT CHECK (display_name IS NULL OR (length(trim(display_name)) > 0 AND instr(display_name, char(0)) = 0)),
       created_at REAL NOT NULL,
       updated_at REAL NOT NULL,
       PRIMARY KEY (catalog_id, entry_id),
@@ -477,7 +479,33 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
     return typeof name === "string" ? [name] : [];
   }));
   if (!CATALOG_V3_TABLES.every((table) => coreTables.has(table))) return;
-  if (CATALOG_V3_IDENTITY_TABLES.every((table) => coreTables.has(table))) return;
+  const hasIdentityTables = CATALOG_V3_IDENTITY_TABLES.every((table) => coreTables.has(table));
+  const hasDisplayName = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'display_name'",
+  ).get() !== undefined;
+  const hasParentEntryId = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'parent_entry_id'",
+  ).get() !== undefined;
+  if (hasIdentityTables && hasDisplayName && hasParentEntryId) return;
+
+  if (hasIdentityTables) {
+    try {
+      opened.exec(`
+        BEGIN IMMEDIATE;
+        ${hasDisplayName ? "" : "ALTER TABLE edit_entries ADD COLUMN display_name TEXT;"}
+        ${hasParentEntryId ? "" : "ALTER TABLE edit_entries ADD COLUMN parent_entry_id TEXT;"}
+        COMMIT;
+      `);
+    } catch (error) {
+      try {
+        opened.exec("ROLLBACK;");
+      } catch {
+        // SQLite may already have ended the failed upgrade transaction.
+      }
+      throw error;
+    }
+    return;
+  }
 
   try {
     opened.exec(`
@@ -487,6 +515,8 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
       entry_id TEXT NOT NULL CHECK (${uuidCheck("entry_id")}),
       source_id TEXT NOT NULL CHECK (${uuidCheck("source_id")}),
       is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
+      parent_entry_id TEXT,
+      display_name TEXT,
       created_at REAL NOT NULL,
       updated_at REAL NOT NULL,
       PRIMARY KEY (catalog_id, entry_id),

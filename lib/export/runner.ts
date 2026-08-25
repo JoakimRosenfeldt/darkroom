@@ -102,6 +102,17 @@ function sourceBasename(entry: LibraryEntry): string {
   return entry.name.replace(/\.[^.]+$/, "");
 }
 
+function virtualCopyFilenameSuffix(entry: LibraryEntry, suffix: string): string | null {
+  if (entry.entryKind === "original") return null;
+  const name = entry.displayName
+    .normalize("NFKD")
+    .replace(/\p{Mark}+/gu, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return `${suffix}-${name || "copy"}`;
+}
+
 function getMetadata(
   metadata: Record<string, EntryMetadata>,
   entry: LibraryEntry,
@@ -271,6 +282,8 @@ export async function runExportBatch(
         }
 
         progress("encoding");
+        const encodeOptions = toEncodeOptions(options);
+        const copySuffix = virtualCopyFilenameSuffix(entry, encodeOptions.suffix ?? DEFAULT_EXPORT_SUFFIX);
         const encoded = await api.encodeAndSaveExport(
           destinationToken,
           sourceBasename(entry),
@@ -279,7 +292,12 @@ export async function runExportBatch(
             width: pixels.width,
             height: pixels.height,
           },
-          { ...toEncodeOptions(options), size: { mode: "original" }, xmp: outputXmp },
+          {
+            ...encodeOptions,
+            ...(copySuffix === null ? {} : { filenameSuffix: copySuffix }),
+            size: { mode: "original" },
+            xmp: outputXmp,
+          },
         );
         if (encoded.status === "exported") {
           lastOutputPath = encoded.path ?? lastOutputPath;

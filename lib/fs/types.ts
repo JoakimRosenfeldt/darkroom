@@ -29,14 +29,19 @@ interface LibraryEntryBase {
   formatAvailability: EntryFormatAvailability;
   fingerprintStatus?: "missing" | "hashing" | "valid" | "stale" | "failed";
   fingerprintSha256?: string | null;
+  entryCreatedAt: number;
 }
 
 export interface OriginalLibraryEntry extends LibraryEntryBase {
   readonly entryKind: "original";
+  readonly parentEntryId: null;
+  readonly displayName: null;
 }
 
 export interface VirtualLibraryEntry extends LibraryEntryBase {
   readonly entryKind: "virtual";
+  readonly parentEntryId: EntryId;
+  readonly displayName: string;
 }
 
 export type LibraryEntry = OriginalLibraryEntry | VirtualLibraryEntry;

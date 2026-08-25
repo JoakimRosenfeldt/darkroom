@@ -101,6 +101,9 @@ const ASSET_SNAPSHOT_SELECT = `
     e.entry_id AS entryId,
     e.source_id AS sourceId,
     e.is_original AS isOriginal,
+    e.parent_entry_id AS parentEntryId,
+    e.display_name AS displayName,
+    e.created_at AS entryCreatedAt,
     a.asset_id AS assetId,
     a.root_id AS rootId,
     a.relative_path AS relativePath,
@@ -929,6 +932,124 @@ export class CatalogLiveRepository {
     return this.upsertMetadata(catalogId, entryId, next);
   }
 
+  private applyEditEntryCreate(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-create" }>,
+  ): boolean {
+    const existing = this.database.prepare(
+      "SELECT 1 FROM edit_entries WHERE catalog_id = ? AND entry_id = ?",
+    ).get(catalogId, mutation.entryId);
+    if (existing !== undefined) throw new Error("Catalog live edit entry already exists.");
+    const source = this.database.prepare(`
+      SELECT source_id AS sourceId
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, mutation.sourceEntryId);
+    if (!isRow(source)) throw new Error("Catalog live source edit entry is missing.");
+    const sourceId = parseSourceId(requiredString(source, "sourceId"));
+    this.database.prepare(`
+      INSERT INTO edit_entries (
+        catalog_id, entry_id, source_id, is_original, parent_entry_id, display_name, created_at, updated_at
+      ) VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+    `).run(
+      catalogId,
+      mutation.entryId,
+      sourceId,
+      mutation.sourceEntryId,
+      mutation.displayName,
+      mutation.createdAt,
+      mutation.createdAt,
+    );
+    const metadata = this.database.prepare(`
+      INSERT INTO entry_metadata (
+        catalog_id, entry_id, archive, pick, rating, color_label, develop_json,
+        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+        raw_xmp, xmp_state, xmp_mtime, xmp_sha256
+      )
+      SELECT catalog_id, ?, archive, pick, rating, color_label, develop_json,
+        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+        NULL, 'absent', NULL, NULL
+      FROM entry_metadata
+      WHERE catalog_id = ? AND entry_id = ?
+    `).run(mutation.entryId, catalogId, mutation.sourceEntryId);
+    if (metadata.changes !== 1) throw new Error("Catalog live source edit metadata is missing.");
+
+    const albums = this.database.prepare(`
+      SELECT album_id AS albumId
+      FROM album_entries
+      WHERE catalog_id = ? AND entry_id = ?
+      ORDER BY album_id
+    `).all(catalogId, mutation.sourceEntryId);
+    for (const album of albums) {
+      if (!isRow(album)) throw new Error("Catalog live source album membership is invalid.");
+      const albumId = requiredString(album, "albumId");
+      const rows = this.database.prepare(`
+        SELECT entry_id AS entryId
+        FROM album_entries
+        WHERE catalog_id = ? AND album_id = ?
+        ORDER BY position
+      `).all(catalogId, albumId);
+      const entryIds = rows.map((row) => {
+        if (!isRow(row)) throw new Error("Catalog live album membership is invalid.");
+        return parseEntryId(requiredString(row, "entryId"));
+      });
+      const sourceIndex = entryIds.indexOf(mutation.sourceEntryId);
+      entryIds.splice(sourceIndex + 1, 0, mutation.entryId);
+      this.applyAlbumMembership(catalogId, {
+        kind: "album-membership-replace",
+        albumId,
+        entryIds,
+      });
+    }
+    return true;
+  }
+
+  private applyEditEntryRename(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-rename" }>,
+  ): boolean {
+    const current = this.database.prepare(`
+      SELECT is_original AS isOriginal, display_name AS displayName
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, mutation.entryId);
+    if (!isRow(current)) throw new Error("Catalog live edit entry is missing.");
+    if (booleanValue(current, "isOriginal")) {
+      throw new Error("Catalog live original edit entry cannot be renamed.");
+    }
+    if (nullableString(current, "displayName") === mutation.displayName) return false;
+    const result = this.database.prepare(`
+      UPDATE edit_entries SET display_name = ?, updated_at = ?
+      WHERE catalog_id = ? AND entry_id = ? AND is_original = 0
+    `).run(mutation.displayName, mutation.updatedAt, catalogId, mutation.entryId);
+    if (result.changes !== 1) throw new Error("Catalog live edit entry rename failed.");
+    return true;
+  }
+
+  private applyEditEntryDelete(catalogId: CatalogId, entryId: EntryId): boolean {
+    const current = this.database.prepare(`
+      SELECT is_original AS isOriginal
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, entryId);
+    if (current === undefined) return false;
+    if (!isRow(current)) throw new Error("Catalog live edit entry is invalid.");
+    if (booleanValue(current, "isOriginal")) {
+      throw new Error("Catalog live original edit entry cannot be deleted.");
+    }
+    this.database.prepare(
+      "DELETE FROM album_entries WHERE catalog_id = ? AND entry_id = ?",
+    ).run(catalogId, entryId);
+    this.database.prepare(
+      "DELETE FROM entry_metadata WHERE catalog_id = ? AND entry_id = ?",
+    ).run(catalogId, entryId);
+    const result = this.database.prepare(
+      "DELETE FROM edit_entries WHERE catalog_id = ? AND entry_id = ? AND is_original = 0",
+    ).run(catalogId, entryId);
+    if (result.changes !== 1) throw new Error("Catalog live edit entry delete failed.");
+    return true;
+  }
+
   private applyFingerprint(catalogId: CatalogId, transition: CatalogLiveFingerprintTransition, now: number): boolean {
     const asset = this.asset(catalogId, transition.assetId);
     const fingerprint = this.fingerprint(catalogId, transition.assetId);
@@ -1209,6 +1330,9 @@ export class CatalogLiveRepository {
         this.database.prepare("UPDATE catalog_meta SET display_name = ?, updated_at = ? WHERE catalog_id = ?").run(mutation.displayName, now, catalogId);
         return true;
       }
+      case "edit-entry-create": return this.applyEditEntryCreate(catalogId, mutation);
+      case "edit-entry-rename": return this.applyEditEntryRename(catalogId, mutation);
+      case "edit-entry-delete": return this.applyEditEntryDelete(catalogId, mutation.entryId);
       case "root-upsert": return this.applyRootUpsert(catalogId, mutation.root);
       case "root-health": {
         const current = this.requireRoot(catalogId, mutation.rootId);
@@ -1284,6 +1408,11 @@ export class CatalogLiveRepository {
       entryId: parseEntryId(requiredString(value, "entryId")),
       sourceId: parseSourceId(requiredString(value, "sourceId")),
       entryKind: booleanValue(value, "isOriginal") ? "original" : "virtual",
+      parentEntryId: nullableString(value, "parentEntryId") === null
+        ? null
+        : parseEntryId(nullableString(value, "parentEntryId")),
+      displayName: nullableString(value, "displayName"),
+      entryCreatedAt: numberValue(value, "entryCreatedAt"),
       assetId: parseAssetId(requiredString(value, "assetId")),
       rootId: parseRootId(requiredString(value, "rootId")),
       relativePath: requiredString(value, "relativePath"),
@@ -1390,7 +1519,7 @@ export class CatalogLiveRepository {
     if (input.entryId !== undefined) { conditions.push("e.entry_id = ?"); parameters.push(input.entryId); }
     if (input.assetId !== undefined) { conditions.push("a.asset_id = ?"); parameters.push(input.assetId); }
     if (input.rootId !== undefined) { conditions.push("a.root_id = ?"); parameters.push(input.rootId); }
-    const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
+    const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id, e.is_original DESC, e.created_at, e.entry_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
     const fingerprintMatches = input.fingerprintSha256 === undefined
       ? []
       : this.database.prepare("SELECT fingerprint_id AS fingerprintId, asset_id AS assetId, sha256 FROM fingerprints WHERE catalog_id = ? AND status = 'valid' AND sha256 = ? ORDER BY asset_id").all(input.catalogId, input.fingerprintSha256).map((value) => {
