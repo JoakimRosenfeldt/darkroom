@@ -98,6 +98,20 @@ import type {
   DevelopAssetTransitionRequest,
   DevelopAssetTransitionResult,
 } from "../lib/develop/v3/asset-store";
+import type {
+  DevelopJobAcceptanceResult,
+  DevelopJobAcceptRequest,
+  DevelopJobListener,
+  DevelopJobRetryRequest,
+  DevelopJobStartRequest,
+  DevelopJobTargetRequest,
+  GenerativeRemoveConsentGrantRequest,
+  GenerativeRemoveConsentRevokeRequest,
+} from "../lib/develop/v3/job-api";
+import type {
+  DevelopJobSnapshot,
+  GenerativeRemoveConsentReceipt,
+} from "../lib/develop/v3/jobs";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -141,6 +155,19 @@ export interface DarkroomAPI {
   developAssetCollectGarbage(
     request: DevelopAssetGcRequest,
   ): Promise<DevelopAssetGcResult>;
+  developJobsList(): Promise<readonly DevelopJobSnapshot[]>;
+  developJobsStart(request: DevelopJobStartRequest): Promise<DevelopJobSnapshot>;
+  developJobsCancel(request: DevelopJobTargetRequest): Promise<DevelopJobSnapshot>;
+  developJobsRetry(request: DevelopJobRetryRequest): Promise<DevelopJobSnapshot>;
+  developJobsDiscard(request: DevelopJobTargetRequest): Promise<void>;
+  developJobsAccept(request: DevelopJobAcceptRequest): Promise<DevelopJobAcceptanceResult>;
+  developJobsGrantGenerativeRemoveConsent(
+    request: GenerativeRemoveConsentGrantRequest,
+  ): Promise<GenerativeRemoveConsentReceipt>;
+  developJobsRevokeGenerativeRemoveConsent(
+    request: GenerativeRemoveConsentRevokeRequest,
+  ): Promise<GenerativeRemoveConsentReceipt>;
+  onDevelopJobsUpdated(listener: DevelopJobListener): () => void;
   catalogReadAssetHead(request: CatalogAssetHeadRequest): Promise<ArrayBuffer>;
   catalogStatAsset(request: CatalogAssetRequest): Promise<{ readonly size: number; readonly lastModified: number }>;
   catalogReadSidecar(request: CatalogAssetRequest): Promise<{ readonly contents: string; readonly lastModified: number } | null>;

@@ -65,12 +65,21 @@ import {
 } from "../lib/catalog/admin.ts";
 import { NativeAssetAccess } from "./native-asset-access.ts";
 import { DevelopAssetStore } from "./develop-asset-store.ts";
+import { DevelopJobRuntime } from "./develop-job-runtime.ts";
 import {
   parseDevelopAssetGcRequest,
   parseDevelopAssetPutRequest,
   parseDevelopAssetReadRequest,
   parseDevelopAssetTransitionRequest,
 } from "../lib/develop/v3/asset-store.ts";
+import {
+  parseDevelopJobAcceptRequest,
+  parseDevelopJobRetryRequest,
+  parseDevelopJobStartRequest,
+  parseDevelopJobTargetRequest,
+  parseGenerativeRemoveConsentGrantRequest,
+  parseGenerativeRemoveConsentRevokeRequest,
+} from "../lib/develop/v3/job-api.ts";
 import { CatalogWatcherReconcileAdapter } from "./catalog-watcher-adapter.ts";
 import { WatcherReconciliationService } from "./watcher-reconciliation.ts";
 import {
@@ -711,6 +720,26 @@ function registerIpcHandlers(): void {
   const developAssetStore = new DevelopAssetStore(
     path.join(app.getPath("userData"), "develop-assets-v3"),
   );
+  const developJobRuntime = new DevelopJobRuntime({
+    journalPath: path.join(
+      app.getPath("userData"),
+      "develop-jobs-v3",
+      "journal.json",
+    ),
+    assetStore: developAssetStore,
+    onUpdate: (jobs) => {
+      mainWindow?.webContents.send("darkroom:develop-jobs-updated", jobs);
+    },
+  });
+  const developJobRuntimeReady = developJobRuntime.initialize().then(
+    () => true,
+    () => false,
+  );
+  const requireDevelopJobRuntime = async (): Promise<void> => {
+    if (!(await developJobRuntimeReady)) {
+      throw new Error("Prototype job storage is unavailable.");
+    }
+  };
   const metadataCache = new MetadataCache(path.join(app.getPath("userData"), "metadata-cache"));
   const assetOperations: AssetScopedOperations = {
     readSidecar: (location) => nativeAssetAccess.readSidecar(location),
@@ -1597,6 +1626,50 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return developAssetStore.collectGarbage(parseDevelopAssetGcRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-list", async (event) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.list();
+  });
+  ipcMain.handle("darkroom:develop-jobs-start", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.start(parseDevelopJobStartRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.cancel(parseDevelopJobTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-retry", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.retry(parseDevelopJobRetryRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-discard", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    await developJobRuntime.discard(parseDevelopJobTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-accept", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.accept(parseDevelopJobAcceptRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-jobs-consent-grant", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.grantGenerativeRemoveConsent(
+      parseGenerativeRemoveConsentGrantRequest(value),
+    );
+  });
+  ipcMain.handle("darkroom:develop-jobs-consent-revoke", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await requireDevelopJobRuntime();
+    return developJobRuntime.revokeGenerativeRemoveConsent(
+      parseGenerativeRemoveConsentRevokeRequest(value),
+    );
   });
   ipcMain.handle("darkroom:catalog-read-asset-head", async (event, value: unknown) => {
     assertTrustedRenderer(event);

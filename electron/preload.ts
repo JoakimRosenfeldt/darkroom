@@ -148,6 +148,30 @@ import {
   type DevelopAssetTransitionRequest,
   type DevelopAssetTransitionResult,
 } from "../lib/develop/v3/asset-store.ts";
+import {
+  parseDevelopJobAcceptanceResult,
+  parseDevelopJobAcceptRequest,
+  parseDevelopJobRetryRequest,
+  parseDevelopJobSnapshotList,
+  parseDevelopJobStartRequest,
+  parseDevelopJobTargetRequest,
+  parseGenerativeRemoveConsentGrantRequest,
+  parseGenerativeRemoveConsentResult,
+  parseGenerativeRemoveConsentRevokeRequest,
+  type DevelopJobAcceptanceResult,
+  type DevelopJobAcceptRequest,
+  type DevelopJobListener,
+  type DevelopJobRetryRequest,
+  type DevelopJobStartRequest,
+  type DevelopJobTargetRequest,
+  type GenerativeRemoveConsentGrantRequest,
+  type GenerativeRemoveConsentRevokeRequest,
+} from "../lib/develop/v3/job-api.ts";
+import {
+  parseDevelopJobSnapshot,
+  type DevelopJobSnapshot,
+  type GenerativeRemoveConsentReceipt,
+} from "../lib/develop/v3/jobs.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -381,6 +405,87 @@ const darkroom = {
       parseDevelopAssetGcRequest(request),
     );
     return parseDevelopAssetGcResult(result);
+  },
+
+  async developJobsList(): Promise<readonly DevelopJobSnapshot[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-jobs-list");
+    return parseDevelopJobSnapshotList(result);
+  },
+
+  async developJobsStart(request: DevelopJobStartRequest): Promise<DevelopJobSnapshot> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-start",
+      parseDevelopJobStartRequest(request),
+    );
+    return parseDevelopJobSnapshot(result);
+  },
+
+  async developJobsCancel(request: DevelopJobTargetRequest): Promise<DevelopJobSnapshot> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-cancel",
+      parseDevelopJobTargetRequest(request),
+    );
+    return parseDevelopJobSnapshot(result);
+  },
+
+  async developJobsRetry(request: DevelopJobRetryRequest): Promise<DevelopJobSnapshot> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-retry",
+      parseDevelopJobRetryRequest(request),
+    );
+    return parseDevelopJobSnapshot(result);
+  },
+
+  async developJobsDiscard(request: DevelopJobTargetRequest): Promise<void> {
+    await ipcRenderer.invoke(
+      "darkroom:develop-jobs-discard",
+      parseDevelopJobTargetRequest(request),
+    );
+  },
+
+  async developJobsAccept(
+    request: DevelopJobAcceptRequest,
+  ): Promise<DevelopJobAcceptanceResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-accept",
+      parseDevelopJobAcceptRequest(request),
+    );
+    return parseDevelopJobAcceptanceResult(result);
+  },
+
+  async developJobsGrantGenerativeRemoveConsent(
+    request: GenerativeRemoveConsentGrantRequest,
+  ): Promise<GenerativeRemoveConsentReceipt> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-consent-grant",
+      parseGenerativeRemoveConsentGrantRequest(request),
+    );
+    return parseGenerativeRemoveConsentResult(result);
+  },
+
+  async developJobsRevokeGenerativeRemoveConsent(
+    request: GenerativeRemoveConsentRevokeRequest,
+  ): Promise<GenerativeRemoveConsentReceipt> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-jobs-consent-revoke",
+      parseGenerativeRemoveConsentRevokeRequest(request),
+    );
+    return parseGenerativeRemoveConsentResult(result);
+  },
+
+  onDevelopJobsUpdated(listener: DevelopJobListener): () => void {
+    if (typeof listener !== "function") {
+      throw new Error("Develop job listener must be a function.");
+    }
+    const wrapped = (_event: IpcRendererEvent, value: unknown) => {
+      try {
+        listener(parseDevelopJobSnapshotList(value));
+      } catch {
+        // Malformed or stale main-process events are ignored at the renderer boundary.
+      }
+    };
+    ipcRenderer.on("darkroom:develop-jobs-updated", wrapped);
+    return () => ipcRenderer.removeListener("darkroom:develop-jobs-updated", wrapped);
   },
 
   catalogReadAssetHead(request: CatalogAssetHeadRequest): Promise<ArrayBuffer> {
