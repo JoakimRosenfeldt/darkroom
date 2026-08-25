@@ -1,6 +1,8 @@
 import { parseCatalogId, parseEntryId, type CatalogId, type EntryId } from "../../catalog/ids.ts";
 import { parseDevelopRevisionId, type DevelopRevisionId } from "../history.ts";
 import { DEVELOP_PRESET_FIELDS, parseDevelopPresetField, type DevelopPresetField } from "../presets/policy.ts";
+import { parseDevelopPresetPayload } from "../presets/schema.ts";
+import type { DevelopPresetCameraProfileContext } from "../presets/apply.ts";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
 
@@ -20,12 +22,21 @@ export const DEVELOP_BATCH_MAX_NODES = 100_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export type DevelopBatchOperation =
+export type DevelopBatchAction =
   | { readonly kind: "copy-fields"; readonly fields: readonly DevelopPresetField[] }
   | { readonly kind: "preset"; readonly preset: DevelopBatchJson; readonly fields: readonly DevelopPresetField[] | null; readonly amount: number }
   | { readonly kind: "paste-settings"; readonly payload: DevelopBatchJson; readonly fields: readonly DevelopPresetField[] }
   | { readonly kind: "section-reset"; readonly fields: readonly DevelopPresetField[] }
-  | { readonly kind: "selected-control"; readonly field: DevelopPresetField; readonly payloadEntry: DevelopBatchJson }
+  | { readonly kind: "selected-control"; readonly field: DevelopPresetField; readonly payloadEntry: DevelopBatchJson };
+
+export interface DevelopBatchFrozenProfileContext {
+  readonly entryId: EntryId;
+  readonly context: DevelopPresetCameraProfileContext;
+}
+
+export type DevelopBatchOperation =
+  | DevelopBatchAction
+  | { readonly kind: "frozen"; readonly action: DevelopBatchAction; readonly profileContexts: readonly DevelopBatchFrozenProfileContext[] }
   | { readonly kind: "undo"; readonly sourceBatchId: DevelopBatchId };
 
 export interface DevelopBatchFrozenTarget {
@@ -84,10 +95,15 @@ export interface DevelopBatchReceipt {
   readonly updatedAt: number;
 }
 
+export type DevelopBatchAutoSyncState =
+  | { readonly kind: "auto-state"; readonly enabled: false; readonly sourceEntryId: null; readonly targetEntryIds: readonly EntryId[]; readonly fields: readonly DevelopPresetField[] }
+  | { readonly kind: "auto-state"; readonly enabled: true; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[]; readonly fields: readonly DevelopPresetField[] };
+
 export type DevelopBatchCommand =
   | { readonly kind: "create"; readonly input: DevelopBatchCreateInput }
   | { readonly kind: "get"; readonly catalogId: CatalogId; readonly batchId: DevelopBatchId }
   | { readonly kind: "list"; readonly catalogId: CatalogId; readonly limit: number }
+  | { readonly kind: "auto-get"; readonly catalogId: CatalogId }
   | { readonly kind: "run" | "cancel" | "retry"; readonly catalogId: CatalogId; readonly batchId: DevelopBatchId }
   | {
       readonly kind: "freeze";
@@ -102,6 +118,11 @@ export type DevelopBatchCommand =
       readonly currentEntryId: EntryId; readonly fields: readonly DevelopPresetField[]; readonly createdAt: number;
     }
   | {
+      readonly kind: "previous-frozen";
+      readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
+      readonly currentEntryId: EntryId; readonly operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>; readonly createdAt: number;
+    }
+  | {
       readonly kind: "undo";
       readonly catalogId: CatalogId; readonly sourceBatchId: DevelopBatchId; readonly batchId: DevelopBatchId;
       readonly operationId: DevelopBatchOperationId; readonly createdAt: number;
@@ -111,6 +132,11 @@ export type DevelopBatchCommand =
       readonly catalogId: CatalogId; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[];
       readonly fields: readonly DevelopPresetField[]; readonly updatedAt: number;
     }
+  | {
+      readonly kind: "auto-enable-frozen";
+      readonly catalogId: CatalogId; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[];
+      readonly operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>; readonly updatedAt: number;
+    }
   | { readonly kind: "auto-disable"; readonly catalogId: CatalogId; readonly updatedAt: number }
   | {
       readonly kind: "auto-emit";
@@ -118,7 +144,7 @@ export type DevelopBatchCommand =
       readonly sourceRevisionId: DevelopRevisionId; readonly createdAt: number;
     };
 
-export type DevelopBatchCommandResult = DevelopBatchReceipt | readonly DevelopBatchReceipt[] | null;
+export type DevelopBatchCommandResult = DevelopBatchReceipt | readonly DevelopBatchReceipt[] | DevelopBatchAutoSyncState | null;
 
 function fail(message: string): never { throw new Error(message); }
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -186,6 +212,41 @@ function fields(value: unknown, allowEmpty = false): readonly DevelopPresetField
   return parsed;
 }
 
+function cameraProfileContext(value: unknown): DevelopPresetCameraProfileContext {
+  const input = record(value, "Develop batch camera profile context");
+  if (input.kind === "unavailable") {
+    exact(input, ["kind", "reason"], "Develop batch unavailable camera profile context");
+    return { kind: "unavailable", reason: text(input.reason, "Develop batch camera profile reason", 4_096) };
+  }
+  if (input.kind !== "available-before-tone") fail("Develop batch camera profile context kind is invalid.");
+  exact(input, ["kind", "decoderDefault", "compatibleProfiles"], "Develop batch camera profile context");
+  if (!Array.isArray(input.compatibleProfiles) || input.compatibleProfiles.length > 10_000) {
+    fail("Develop batch compatible profiles are invalid.");
+  }
+  const parsed = [input.decoderDefault, ...input.compatibleProfiles].map((profileValue) => {
+    const payload = parseDevelopPresetPayload(
+      [{ field: "camera-profile", value: profileValue }],
+      ["camera-profile"],
+    );
+    const entry = payload[0];
+    if (!entry || entry.field !== "camera-profile") fail("Develop batch camera profile is invalid.");
+    return entry.value;
+  });
+  const decoderDefault = parsed[0];
+  if (!decoderDefault) fail("Develop batch decoder profile is missing.");
+  return {
+    kind: "available-before-tone",
+    decoderDefault,
+    compatibleProfiles: parsed.slice(1),
+  };
+}
+
+function batchAction(value: unknown): DevelopBatchAction {
+  const operation = parseDevelopBatchOperation(value);
+  if (operation.kind === "undo" || operation.kind === "frozen") fail("Nested Develop batch operations are invalid.");
+  return operation;
+}
+
 export function parseDevelopBatchOperation(value: unknown): DevelopBatchOperation {
   const input = record(value, "Develop batch operation");
   const kind = input.kind;
@@ -206,6 +267,20 @@ export function parseDevelopBatchOperation(value: unknown): DevelopBatchOperatio
   } else if (kind === "selected-control") {
     exact(input, ["kind", "field", "payloadEntry"], "Develop batch control operation");
     operation = { kind, field: parseDevelopPresetField(input.field), payloadEntry: parseDevelopBatchJson(input.payloadEntry) };
+  } else if (kind === "frozen") {
+    exact(input, ["kind", "action", "profileContexts"], "Frozen Develop batch operation");
+    if (!Array.isArray(input.profileContexts) || input.profileContexts.length > DEVELOP_BATCH_MAX_TARGETS) {
+      fail("Frozen Develop batch profile contexts are invalid.");
+    }
+    const profileContexts = input.profileContexts.map((value, index) => {
+      const context = record(value, `Frozen Develop batch profile context ${index}`);
+      exact(context, ["entryId", "context"], `Frozen Develop batch profile context ${index}`);
+      return { entryId: parseEntryId(context.entryId), context: cameraProfileContext(context.context) };
+    });
+    if (new Set(profileContexts.map((item) => item.entryId)).size !== profileContexts.length) {
+      fail("Frozen Develop batch profile contexts contain duplicate entries.");
+    }
+    operation = { kind, action: batchAction(input.action), profileContexts };
   } else if (kind === "undo") {
     exact(input, ["kind", "sourceBatchId"], "Develop batch undo operation");
     operation = { kind, sourceBatchId: parseDevelopBatchId(input.sourceBatchId) };
@@ -222,13 +297,14 @@ function batchKind(value: unknown): DevelopBatchKind {
 }
 
 function assertBatchKindOperation(kind: DevelopBatchKind, operation: DevelopBatchOperation): void {
+  const action = operation.kind === "frozen" ? operation.action : operation;
   const valid = kind === "undo"
-    ? operation.kind === "undo"
+    ? action.kind === "undo"
     : kind === "previous" || kind === "sync" || kind === "auto-sync"
-      ? operation.kind === "copy-fields"
-      : operation.kind === "preset" || operation.kind === "paste-settings" ||
-        operation.kind === "section-reset" || operation.kind === "selected-control";
-  if (!valid) fail(`Develop batch kind ${kind} cannot use operation ${operation.kind}.`);
+      ? action.kind === "copy-fields"
+      : action.kind === "preset" || action.kind === "paste-settings" ||
+        action.kind === "section-reset" || action.kind === "selected-control";
+  if (!valid) fail(`Develop batch kind ${kind} cannot use operation ${action.kind}.`);
 }
 
 export function parseDevelopBatchCreateInput(value: unknown): DevelopBatchCreateInput {
@@ -252,6 +328,10 @@ export function parseDevelopBatchCreateInput(value: unknown): DevelopBatchCreate
   if (sourceEntryId !== null && targets.some((target) => target.entryId === sourceEntryId)) fail("Develop batch source cannot be a target.");
   const operation = parseDevelopBatchOperation(input.operation);
   if (operation.kind === "undo") fail("Develop batch create operation is invalid.");
+  if (operation.kind === "frozen" && (
+    operation.profileContexts.length !== targets.length ||
+    operation.profileContexts.some((context, index) => context.entryId !== targets[index]?.entryId)
+  )) fail("Frozen Develop batch profile contexts do not match the ordered targets.");
   assertBatchKindOperation(kind, operation);
   const parsed: DevelopBatchCreateInput = {
     schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION,
@@ -398,6 +478,10 @@ export function parseDevelopBatchCommand(value: unknown): DevelopBatchCommand {
     exact(input, ["kind", "catalogId", "limit"], "Develop batch list command");
     return { kind, catalogId: parseCatalogId(input.catalogId), limit: integer(input.limit, "Develop batch list limit", 1, 1_000) };
   }
+  if (kind === "auto-get") {
+    exact(input, ["kind", "catalogId"], "Auto Sync state command");
+    return { kind, catalogId: parseCatalogId(input.catalogId) };
+  }
   if (kind === "freeze") {
     exact(input, ["kind", "catalogId", "batchId", "operationId", "batchKind", "sourceEntryId", "targetEntryIds", "operation", "createdAt"], "Develop batch freeze command");
     if (input.batchKind !== "sync" && input.batchKind !== "batch") fail("Develop batch freeze kind is invalid.");
@@ -409,6 +493,14 @@ export function parseDevelopBatchCommand(value: unknown): DevelopBatchCommand {
     exact(input, ["kind", "catalogId", "batchId", "operationId", "currentEntryId", "fields", "createdAt"], "Previous Develop command");
     return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), currentEntryId: parseEntryId(input.currentEntryId), fields: fields(input.fields), createdAt: finite(input.createdAt, "Previous Develop createdAt") };
   }
+  if (kind === "previous-frozen") {
+    exact(input, ["kind", "catalogId", "batchId", "operationId", "currentEntryId", "operation", "createdAt"], "Frozen Previous Develop command");
+    const operation = parseDevelopBatchOperation(input.operation);
+    if (operation.kind !== "frozen" || operation.action.kind !== "copy-fields") fail("Frozen Previous Develop operation is invalid.");
+    const currentEntryId = parseEntryId(input.currentEntryId);
+    if (operation.profileContexts.length !== 1 || operation.profileContexts[0]?.entryId !== currentEntryId) fail("Frozen Previous profile context is invalid.");
+    return { kind, catalogId: parseCatalogId(input.catalogId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), currentEntryId, operation, createdAt: finite(input.createdAt, "Previous Develop createdAt") };
+  }
   if (kind === "undo") {
     exact(input, ["kind", "catalogId", "sourceBatchId", "batchId", "operationId", "createdAt"], "Develop batch undo command");
     return { kind, catalogId: parseCatalogId(input.catalogId), sourceBatchId: parseDevelopBatchId(input.sourceBatchId), batchId: parseDevelopBatchId(input.batchId), operationId: parseDevelopBatchOperationId(input.operationId), createdAt: finite(input.createdAt, "Develop batch undo createdAt") };
@@ -416,6 +508,14 @@ export function parseDevelopBatchCommand(value: unknown): DevelopBatchCommand {
   if (kind === "auto-enable") {
     exact(input, ["kind", "catalogId", "sourceEntryId", "targetEntryIds", "fields", "updatedAt"], "Auto Sync enable command");
     return { kind, catalogId: parseCatalogId(input.catalogId), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds: entryIds(input.targetEntryIds, "Auto Sync target IDs"), fields: fields(input.fields), updatedAt: finite(input.updatedAt, "Auto Sync updatedAt") };
+  }
+  if (kind === "auto-enable-frozen") {
+    exact(input, ["kind", "catalogId", "sourceEntryId", "targetEntryIds", "operation", "updatedAt"], "Frozen Auto Sync enable command");
+    const operation = parseDevelopBatchOperation(input.operation);
+    if (operation.kind !== "frozen" || operation.action.kind !== "copy-fields") fail("Frozen Auto Sync operation is invalid.");
+    const targetEntryIds = entryIds(input.targetEntryIds, "Auto Sync target IDs");
+    if (operation.profileContexts.length !== targetEntryIds.length || operation.profileContexts.some((context, index) => context.entryId !== targetEntryIds[index])) fail("Frozen Auto Sync profile contexts are invalid.");
+    return { kind, catalogId: parseCatalogId(input.catalogId), sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds, operation, updatedAt: finite(input.updatedAt, "Auto Sync updatedAt") };
   }
   if (kind === "auto-disable") {
     exact(input, ["kind", "catalogId", "updatedAt"], "Auto Sync disable command");
@@ -430,5 +530,23 @@ export function parseDevelopBatchCommand(value: unknown): DevelopBatchCommand {
 
 export function parseDevelopBatchCommandResult(value: unknown): DevelopBatchCommandResult {
   if (value === null) return null;
+  if (!Array.isArray(value) && typeof value === "object" && value !== null && Reflect.get(value, "kind") === "auto-state") {
+    return parseDevelopBatchAutoSyncState(value);
+  }
   return Array.isArray(value) ? value.map(parseDevelopBatchReceipt) : parseDevelopBatchReceipt(value);
+}
+
+export function parseDevelopBatchAutoSyncState(value: unknown): DevelopBatchAutoSyncState {
+    const input = record(value, "Auto Sync state");
+    exact(input, ["kind", "enabled", "sourceEntryId", "targetEntryIds", "fields"], "Auto Sync state");
+    if (typeof input.enabled !== "boolean") fail("Auto Sync enabled state is invalid.");
+    if (!Array.isArray(input.targetEntryIds) || input.targetEntryIds.length > DEVELOP_BATCH_MAX_TARGETS) fail("Auto Sync targets are invalid.");
+    const targetEntryIds = input.targetEntryIds.map(parseEntryId);
+    if (new Set(targetEntryIds).size !== targetEntryIds.length) fail("Auto Sync target IDs contain duplicates.");
+    const parsedFields = fields(input.fields, !input.enabled);
+    if (!input.enabled) {
+      if (input.sourceEntryId !== null || targetEntryIds.length !== 0 || parsedFields.length !== 0) fail("Disabled Auto Sync state is invalid.");
+      return { kind: "auto-state", enabled: false, sourceEntryId: null, targetEntryIds, fields: parsedFields };
+    }
+    return { kind: "auto-state", enabled: true, sourceEntryId: parseEntryId(input.sourceEntryId), targetEntryIds, fields: parsedFields };
 }

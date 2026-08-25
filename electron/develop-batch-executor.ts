@@ -48,21 +48,25 @@ function sourcePayload(input: DevelopBatchExecutionInput, fields: readonly Devel
 }
 
 function operationPreset(input: DevelopBatchExecutionInput): { readonly preset: unknown; readonly fields?: readonly DevelopPresetField[]; readonly amount: number } {
-  switch (input.operation.kind) {
+  if (input.operation.kind === "frozen") {
+    return operationPreset({ ...input, operation: input.operation.action });
+  }
+  const operation = input.operation;
+  switch (operation.kind) {
     case "copy-fields":
-      return { preset: ephemeralPreset(input.operationId, input.operation.fields, sourcePayload(input, input.operation.fields)), amount: 100 };
+      return { preset: ephemeralPreset(input.operationId, operation.fields, sourcePayload(input, operation.fields)), amount: 100 };
     case "preset":
-      return { preset: input.operation.preset, ...(input.operation.fields === null ? {} : { fields: input.operation.fields }), amount: input.operation.amount };
+      return { preset: operation.preset, ...(operation.fields === null ? {} : { fields: operation.fields }), amount: operation.amount };
     case "paste-settings":
-      return { preset: ephemeralPreset(input.operationId, input.operation.fields, input.operation.payload), amount: 100 };
+      return { preset: ephemeralPreset(input.operationId, operation.fields, operation.payload), amount: 100 };
     case "section-reset": {
-      const payload = captureDevelopPresetPayload(DEFAULT_V3_DEVELOP_DOCUMENT, input.operation.fields, input.targetSourceId);
-      return { preset: ephemeralPreset(input.operationId, input.operation.fields, payload), amount: 100 };
+      const payload = captureDevelopPresetPayload(DEFAULT_V3_DEVELOP_DOCUMENT, operation.fields, input.targetSourceId);
+      return { preset: ephemeralPreset(input.operationId, operation.fields, payload), amount: 100 };
     }
     case "selected-control":
-      return { preset: ephemeralPreset(input.operationId, [input.operation.field], [input.operation.payloadEntry]), amount: 100 };
+      return { preset: ephemeralPreset(input.operationId, [operation.field], [operation.payloadEntry]), amount: 100 };
     default: {
-      const exhaustive: never = input.operation;
+      const exhaustive: never = operation;
       return exhaustive;
     }
   }

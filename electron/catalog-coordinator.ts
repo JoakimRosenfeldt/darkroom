@@ -481,6 +481,11 @@ export class CatalogCoordinator {
     });
   }
 
+  assertCurrentSession(value: unknown): void {
+    const input = parseCatalogSessionRequest(value);
+    this.requireCurrent(input.catalogId, input.sessionId);
+  }
+
   async addRoot(value: unknown): Promise<CatalogRootResult> {
     const input = parseCatalogSessionRequest(value);
     const active = this.requireCurrent(input.catalogId, input.sessionId);

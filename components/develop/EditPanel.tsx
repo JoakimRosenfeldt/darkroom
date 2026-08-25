@@ -22,9 +22,8 @@ import {
 import { resolveAdjustedWhiteBalance } from "@/lib/develop/v3/white-balance";
 import type { ColorGradingWheel } from "@/lib/develop/v3/color-grading";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
-import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
+import { DevelopBatchPanel } from "@/components/develop/DevelopBatchPanel";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import type {
   V3CanvasDiagnostic,
@@ -92,23 +91,6 @@ function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
   if (panel === "masking") return "masking";
   if (panel === "cleanup") return "cleanup";
   return null;
-}
-
-function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
-  switch (tab) {
-    case "presets": return "tone";
-    case "light": return "tone";
-    case "color": return "curve-and-color";
-    case "detail": return "detail";
-    case "geometry": return "geometry-and-crop";
-    case "masking": return "local-adjustments";
-    case "cleanup": return "cleanup";
-    case "output": return "output-intent";
-    default: {
-      const exhaustive: never = tab;
-      return exhaustive;
-    }
-  }
 }
 
 export interface V3BatchContext {
@@ -271,15 +253,8 @@ export function EditPanel({
       </div>
       </aside>
       {batchOpen ? (
-        <V3BatchDialog
+        <DevelopBatchPanel
           sourceEntry={batch.sourceEntry}
-          entries={batch.entries}
-          resultId={batch.resultId}
-          catalogId={batch.sourceEntry.catalogId}
-          catalogRevision={batch.catalogRevision}
-          resultEntryIds={batch.resultEntryIds}
-          missingEntryIds={batch.missingEntryIds}
-          currentGroup={batchGroupForTab(activeTab)}
           onClose={() => setBatchOpen(false)}
         />
       ) : null}

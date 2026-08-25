@@ -251,6 +251,20 @@ import {
   type DevelopClipboardPayload,
   type DevelopClipboardReadResult,
 } from "../lib/develop/clipboard/schema.ts";
+import {
+  parseDevelopBatchAutoSyncRequest,
+  parseDevelopBatchListRequest,
+  parseDevelopBatchReceiptList,
+  parseDevelopBatchStartRequest,
+  parseDevelopBatchTargetRequest,
+  parseDevelopBatchUpdate,
+  type DevelopBatchAutoSyncRequest,
+  type DevelopBatchListRequest,
+  type DevelopBatchStartRequest,
+  type DevelopBatchTargetRequest,
+  type DevelopBatchUpdate,
+} from "../lib/develop/batch/api.ts";
+import { parseDevelopBatchAutoSyncState, parseDevelopBatchReceipt, type DevelopBatchAutoSyncState, type DevelopBatchReceipt } from "../lib/develop/batch/domain.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -682,6 +696,53 @@ const darkroom = {
       "darkroom:develop-clipboard-groups-set",
       parseDevelopClipboardGroups(groups),
     );
+  },
+
+  async developBatchList(request: DevelopBatchListRequest): Promise<readonly DevelopBatchReceipt[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-list", parseDevelopBatchListRequest(request));
+    return parseDevelopBatchReceiptList(result);
+  },
+
+  async developBatchStart(request: DevelopBatchStartRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-start", parseDevelopBatchStartRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchCancel(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-cancel", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchRetry(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-retry", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchUndo(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-undo", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  developBatchAutoEnable(request: DevelopBatchAutoSyncRequest): Promise<void> {
+    return ipcRenderer.invoke("darkroom:develop-batch-auto-enable", parseDevelopBatchAutoSyncRequest(request));
+  },
+
+  developBatchAutoDisable(request: CatalogSessionRequest): Promise<void> {
+    return ipcRenderer.invoke("darkroom:develop-batch-auto-disable", parseCatalogSessionRequest(request));
+  },
+
+  async developBatchAutoState(request: CatalogSessionRequest): Promise<DevelopBatchAutoSyncState> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-auto-state", parseCatalogSessionRequest(request));
+    return parseDevelopBatchAutoSyncState(result);
+  },
+
+  onDevelopBatchUpdated(listener: (update: DevelopBatchUpdate) => void): () => void {
+    if (typeof listener !== "function") throw new Error("Develop batch listener must be a function.");
+    const wrapped = (_event: IpcRendererEvent, value: unknown) => {
+      try { listener(parseDevelopBatchUpdate(value)); } catch { /* ignore malformed main events */ }
+    };
+    ipcRenderer.on("darkroom:develop-batch-updated", wrapped);
+    return () => ipcRenderer.removeListener("darkroom:develop-batch-updated", wrapped);
   },
 
   async developAssetCollectGarbage(

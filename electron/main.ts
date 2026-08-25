@@ -190,6 +190,13 @@ import {
   parseDevelopClipboardText,
   serializeDevelopClipboardPayload,
 } from "../lib/develop/clipboard/schema.ts";
+import {
+  parseDevelopBatchAutoSyncRequest,
+  parseDevelopBatchListRequest,
+  parseDevelopBatchStartRequest,
+  parseDevelopBatchTargetRequest,
+} from "../lib/develop/batch/api.ts";
+import { DevelopBatchService } from "./develop-batch-service.ts";
 
 registerAiModelScheme();
 
@@ -1058,6 +1065,33 @@ function registerIpcHandlers(): void {
       ) {
         throw new Error("Develop default source changed before installation.");
       }
+    },
+  });
+  const developBatchService = new DevelopBatchService({
+    worker,
+    cameraProfiles,
+    presets: developPresets,
+    verifyBinding: (catalogId, sessionId) => coordinator.assertCurrentSession({ catalogId, sessionId }),
+    verifySession: (catalogId, sessionId) => coordinator.queryLive({
+      catalogId,
+      sessionId,
+      expectedRevision: null,
+    }),
+    readClipboard: () => {
+      const text = clipboard.readText();
+      if (text.length === 0) return { kind: "empty" };
+      try {
+        return { kind: "ready", payload: parseDevelopClipboardText(text) };
+      } catch (error) {
+        return {
+          kind: "invalid",
+          reason: error instanceof Error ? error.message.slice(0, 512) : "Clipboard does not contain valid Darkroom Develop settings.",
+        };
+      }
+    },
+    onUpdate: (catalogId, receipts) => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+      mainWindow.webContents.send("darkroom:develop-batch-updated", { catalogId, receipts });
     },
   });
   let manualImportBinding: {
@@ -2010,9 +2044,46 @@ function registerIpcHandlers(): void {
     assertTrustedRenderer(event);
     return worker.listDevelopHistory(parseDevelopHistoryListInput(value));
   });
+  ipcMain.handle("darkroom:develop-batch-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.list(parseDevelopBatchListRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-start", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developPresetsReady, cameraProfilesReady]);
+    return developBatchService.start(parseDevelopBatchStartRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.cancel(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-retry", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.retry(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-undo", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.undo(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-enable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    await developBatchService.enableAutoSync(parseDevelopBatchAutoSyncRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-disable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developBatchService.disableAutoSync(parseCatalogSessionRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-state", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.autoSyncState(parseCatalogSessionRequest(value));
+  });
   ipcMain.handle("darkroom:develop-history-commit", async (event, value: unknown) => {
     assertTrustedRenderer(event);
-    return worker.commitDevelopHistory(parseDevelopHistoryCommitInput(value));
+    const input = parseDevelopHistoryCommitInput(value);
+    const result = await worker.commitDevelopHistory(input);
+    await developBatchService.historyCommitted(input, result).catch(() => undefined);
+    return result;
   });
   ipcMain.handle("darkroom:develop-history-refs", async (event, value: unknown) => {
     assertTrustedRenderer(event);

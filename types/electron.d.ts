@@ -156,6 +156,14 @@ import type {
 } from "../lib/develop/defaults/api";
 import type { InstalledDevelopDefault } from "../lib/develop/defaults/installed";
 import type { DevelopDefaultRule } from "../lib/develop/defaults/schema";
+import type {
+  DevelopBatchAutoSyncRequest,
+  DevelopBatchListRequest,
+  DevelopBatchStartRequest,
+  DevelopBatchTargetRequest,
+  DevelopBatchUpdate,
+} from "../lib/develop/batch/api";
+import type { DevelopBatchAutoSyncState, DevelopBatchReceipt } from "../lib/develop/batch/domain";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -203,6 +211,15 @@ export interface DarkroomAPI {
   developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]>;
   developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null>;
   developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection>;
+  developBatchList(request: DevelopBatchListRequest): Promise<readonly DevelopBatchReceipt[]>;
+  developBatchStart(request: DevelopBatchStartRequest): Promise<DevelopBatchReceipt>;
+  developBatchCancel(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchRetry(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchUndo(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchAutoEnable(request: DevelopBatchAutoSyncRequest): Promise<void>;
+  developBatchAutoDisable(request: CatalogSessionRequest): Promise<void>;
+  developBatchAutoState(request: CatalogSessionRequest): Promise<DevelopBatchAutoSyncState>;
+  onDevelopBatchUpdated(listener: (update: DevelopBatchUpdate) => void): Unsubscribe;
   developDefaultsList(): Promise<readonly DevelopDefaultRule[]>;
   developDefaultsReferencedPresets(): Promise<readonly DevelopPresetRecord[]>;
   developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;

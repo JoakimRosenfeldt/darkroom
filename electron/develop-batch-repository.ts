@@ -47,6 +47,10 @@ export interface DevelopBatchFreezeInput {
   readonly createdAt: number;
 }
 
+function operationAction(operation: DevelopBatchOperation) {
+  return operation.kind === "frozen" ? operation.action : operation;
+}
+
 function row(value: unknown, label: string): Row {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} is invalid.`);
   return value as Row;
@@ -297,9 +301,12 @@ export class DevelopBatchRepository {
     const source = this.database.prepare(`
       SELECT h.entry_id AS entryId, h.revision_id AS revisionId
       FROM develop_history_heads AS h
+      JOIN develop_history_revisions AS revision
+        ON revision.catalog_id = h.catalog_id AND revision.entry_id = h.entry_id
+       AND revision.revision_id = h.revision_id
       JOIN edit_entries AS e ON e.catalog_id = h.catalog_id AND e.entry_id = h.entry_id
       WHERE h.catalog_id = ? AND h.entry_id <> ? AND e.tombstoned_at IS NULL
-      ORDER BY h.updated_at DESC, h.entry_id LIMIT 1
+      ORDER BY revision.rowid DESC, h.entry_id LIMIT 1
     `).get(input.catalogId, input.currentEntryId);
     if (source === undefined) throw new Error("No previous committed Develop entry is available.");
     const sourceRow = row(source, "Previous Develop source");
@@ -309,6 +316,40 @@ export class DevelopBatchRepository {
       sourceRevisionId: parseDevelopRevisionId(string(sourceRow, "revisionId")),
       targets: [{ entryId: input.currentEntryId, expectedRevisionId: this.activeHead(input.catalogId, input.currentEntryId) }],
       operation: { kind: "copy-fields", fields: input.fields }, createdAt: input.createdAt,
+    });
+  }
+
+  previousFrozen(input: {
+    readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
+    readonly currentEntryId: EntryId; readonly operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>;
+    readonly createdAt: number;
+  }): DevelopBatchReceipt {
+    const existing = this.existingReceipt(input.catalogId, input.operationId);
+    if (existing !== null) {
+      const matches = existing.batchId === input.batchId && existing.kind === "previous"
+        && existing.createdAt === input.createdAt && existing.targetEntryIds[0] === input.currentEntryId
+        && canonicalDevelopBatchJson(existing.operation) === canonicalDevelopBatchJson(input.operation);
+      if (!matches) throw new Error("Previous Develop operation ID conflicts with a different request.");
+      return existing;
+    }
+    const source = this.database.prepare(`
+      SELECT h.entry_id AS entryId, h.revision_id AS revisionId
+      FROM develop_history_heads AS h
+      JOIN develop_history_revisions AS revision
+        ON revision.catalog_id = h.catalog_id AND revision.entry_id = h.entry_id
+       AND revision.revision_id = h.revision_id
+      JOIN edit_entries AS e ON e.catalog_id = h.catalog_id AND e.entry_id = h.entry_id
+      WHERE h.catalog_id = ? AND h.entry_id <> ? AND e.tombstoned_at IS NULL
+      ORDER BY revision.rowid DESC, h.entry_id LIMIT 1
+    `).get(input.catalogId, input.currentEntryId);
+    if (source === undefined) throw new Error("No previous committed Develop entry is available.");
+    const sourceRow = row(source, "Previous Develop source");
+    return this.create({
+      schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
+      operationId: input.operationId, kind: "previous", sourceEntryId: parseEntryId(string(sourceRow, "entryId")),
+      sourceRevisionId: parseDevelopRevisionId(string(sourceRow, "revisionId")),
+      targets: [{ entryId: input.currentEntryId, expectedRevisionId: this.activeHead(input.catalogId, input.currentEntryId) }],
+      operation: input.operation, createdAt: input.createdAt,
     });
   }
 
@@ -396,10 +437,13 @@ export class DevelopBatchRepository {
             return { kind: "terminal", state: { kind: "skipped", reason: "Source is not an editable V3 Develop document." } };
           }
         }
+        const frozenContext = receipt.operation.kind === "frozen"
+          ? receipt.operation.profileContexts.find((candidate) => candidate.entryId === item.entryId)?.context
+          : undefined;
         const application = this.executeOperation({
           operationId: receipt.operationId, operation: receipt.operation, sourceDocument, sourceId,
           targetDocument, targetSourceId: this.sourceId(receipt.catalogId, item.entryId),
-          targetCameraProfile: {
+          targetCameraProfile: frozenContext ?? {
             kind: "unavailable",
             reason: "Batch profile application requires a verified before-tone registry snapshot.",
           },
@@ -422,7 +466,7 @@ export class DevelopBatchRepository {
       const commit = this.history.commit({
         catalogId: receipt.catalogId, entryId: item.entryId, revisionId: item.plannedRevisionId,
         expectedParentRevisionId: item.expectedRevisionId, operationId: parseOperationId(item.operationId),
-        label: receipt.operation.kind === "undo" ? "Undo Develop batch" : "Develop batch",
+        label: operationAction(receipt.operation).kind === "undo" ? "Undo Develop batch" : "Develop batch",
         document: prepared.document, createdAt: receipt.createdAt + item.position / 100_000,
       }, true);
       this.database.prepare(`
@@ -592,9 +636,61 @@ export class DevelopBatchRepository {
     `).run(input.catalogId, input.sourceEntryId, sourceRevisionId, canonicalDevelopBatchJson(targets), canonicalDevelopBatchJson(input.fields), input.updatedAt, sourceEmissionSequence));
   }
 
+  enableAutoSyncFrozen(input: {
+    readonly catalogId: CatalogId; readonly sourceEntryId: EntryId; readonly targetEntryIds: readonly EntryId[];
+    readonly operation: Extract<DevelopBatchOperation, { readonly kind: "frozen" }>; readonly updatedAt: number;
+  }): void {
+    if (input.targetEntryIds.length === 0 || input.targetEntryIds.includes(input.sourceEntryId) || new Set(input.targetEntryIds).size !== input.targetEntryIds.length) throw new Error("Auto Sync target selection is invalid.");
+    const targets = input.targetEntryIds.map((entryId) => ({ entryId, expectedRevisionId: this.activeHead(input.catalogId, entryId) }));
+    const sourceRevisionId = this.activeHead(input.catalogId, input.sourceEntryId);
+    const latest = row(this.database.prepare(`
+      SELECT COALESCE(MAX(emission_sequence), 0) AS emissionSequence
+      FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'
+    `).get(input.catalogId), "Auto Sync latest emission");
+    this.transaction(() => this.database.prepare(`
+      INSERT INTO develop_auto_sync (
+        catalog_id, source_entry_id, source_revision_id, targets_json, fields_json,
+        enabled, updated_at, source_emission_sequence
+      ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT (catalog_id) DO UPDATE SET source_entry_id = excluded.source_entry_id,
+        source_revision_id = excluded.source_revision_id, targets_json = excluded.targets_json,
+        fields_json = excluded.fields_json, enabled = 1, updated_at = excluded.updated_at,
+        source_emission_sequence = excluded.source_emission_sequence
+    `).run(input.catalogId, input.sourceEntryId, sourceRevisionId, canonicalDevelopBatchJson(targets), canonicalDevelopBatchJson(input.operation), input.updatedAt, integer(latest, "emissionSequence")));
+  }
+
   disableAutoSync(catalogIdValue: CatalogId, updatedAt = Date.now()): void {
     const catalogId = parseCatalogId(catalogIdValue);
     this.database.prepare("UPDATE develop_auto_sync SET enabled = 0, updated_at = ? WHERE catalog_id = ?").run(updatedAt, catalogId);
+  }
+
+  autoSyncState(catalogIdValue: CatalogId) {
+    const catalogId = parseCatalogId(catalogIdValue);
+    const value = this.database.prepare(`
+      SELECT source_entry_id AS sourceEntryId, targets_json AS targetsJson,
+             fields_json AS fieldsJson, enabled
+      FROM develop_auto_sync WHERE catalog_id = ?
+    `).get(catalogId);
+    if (value === undefined || integer(row(value, "Auto Sync state"), "enabled") === 0) {
+      return { kind: "auto-state" as const, enabled: false as const, sourceEntryId: null, targetEntryIds: [], fields: [] };
+    }
+    const state = row(value, "Auto Sync state");
+    const targetValue = JSON.parse(string(state, "targetsJson")) as unknown;
+    if (!Array.isArray(targetValue)) throw new Error("Auto Sync targets are invalid.");
+    const targetEntryIds = targetValue.map((target) => parseEntryId(string(row(target, "Auto Sync target"), "entryId")));
+    const stored = JSON.parse(string(state, "fieldsJson")) as unknown;
+    const operation = Array.isArray(stored)
+      ? parseDevelopBatchOperation({ kind: "copy-fields", fields: stored })
+      : parseDevelopBatchOperation(stored);
+    const action = operationAction(operation);
+    if (action.kind !== "copy-fields") throw new Error("Auto Sync operation is invalid.");
+    return {
+      kind: "auto-state" as const,
+      enabled: true as const,
+      sourceEntryId: parseEntryId(string(state, "sourceEntryId")),
+      targetEntryIds,
+      fields: action.fields,
+    };
   }
 
   emitAutoSync(input: {
@@ -651,8 +747,12 @@ export class DevelopBatchRepository {
         const item = row(target, "Auto Sync target");
         return { entryId: parseEntryId(item.entryId), expectedRevisionId: parseDevelopRevisionId(item.expectedRevisionId) };
       });
-      const operation = parseDevelopBatchOperation({ kind: "copy-fields", fields: JSON.parse(string(config, "fieldsJson")) as unknown });
-      if (operation.kind !== "copy-fields") throw new Error("Auto Sync fields are invalid.");
+      const storedOperation = JSON.parse(string(config, "fieldsJson")) as unknown;
+      const operation = Array.isArray(storedOperation)
+        ? parseDevelopBatchOperation({ kind: "copy-fields", fields: storedOperation })
+        : parseDevelopBatchOperation(storedOperation);
+      if (operation.kind === "undo") throw new Error("Auto Sync operation is invalid.");
+      if (operationAction(operation).kind !== "copy-fields") throw new Error("Auto Sync fields are invalid.");
       const latest = row(this.database.prepare(`
         SELECT COALESCE(MAX(emission_sequence), 0) AS emissionSequence
         FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'

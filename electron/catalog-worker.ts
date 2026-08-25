@@ -760,6 +760,7 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
     case "create": return repository.create(command.input);
     case "get": return repository.get(command.catalogId, command.batchId);
     case "list": return repository.list(command.catalogId, command.limit);
+    case "auto-get": return repository.autoSyncState(command.catalogId);
     case "run": {
       const key = JSON.stringify([command.catalogId, command.batchId]);
       const existing = activeBatchRuns.get(key);
@@ -785,9 +786,13 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
       createdAt: command.createdAt,
     });
     case "previous": return repository.previous(command);
+    case "previous-frozen": return repository.previousFrozen(command);
     case "undo": return repository.undo(command);
     case "auto-enable":
       repository.enableAutoSync(command);
+      return null;
+    case "auto-enable-frozen":
+      repository.enableAutoSyncFrozen(command);
       return null;
     case "auto-disable":
       repository.disableAutoSync(command.catalogId, command.updatedAt);
@@ -1043,8 +1048,32 @@ function handleActiveBatchCancel(value: unknown): boolean {
   return true;
 }
 
+function handleActiveBatchRead(value: unknown): boolean {
+  if (activeBatchRuns.size === 0) return false;
+  let request: CatalogWorkerRequest;
+  try {
+    request = parseCatalogWorkerRequest(value);
+  } catch {
+    return false;
+  }
+  if (request.kind !== "develop-batch" || (request.command.kind !== "get" && request.command.kind !== "list" && request.command.kind !== "auto-get")) return false;
+  try {
+    const repository = developBatchRepository();
+    const result = request.command.kind === "get"
+      ? repository.get(request.command.catalogId, request.command.batchId)
+      : request.command.kind === "list"
+        ? repository.list(request.command.catalogId, request.command.limit)
+        : repository.autoSyncState(request.command.catalogId);
+    post({ kind: "develop-batch", requestId: request.requestId, result });
+  } catch (error) {
+    postError({ kind: "error", requestId: request.requestId, code: "runtime", message: safeErrorMessage(error) });
+  }
+  return true;
+}
+
 workerPort.on("message", (value: unknown) => {
   if (handleActiveBatchCancel(value)) return;
+  if (handleActiveBatchRead(value)) return;
   queue = queue.then(async () => {
     await developRuntimeReady;
     let request: CatalogWorkerRequest;
