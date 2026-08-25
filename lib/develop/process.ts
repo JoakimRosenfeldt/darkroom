@@ -631,7 +631,8 @@ export const BASELINE_CAPABILITY_REPORT = {
     "input-profile-transform": {
       kind: "available",
       evidence: [
-        "The CPU and GPU pointwise stages apply the same validated matrix before basic tone.",
+        "The CPU pointwise stage applies the validated matrix before basic tone.",
+        "The RGB16 LibRaw path uses the CPU renderer because high-bit GPU source upload is unavailable.",
         "Only provenance that names the before-develop-tone stage can supply the matrix.",
       ],
     },

@@ -117,6 +117,37 @@ async function decodeDevelopedNef(
     : embedded;
 }
 
+function cameraProfileFallbackReason(error: unknown): string {
+  const message = error instanceof Error && error.message.trim().length > 0
+    ? error.message.trim()
+    : "The LibRaw camera profile stage failed.";
+  return `The LibRaw camera profile stage is unavailable: ${message}`;
+}
+
+async function decodeWithCameraProfileFallback(
+  input: Uint8Array,
+  options: DecodeOptions,
+): Promise<DecodedImage> {
+  try {
+    return await decodeWithLibRaw(input, options);
+  } catch (error) {
+    const fallback = await decodeDevelopedNef(input, {
+      ...options,
+      cameraProfile: { kind: "none" },
+    });
+    return {
+      ...fallback,
+      pixelProvenance: {
+        ...fallback.pixelProvenance,
+        cameraProfileStage: {
+          kind: "unavailable",
+          reason: cameraProfileFallbackReason(error),
+        },
+      },
+    };
+  }
+}
+
 export const nefProfile: ImageProfile = {
   id: "nef",
   extensions: getFormatExtensionsForProfile("nef"),
@@ -124,7 +155,7 @@ export const nefProfile: ImageProfile = {
     getFormatCapabilityForFileName(file.name)?.profileId === "nef",
   decode: (input, options: DecodeOptions = {}) => {
     if (options.cameraProfile?.kind === "libraw-camera-matrix") {
-      return decodeWithLibRaw(input, options);
+      return decodeWithCameraProfileFallback(input, options);
     }
     return options.fullResolution ||
       (options.thumbnail && options.rawSource === "developed")

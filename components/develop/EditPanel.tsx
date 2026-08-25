@@ -227,7 +227,7 @@ export function EditPanel({
 
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
-        {activeTab === "color" ? <ColorTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
+        {activeTab === "color" ? <ColorTab document={document} pixelProvenance={decoded.pixelProvenance} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
         {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
         {activeTab === "masking" ? (
@@ -323,10 +323,17 @@ function whiteBalanceMode(value: string): PersistedWhiteBalanceMode | null {
   }
 }
 
-function profileDescription(document: DevelopDocumentV3): string {
+function profileDescription(
+  document: DevelopDocumentV3,
+  pixelProvenance: DevelopImage["pixelProvenance"],
+): string {
   const selection = document.color.inputProfile.selection;
   if (selection.kind === "decoder-default") {
-    return "Decoder-provided color. No licensed camera profile registry is installed.";
+    const stage = pixelProvenance.cameraProfileStage;
+    if (stage.kind === "available") {
+      return `${stage.profile.label} applied before Develop tone. ${stage.profile.id} · revision ${stage.profile.revision}.`;
+    }
+    return `Camera profile unavailable: ${stage.reason} Using decoder-provided color.`;
   }
   if (selection.kind === "unavailable") return selection.reason;
   return `${selection.profileId} · revision ${selection.profileRevision}. Stored calibration only; no registry lookup is available.`;
@@ -334,10 +341,12 @@ function profileDescription(document: DevelopDocumentV3): string {
 
 function ColorTab({
   document,
+  pixelProvenance,
   canvasTool,
   onCanvasToolChange,
 }: {
   readonly document: DevelopDocumentV3;
+  readonly pixelProvenance: DevelopImage["pixelProvenance"];
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
@@ -421,7 +430,7 @@ function ColorTab({
       <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation")} />
 
       <SectionLabel>Input profile</SectionLabel>
-      <StatusCard title="Profile status">{profileDescription(document)}</StatusCard>
+      <StatusCard title="Profile status">{profileDescription(document, pixelProvenance)}</StatusCard>
 
       <PointColorControls
         document={document}

@@ -107,16 +107,6 @@ async function buildFromImageData(
   options: DecodeOptions,
   maxEdge?: number,
 ): Promise<DecodedImage> {
-  const scale = maxEdge
-    ? Math.min(1, maxEdge / Math.max(image.width, image.height))
-    : 1;
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
-  const rgb = scale === 1
-    ? image.data
-    : resizeRgbData(image.data, image.width, image.height, image.colors, width, height);
-  const blob = await rgbDataToBlob(rgb, width, height, image.bits);
-  const objectUrl = URL.createObjectURL(blob);
   const profiled = options.cameraProfile?.kind === "libraw-camera-matrix";
   if (
     profiled &&
@@ -127,6 +117,16 @@ async function buildFromImageData(
   const cameraProfile = profiled
     ? matrixCameraProfileFromLibRawMetadata(metadata)
     : null;
+  const scale = maxEdge
+    ? Math.min(1, maxEdge / Math.max(image.width, image.height))
+    : 1;
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const rgb = scale === 1
+    ? image.data
+    : resizeRgbData(image.data, image.width, image.height, image.colors, width, height);
+  const blob = await rgbDataToBlob(rgb, width, height, image.bits);
+  const objectUrl = URL.createObjectURL(blob);
 
   return {
     width,
