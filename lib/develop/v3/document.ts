@@ -31,6 +31,7 @@ import type { DefringeSettings, OpticsAmounts } from "./optics";
 import type { PresenceSettings } from "./presence";
 import type { WhiteBalanceValues } from "./white-balance";
 import type { LocalMaskV3 } from "./masking";
+import type { AppliedPresetState } from "../presets/schema";
 
 export const LEGACY_V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-1";
 export const V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-2";
@@ -204,6 +205,7 @@ export interface DevelopDocumentV3 {
   readonly effects: { readonly postCrop: PostCropEffects };
   readonly lensBlur: LensBlurSettings;
   readonly hdr: HdrEdits;
+  readonly appliedPreset: AppliedPresetState | null;
   readonly compatibility: V3Compatibility;
 }
 
@@ -380,6 +382,7 @@ export const DEFAULT_V3_DEVELOP_DOCUMENT = {
     sdrBrightness: 0,
     sdrContrast: 0,
   },
+  appliedPreset: null,
   compatibility: {
     mappingRevision: null,
     legacyV2: null,
@@ -429,5 +432,6 @@ export function canonicalV3DocumentHashInput(document: DevelopDocumentV3): strin
     effects: document.effects,
     lensBlur: document.lensBlur,
     hdr: document.hdr,
+    appliedPreset: document.appliedPreset,
   });
 }

@@ -5,6 +5,7 @@ import {
   type PersistedCrop,
 } from "./document";
 import type { GeneratedAcceptanceResult } from "./generated-jobs";
+import { markAppliedPresetModified } from "../presets/apply";
 
 export const V3_SEMANTIC_GROUP_IDS = [
   "tone",
@@ -232,7 +233,10 @@ export function applyV3EditCommand(
   command: V3EditCommand,
 ): V3CommandResult {
   if (command.kind !== "accept-v3-job-result") {
-    return applyDirectV3Command(document, command);
+    const edited = applyDirectV3Command(document, command);
+    if (!edited.changed || command.kind === "replace-v3-complete-state") return edited;
+    const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
+    return { ...edited, document: next };
   }
   const edited = applyDirectV3Command(document, command.edit);
   const referenced = new Map(
@@ -263,7 +267,9 @@ export function applyV3EditCommand(
       );
     }
   }
-  return edited;
+  if (!edited.changed || command.edit.kind === "replace-v3-complete-state") return edited;
+  const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
+  return { ...edited, document: next };
 }
 
 export function replayV3Patches(

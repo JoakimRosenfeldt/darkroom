@@ -26,7 +26,7 @@ import type {
 import type { DevelopDocumentV3 } from "./document";
 import { canonicalV3DocumentHashInput } from "./document";
 import { validateRenderQualityRequest } from "./source";
-import { collectDevelopAssetRefs } from "../asset-refs";
+import { collectActiveDevelopAssetRefs } from "../asset-refs";
 
 export const V3_COMPILER_VERSION = "darkroom-v3-compiler-1";
 
@@ -286,7 +286,7 @@ function requestIssues(
   if (qualityError) {
     issues.push({ kind: "request-mismatch", reason: qualityError });
   }
-  const expectedAssets = collectDevelopAssetRefs(document).map(acceptedAssetRevision).map(assetKey);
+  const expectedAssets = collectActiveDevelopAssetRefs(document).map(acceptedAssetRevision).map(assetKey);
   const requestedAssets = request.plan.acceptedAssetRevisions.map(assetKey).sort();
   if (
     expectedAssets.length !== requestedAssets.length ||

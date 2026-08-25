@@ -48,6 +48,7 @@ import {
 import type { Homography, QuarterTurns } from "./geometry";
 import { parseLensBlurSettings } from "./lens-blur";
 import type { Matrix3, Rgb } from "./profiles";
+import { parseAppliedPresetState } from "../presets/schema.ts";
 
 export const MAX_V3_PAYLOAD_BYTES = 32 * 1024 * 1024;
 export const MAX_V3_QUARANTINE_BYTES = 64 * 1024;
@@ -638,7 +639,7 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
   const input = record(value, "develop document", [
     "version", "process", "schemaRevision", "tone", "color", "optics", "geometry",
     "local", "cleanup", "presence", "detail", "effects", "lensBlur", "hdr",
-    "compatibility",
+    "appliedPreset", "compatibility",
   ], state);
   if (input.version !== DEVELOP_PROCESS_VERSION) invalid("Develop document version must be 3.");
   if (input.process !== DEVELOP_PROCESS_ID) invalid("Develop document process is not darkroom-v3.");
@@ -818,6 +819,9 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
       }
     })(),
     hdr: hdr(input.hdr, "hdr", state),
+    appliedPreset: input.appliedPreset === undefined || input.appliedPreset === null
+      ? null
+      : parseAppliedPresetState(input.appliedPreset),
     compatibility: { ...parsedCompatibility, quarantine: state.quarantine },
   };
   return parsedDocument;
