@@ -358,6 +358,14 @@ function pruneWorkspaceForEntries(
   const analysisByEntryId = Object.fromEntries(
     Object.entries(workspace.analysisByEntryId).filter(([entryId]) => validEntryIds.has(entryId)),
   );
+  const metadataOverridesByEntryId = Object.fromEntries(
+    Object.entries(workspace.metadataOverridesByEntryId)
+      .filter(([entryId]) => validEntryIds.has(entryId)),
+  );
+  const metadataSyncByEntryId = Object.fromEntries(
+    Object.entries(workspace.metadataSyncByEntryId)
+      .filter(([entryId]) => validEntryIds.has(entryId)),
+  );
   return {
     ...workspace,
     quickEntryIds: workspace.quickEntryIds.filter((id) => validEntryIds.has(id)),
@@ -365,6 +373,8 @@ function pruneWorkspaceForEntries(
     archiveMemberships: workspace.archiveMemberships.filter((item) => validEntryIds.has(item.entryId)),
     excludedEntryIds: workspace.excludedEntryIds.filter((id) => validEntryIds.has(id)),
     analysisByEntryId,
+    metadataOverridesByEntryId,
+    metadataSyncByEntryId,
     stacks: workspace.stacks.flatMap((stack) => {
       const entryIds = stack.entryIds.filter((id) => validEntryIds.has(id));
       if (entryIds.length < 2) return [];
@@ -378,12 +388,39 @@ function pruneWorkspaceForEntries(
   };
 }
 
+interface CatalogSessionBinding {
+  readonly catalogId: CatalogId;
+  readonly sessionId: SessionId;
+}
+
+function catalogSessionIsCurrent(
+  binding: CatalogSessionBinding,
+  get: () => LibraryStore,
+): boolean {
+  const current = get();
+  return current.catalogId === binding.catalogId && current.sessionId === binding.sessionId;
+}
+
+function requireCatalogSession(
+  binding: CatalogSessionBinding,
+  get: () => LibraryStore,
+  message: string,
+): void {
+  if (!catalogSessionIsCurrent(binding, get)) throw new Error(message);
+}
+
 function removeEntriesForAssets(
   assetIds: ReadonlySet<AssetId>,
+  binding: CatalogSessionBinding,
   set: (partial: Partial<LibraryStore>) => void,
   get: () => LibraryStore,
 ): void {
   if (assetIds.size === 0) return;
+  requireCatalogSession(
+    binding,
+    get,
+    "Catalog changed before removed photos could be reconciled. Reopen the original catalog.",
+  );
   const current = get();
   const entries = current.entries.filter((entry) => !assetIds.has(entry.assetId));
   const remainingIds = new Set<string>(entries.map((entry) => entry.id));
@@ -2084,21 +2121,37 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     if (!keeper || current.catalogId === null || current.sessionId === null) {
       throw new Error("The duplicate keeper is no longer available.");
     }
+    const binding = {
+      catalogId: current.catalogId,
+      sessionId: current.sessionId,
+    };
     const targets = [...new Set(current.entries
       .filter((entry) => entry.assetId !== keeper.assetId && targetIds.includes(entry.id))
       .map((entry) => entry.assetId))];
     if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
     await backupCatalogAdmin();
+    requireCatalogSession(
+      binding,
+      get,
+      "Catalog changed before duplicate files were trashed. No files were moved.",
+    );
     const result = await getDarkroomAPI().catalogTrashExactDuplicates({
-      catalogId: current.catalogId,
-      sessionId: current.sessionId,
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
       keeperId: keeper.assetId,
       targetIds: targets,
     });
+    if (!catalogSessionIsCurrent(binding, get)) {
+      const succeeded = result.items.filter((item) => item.trashed).length;
+      const failed = result.items.length - succeeded;
+      throw new Error(
+        `Catalog changed after duplicate trash completed: ${succeeded} moved, ${failed} failed. Reopen the original catalog to reconcile the results.`,
+      );
+    }
     const trashed = new Set(result.items
       .filter((item) => item.trashed)
       .map((item) => item.entryId));
-    removeEntriesForAssets(trashed, set, get);
+    removeEntriesForAssets(trashed, binding, set, get);
     const failures = result.items.filter((item) => !item.trashed);
     if (failures.length > 0) {
       set({
@@ -2110,16 +2163,39 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   deleteEntriesFromDisk: async (entryIds) => {
     if (entryIds.length === 0) return;
-    const selected = get().entries.filter((entry) => entryIds.includes(entry.id));
+    const current = get();
+    if (current.catalogId === null || current.sessionId === null) {
+      throw new Error("Open the original catalog before removing photos from disk.");
+    }
+    const binding = {
+      catalogId: current.catalogId,
+      sessionId: current.sessionId,
+    };
+    const selected = current.entries.filter((entry) => entryIds.includes(entry.id));
     const targets = [...new Map(selected.map((entry) => [entry.assetId, entry])).values()];
     try {
       await Promise.all(targets.map((entry) => getDarkroomAPI().catalogTrashAsset(getAssetRequest(entry))));
     } catch (error) {
+      requireCatalogSession(
+        binding,
+        get,
+        "Catalog changed while photos were being removed. Reopen the original catalog to reconcile the results.",
+      );
       const message = formatPickerError(error);
       set({ importError: message });
       throw new Error(message);
     }
-    removeEntriesForAssets(new Set(targets.map((entry) => entry.assetId)), set, get);
+    requireCatalogSession(
+      binding,
+      get,
+      "Catalog changed after photos were removed. Reopen the original catalog to reconcile the results.",
+    );
+    removeEntriesForAssets(
+      new Set(targets.map((entry) => entry.assetId)),
+      binding,
+      set,
+      get,
+    );
   },
 
   createCatalog: async (displayName) => {
