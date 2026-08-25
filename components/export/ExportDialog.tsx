@@ -21,6 +21,7 @@ import type {
 } from "@/lib/export/types";
 import {
   mergeExportBatchSummaries,
+  mergeResumedExportBatchSummaries,
   runExportBatch,
   validateExportEntries,
   virtualCopyFilenameSuffix,
@@ -231,6 +232,10 @@ function safeSuggestedFilename(
   return `${base}${filenameSuffix}.${format.extensions[0] ?? "jpg"}`;
 }
 
+function freezeExportEntry(entry: LibraryEntry): LibraryEntry {
+  return { ...entry, formatAvailability: { ...entry.formatAvailability } };
+}
+
 export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const metadata = useLibraryStore((state) => state.entryMetadata);
   const metadataOverrides = useLibraryStore((state) => state.libraryWorkspace.metadataOverridesByEntryId);
@@ -250,6 +255,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const [summary, setSummary] = useState<ExportBatchSummary | null>(null);
   const [prototypeAcknowledged, setPrototypeAcknowledged] = useState(false);
   const cancelledRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const frozenEntriesRef = useRef<readonly LibraryEntry[] | null>(null);
   const jobs = useDevelopJobStore((state) => state.jobs);
   const jobsHydrated = useDevelopJobStore((state) => state.hydrated);
   const jobsError = useDevelopJobStore((state) => state.error);
@@ -339,15 +346,19 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const executeExport = useCallback(async (
     selectedEntries: readonly LibraryEntry[],
     previous: ExportBatchSummary | null,
+    mode: "start" | "retry" | "resume",
   ) => {
-    if (!selectedFormat) return;
-    const frozenEntries = [...selectedEntries];
+    if (!selectedFormat || inFlightRef.current) return;
+    inFlightRef.current = true;
+    const frozenEntries = selectedEntries.map(freezeExportEntry);
     try {
       validateExportEntries(frozenEntries);
     } catch (validationError) {
       setError(errorMessage(validationError));
+      inFlightRef.current = false;
       return;
     }
+    if (mode === "start") frozenEntriesRef.current = frozenEntries;
     setError(null);
     if (!previous) setSummary(null);
     setDialogState("running");
@@ -403,14 +414,47 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         isCancelled: () => cancelledRef.current,
       });
       const nextSummary = previous
-        ? mergeExportBatchSummaries(previous, result)
+        ? mode === "resume"
+          ? mergeResumedExportBatchSummaries(previous, result)
+          : mergeExportBatchSummaries(previous, result)
         : result;
       setSummary(nextSummary);
       setLiveResults(nextSummary.results);
       setDialogState("done");
     } catch (exportError) {
-      setError(errorMessage(exportError));
-      setDialogState(previous ? "done" : "idle");
+      const message = errorMessage(exportError);
+      const failed: ExportBatchSummary = {
+        results: frozenEntries.map((entry) => ({
+          entryId: entry.id,
+          sourceName: entry.name,
+          state: { kind: "failed", error: message, retryable: true },
+        })),
+        exported: 0,
+        skipped: 0,
+        failed: frozenEntries.length,
+        cancelled: 0,
+        warnings: [],
+        cancellationRequested: cancelledRef.current,
+        finalizationError: message,
+        revealCapability: null,
+        lastOutputPath: null,
+      };
+      let complete = failed;
+      if (previous) {
+        try {
+          complete = mode === "resume"
+            ? mergeResumedExportBatchSummaries(previous, failed)
+            : mergeExportBatchSummaries(previous, failed);
+        } catch {
+          complete = previous;
+        }
+      }
+      setSummary(complete);
+      setLiveResults(complete.results);
+      setError(message);
+      setDialogState("done");
+    } finally {
+      inFlightRef.current = false;
     }
   }, [
     conflict,
@@ -439,7 +483,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       setError("Quality must be a whole number from 1 to 100.");
       return;
     }
-    await executeExport(entries, null);
+    await executeExport(entries, null, "start");
   }, [entries, executeExport, quality, selectedFormat, size, suffix]);
 
   const retryFailed = useCallback(async () => {
@@ -447,13 +491,28 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     const retryableIds = new Set(summary.results.flatMap((result) =>
       result.state.kind === "failed" && result.state.retryable ? [result.entryId] : [],
     ));
-    const retryEntries = entries.filter((entry) => retryableIds.has(entry.id));
+    const frozenEntries = frozenEntriesRef.current ?? [];
+    const retryEntries = frozenEntries.filter((entry) => retryableIds.has(entry.id));
     if (retryEntries.length !== retryableIds.size) {
       setError("A failed photo is no longer in the frozen export selection.");
       return;
     }
-    await executeExport(retryEntries, summary);
-  }, [entries, executeExport, summary]);
+    await executeExport(retryEntries, summary, "retry");
+  }, [executeExport, summary]);
+
+  const resumeCancelled = useCallback(async () => {
+    if (!summary) return;
+    const cancelledIds = new Set(summary.results.flatMap((result) =>
+      result.state.kind === "cancelled" && result.state.reason === "not-started" ? [result.entryId] : [],
+    ));
+    const frozenEntries = frozenEntriesRef.current ?? [];
+    const resumeEntries = frozenEntries.filter((entry) => cancelledIds.has(entry.id));
+    if (resumeEntries.length !== cancelledIds.size) {
+      setError("A cancelled photo is missing from the frozen export selection.");
+      return;
+    }
+    await executeExport(resumeEntries, summary, "resume");
+  }, [executeExport, summary]);
 
   const showInFolder = useCallback(() => {
     const capability: ExportRevealCapability | null = summary?.revealCapability ?? null;
@@ -726,6 +785,11 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
             </div>
             {error ? <p className="text-xs text-red-400">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
+              {summary.results.some((result) => result.state.kind === "cancelled" && result.state.reason === "not-started") ? (
+                <button type="button" onClick={() => void resumeCancelled()} className="button-secondary">
+                  Resume not started
+                </button>
+              ) : null}
               {summary.results.some((result) =>
                 result.state.kind === "failed" && result.state.retryable
               ) ? (

@@ -418,28 +418,36 @@ export async function runExportBatch(
   const entries = [...runnerOptions.entries];
   validateExportEntries(entries);
   const isCancelled = runnerOptions.isCancelled ?? (() => false);
-  const adapter = runnerOptions.adapter ?? createDefaultAdapter();
   const results = initialResults(entries);
+  let adapter: ExportRunnerAdapter | null = null;
   let activeIndex: number | null = null;
   let activePhase: ExportPhase | null = null;
   let finalizationError: string | null = null;
   let revealCapability: ExportRevealCapability | null = null;
   let finalizedOutputPath: string | null = null;
+  let progressError: string | null = null;
 
-  const publish = () => runnerOptions.onProgress?.({
-    phase: activePhase,
-    index: activeIndex,
-    total: entries.length,
-    entry: activeIndex === null ? null : entries[activeIndex]!,
-    results: results.map((result) => ({ ...result, state: { ...result.state } })),
-  });
+  const publish = () => {
+    try {
+      runnerOptions.onProgress?.({
+        phase: activePhase,
+        index: activeIndex,
+        total: entries.length,
+        entry: activeIndex === null ? null : entries[activeIndex]!,
+        results: results.map((result) => ({ ...result, state: { ...result.state } })),
+      });
+    } catch (error) {
+      progressError ??= asErrorMessage(error);
+    }
+  };
   const setState = (index: number, state: ExportItemState) => {
     results[index] = { ...results[index]!, state };
     publish();
   };
 
-  publish();
   try {
+    adapter = runnerOptions.adapter ?? createDefaultAdapter();
+    publish();
     for (let index = 0; index < entries.length; index += 1) {
       if (isCancelled()) break;
       const entry = entries[index]!;
@@ -487,16 +495,28 @@ export async function runExportBatch(
         }
       }
     }
+  } catch (error) {
+    const message = asErrorMessage(error);
+    for (let index = 0; index < results.length; index += 1) {
+      if (results[index]!.state.kind === "queued" || results[index]!.state.kind === "active") {
+        results[index] = {
+          ...results[index]!,
+          state: { kind: "failed", error: message, retryable: failureIsRetryable(error, activePhase ?? "decode") },
+        };
+      }
+    }
   } finally {
     try {
-      adapter.dispose?.();
+      adapter?.dispose?.();
     } catch (error) {
       finalizationError = asErrorMessage(error);
     }
     try {
-      const finalized = await adapter.finalizeDestination(runnerOptions.destinationToken);
-      revealCapability = finalized.revealToken;
-      finalizedOutputPath = finalized.outputPath;
+      if (adapter) {
+        const finalized = await adapter.finalizeDestination(runnerOptions.destinationToken);
+        revealCapability = finalized.revealToken;
+        finalizedOutputPath = finalized.outputPath;
+      }
     } catch (error) {
       const message = asErrorMessage(error);
       finalizationError = finalizationError ? `${finalizationError} ${message}` : message;
@@ -506,9 +526,19 @@ export async function runExportBatch(
   activeIndex = null;
   activePhase = null;
   publish();
+  if (progressError) {
+    finalizationError = finalizationError ? `${finalizationError} ${progressError}` : progressError;
+  }
+  let cancellationRequested = false;
+  try {
+    cancellationRequested = isCancelled();
+  } catch (error) {
+    const message = asErrorMessage(error);
+    finalizationError = finalizationError ? `${finalizationError} ${message}` : message;
+  }
   return summarize({
     results,
-    cancellationRequested: isCancelled(),
+    cancellationRequested,
     finalizationError,
     revealCapability,
     finalizedOutputPath,
@@ -536,5 +566,28 @@ export function mergeExportBatchSummaries(
     finalizationError: retry.finalizationError,
     revealCapability: retry.revealCapability ?? previous.revealCapability,
     finalizedOutputPath: retry.lastOutputPath ?? previous.lastOutputPath,
+  });
+}
+
+export function mergeResumedExportBatchSummaries(
+  previous: ExportBatchSummary,
+  resumed: ExportBatchSummary,
+): ExportBatchSummary {
+  const previousById = new Map(previous.results.map((result) => [result.entryId, result]));
+  const resumedById = new Map<string, ExportFileResult>();
+  for (const result of resumed.results) {
+    if (resumedById.has(result.entryId)) throw new Error(`Resume repeats EntryId ${result.entryId}.`);
+    const prior = previousById.get(result.entryId);
+    if (!prior || prior.state.kind !== "cancelled" || prior.state.reason !== "not-started") {
+      throw new Error(`Resume may include only cancelled, not-started EntryIds: ${result.entryId}.`);
+    }
+    resumedById.set(result.entryId, result);
+  }
+  return summarize({
+    results: previous.results.map((result) => resumedById.get(result.entryId) ?? result),
+    cancellationRequested: resumed.cancellationRequested,
+    finalizationError: resumed.finalizationError,
+    revealCapability: resumed.revealCapability ?? previous.revealCapability,
+    finalizedOutputPath: resumed.lastOutputPath ?? previous.lastOutputPath,
   });
 }

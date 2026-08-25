@@ -191,6 +191,9 @@ export function parseCameraProfileRegistrySnapshot(
     throw new Error("cameraProfileRegistry.profiles must be an array.");
   }
   const replacementInput = record(input.replacements, "cameraProfileRegistry.replacements");
+  if (Object.keys(replacementInput).length > 10_000) {
+    throw new Error("cameraProfileRegistry.replacements is too large.");
+  }
   const replacements: Record<string, string> = {};
   for (const [profileId, replacementId] of Object.entries(replacementInput)) {
     replacements[text(profileId, "cameraProfileRegistry.replacementId")] = text(
@@ -280,6 +283,13 @@ function finiteList(value: string, count: number, path: string): number[] {
   });
 }
 
+function finiteNumber(value: string, path: string): number {
+  if (value.trim().length === 0) throw new Error(`${path} is invalid.`);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${path} is invalid.`);
+  return parsed;
+}
+
 function parseXmlAttributes(source: string): Record<string, string> {
   if (/<!DOCTYPE|<!ENTITY/i.test(source) || source.includes("&")) {
     throw new Error("Profile XMP cannot contain DTDs or entities.");
@@ -334,7 +344,7 @@ function parseProfileXmp(bytes: Uint8Array): MatrixCameraProfile {
     compatibility: { make: attributes.make, model: attributes.model },
     matrixToLinearSrgb: finiteList(attributes.matrixToLinearSrgb!, 9, "matrixToLinearSrgb"),
     channelScale: finiteList(attributes.channelScale!, 3, "channelScale"),
-    exposureOffsetEv: Number(attributes.exposureOffsetEv),
+    exposureOffsetEv: finiteNumber(attributes.exposureOffsetEv!, "exposureOffsetEv"),
     unsupportedTags: [],
     opcodes: [],
   });
@@ -364,6 +374,12 @@ const PROFILE_LOOK_TABLE_DATA = 50_982;
 const OPCODE_LIST_1 = 51_008;
 const OPCODE_LIST_2 = 51_009;
 const OPCODE_LIST_3 = 51_022;
+const PROFILE_HUE_SAT_MAP_ENCODING = 51_107;
+const PROFILE_LOOK_TABLE_ENCODING = 51_108;
+const BASELINE_EXPOSURE_OFFSET = 51_109;
+const DEFAULT_BLACK_RENDER = 51_110;
+const PROFILE_GAIN_TABLE_MAP = 52_525;
+const PROFILE_HUE_SAT_MAP_DATA_3 = 52_542;
 
 interface TiffEntry {
   readonly tag: number;
@@ -542,6 +558,9 @@ function parseDcp(bytes: Uint8Array): MatrixCameraProfile {
     PROFILE_HUE_SAT_MAP_DIMS, PROFILE_HUE_SAT_MAP_DATA_1, PROFILE_HUE_SAT_MAP_DATA_2,
     PROFILE_TONE_CURVE, PROFILE_LOOK_TABLE_DIMS, PROFILE_LOOK_TABLE_DATA,
     OPCODE_LIST_1, OPCODE_LIST_2, OPCODE_LIST_3,
+    PROFILE_HUE_SAT_MAP_ENCODING, PROFILE_LOOK_TABLE_ENCODING,
+    BASELINE_EXPOSURE_OFFSET, DEFAULT_BLACK_RENDER, PROFILE_GAIN_TABLE_MAP,
+    PROFILE_HUE_SAT_MAP_DATA_3,
   ].filter((tag) => byTag.has(tag));
   if (unsupportedTags.length > 0) {
     throw new Error(`DCP requires unsupported transform tags: ${unsupportedTags.join(", ")}.`);

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   CAMERA_PROFILE_FILE_LIMIT,
@@ -23,17 +25,93 @@ import { parseMatrixCameraProfile, type MatrixCameraProfile } from "../lib/camer
 interface PendingConflict {
   readonly record: ReadyCameraProfileRecord;
   readonly bytes: Uint8Array;
+  readonly createdAt: number;
 }
 
 interface StoredRegistry {
   readonly version: typeof CAMERA_PROFILE_REGISTRY_VERSION;
   readonly generation: number;
   readonly profiles: readonly CameraProfileRecord[];
+  readonly retiredProfiles: readonly CameraProfileRecord[];
   readonly replacements: Readonly<Record<string, string>>;
 }
 
+const CAMERA_PROFILE_REGISTRY_LIMIT = 16 * 1024 * 1024;
+const CAMERA_PROFILE_PENDING_LIMIT = 100;
+const CAMERA_PROFILE_PENDING_TTL_MS = 15 * 60 * 1_000;
+
 function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function errorCode(error: unknown): string | null {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : null;
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === "win32") return;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(directory, fsConstants.O_RDONLY);
+    await handle.sync();
+  } catch (error) {
+    if (!["EINVAL", "ENOTSUP", "ENOSYS"].includes(errorCode(error) ?? "")) throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function boundedRegularFile(filePath: string, limit: number, label: string): Promise<Uint8Array> {
+  const pathBefore = await fs.lstat(filePath);
+  if (!pathBefore.isFile() || pathBefore.isSymbolicLink() || pathBefore.size > limit) {
+    throw new Error(`${label} is not a supported regular file.`);
+  }
+  let handle: FileHandle | undefined;
+  try {
+    try {
+      handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      if (!["EINVAL", "ENOTSUP", "ENOSYS"].includes(errorCode(error) ?? "")) {
+        if (errorCode(error) === "ELOOP") throw new Error(`${label} cannot be a symbolic link.`);
+        throw error;
+      }
+      handle = await fs.open(filePath, fsConstants.O_RDONLY);
+    }
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > limit || before.dev !== pathBefore.dev || before.ino !== pathBefore.ino) {
+      throw new Error(`${label} changed before it was read.`);
+    }
+    const bytes = new Uint8Array(before.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const read = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (read.bytesRead === 0) throw new Error(`${label} changed while it was read.`);
+      offset += read.bytesRead;
+    }
+    const overflow = new Uint8Array(1);
+    if ((await handle.read(overflow, 0, 1, offset)).bytesRead !== 0) throw new Error(`${label} exceeds its byte limit or changed while it was read.`);
+    const after = await handle.stat();
+    const pathAfter = await fs.lstat(filePath);
+    if (
+      !pathAfter.isFile() || pathAfter.isSymbolicLink() ||
+      before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
+      after.dev !== pathAfter.dev || after.ino !== pathAfter.ino
+    ) {
+      throw new Error(`${label} changed while it was read.`);
+    }
+    return bytes;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function sameProfileIdentity(left: MatrixCameraProfile, right: MatrixCameraProfile): boolean {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return left.kind === right.kind &&
+    normalize(left.compatibility.make) === normalize(right.compatibility.make) &&
+    normalize(left.compatibility.model) === normalize(right.compatibility.model);
 }
 
 function sourceFilename(value: string): string {
@@ -97,10 +175,21 @@ function parseStoredRegistry(value: unknown): StoredRegistry {
     profiles: input.profiles,
     replacements: input.replacements,
   });
+  if (input.retiredProfiles !== undefined && (!Array.isArray(input.retiredProfiles) || input.retiredProfiles.length > 10_000)) {
+    throw new Error("Camera profile retired registry is invalid.");
+  }
   return {
     version: CAMERA_PROFILE_REGISTRY_VERSION,
     generation: Number(input.generation),
     profiles: snapshot.profiles,
+    retiredProfiles: Array.isArray(input.retiredProfiles)
+      ? input.retiredProfiles.map((item) => parseCameraProfileRegistrySnapshot({
+          version: CAMERA_PROFILE_REGISTRY_VERSION,
+          revision: "retired-profile",
+          profiles: [item],
+          replacements: {},
+        }).profiles[0]!)
+      : [],
     replacements: snapshot.replacements,
   };
 }
@@ -112,9 +201,11 @@ export class CameraProfileService {
     version: CAMERA_PROFILE_REGISTRY_VERSION,
     generation: 0,
     profiles: [],
+    retiredProfiles: [],
     replacements: {},
   };
   private readonly pending = new Map<string, PendingConflict>();
+  private mutations: Promise<void> = Promise.resolve();
 
   constructor(userDataPath: string) {
     if (!path.isAbsolute(userDataPath)) throw new Error("Camera profile storage needs an absolute path.");
@@ -122,32 +213,39 @@ export class CameraProfileService {
     this.indexPath = path.join(this.directory, "registry.json");
   }
 
-  async initialize(): Promise<CameraProfileRegistrySnapshot> {
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutations.then(operation, operation);
+    this.mutations = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  initialize(): Promise<CameraProfileRegistrySnapshot> {
+    return this.serialize(() => this.initializeInternal());
+  }
+
+  private async initializeInternal(): Promise<CameraProfileRegistrySnapshot> {
     await fs.mkdir(this.directory, { recursive: true });
     try {
-      const contents = await fs.readFile(this.indexPath, "utf8");
-      this.state = parseStoredRegistry(JSON.parse(contents));
+      const contents = await boundedRegularFile(this.indexPath, CAMERA_PROFILE_REGISTRY_LIMIT, "Camera profile registry");
+      this.state = parseStoredRegistry(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(contents)));
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
-    return this.rescan();
+    return this.rescanInternal();
   }
 
   list(): CameraProfileRegistrySnapshot {
     return registrySnapshot(this.state);
   }
 
-  async importFile(filePath: string): Promise<CameraProfileImportResult> {
+  importFile(filePath: string): Promise<CameraProfileImportResult> {
+    return this.serialize(() => this.importFileInternal(filePath));
+  }
+
+  private async importFileInternal(filePath: string): Promise<CameraProfileImportResult> {
     const filename = sourceFilename(filePath);
     const profileFormat = cameraProfileFormatFromFilename(filename);
-    const stat = await fs.lstat(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error("Camera profile import must be a regular file.");
-    }
-    if (stat.size > CAMERA_PROFILE_FILE_LIMIT) {
-      throw new Error("Camera profile file exceeds the 16 MiB limit.");
-    }
-    const bytes = await fs.readFile(filePath);
+    const bytes = await boundedRegularFile(filePath, CAMERA_PROFILE_FILE_LIMIT, "Camera profile import");
     const hash = digest(bytes);
     const duplicate = this.state.profiles.find(
       (record): record is ReadyCameraProfileRecord => record.kind === "ready" && record.hash === hash,
@@ -173,28 +271,40 @@ export class CameraProfileService {
         record.kind === "ready" && record.profile.id === profile.id,
     );
     if (existing) {
+      this.prunePending();
+      if (this.pending.size >= CAMERA_PROFILE_PENDING_LIMIT) throw new Error("Too many pending camera profile conflicts.");
       const token = randomUUID();
-      this.pending.set(token, { record: incoming, bytes });
+      this.pending.set(token, { record: incoming, bytes, createdAt: Date.now() });
       return { kind: "conflict", token, existing, incoming };
     }
     await this.install(incoming, bytes);
     return { kind: "imported", record: incoming };
   }
 
-  async resolveConflict(value: unknown): Promise<CameraProfileImportResult> {
+  resolveConflict(value: unknown): Promise<CameraProfileImportResult> {
+    return this.serialize(() => this.resolveConflictInternal(value));
+  }
+
+  private async resolveConflictInternal(value: unknown): Promise<CameraProfileImportResult> {
     const request: CameraProfileConflictRequest = parseCameraProfileConflictRequest(value);
+    this.prunePending();
     const pending = this.pending.get(request.token);
     if (!pending) throw new Error("Camera profile import conflict expired.");
-    this.pending.delete(request.token);
-    if (request.action === "cancel") return { kind: "cancelled" };
+    if (request.action === "cancel") {
+      this.pending.delete(request.token);
+      return { kind: "cancelled" };
+    }
     const existing = this.state.profiles.find(
       (record): record is ReadyCameraProfileRecord =>
         record.kind === "ready" && record.profile.id === pending.record.profile.id,
     );
     if (!existing) throw new Error("The conflicting camera profile changed. Import it again.");
     if (request.action === "replace") {
+      if (!sameProfileIdentity(existing.profile, pending.record.profile)) {
+        throw new Error("Replace requires the same normalized camera make, model, and profile kind. Import a copy instead.");
+      }
       await this.install(pending.record, pending.bytes, existing.profile.id);
-      await this.deleteIfUnused(existing.storedFilename, existing.hash);
+      this.pending.delete(request.token);
       return { kind: "imported", record: pending.record };
     }
     const copyId = deterministicCameraProfileCopyId(
@@ -210,10 +320,15 @@ export class CameraProfileService {
     });
     const copy = { ...pending.record, profile: copyProfile } satisfies ReadyCameraProfileRecord;
     await this.install(copy, pending.bytes);
+    this.pending.delete(request.token);
     return { kind: "imported", record: copy };
   }
 
-  async remove(value: unknown): Promise<CameraProfileRegistrySnapshot> {
+  remove(value: unknown): Promise<CameraProfileRegistrySnapshot> {
+    return this.serialize(() => this.removeInternal(value));
+  }
+
+  private async removeInternal(value: unknown): Promise<CameraProfileRegistrySnapshot> {
     const request = parseCameraProfileRemoveRequest(value);
     const removed = this.state.profiles.find(
       (record): record is ReadyCameraProfileRecord =>
@@ -233,10 +348,11 @@ export class CameraProfileService {
     ) {
       throw new Error("Replacement camera profile must match the same camera.");
     }
-    this.state = {
+    const nextState: StoredRegistry = {
       ...this.state,
       generation: this.state.generation + 1,
       profiles: this.state.profiles.filter((record) => record !== removed),
+      retiredProfiles: [...this.state.retiredProfiles, removed],
       replacements: Object.fromEntries([
         ...Object.entries(this.state.replacements).map(([profileId, replacementId]) => [
           profileId,
@@ -245,12 +361,16 @@ export class CameraProfileService {
         [removed.profile.id, replacement.profile.id],
       ]),
     };
-    await this.persist();
-    await this.deleteIfUnused(removed.storedFilename, removed.hash);
+    await this.persist(nextState);
+    this.state = nextState;
     return this.list();
   }
 
-  async rescan(): Promise<CameraProfileRegistrySnapshot> {
+  rescan(): Promise<CameraProfileRegistrySnapshot> {
+    return this.serialize(() => this.rescanInternal());
+  }
+
+  private async rescanInternal(): Promise<CameraProfileRegistrySnapshot> {
     await fs.mkdir(this.directory, { recursive: true });
     const existingByHash = new Map<string, CameraProfileRecord[]>();
     for (const record of this.state.profiles) {
@@ -259,19 +379,18 @@ export class CameraProfileService {
       existingByHash.set(record.hash, records);
     }
     const records: CameraProfileRecord[] = [];
+    const retiredHashes = new Set(this.state.retiredProfiles.map((record) => record.hash));
     const names = (await fs.readdir(this.directory)).sort();
     for (const name of names) {
       const match = /^([a-f0-9]{64})\.(dcp|xmp)$/.exec(name);
       if (!match) continue;
       const hash = match[1]!;
+      if (retiredHashes.has(hash)) continue;
       const profileFormat: CameraProfileFormat = match[2] === "dcp" ? "dcp" : "xmp";
       const absolutePath = path.join(this.directory, name);
       const previous = existingByHash.get(hash) ?? [];
       try {
-        const stat = await fs.lstat(absolutePath);
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Stored profile is not a regular file.");
-        if (stat.size > CAMERA_PROFILE_FILE_LIMIT) throw new Error("Stored profile exceeds the 16 MiB limit.");
-        const bytes = await fs.readFile(absolutePath);
+        const bytes = await boundedRegularFile(absolutePath, CAMERA_PROFILE_FILE_LIMIT, "Stored camera profile");
         if (digest(bytes) !== hash) throw new Error("Stored profile content does not match its SHA-256 filename.");
         const profile = withDcpRevision(
           parseCameraProfileFile({ bytes, format: profileFormat }),
@@ -317,13 +436,20 @@ export class CameraProfileService {
       }
     }
     const changed = JSON.stringify(records) !== JSON.stringify(this.state.profiles);
-    this.state = {
+    const nextState: StoredRegistry = {
       ...this.state,
       generation: changed ? this.state.generation + 1 : this.state.generation,
       profiles: records,
     };
-    if (changed || !(await this.indexExists())) await this.persist();
+    if (changed || !(await this.indexExists())) await this.persist(nextState);
+    this.state = nextState;
     return this.list();
+  }
+
+  private prunePending(now = Date.now()): void {
+    for (const [token, pending] of this.pending) {
+      if (now - pending.createdAt >= CAMERA_PROFILE_PENDING_TTL_MS) this.pending.delete(token);
+    }
   }
 
   private async install(
@@ -332,13 +458,21 @@ export class CameraProfileService {
     replaceProfileId?: string,
   ): Promise<void> {
     const destination = path.join(this.directory, record.storedFilename);
+    let created = false;
     try {
-      await fs.writeFile(destination, bytes, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if (!isMissing(error) && !(typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST")) {
-        throw error;
+      let handle: FileHandle | undefined;
+      try {
+        handle = await fs.open(destination, "wx", 0o600);
+        await handle.writeFile(bytes);
+        await handle.sync();
+        created = true;
+      } finally {
+        await handle?.close();
       }
-      const stored = await fs.readFile(destination);
+      await syncDirectory(this.directory);
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+      const stored = await boundedRegularFile(destination, CAMERA_PROFILE_FILE_LIMIT, "Stored camera profile");
       if (digest(stored) !== record.hash) throw new Error("Stored camera profile hash collision.");
     }
     const profiles = replaceProfileId === undefined
@@ -348,20 +482,25 @@ export class CameraProfileService {
             ? record
             : candidate,
         );
-    this.state = {
+    const nextState: StoredRegistry = {
       ...this.state,
       generation: this.state.generation + 1,
       profiles,
+      retiredProfiles: replaceProfileId === undefined
+        ? this.state.retiredProfiles
+        : [
+            ...this.state.retiredProfiles,
+            ...this.state.profiles.filter((candidate) =>
+              candidate.kind === "ready" && candidate.profile.id === replaceProfileId,
+            ),
+          ],
     };
-    await this.persist();
-  }
-
-  private async deleteIfUnused(filename: string, hash: string): Promise<void> {
-    if (this.state.profiles.some((record) => record.hash === hash)) return;
     try {
-      await fs.unlink(path.join(this.directory, filename));
+      await this.persist(nextState);
+      this.state = nextState;
     } catch (error) {
-      if (!isMissing(error)) throw error;
+      if (created) await fs.unlink(destination).catch(() => undefined);
+      throw error;
     }
   }
 
@@ -375,12 +514,31 @@ export class CameraProfileService {
     }
   }
 
-  private async persist(): Promise<void> {
+  private async persist(state: StoredRegistry): Promise<void> {
+    const contents = `${JSON.stringify(state, null, 2)}\n`;
+    if (Buffer.byteLength(contents, "utf8") > CAMERA_PROFILE_REGISTRY_LIMIT) {
+      throw new Error("Camera profile registry exceeds the 16 MiB limit.");
+    }
     const temporary = `${this.indexPath}.${process.pid}.${randomUUID()}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
-    });
-    await fs.rename(temporary, this.indexPath);
+    let handle: FileHandle | undefined;
+    try {
+      const existing = await fs.lstat(this.indexPath).catch((error: unknown) => {
+        if (isMissing(error)) return null;
+        throw error;
+      });
+      if (existing?.isSymbolicLink()) throw new Error("Camera profile registry cannot be a symbolic link.");
+      handle = await fs.open(temporary, "wx", 0o600);
+      await handle.writeFile(contents, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await fs.rename(temporary, this.indexPath);
+      await syncDirectory(this.directory);
+    } finally {
+      await handle?.close().catch(() => undefined);
+      await fs.unlink(temporary).catch((error: unknown) => {
+        if (!isMissing(error)) throw error;
+      });
+    }
   }
 }

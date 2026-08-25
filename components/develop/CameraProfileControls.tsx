@@ -31,7 +31,8 @@ function errorMessage(error: unknown): string {
 }
 
 function sameCamera(left: ReadyCameraProfileRecord, right: ReadyCameraProfileRecord): boolean {
-  return left.profile.compatibility.make.trim().toLocaleLowerCase() ===
+  return left.profile.kind === right.profile.kind &&
+    left.profile.compatibility.make.trim().toLocaleLowerCase() ===
       right.profile.compatibility.make.trim().toLocaleLowerCase() &&
     left.profile.compatibility.model.trim().toLocaleLowerCase() ===
       right.profile.compatibility.model.trim().toLocaleLowerCase();
@@ -110,6 +111,10 @@ export function CameraProfileControls({
   };
 
   const useDecoderProfile = () => {
+    if (profileStage.kind !== "available") {
+      setMessage(`Decoder camera profile unavailable: ${profileStage.reason}`);
+      return;
+    }
     const next: DevelopDocumentV3 = {
       ...document,
       color: {
@@ -126,7 +131,7 @@ export function CameraProfileControls({
       },
     };
     commitCompleteState(entry.catalogId, entry.id, next, "Use decoder camera profile");
-    setMessage("Using the verified decoder camera profile.");
+    setMessage("Using the decoder camera profile available for this source.");
   };
 
   const importProfile = async () => {
@@ -161,14 +166,6 @@ export function CameraProfileControls({
       setMessage(resultMessage(result));
       const nextRegistry = await getDarkroomAPI().cameraProfilesList();
       setRegistry(nextRegistry);
-      if (
-        action === "replace" &&
-        result.kind === "imported" &&
-        document.color.inputProfile.selection.kind === "selected" &&
-        document.color.inputProfile.selection.profileId === result.record.profile.id
-      ) {
-        selectProfile(result.record, nextRegistry.revision);
-      }
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -199,17 +196,17 @@ export function CameraProfileControls({
     }
     setBusy(true);
     try {
-      if (document.color.inputProfile.selection.kind === "selected" &&
-        document.color.inputProfile.selection.profileId === removed.profile.id &&
-        !selectProfile(replacement)) {
-        return;
-      }
       const next = await getDarkroomAPI().cameraProfilesRemove({
         profileId: removed.profile.id,
         replacementProfileId: replacement.profile.id,
       });
       setRegistry(next);
-      setMessage(`${removed.profile.label} removed. Stored references resolve to ${replacement.profile.label}.`);
+      if (document.color.inputProfile.selection.kind === "selected" &&
+        document.color.inputProfile.selection.profileId === removed.profile.id) {
+        selectProfile(replacement, next.revision);
+      } else {
+        setMessage(`${removed.profile.label} removed from future choices. Existing edits keep their embedded calibration.`);
+      }
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -226,7 +223,7 @@ export function CameraProfileControls({
       <div className="flex gap-1.5">
         <ActionButton onClick={() => void importProfile()} disabled={busy}>Import</ActionButton>
         <ActionButton onClick={() => void rescan()} disabled={busy || !isElectronApp()}>Rescan</ActionButton>
-        <ActionButton onClick={useDecoderProfile} disabled={busy}>Use decoder</ActionButton>
+        <ActionButton onClick={useDecoderProfile} disabled={busy || profileStage.kind !== "available"}>Use decoder</ActionButton>
       </div>
       {profileStage.kind === "unavailable" ? (
         <p className="text-[10px] leading-4 text-lr-danger">
@@ -244,7 +241,15 @@ export function CameraProfileControls({
             Installed hash {conflict.existing.hash.slice(0, 12)} differs from imported hash {conflict.incoming.hash.slice(0, 12)}.
           </p>
           <div className="mt-2 flex gap-1.5">
-            <ActionButton onClick={() => void resolveConflict("replace")} disabled={busy}>Replace</ActionButton>
+            <ActionButton
+              onClick={() => void resolveConflict("replace")}
+              disabled={busy || !sameCamera(conflict.existing, conflict.incoming)}
+              title={sameCamera(conflict.existing, conflict.incoming)
+                ? "Replace the matching camera profile."
+                : "Replace requires the same camera make, model, and profile kind."}
+            >
+              Replace
+            </ActionButton>
             <ActionButton onClick={() => void resolveConflict("import-copy")} disabled={busy}>Import copy</ActionButton>
             <ActionButton onClick={() => void resolveConflict("cancel")} disabled={busy}>Cancel</ActionButton>
           </div>
