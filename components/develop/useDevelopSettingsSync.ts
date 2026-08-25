@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   DevelopRepositoryError,
@@ -15,6 +15,20 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { useLibraryStore } from "@/stores/library-store";
 import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import { parseOperationId } from "@/lib/catalog/ids";
+import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
+
+export type DevelopDefaultsResolution =
+  | { readonly kind: "pending" }
+  | { readonly kind: "installed"; readonly installed: InstalledDevelopDefault }
+  | { readonly kind: "no-match" }
+  | { readonly kind: "existing"; readonly installed: InstalledDevelopDefault | null }
+  | { readonly kind: "failed"; readonly message: string };
+
+interface DefaultsResolutionState {
+  readonly key: string;
+  readonly value: DevelopDefaultsResolution;
+}
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
@@ -38,8 +52,12 @@ export function useDevelopSettingsSync({
   metadata,
   persistCatalog,
   hydrateKeywords,
-  defaultFacts = null,
-}: UseDevelopSettingsSyncOptions): void {
+  defaultFacts,
+}: UseDevelopSettingsSyncOptions): DevelopDefaultsResolution {
+  const [defaultsResolution, setDefaultsResolution] = useState<DefaultsResolutionState | null>(null);
+  const defaultsKey = defaultFacts
+    ? `${entry.catalogId}:${entry.sessionId}:${entry.id}:${JSON.stringify(defaultFacts)}`
+    : null;
   const sessionState = useDevelopStore((state) => state.sessions[entry.id]);
   const documentRevision = sessionState?.documentRevision;
   const persistedDocumentRevision = sessionState?.persistedDocumentRevision;
@@ -159,21 +177,33 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
-    if (!defaultFacts) return;
+    if (!defaultFacts || !defaultsKey) return;
     let active = true;
     const repository = getDevelopRepository(entry);
-    void repository.installDefault(defaultFacts).catch((error: unknown) => {
+    const requestId = parseOperationId(crypto.randomUUID());
+    void repository.installDefault(defaultFacts, requestId).then((result) => {
       if (!active) return;
+      if (result.kind === "installed" || result.kind === "already-installed") {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "installed", installed: result.installed } });
+      } else if (result.kind === "no-match") {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "no-match" } });
+      } else {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "existing", installed: repository.installedDefault() } });
+      }
+    }).catch((error: unknown) => {
+      if (!active) return;
+      const message = error instanceof Error ? error.message : "Could not apply the Develop default.";
+      setDefaultsResolution({ key: defaultsKey, value: { kind: "failed", message } });
       const state = useDevelopStore.getState();
       if (state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id) {
-        setSidecarStatus(
-          "error",
-          error instanceof Error ? error.message : "Could not apply the Develop default.",
-        );
+        setSidecarStatus("error", message);
       }
     });
-    return () => { active = false; };
-  }, [defaultFacts, entry, setSidecarStatus]);
+    return () => {
+      active = false;
+      void repository.cancelDefault(requestId);
+    };
+  }, [defaultFacts, defaultsKey, entry, setSidecarStatus]);
 
   useEffect(() => {
     const alreadyScheduled =
@@ -244,4 +274,8 @@ export function useDevelopSettingsSync({
     setSidecarStatus,
     sidecarStatus,
   ]);
+
+  if (defaultFacts === undefined) return { kind: "pending" };
+  if (defaultFacts === null) return { kind: "failed", message: "Verified source facts are unavailable." };
+  return defaultsResolution?.key === defaultsKey ? defaultsResolution.value : { kind: "pending" };
 }

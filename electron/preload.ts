@@ -175,6 +175,7 @@ import {
 import {
   parseDevelopDefaultRuleDeleteRequest,
   parseDevelopDefaultRuleEnabledRequest,
+  parseDevelopDefaultsCancelRequest,
   parseDevelopDefaultsEntryRequest,
   parseDevelopDefaultsInstallRequest,
   parseDevelopDefaultsPreviewRequest,
@@ -182,6 +183,7 @@ import {
   parseDevelopDefaultsProductionResult,
   type DevelopDefaultRuleDeleteRequest,
   type DevelopDefaultRuleEnabledRequest,
+  type DevelopDefaultsCancelRequest,
   type DevelopDefaultsEntryRequest,
   type DevelopDefaultsInstallRequest,
   type DevelopDefaultsPreviewRequest,
@@ -524,6 +526,10 @@ const darkroom = {
     return result.map(parseDevelopDefaultRule);
   },
 
+  async developDefaultsReferencedPresets(): Promise<readonly DevelopPresetRecord[]> {
+    return parseDevelopPresetList(await ipcRenderer.invoke("darkroom:develop-defaults-referenced-presets"));
+  },
+
   async developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule> {
     return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-create", parseDevelopDefaultRule(rule)));
   },
@@ -551,6 +557,10 @@ const darkroom = {
 
   async developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult> {
     return parseDevelopDefaultsProductionResult(await ipcRenderer.invoke("darkroom:develop-defaults-install", parseDevelopDefaultsInstallRequest(request)));
+  },
+
+  async developDefaultsCancel(request: DevelopDefaultsCancelRequest): Promise<void> {
+    await ipcRenderer.invoke("darkroom:develop-defaults-cancel", parseDevelopDefaultsCancelRequest(request));
   },
 
   async cameraProfilesList(): Promise<CameraProfileRegistrySnapshot> {

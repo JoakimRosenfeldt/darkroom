@@ -22,6 +22,7 @@ import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
 import { DevelopHistoryPanel } from "@/components/develop/DevelopHistoryPanel";
 import { DevelopDefaultsPanel } from "@/components/develop/DevelopDefaultsPanel";
 import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import type { DevelopDefaultsResolution } from "@/components/develop/useDevelopSettingsSync";
 import { StatusCard } from "@/components/develop/V3PanelControls";
 
 interface DevelopSidePanelsProps {
@@ -38,7 +39,8 @@ interface DevelopSidePanelsProps {
   v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
   v3CanvasTool: V3CanvasTool;
   onV3CanvasToolChange: (tool: V3CanvasTool) => void;
-  defaultFacts: DevelopDefaultFacts | null;
+  defaultFacts: DevelopDefaultFacts | null | undefined;
+  defaultsResolution: DevelopDefaultsResolution;
 }
 
 export function DevelopSidePanels({
@@ -56,6 +58,7 @@ export function DevelopSidePanels({
   v3CanvasTool,
   onV3CanvasToolChange,
   defaultFacts,
+  defaultsResolution,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -75,7 +78,7 @@ export function DevelopSidePanels({
       entry={entry}
       decodedMetadata={decoded.metadata}
     />
-  ) : session?.processKind === "v3" ? (
+  ) : session?.processKind === "v3" && defaultsResolution.kind !== "pending" ? (
     <EditPanel
       key={effectivePanel ?? "edit"}
       decoded={decoded}
@@ -109,7 +112,7 @@ export function DevelopSidePanels({
       <DevelopPanelRail
         activePanel={effectivePanel}
         onSelect={onSelect}
-        editingDisabled={session?.processKind !== "v3" || projectionConflict}
+        editingDisabled={session?.processKind !== "v3" || projectionConflict || defaultsResolution.kind === "pending"}
       />
       <DevelopJobDrawer />
     </>

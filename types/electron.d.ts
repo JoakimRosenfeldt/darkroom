@@ -147,6 +147,7 @@ import type {
 import type {
   DevelopDefaultRuleDeleteRequest,
   DevelopDefaultRuleEnabledRequest,
+  DevelopDefaultsCancelRequest,
   DevelopDefaultsEntryRequest,
   DevelopDefaultsInstallRequest,
   DevelopDefaultsPreviewRequest,
@@ -203,6 +204,7 @@ export interface DarkroomAPI {
   developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null>;
   developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection>;
   developDefaultsList(): Promise<readonly DevelopDefaultRule[]>;
+  developDefaultsReferencedPresets(): Promise<readonly DevelopPresetRecord[]>;
   developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
   developDefaultsUpdate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
   developDefaultsSetEnabled(request: DevelopDefaultRuleEnabledRequest): Promise<DevelopDefaultRule>;
@@ -210,6 +212,7 @@ export interface DarkroomAPI {
   developDefaultsPreview(request: DevelopDefaultsPreviewRequest): Promise<DevelopDefaultsPreviewResult>;
   developDefaultsInstalled(request: DevelopDefaultsEntryRequest): Promise<InstalledDevelopDefault | null>;
   developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult>;
+  developDefaultsCancel(request: DevelopDefaultsCancelRequest): Promise<void>;
   cameraProfilesList(): Promise<CameraProfileRegistrySnapshot>;
   cameraProfilesImport(): Promise<CameraProfileImportResult>;
   cameraProfilesResolveConflict(

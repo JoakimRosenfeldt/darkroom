@@ -174,6 +174,8 @@ import {
 import { DevelopPresetStore } from "./develop-preset-store.ts";
 import { DevelopDefaultsStore } from "./develop-defaults-store.ts";
 import { DevelopDefaultsService } from "./develop-defaults-service.ts";
+import { verifyLibRawInputProfile } from "./libraw-profile-verifier.ts";
+import type { DevelopDefaultFacts } from "../lib/develop/defaults/matcher.ts";
 import { BUILT_IN_DEVELOP_PRESETS } from "../lib/develop/presets/built-ins.ts";
 import {
   parseDevelopPresetConflictRequest,
@@ -940,6 +942,15 @@ function registerIpcHandlers(): void {
     presets: developPresets,
     worker,
     cameraProfiles,
+    assertEntry: async (request) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const entry = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      if (!entry) throw new Error("Develop default entry is not active in this catalog session.");
+    },
     verifyEntry: async (request) => {
       const state = await coordinator.queryLive({
         catalogId: request.catalogId,
@@ -947,7 +958,9 @@ function registerIpcHandlers(): void {
         expectedRevision: null,
       });
       const entry = state.assets.find((candidate) => candidate.entryId === request.entryId);
-      if (!entry || !entry.sourceId) throw new Error("Develop default entry is not active in this catalog session.");
+      if (!entry || !entry.sourceId || entry.health !== "present" || entry.observation === null) {
+        throw new Error("Develop default source is not available in the active catalog session.");
+      }
       const analysis = await runMetadataAnalysis({
         catalogId: request.catalogId,
         sessionId: request.sessionId,
@@ -956,16 +969,95 @@ function registerIpcHandlers(): void {
         force: false,
       }, new AbortController().signal);
       const verified = analysis.items.find((item) => item.entryId === entry.assetId)?.analysis;
-      return {
-        entry: {
-          ...entry,
-          cameraMake: verified?.cameraMake ?? entry.cameraMake,
-          cameraModel: verified?.cameraModel ?? entry.cameraModel,
-        },
-        iso: verified?.iso !== null && verified?.iso !== undefined && Number.isSafeInteger(verified.iso) && verified.iso >= 1
-          ? verified.iso
-          : null,
+      if (
+        !verified || verified.error !== null || verified.sourceSha256 === null ||
+        verified.size !== entry.observation.byteLength ||
+        verified.modifiedAt !== entry.observation.modifiedAt
+      ) {
+        throw new Error("Develop default source analysis is missing, stale, or failed.");
+      }
+      const camera = verified.cameraMake !== null && verified.cameraModel !== null
+        ? { kind: "known" as const, make: verified.cameraMake, model: verified.cameraModel }
+        : { kind: "unknown" as const, reason: "Camera identity is unavailable in verified metadata." };
+      const iso = verified.iso !== null && Number.isSafeInteger(verified.iso) && verified.iso >= 1
+        ? { kind: "known" as const, value: verified.iso }
+        : { kind: "unknown" as const, reason: "ISO is unavailable in verified metadata." };
+      const unavailableFacts: DevelopDefaultFacts = {
+        camera,
+        decoder: { kind: "unknown", reason: "A verified raw decoder is unavailable." },
+        inputProfile: { kind: "unknown", reason: "A verified before-tone input profile is unavailable." },
+        iso,
       };
+      if (entry.formatId !== "nef" || entry.observation.byteLength > 512 * 1024 * 1024) {
+        return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
+      }
+      const root = coordinatorRuntime.getNativeSessionRoots()
+        .filter(isRuntimeNativeRoot)
+        .find((candidate) => candidate.catalogId === request.catalogId && candidate.rootId === entry.rootId);
+      if (!root) throw new Error("Develop default source root is unavailable.");
+      const location = {
+        catalogId: request.catalogId,
+        assetId: entry.assetId,
+        rootId: entry.rootId,
+        canonicalRootPath: root.nativePath,
+        relativePath: entry.relativePath,
+      };
+      const before = await nativeAssetAccess.stat(location);
+      if (before.size !== entry.observation.byteLength || before.lastModified !== entry.observation.modifiedAt) {
+        throw new Error("Develop default source changed after analysis.");
+      }
+      let decoderProfile;
+      try {
+        decoderProfile = await verifyLibRawInputProfile(await nativeAssetAccess.read(location));
+      } catch {
+        return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
+      }
+      const after = await nativeAssetAccess.stat(location);
+      if (after.size !== before.size || after.lastModified !== before.lastModified) {
+        throw new Error("Develop default source changed during profile verification.");
+      }
+      if (
+        camera.kind !== "known" ||
+        decoderProfile.compatibility.make.trim().toLocaleLowerCase() !== camera.make.trim().toLocaleLowerCase() ||
+        decoderProfile.compatibility.model.trim().toLocaleLowerCase() !== camera.model.trim().toLocaleLowerCase()
+      ) {
+        throw new Error("Verified decoder profile does not match source camera metadata.");
+      }
+      const facts: DevelopDefaultFacts = {
+        camera,
+        decoder: { kind: "known", value: "libraw-wasm" },
+        inputProfile: {
+          kind: "known",
+          profileId: decoderProfile.id,
+          profileRevision: decoderProfile.revision,
+          stage: "before-develop-tone",
+        },
+        iso,
+      };
+      return {
+        entry: { ...entry, cameraMake: camera.make, cameraModel: camera.model },
+        facts,
+        decoderProfile,
+        installAvailable: true,
+      };
+    },
+    recheckEntry: async (request, verified) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const current = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      const expected = verified.entry;
+      if (
+        !current || current.sourceId !== expected.sourceId || current.revision !== expected.revision ||
+        current.health !== "present" || current.observation === null || expected.observation === null ||
+        current.rootId !== expected.rootId || current.relativePath !== expected.relativePath ||
+        current.observation.byteLength !== expected.observation.byteLength ||
+        current.observation.modifiedAt !== expected.observation.modifiedAt
+      ) {
+        throw new Error("Develop default source changed before installation.");
+      }
     },
   });
   let manualImportBinding: {
@@ -1785,6 +1877,11 @@ function registerIpcHandlers(): void {
     await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
     return developDefaultsService.list();
   });
+  ipcMain.handle("darkroom:develop-defaults-referenced-presets", async (event) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.referencedPresets();
+  });
   ipcMain.handle("darkroom:develop-defaults-create", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     await Promise.all([developDefaultsReady, developPresetsReady]);
@@ -1819,6 +1916,10 @@ function registerIpcHandlers(): void {
     assertTrustedRenderer(event);
     await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
     return developDefaultsService.install(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    developDefaultsService.cancel(value);
   });
   ipcMain.handle("darkroom:develop-clipboard-write", async (event, value: unknown) => {
     assertTrustedRenderer(event);

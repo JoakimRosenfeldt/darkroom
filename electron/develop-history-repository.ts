@@ -429,13 +429,14 @@ export class DevelopHistoryRepository {
       const loaded = this.load({ catalogId: input.catalogId, entryId: input.entryId, revisionId: null });
       if (loaded.kind !== "loaded") throw new Error("Develop default Head needs recovery.");
       const metadata = row(this.database.prepare(`
-        SELECT raw_xmp AS rawXmp, xmp_state AS xmpState
+        SELECT develop_json AS developJson, raw_xmp AS rawXmp, xmp_state AS xmpState
         FROM entry_metadata WHERE catalog_id = ? AND entry_id = ?
       `).get(input.catalogId, input.entryId), "Develop default metadata");
       const neutralJson = canonicalDevelopHistoryDocument(createDefaultV3DevelopDocument());
       const currentJson = canonicalDevelopHistoryDocument(loaded.value.document);
       const pristine = loaded.value.ordinal === 0 &&
         loaded.value.revisionId === input.expectedParentRevisionId &&
+        metadata.developJson === null &&
         metadata.rawXmp === null &&
         metadata.xmpState !== "preserved" &&
         (loaded.value.document === null || currentJson === neutralJson);

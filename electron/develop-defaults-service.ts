@@ -6,6 +6,7 @@ import type { DevelopPresetStore } from "./develop-preset-store.ts";
 import type { CatalogLiveEntrySnapshot } from "../lib/catalog/live.ts";
 import { parseOperationId } from "../lib/catalog/ids.ts";
 import {
+  parseDevelopDefaultsCancelRequest,
   parseDevelopDefaultRuleEnabledRequest,
   parseDevelopDefaultRuleDeleteRequest,
   parseDevelopDefaultsEntryRequest,
@@ -21,13 +22,16 @@ import { matchDevelopDefault, type DevelopDefaultFacts } from "../lib/develop/de
 import { parseDevelopDefaultRule, type DevelopDefaultRule } from "../lib/develop/defaults/schema.ts";
 import { createDevelopRevisionId } from "../lib/develop/history.ts";
 import { createDefaultV3DevelopDocument } from "../lib/develop/v3/document.ts";
-import { IDENTITY_MATRIX_3, persistedInputProfileFromMatrix } from "../lib/develop/v3/profiles.ts";
+import { persistedInputProfileFromMatrix } from "../lib/develop/v3/profiles.ts";
 import { cameraProfileIsCompatible } from "../lib/camera-profiles/matrix.ts";
+import type { MatrixCameraProfile } from "../lib/camera-profiles/matrix.ts";
 import type { DevelopPresetRecord } from "../lib/develop/presets/schema.ts";
 
 interface VerifiedEntry {
   readonly entry: CatalogLiveEntrySnapshot;
-  readonly iso: number | null;
+  readonly facts: DevelopDefaultFacts;
+  readonly decoderProfile: MatrixCameraProfile | null;
+  readonly installAvailable: boolean;
 }
 
 interface DevelopDefaultsServiceOptions {
@@ -35,63 +39,36 @@ interface DevelopDefaultsServiceOptions {
   readonly presets: DevelopPresetStore;
   readonly worker: CatalogWorkerClient;
   readonly cameraProfiles: CameraProfileService;
+  readonly assertEntry: (request: DevelopDefaultsEntryRequest) => Promise<void>;
   readonly verifyEntry: (request: DevelopDefaultsEntryRequest) => Promise<VerifiedEntry>;
+  readonly recheckEntry: (request: DevelopDefaultsEntryRequest, verified: VerifiedEntry) => Promise<void>;
 }
 
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
-function profileIdPart(value: string): string {
-  const part = normalize(value).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
-  if (!part) throw new Error("Verified camera identity cannot form an input profile ID.");
-  return part;
-}
-
-function expectedLibRawProfile(make: string, model: string): { readonly id: string; readonly revision: string } {
-  return { id: `darkroom.libraw-matrix.${profileIdPart(make)}.${profileIdPart(model)}`, revision: "libraw-rgb-cam-v1" };
-}
-
-function sameKnownText(actual: string | null, fact: { readonly kind: "known"; readonly value: string } | { readonly kind: "unknown" }): boolean {
-  return actual === null ? fact.kind === "unknown" : fact.kind === "known" && normalize(actual) === normalize(fact.value);
-}
-
-function verifyFacts(input: DevelopDefaultFacts, verified: VerifiedEntry): DevelopDefaultFacts {
-  const asset = verified.entry;
-  const camera = asset.cameraMake !== null && asset.cameraModel !== null
-    ? { make: asset.cameraMake, model: asset.cameraModel }
-    : null;
-  if (camera) {
-    if (input.camera.kind !== "known" || normalize(input.camera.make) !== normalize(camera.make) || normalize(input.camera.model) !== normalize(camera.model)) {
-      throw new Error("Develop default camera facts do not match the active catalog entry.");
-    }
-  } else if (input.camera.kind !== "unknown") {
-    throw new Error("Develop default camera facts claim unavailable catalog metadata.");
-  }
-  const isoFact = input.iso.kind === "known" ? { kind: "known" as const, value: String(input.iso.value) } : { kind: "unknown" as const };
-  if (!sameKnownText(verified.iso === null ? null : String(verified.iso), isoFact)) {
-    throw new Error("Develop default ISO facts do not match verified source metadata.");
-  }
-  const allowedDecoderIds = asset.formatId === "nef"
-    ? new Set(["libraw-wasm", "nikon-sdk", "nikon-test-only", "embedded-raw-preview"])
-    : new Set(["browser-image-decoder"]);
-  if (input.decoder.kind !== "known" || !allowedDecoderIds.has(input.decoder.value)) {
-    throw new Error("Develop default decoder facts do not match the active source format.");
-  }
-  if (input.inputProfile.kind === "known") {
-    if (!camera || input.decoder.value !== "libraw-wasm") {
-      throw new Error("A before-tone input profile needs a verified LibRaw camera source.");
-    }
-    const expected = expectedLibRawProfile(camera.make, camera.model);
-    if (input.inputProfile.profileId !== expected.id || input.inputProfile.profileRevision !== expected.revision) {
-      throw new Error("Develop default input profile facts do not match the verified camera source.");
-    }
-  }
-  return structuredClone(input);
+function factsMatch(input: DevelopDefaultFacts, verified: DevelopDefaultFacts): boolean {
+  const camera = input.camera.kind === verified.camera.kind && (
+    input.camera.kind === "unknown" || verified.camera.kind === "unknown" ||
+    (normalize(input.camera.make) === normalize(verified.camera.make) && normalize(input.camera.model) === normalize(verified.camera.model))
+  );
+  const decoder = input.decoder.kind === verified.decoder.kind && (
+    input.decoder.kind === "unknown" || verified.decoder.kind === "unknown" || input.decoder.value === verified.decoder.value
+  );
+  const profile = input.inputProfile.kind === verified.inputProfile.kind && (
+    input.inputProfile.kind === "unknown" || verified.inputProfile.kind === "unknown" ||
+    (input.inputProfile.profileId === verified.inputProfile.profileId && input.inputProfile.profileRevision === verified.inputProfile.profileRevision)
+  );
+  const iso = input.iso.kind === verified.iso.kind && (
+    input.iso.kind === "unknown" || verified.iso.kind === "unknown" || input.iso.value === verified.iso.value
+  );
+  return camera && decoder && profile && iso;
 }
 
 export class DevelopDefaultsService {
   readonly #options: DevelopDefaultsServiceOptions;
+  readonly #cancelledInstalls = new Map<string, number>();
 
   constructor(options: DevelopDefaultsServiceOptions) {
     this.#options = options;
@@ -99,6 +76,18 @@ export class DevelopDefaultsService {
 
   list(): Promise<readonly DevelopDefaultRule[]> {
     return this.#options.store.list();
+  }
+
+  async referencedPresets(): Promise<readonly DevelopPresetRecord[]> {
+    const rules = await this.#options.store.list();
+    const records = new Map<string, DevelopPresetRecord>();
+    for (const rule of rules) {
+      const key = `${rule.preset.presetId}:${rule.preset.presetRevision}`;
+      if (records.has(key)) continue;
+      const preset = await this.#options.presets.getRevision(rule.preset.presetId, rule.preset.presetRevision);
+      if (preset) records.set(key, preset);
+    }
+    return [...records.values()];
   }
 
   create(value: unknown): Promise<DevelopDefaultRule> {
@@ -141,37 +130,62 @@ export class DevelopDefaultsService {
 
   async installed(value: unknown) {
     const request = parseDevelopDefaultsEntryRequest(value);
-    await this.#options.verifyEntry(request);
+    await this.#options.assertEntry(request);
     return this.#options.worker.getInstalledDevelopDefault(request.catalogId, request.entryId);
+  }
+
+  cancel(value: unknown): void {
+    const request = parseDevelopDefaultsCancelRequest(value);
+    const now = Date.now();
+    for (const [requestId, expiresAt] of this.#cancelledInstalls) {
+      if (expiresAt <= now) this.#cancelledInstalls.delete(requestId);
+    }
+    if (this.#cancelledInstalls.size >= 1_024) {
+      const oldest = this.#cancelledInstalls.keys().next().value;
+      if (oldest !== undefined) this.#cancelledInstalls.delete(oldest);
+    }
+    this.#cancelledInstalls.set(request.requestId, now + 60_000);
   }
 
   async install(value: unknown): Promise<DevelopDefaultsProductionResult> {
     const request: DevelopDefaultsInstallRequest = parseDevelopDefaultsInstallRequest(value);
-    const verified = await this.#options.verifyEntry(request);
-    const facts = verifyFacts(request.facts, verified);
-    const existing = await this.#options.worker.getInstalledDevelopDefault(request.catalogId, request.entryId);
-    const loaded = await this.#options.worker.loadDevelopHistory({ catalogId: request.catalogId, entryId: request.entryId, revisionId: null });
-    if (loaded.kind !== "loaded") throw new Error("Develop Head needs recovery before defaults can run.");
-    if (existing) return { kind: "already-installed", head: loaded.value, installed: existing };
-    if (loaded.value.ordinal !== 0 || verified.entry.metadata.rawXmp !== null || verified.entry.metadata.xmpState === "preserved") {
-      return { kind: "not-pristine", head: loaded.value, installed: null };
-    }
-    const match = await this.#match(facts);
-    if (match.kind !== "matched") return { kind: "no-match", head: loaded.value, installed: null };
-    const registry = this.#options.cameraProfiles.list();
-    const camera = facts.camera;
-    const sourceId = verified.entry.sourceId;
-    if (!sourceId) throw new Error("Develop default entry has no verified SourceId.");
-    const hasBeforeToneProfile = camera.kind === "known" &&
-      facts.decoder.kind === "known" && facts.decoder.value === "libraw-wasm" &&
-      facts.inputProfile.kind === "known" && facts.inputProfile.stage === "before-develop-tone";
-    const cameraProfile = hasBeforeToneProfile && camera.kind === "known"
+    const assertCurrent = (): void => {
+      if (this.#cancelledInstalls.has(request.requestId)) {
+        throw new Error("Develop default installation was cancelled because the active photo changed.");
+      }
+    };
+    try {
+      const verified = await this.#options.verifyEntry(request);
+      assertCurrent();
+      if (!factsMatch(request.facts, verified.facts)) {
+        throw new Error("Develop default facts do not match main-verified source provenance.");
+      }
+      const facts = verified.facts;
+      const existing = await this.#options.worker.getInstalledDevelopDefault(request.catalogId, request.entryId);
+      const loaded = await this.#options.worker.loadDevelopHistory({ catalogId: request.catalogId, entryId: request.entryId, revisionId: null });
+      if (loaded.kind !== "loaded") throw new Error("Develop Head needs recovery before defaults can run.");
+      if (existing) return { kind: "already-installed", head: loaded.value, installed: existing };
+      if (loaded.value.ordinal !== 0 || verified.entry.metadata.developJson !== null || verified.entry.metadata.rawXmp !== null || verified.entry.metadata.xmpState === "preserved") {
+        return { kind: "not-pristine", head: loaded.value, installed: null };
+      }
+      if (!verified.installAvailable) return { kind: "no-match", head: loaded.value, installed: null };
+      const match = await this.#match(facts);
+      if (match.kind !== "matched") return { kind: "no-match", head: loaded.value, installed: null };
+      const registry = this.#options.cameraProfiles.list();
+      const camera = facts.camera;
+      const sourceId = verified.entry.sourceId;
+      if (!sourceId) throw new Error("Develop default entry has no verified SourceId.");
+      const cameraProfile = verified.decoderProfile && camera.kind === "known"
       ? {
           kind: "available-before-tone" as const,
           decoderDefault: {
             registryRevision: registry.revision,
             selection: { kind: "decoder-default" as const },
-            calibration: { matrixToLinearSrgb: IDENTITY_MATRIX_3, channelScale: [1, 1, 1] as const, exposureOffsetEv: 0 },
+            calibration: {
+              matrixToLinearSrgb: verified.decoderProfile.matrixToLinearSrgb,
+              channelScale: verified.decoderProfile.channelScale,
+              exposureOffsetEv: verified.decoderProfile.exposureOffsetEv,
+            },
           },
           compatibleProfiles: registry.profiles.flatMap((record) =>
             record.kind === "ready" && cameraProfileIsCompatible(record.profile, { make: camera.make, model: camera.model })
@@ -179,45 +193,50 @@ export class DevelopDefaultsService {
               : []
           ),
         }
-      : {
+        : {
           kind: "unavailable" as const,
           reason: camera.kind === "unknown"
             ? "Camera identity is unavailable."
             : "The decoded source has no verified before-tone input profile stage.",
         };
-    const candidate = prepareDevelopDefaultCandidate({
-      match: match.match,
-      initialDocument: createDefaultV3DevelopDocument(),
-      context: { sourceId, cameraProfile },
-    });
-    if (candidate.kind !== "matched-default-candidate") {
-      throw new Error("Matched Develop default did not produce a matched candidate.");
+      const candidate = prepareDevelopDefaultCandidate({
+        match: match.match,
+        initialDocument: createDefaultV3DevelopDocument(),
+        context: { sourceId, cameraProfile },
+      });
+      if (candidate.kind !== "matched-default-candidate") {
+        throw new Error("Matched Develop default did not produce a matched candidate.");
+      }
+      const createdAt = Date.now();
+      await this.#options.recheckEntry(request, verified);
+      assertCurrent();
+      const result = await this.#options.worker.installDevelopDefault({
+        catalogId: request.catalogId,
+        entryId: request.entryId,
+        expectedParentRevisionId: loaded.value.revisionId,
+        revisionId: createDevelopRevisionId(),
+        operationId: parseOperationId(randomUUID()),
+        label: `Apply default ${candidate.rule.name}`,
+        document: candidate.document,
+        installed: {
+          ruleId: candidate.baseline.ruleId,
+          ruleRevision: candidate.baseline.ruleRevision,
+          presetId: candidate.baseline.presetId,
+          presetRevision: candidate.baseline.presetRevision,
+          selectedFields: candidate.baseline.selectedFields,
+          baselineDocument: candidate.document,
+          appliedFields: candidate.baseline.report.applied,
+          skipped: candidate.baseline.report.skipped,
+          unsupported: candidate.baseline.report.unsupported,
+          createdAt,
+        },
+      });
+      return result.kind === "not-pristine"
+        ? result
+        : { kind: result.kind, head: result.head, installed: result.installed };
+    } finally {
+      this.#cancelledInstalls.delete(request.requestId);
     }
-    const createdAt = Date.now();
-    const result = await this.#options.worker.installDevelopDefault({
-      catalogId: request.catalogId,
-      entryId: request.entryId,
-      expectedParentRevisionId: loaded.value.revisionId,
-      revisionId: createDevelopRevisionId(),
-      operationId: parseOperationId(randomUUID()),
-      label: `Apply default ${candidate.rule.name}`,
-      document: candidate.document,
-      installed: {
-        ruleId: candidate.baseline.ruleId,
-        ruleRevision: candidate.baseline.ruleRevision,
-        presetId: candidate.baseline.presetId,
-        presetRevision: candidate.baseline.presetRevision,
-        selectedFields: candidate.baseline.selectedFields,
-        baselineDocument: candidate.document,
-        appliedFields: candidate.baseline.report.applied,
-        skipped: candidate.baseline.report.skipped,
-        unsupported: candidate.baseline.report.unsupported,
-        createdAt,
-      },
-    });
-    return result.kind === "not-pristine"
-      ? result
-      : { kind: result.kind, head: result.head, installed: result.installed };
   }
 
   async #match(facts: DevelopDefaultFacts) {

@@ -1,4 +1,4 @@
-import { parseCatalogId, parseEntryId, type CatalogId, type EntryId } from "../../catalog/ids.ts";
+import { parseCatalogId, parseEntryId, parseOperationId, type CatalogId, type EntryId, type OperationId } from "../../catalog/ids.ts";
 import { parseSessionId, type SessionId } from "../../catalog/runtime.ts";
 import { parseDevelopHistoryLoadedRevision, type DevelopHistoryLoadedRevision } from "../history.ts";
 import {
@@ -35,7 +35,12 @@ export interface DevelopDefaultsEntryRequest {
 }
 
 export interface DevelopDefaultsInstallRequest extends DevelopDefaultsEntryRequest {
+  readonly requestId: OperationId;
   readonly facts: DevelopDefaultFacts;
+}
+
+export interface DevelopDefaultsCancelRequest extends DevelopDefaultsEntryRequest {
+  readonly requestId: OperationId;
 }
 
 export type DevelopDefaultsProductionResult =
@@ -96,12 +101,22 @@ export function parseDevelopDefaultFacts(value: unknown): DevelopDefaultFacts {
 }
 
 export function parseDevelopDefaultsInstallRequest(value: unknown): DevelopDefaultsInstallRequest {
-  const input = record(value, "Develop defaults install request", ["catalogId", "sessionId", "entryId", "facts"]);
+  const input = record(value, "Develop defaults install request", ["catalogId", "sessionId", "entryId", "requestId", "facts"]);
   return {
     catalogId: parseCatalogId(input.catalogId),
     sessionId: parseSessionId(input.sessionId),
     entryId: parseEntryId(input.entryId),
+    requestId: parseOperationId(input.requestId),
     facts: parseDevelopDefaultFacts(input.facts),
+  };
+}
+export function parseDevelopDefaultsCancelRequest(value: unknown): DevelopDefaultsCancelRequest {
+  const input = record(value, "Develop defaults cancel request", ["catalogId", "sessionId", "entryId", "requestId"]);
+  return {
+    catalogId: parseCatalogId(input.catalogId),
+    sessionId: parseSessionId(input.sessionId),
+    entryId: parseEntryId(input.entryId),
+    requestId: parseOperationId(input.requestId),
   };
 }
 export function parseDevelopDefaultsEntryRequest(value: unknown): DevelopDefaultsEntryRequest {

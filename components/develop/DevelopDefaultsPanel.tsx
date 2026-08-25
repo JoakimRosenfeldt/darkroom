@@ -154,13 +154,17 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
     if (!isElectronApp()) return;
     const current = ++generation.current;
     const api = getDarkroomAPI();
-    const [nextRules, nextPresets, nextInstalled, nextPreview] = await Promise.all([
+    const [nextRules, latestPresets, retainedPresets, nextInstalled, nextPreview] = await Promise.all([
       api.developDefaultsList(),
       api.developPresetsList({ query: "", category: null, favoriteOnly: false }),
+      api.developDefaultsReferencedPresets(),
       api.developDefaultsInstalled({ catalogId: entry.catalogId, sessionId: entry.sessionId, entryId: entry.id }),
       api.developDefaultsPreview({ facts }),
     ]);
     if (current !== generation.current) return;
+    const nextPresets = [...new Map(
+      [...latestPresets, ...retainedPresets].map((preset) => [presetKey(preset), preset]),
+    ).values()];
     setRules(nextRules);
     setPresets(nextPresets);
     setInstalled(nextInstalled);
@@ -229,6 +233,9 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
     commitCompleteState(entry.catalogId, entry.id, baseline.baselineDocument, "Reset to matched default");
     await getDevelopRepository(entry).flush();
   });
+  const selectedPresetMissing = selected !== null && !presets.some(
+    (preset) => preset.presetId === selected.preset.presetId && preset.revision === selected.preset.presetRevision,
+  );
 
   if (!isElectronApp()) {
     return <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="Defaults unavailable">Camera defaults require the Darkroom desktop app.</StatusCard></aside>;
@@ -267,7 +274,8 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
           {facts.inputProfile.kind === "unknown" ? <p className="mt-1 text-[9px] leading-4 text-lr-text-faint">{facts.inputProfile.reason}</p> : null}
           <label className="mt-2 block text-[10px] text-lr-text-muted">ISO<select value={draft.iso} disabled={busy || !durable} onChange={(event) => setDraft({ ...draft, iso: event.target.value === "unknown" ? "unknown" : "range" })} className="mt-1 w-full rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text"><option value="range" disabled={facts.iso.kind !== "known"}>Inclusive range</option><option value="unknown">Explicit unknown only</option></select></label>
           {draft.iso === "range" ? <div className="mt-1 grid grid-cols-2 gap-2"><input aria-label="Minimum ISO" type="number" min="1" value={draft.isoMinimum} disabled={busy || !durable} onChange={(event) => setDraft({ ...draft, isoMinimum: event.target.value })} className="rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text" /><input aria-label="Maximum ISO" type="number" min="1" value={draft.isoMaximum} disabled={busy || !durable} onChange={(event) => setDraft({ ...draft, isoMaximum: event.target.value })} className="rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text" /></div> : null}
-          <label className="mt-2 block text-[10px] text-lr-text-muted">Preset revision<select value={draft.presetKey} disabled={busy || !durable || presets.length === 0} onChange={(event) => { const preset = presets.find((candidate) => presetKey(candidate) === event.target.value); setDraft({ ...draft, presetKey: event.target.value, fields: preset?.fields.filter((field) => field !== "ai-masks") ?? draft.fields }); }} className="mt-1 w-full rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text"><option value="">Choose preset</option>{presets.map((preset) => <option key={presetKey(preset)} value={presetKey(preset)}>{preset.name} · r{preset.revision}</option>)}</select></label>
+          <label className="mt-2 block text-[10px] text-lr-text-muted">Preset revision<select value={draft.presetKey} disabled={busy || !durable || presets.length === 0} onChange={(event) => { const preset = presets.find((candidate) => presetKey(candidate) === event.target.value); setDraft({ ...draft, presetKey: event.target.value, fields: preset?.fields.filter((field) => field !== "ai-masks") ?? draft.fields }); }} className="mt-1 w-full rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text"><option value="">Choose preset</option>{selectedPresetMissing ? <option value={draft.presetKey}>Missing retained preset revision</option> : null}{presets.map((preset) => <option key={presetKey(preset)} value={presetKey(preset)}>{preset.name} · r{preset.revision}</option>)}</select></label>
+          {selectedPresetMissing ? <p className="mt-1 text-[9px] leading-4 text-lr-danger">This rule&apos;s exact preset revision is missing. Choose another revision before updating it.</p> : null}
           <fieldset className="mt-3"><legend className="text-[10px] text-lr-text-muted">Included fields</legend><div className="mt-1 grid grid-cols-2 gap-x-2">{DEVELOP_PRESET_FIELDS.map((field) => {
             const available = field !== "ai-masks" && presets.find((preset) => presetKey(preset) === draft.presetKey)?.fields.includes(field) === true;
             return <label key={field} className={`flex items-center gap-1.5 py-1 text-[9px] ${available ? "text-lr-text-muted" : "text-lr-text-faint opacity-50"}`}><input type="checkbox" checked={draft.fields.includes(field)} disabled={!available || busy || !durable} onChange={(event) => setDraft({ ...draft, fields: event.target.checked ? [...draft.fields, field] : draft.fields.filter((candidate) => candidate !== field) })} className="size-3 accent-lr-accent" />{FIELD_LABELS[field]}</label>;

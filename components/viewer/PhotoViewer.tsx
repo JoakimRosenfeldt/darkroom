@@ -171,20 +171,21 @@ export function PhotoViewer({
     [entry.id, hydrateEntryKeywordsDurably],
   );
   const defaultFacts = useMemo(() => {
-    if (!decoded) return null;
+    if (!decoded) return undefined;
     const source = buildV3SourceRecord(entry, decoded, "preview");
     return source.kind === "source"
       ? developDefaultFactsFromSource(source.source, sourceIso(decoded.metadata))
       : null;
   }, [decoded, entry]);
 
-  useDevelopSettingsSync({
+  const defaultsResolution = useDevelopSettingsSync({
     entry,
     metadata,
     persistCatalog,
     hydrateKeywords,
     defaultFacts,
   });
+  const defaultsPending = defaultsResolution.kind === "pending";
   const visibleV3Document = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
     const document = session?.previewDocument ?? session?.persistedDocument;
@@ -418,6 +419,7 @@ export function PhotoViewer({
       }
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
       if (
+        !defaultsPending &&
         developProcessKind === "v3" &&
         activePanel === "masking" &&
         plainKey &&
@@ -428,7 +430,7 @@ export function PhotoViewer({
         return;
       }
       const key = event.key.toLowerCase();
-      if (developProcessKind === "v3" && plainKey && (key === "k" || key === "m")) {
+      if (!defaultsPending && developProcessKind === "v3" && plainKey && (key === "k" || key === "m")) {
         event.preventDefault();
         setActivePanel("masking");
         setMaskOverlayVisible(true);
@@ -440,7 +442,7 @@ export function PhotoViewer({
         closeEditingTools();
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if (!defaultsPending && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
@@ -500,6 +502,7 @@ export function PhotoViewer({
     setV3CanvasTool,
     v3CanvasTool.kind,
     developProcessKind,
+    defaultsPending,
   ]);
 
   return (
@@ -582,10 +585,10 @@ export function PhotoViewer({
               </>
             ) : developProcessKind === "v3" && activePanel !== "crop" ? (
               <>
-                <button type="button" disabled={!canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                <button type="button" disabled={defaultsPending || !canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
                   Undo
                 </button>
-                <button type="button" disabled={!canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                <button type="button" disabled={defaultsPending || !canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
                   Redo
                 </button>
                 <button
@@ -637,11 +640,11 @@ export function PhotoViewer({
                   alt={entry.name}
                   onRenderDiagnostics={setV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
-                  cropActive={activePanel === "crop"}
+                  cropActive={!defaultsPending && activePanel === "crop"}
                   maskingActive={
-                    activePanel === "masking" || (maskUi?.tool ?? "none") !== "none"
+                    !defaultsPending && (activePanel === "masking" || (maskUi?.tool ?? "none") !== "none")
                   }
-                  canvasTool={v3CanvasTool}
+                  canvasTool={defaultsPending ? { kind: "none" } : v3CanvasTool}
                   onCanvasToolChange={setV3CanvasTool}
                 />
             ) : decoded && !error ? (
@@ -684,6 +687,7 @@ export function PhotoViewer({
               v3CanvasTool={v3CanvasTool}
               onV3CanvasToolChange={setV3CanvasTool}
               defaultFacts={defaultFacts}
+              defaultsResolution={defaultsResolution}
               activePanel={activePanel}
               onSelect={selectDevelopPanel}
             />

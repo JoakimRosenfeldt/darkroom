@@ -21,7 +21,7 @@ import {
   type DevelopHistoryProjection,
   type DevelopRevisionId,
 } from "@/lib/develop/history";
-import { parseOperationId } from "@/lib/catalog/ids";
+import { parseOperationId, type OperationId } from "@/lib/catalog/ids";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import {
   decodePersistedDevelopDocument,
@@ -35,6 +35,7 @@ import { MAX_DEVELOP_XMP_PAYLOAD_BYTES } from "@/lib/develop/xmp";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
 import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
+import type { DevelopDefaultsProductionResult } from "@/lib/develop/defaults/api";
 
 const PERSIST_DEBOUNCE_MS = 500;
 const MAX_WRITE_ATTEMPTS_PER_REVISION = 3;
@@ -426,30 +427,46 @@ export class DevelopRepository {
     return this.#installedDefault ? structuredClone(this.#installedDefault) : null;
   }
 
-  async installDefault(facts: DevelopDefaultFacts): Promise<InstalledDevelopDefault | null> {
-    await this.#hydration;
-    if (!isElectronApp() || this.#projectionState.kind === "divergent") return null;
-    const result = await getDarkroomAPI().developDefaultsInstall({
+  installDefault(facts: DevelopDefaultFacts, requestId: OperationId): Promise<DevelopDefaultsProductionResult> {
+    const execute = async (): Promise<DevelopDefaultsProductionResult> => {
+      await this.#hydration;
+      if (!isElectronApp() || this.#projectionState.kind === "divergent") {
+        throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
+      }
+      const result = await getDarkroomAPI().developDefaultsInstall({
+        catalogId: this.#entry.catalogId,
+        sessionId: this.#entry.sessionId,
+        entryId: this.#entry.id,
+        requestId,
+        facts,
+      });
+      this.#head = result.head;
+      if (result.kind === "installed" || result.kind === "already-installed") {
+        this.#installedDefault = result.installed;
+        const session = this.#requireSession();
+        this.#requireAdapters().onSessionChanged(
+          session.hydrateAuthoritative(openDevelopSessionDocument(result.head.document)),
+        );
+        if (this.#entry.entryKind === "original") {
+          await this.#projectHead(result.head.revisionId, result.head.document);
+        }
+        this.#adapters?.setStatus("saved");
+      }
+      return result;
+    };
+    const operation = this.#queue.then(execute);
+    this.#queue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  async cancelDefault(requestId: OperationId): Promise<void> {
+    if (!isElectronApp()) return;
+    await getDarkroomAPI().developDefaultsCancel({
       catalogId: this.#entry.catalogId,
       sessionId: this.#entry.sessionId,
       entryId: this.#entry.id,
-      facts,
+      requestId,
     });
-    if (result.kind === "installed" || result.kind === "already-installed") {
-      this.#head = result.head;
-      this.#installedDefault = result.installed;
-      const session = this.#requireSession();
-      this.#requireAdapters().onSessionChanged(
-        session.hydrateAuthoritative(openDevelopSessionDocument(result.head.document)),
-      );
-      if (this.#entry.entryKind === "original") {
-        await this.#projectHead(result.head.revisionId, result.head.document);
-      }
-      this.#adapters?.setStatus("saved");
-      return structuredClone(result.installed);
-    }
-    this.#head = result.head;
-    return null;
   }
 
   async resolveProjection(choice: "keep-darkroom" | "import-xmp"): Promise<void> {
