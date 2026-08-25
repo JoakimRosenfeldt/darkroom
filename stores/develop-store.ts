@@ -21,6 +21,7 @@ import {
   type PersistedDevelopDocument,
   type StoredDevelopDocument,
 } from "@/lib/develop/v3/document";
+import type { DevelopProjectionState } from "@/lib/develop/repository";
 
 export type SidecarStatus = "idle" | "loading" | "saving" | "saved" | "error";
 type MetadataValues = Pick<EntryMetadata, "pick" | "rating" | "colorLabel">;
@@ -33,6 +34,7 @@ interface DevelopSessionUi {
   tool: "none" | "brush" | "linear-gradient" | "radial-gradient";
   sidecarStatus: SidecarStatus;
   sidecarError: string | null;
+  projection: DevelopProjectionState;
 }
 
 export interface DevelopSessionState {
@@ -65,6 +67,7 @@ function defaultUi(): DevelopSessionUi {
     tool: "none",
     sidecarStatus: "idle",
     sidecarError: null,
+    projection: { kind: "clean", revisionId: null },
   };
 }
 
@@ -160,6 +163,7 @@ interface DevelopStore {
   ) => void;
   clearLibrarySessions: () => void;
   setSidecarStatus: (status: SidecarStatus, error?: string | null) => void;
+  setProjectionState: (projection: DevelopProjectionState) => void;
   setSelectedMask: (maskId: string | null) => void;
   setSelectedComponent: (componentId: string | null) => void;
   setMaskOverlayVisible: (visible: boolean) => void;
@@ -439,6 +443,17 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
           ...current,
           ui: { ...current.ui, sidecarStatus, sidecarError },
         },
+      },
+    };
+  }),
+  setProjectionState: (projection) => set((state) => {
+    const entryId = state.activeEntryId;
+    const current = entryId ? state.sessions[entryId] : undefined;
+    if (!entryId || !current) return state;
+    return {
+      sessions: {
+        ...state.sessions,
+        [entryId]: { ...current, ui: { ...current.ui, projection } },
       },
     };
   }),

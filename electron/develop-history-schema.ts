@@ -13,6 +13,7 @@ export const DEVELOP_HISTORY_TABLES = [
   "develop_revision_assets",
   "develop_history_heads",
   "develop_history_refs",
+  "develop_xmp_projections",
 ] as const;
 
 function digest(json: string): string {
@@ -92,6 +93,17 @@ export function upgradeDevelopHistorySchema(database: DatabaseSync): void {
         updated_at REAL NOT NULL,
         PRIMARY KEY (catalog_id, entry_id, ref_id),
         UNIQUE (catalog_id, entry_id, kind, name),
+        FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id),
+        FOREIGN KEY (catalog_id, entry_id, revision_id)
+          REFERENCES develop_history_revisions (catalog_id, entry_id, revision_id)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS develop_xmp_projections (
+        catalog_id TEXT NOT NULL,
+        entry_id TEXT NOT NULL,
+        revision_id TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
+        projected_at REAL NOT NULL,
+        PRIMARY KEY (catalog_id, entry_id),
         FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id),
         FOREIGN KEY (catalog_id, entry_id, revision_id)
           REFERENCES develop_history_revisions (catalog_id, entry_id, revision_id)

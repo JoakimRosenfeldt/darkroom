@@ -72,6 +72,8 @@ import {
   parseDevelopHistoryListInput,
   parseDevelopHistoryLoadInput,
   parseDevelopHistoryLoadResult,
+  parseDevelopHistoryProjection,
+  parseDevelopHistoryProjectionWriteInput,
   parseDevelopHistoryRef,
   parseDevelopHistoryRefMutationInput,
   parseDevelopHistoryRevision,
@@ -80,6 +82,8 @@ import {
   type DevelopHistoryListInput,
   type DevelopHistoryLoadInput,
   type DevelopHistoryLoadResult,
+  type DevelopHistoryProjection,
+  type DevelopHistoryProjectionWriteInput,
   type DevelopHistoryRef,
   type DevelopHistoryRefMutationInput,
   type DevelopHistoryRevision,
@@ -402,6 +406,10 @@ export interface CatalogWorkerDevelopHistoryRefsRequest { readonly kind: "develo
 export interface CatalogWorkerDevelopHistoryRefsResponse { readonly kind: "develop-history-refs"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
 export interface CatalogWorkerDevelopHistoryRefMutateRequest { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly input: DevelopHistoryRefMutationInput }
 export interface CatalogWorkerDevelopHistoryRefMutateResponse { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+export interface CatalogWorkerDevelopHistoryProjectionGetRequest { readonly kind: "develop-history-projection-get"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopHistoryProjectionGetResponse { readonly kind: "develop-history-projection-get"; readonly requestId: string; readonly result: DevelopHistoryProjection | null }
+export interface CatalogWorkerDevelopHistoryProjectionSetRequest { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly input: DevelopHistoryProjectionWriteInput }
+export interface CatalogWorkerDevelopHistoryProjectionSetResponse { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly result: DevelopHistoryProjection }
 export interface CatalogWorkerDevelopBatchRequest { readonly kind: "develop-batch"; readonly requestId: string; readonly command: DevelopBatchCommand }
 export interface CatalogWorkerDevelopBatchResponse { readonly kind: "develop-batch"; readonly requestId: string; readonly result: DevelopBatchCommandResult }
 
@@ -478,6 +486,8 @@ export type CatalogWorkerRequest =
   | CatalogWorkerDevelopHistoryCommitRequest
   | CatalogWorkerDevelopHistoryRefsRequest
   | CatalogWorkerDevelopHistoryRefMutateRequest
+  | CatalogWorkerDevelopHistoryProjectionGetRequest
+  | CatalogWorkerDevelopHistoryProjectionSetRequest
   | CatalogWorkerDevelopBatchRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
@@ -541,6 +551,8 @@ export type CatalogWorkerResponse =
   | CatalogWorkerDevelopHistoryCommitResponse
   | CatalogWorkerDevelopHistoryRefsResponse
   | CatalogWorkerDevelopHistoryRefMutateResponse
+  | CatalogWorkerDevelopHistoryProjectionGetResponse
+  | CatalogWorkerDevelopHistoryProjectionSetResponse
   | CatalogWorkerDevelopBatchResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
@@ -1345,6 +1357,10 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
     case "develop-history-ref-mutate":
       return { kind, requestId, input: parseDevelopHistoryRefMutationInput(record.input) };
+    case "develop-history-projection-get":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
+    case "develop-history-projection-set":
+      return { kind, requestId, input: parseDevelopHistoryProjectionWriteInput(record.input) };
     case "develop-batch":
       return { kind, requestId, command: parseDevelopBatchCommand(record.command) };
     case "test-tracer-run":
@@ -1528,6 +1544,12 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "develop-history-ref-mutate":
       if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history refs response is invalid.");
       return { kind, requestId, result: record.result.map(parseDevelopHistoryRef) };
+    case "develop-history-projection-get":
+      if (requestId === null) throw new Error("Develop history projection response needs a requestId.");
+      return { kind, requestId, result: record.result === null ? null : parseDevelopHistoryProjection(record.result) };
+    case "develop-history-projection-set":
+      if (requestId === null) throw new Error("Develop history projection response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryProjection(record.result) };
     case "develop-batch":
       if (requestId === null) throw new Error("Develop batch response needs a requestId.");
       return { kind, requestId, result: parseDevelopBatchCommandResult(record.result) };

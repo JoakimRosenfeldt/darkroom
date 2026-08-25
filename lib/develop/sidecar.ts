@@ -17,6 +17,11 @@ export interface DevelopSidecar {
   keywords: ReturnType<typeof parseKeywordXmp>;
 }
 
+export async function digestDevelopSidecarContents(contents: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(contents));
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export async function readDevelopSidecar(
   entry: LibraryEntry,
 ): Promise<DevelopSidecar | null> {

@@ -111,6 +111,14 @@ import { createRuntimeFormatCapabilityReport } from "./format-capability-service
 import type { FormatCapabilityReport, NikonRuntimePackageState } from "../lib/formats/types.ts";
 import { isRuntimeNativeRoot, type AssetScopedOperations, type RuntimeRootProjection } from "./library-runtime.ts";
 import { createOperationId, type AssetId, type CatalogId, type OperationId } from "../lib/catalog/ids.ts";
+import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryProjectionWriteInput,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryTargetInput,
+} from "../lib/develop/history.ts";
 import { parseCatalogLiveQueryResult } from "../lib/catalog/live.ts";
 import {
   parseCatalogDecodeRequest,
@@ -1813,6 +1821,36 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-read-asset-head", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return coordinator.readAssetHead(value);
+  });
+  ipcMain.handle("darkroom:develop-history-load", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.loadDevelopHistory(parseDevelopHistoryLoadInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.listDevelopHistory(parseDevelopHistoryListInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-commit", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.commitDevelopHistory(parseDevelopHistoryCommitInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-refs", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const target = parseDevelopHistoryTargetInput(value);
+    return worker.listDevelopHistoryRefs(target.catalogId, target.entryId);
+  });
+  ipcMain.handle("darkroom:develop-history-ref-mutate", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.mutateDevelopHistoryRef(parseDevelopHistoryRefMutationInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-projection-get", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const target = parseDevelopHistoryTargetInput(value);
+    return worker.getDevelopHistoryProjection(target.catalogId, target.entryId);
+  });
+  ipcMain.handle("darkroom:develop-history-projection-set", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.recordDevelopHistoryProjection(parseDevelopHistoryProjectionWriteInput(value));
   });
   ipcMain.handle("darkroom:catalog-stat-asset", async (event, value: unknown) => {
     assertTrustedRenderer(event);

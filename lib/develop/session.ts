@@ -29,7 +29,6 @@ import type {
   DevelopDocumentV3,
   NewerDevelopDocument,
   PersistedDevelopDocument,
-  StoredDevelopDocument,
 } from "@/lib/develop/v3/document";
 import {
   createV3MigrationCandidate,
@@ -71,7 +70,7 @@ export type DevelopSessionOpenDocument =
     };
 
 export function openDevelopSessionDocument(
-  value: StoredDevelopDocument,
+  value: unknown,
 ): DevelopSessionOpenDocument {
   const decoded = decodePersistedDevelopDocument(value);
   if (decoded.kind === "invalid") {
@@ -525,6 +524,20 @@ export class DevelopSessionCore implements DevelopSession {
       persistedDocumentRevision: this.#state.persistedDocumentRevision + 1,
       undo: this.#state.undo.filter((entry) => entry.kind === "metadata"),
       redo: this.#state.redo.filter((entry) => entry.kind === "metadata"),
+      transientEdit: null,
+    };
+    return this.snapshot();
+  }
+
+  hydrateAuthoritative(process: DevelopSessionOpenDocument): DevelopSessionSnapshot {
+    const revision = this.#state.documentRevision + 1;
+    this.#state = {
+      ...this.#state,
+      process,
+      documentRevision: revision,
+      persistedDocumentRevision: revision,
+      undo: [],
+      redo: [],
       transientEdit: null,
     };
     return this.snapshot();

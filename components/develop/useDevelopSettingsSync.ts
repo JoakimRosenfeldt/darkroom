@@ -44,6 +44,7 @@ export function useDevelopSettingsSync({
   const activateEntry = useDevelopStore((state) => state.activateEntry);
   const synchronizeSession = useDevelopStore((state) => state.synchronizeSession);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
+  const setProjectionState = useDevelopStore((state) => state.setProjectionState);
   const metadataRef = useRef(metadata);
   const scheduledRevisionRef = useRef<{
     readonly catalogId: string;
@@ -86,7 +87,7 @@ export function useDevelopSettingsSync({
         return snapshot.processKind === "v2" ? snapshot.document : null;
       },
     }));
-    repository.configure(session, metadataRef.current, {
+    const disconnectRepository = repository.configure(session, metadataRef.current, {
       mirrorCatalog: persistCatalog,
       hydrateKeywords,
       setStatus: (status, error = null) => {
@@ -101,12 +102,21 @@ export function useDevelopSettingsSync({
       onSessionChanged: (snapshot) => {
         synchronizeSession(entry.id, snapshot);
       },
+      setProjectionState: (projection) => {
+        const state = useDevelopStore.getState();
+        if (state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id) {
+          setProjectionState(projection);
+        }
+      },
     });
     void repository.open(metadataRef.current).then(async () => {
       if (!active || session.snapshot().processKind !== "v2") return;
       try {
         const snapshot = await session.upgradeToCurrentProcess();
-        if (active) synchronizeSession(entry.id, snapshot);
+        if (active && snapshot.processKind === "v3") {
+          synchronizeSession(entry.id, snapshot);
+          await repository.commitProcessUpgrade(snapshot);
+        }
       } catch (error) {
         if (!active) return;
         setSidecarStatus(
@@ -118,7 +128,7 @@ export function useDevelopSettingsSync({
     return () => {
       active = false;
       detachSourceSignatureProvider();
-      void repository.flush();
+      void repository.flush().finally(disconnectRepository);
     };
   }, [
     activateEntry,
@@ -127,6 +137,7 @@ export function useDevelopSettingsSync({
     hydrateKeywords,
     persistCatalog,
     setSidecarStatus,
+    setProjectionState,
     synchronizeSession,
   ]);
 

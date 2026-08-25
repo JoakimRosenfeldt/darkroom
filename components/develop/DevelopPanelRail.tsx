@@ -1,8 +1,8 @@
 "use client";
 
-import { IconCopy, IconCrop, IconInfo, IconMask, IconSliders } from "@/components/shell/icons";
+import { IconCopy, IconCrop, IconInfo, IconMask, IconRotate, IconSliders } from "@/components/shell/icons";
 
-export type DevelopPanelId = "crop" | "edit" | "masking" | "cleanup" | "info";
+export type DevelopPanelId = "crop" | "edit" | "masking" | "cleanup" | "history" | "info";
 
 interface DevelopPanelRailProps {
   activePanel: DevelopPanelId | null;
@@ -15,6 +15,7 @@ const PANELS: Array<{ id: DevelopPanelId; label: string; short: string; icon: ty
   { id: "edit", label: "Edit", short: "EDT", icon: IconSliders },
   { id: "masking", label: "Masking", short: "MSK", icon: IconMask },
   { id: "cleanup", label: "Cleanup", short: "CLN", icon: IconCopy },
+  { id: "history", label: "History", short: "HST", icon: IconRotate },
   { id: "info", label: "Info", short: "NFO", icon: IconInfo },
 ];
 
@@ -30,7 +31,7 @@ export function DevelopPanelRail({
     >
       {PANELS.map(({ id, label, short, icon: Icon }) => {
         const isActive = activePanel === id;
-        const disabled = editingDisabled && id !== "info";
+        const disabled = editingDisabled && id !== "info" && id !== "history";
         return (
           <button
             key={id}

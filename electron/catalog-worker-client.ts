@@ -16,6 +16,8 @@ import type {
   DevelopHistoryListInput,
   DevelopHistoryLoadInput,
   DevelopHistoryLoadResult,
+  DevelopHistoryProjection,
+  DevelopHistoryProjectionWriteInput,
   DevelopHistoryRef,
   DevelopHistoryRefMutationInput,
   DevelopHistoryRevision,
@@ -405,6 +407,14 @@ export class CatalogWorkerClient {
 
   async mutateDevelopHistoryRef(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]> {
     return requireKind(await this.send({ kind: "develop-history-ref-mutate", requestId: requestId(), input }), "develop-history-ref-mutate").result;
+  }
+
+  async getDevelopHistoryProjection(catalogId: CatalogId, entryId: EntryId): Promise<DevelopHistoryProjection | null> {
+    return requireKind(await this.send({ kind: "develop-history-projection-get", requestId: requestId(), catalogId, entryId }), "develop-history-projection-get").result;
+  }
+
+  async recordDevelopHistoryProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection> {
+    return requireKind(await this.send({ kind: "develop-history-projection-set", requestId: requestId(), input }), "develop-history-projection-set").result;
   }
 
   async developBatch(command: DevelopBatchCommand): Promise<DevelopBatchCommandResult> {

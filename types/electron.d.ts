@@ -131,6 +131,19 @@ import type {
   DevelopClipboardPayload,
   DevelopClipboardReadResult,
 } from "../lib/develop/clipboard/schema";
+import type {
+  DevelopHistoryCommitInput,
+  DevelopHistoryCommitResult,
+  DevelopHistoryListInput,
+  DevelopHistoryLoadInput,
+  DevelopHistoryLoadResult,
+  DevelopHistoryProjection,
+  DevelopHistoryProjectionWriteInput,
+  DevelopHistoryRef,
+  DevelopHistoryRefMutationInput,
+  DevelopHistoryRevision,
+  DevelopHistoryTargetInput,
+} from "../lib/develop/history";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -171,6 +184,13 @@ export interface DarkroomAPI {
     request: DevelopAssetTransitionRequest,
   ): Promise<DevelopAssetTransitionResult>;
   developAssetRead(request: DevelopAssetReadRequest): Promise<DevelopAssetReadResult>;
+  developHistoryLoad(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadResult>;
+  developHistoryList(input: DevelopHistoryListInput): Promise<readonly DevelopHistoryRevision[]>;
+  developHistoryCommit(input: DevelopHistoryCommitInput): Promise<DevelopHistoryCommitResult>;
+  developHistoryRefs(input: DevelopHistoryTargetInput): Promise<readonly DevelopHistoryRef[]>;
+  developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]>;
+  developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null>;
+  developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection>;
   cameraProfilesList(): Promise<CameraProfileRegistrySnapshot>;
   cameraProfilesImport(): Promise<CameraProfileImportResult>;
   cameraProfilesResolveConflict(

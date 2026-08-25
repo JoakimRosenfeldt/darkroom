@@ -149,6 +149,30 @@ import {
   type DevelopAssetTransitionResult,
 } from "../lib/develop/v3/asset-store.ts";
 import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryCommitResult,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryLoadResult,
+  parseDevelopHistoryProjection,
+  parseDevelopHistoryProjectionWriteInput,
+  parseDevelopHistoryRef,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryRevision,
+  parseDevelopHistoryTargetInput,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
+  type DevelopHistoryListInput,
+  type DevelopHistoryLoadInput,
+  type DevelopHistoryLoadResult,
+  type DevelopHistoryProjection,
+  type DevelopHistoryProjectionWriteInput,
+  type DevelopHistoryRef,
+  type DevelopHistoryRefMutationInput,
+  type DevelopHistoryRevision,
+  type DevelopHistoryTargetInput,
+} from "../lib/develop/history.ts";
+import {
   parseDevelopJobAcceptanceResult,
   parseDevelopJobAcceptRequest,
   parseDevelopJobRetryRequest,
@@ -430,6 +454,50 @@ const darkroom = {
       parseDevelopAssetReadRequest(request),
     );
     return parseDevelopAssetReadResult(result);
+  },
+
+  async developHistoryLoad(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadResult> {
+    return parseDevelopHistoryLoadResult(await ipcRenderer.invoke(
+      "darkroom:develop-history-load",
+      parseDevelopHistoryLoadInput(input),
+    ));
+  },
+
+  async developHistoryList(input: DevelopHistoryListInput): Promise<readonly DevelopHistoryRevision[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-list", parseDevelopHistoryListInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history list response is invalid.");
+    return result.map(parseDevelopHistoryRevision);
+  },
+
+  async developHistoryCommit(input: DevelopHistoryCommitInput): Promise<DevelopHistoryCommitResult> {
+    return parseDevelopHistoryCommitResult(await ipcRenderer.invoke(
+      "darkroom:develop-history-commit",
+      parseDevelopHistoryCommitInput(input),
+    ));
+  },
+
+  async developHistoryRefs(input: DevelopHistoryTargetInput): Promise<readonly DevelopHistoryRef[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-refs", parseDevelopHistoryTargetInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history refs response is invalid.");
+    return result.map(parseDevelopHistoryRef);
+  },
+
+  async developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-ref-mutate", parseDevelopHistoryRefMutationInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history refs response is invalid.");
+    return result.map(parseDevelopHistoryRef);
+  },
+
+  async developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-projection-get", parseDevelopHistoryTargetInput(input));
+    return result === null ? null : parseDevelopHistoryProjection(result);
+  },
+
+  async developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection> {
+    return parseDevelopHistoryProjection(await ipcRenderer.invoke(
+      "darkroom:develop-history-projection-set",
+      parseDevelopHistoryProjectionWriteInput(input),
+    ));
   },
 
   async cameraProfilesList(): Promise<CameraProfileRegistrySnapshot> {

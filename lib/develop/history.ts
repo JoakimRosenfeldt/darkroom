@@ -108,6 +108,11 @@ export interface DevelopHistoryListInput {
   readonly limit: number;
 }
 
+export interface DevelopHistoryTargetInput {
+  readonly catalogId: CatalogId;
+  readonly entryId: EntryId;
+}
+
 export interface DevelopHistoryCommitInput {
   readonly catalogId: CatalogId;
   readonly entryId: EntryId;
@@ -123,6 +128,16 @@ export interface DevelopHistoryCommitResult {
   readonly revision: DevelopHistoryRevision;
   readonly idempotent: boolean;
 }
+
+export interface DevelopHistoryProjection {
+  readonly catalogId: CatalogId;
+  readonly entryId: EntryId;
+  readonly revisionId: DevelopRevisionId;
+  readonly contentSha256: string;
+  readonly projectedAt: number;
+}
+
+export type DevelopHistoryProjectionWriteInput = DevelopHistoryProjection;
 
 export type DevelopHistoryRefMutationInput =
   | {
@@ -350,6 +365,11 @@ export function parseDevelopHistoryListInput(value: unknown): DevelopHistoryList
   const input = record(value, "Develop history list input"); exactKeys(input, ["catalogId", "entryId", "limit"], "Develop history list input");
   return { catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), limit: integer(input.limit, "Develop history list limit", 1, DEVELOP_HISTORY_RETAINED_REVISIONS) };
 }
+export function parseDevelopHistoryTargetInput(value: unknown): DevelopHistoryTargetInput {
+  const input = record(value, "Develop history target");
+  exactKeys(input, ["catalogId", "entryId"], "Develop history target");
+  return { catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId) };
+}
 export function parseDevelopHistoryCommitInput(value: unknown): DevelopHistoryCommitInput {
   const input = record(value, "Develop history commit input"); exactKeys(input, ["catalogId", "entryId", "revisionId", "expectedParentRevisionId", "operationId", "label", "document", "createdAt"], "Develop history commit input");
   return { catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), revisionId: parseDevelopRevisionId(input.revisionId), expectedParentRevisionId: parseDevelopRevisionId(input.expectedParentRevisionId), operationId: parseOperationId(input.operationId), label: text(input.label, "Develop history label"), document: parseDevelopHistoryDocument(input.document), createdAt: finite(input.createdAt, "Develop history createdAt") };
@@ -370,11 +390,13 @@ export function parseDevelopHistoryRevision(value: unknown): DevelopHistoryRevis
 }
 export function parseDevelopHistoryLoadedRevision(value: unknown): DevelopHistoryLoadedRevision {
   const input = record(value, "Loaded Develop history revision");
+  exactKeys(input, ["catalogId", "entryId", "revisionId", "parentRevisionId", "operationId", "ordinal", "label", "documentHash", "checkpoint", "createdAt", "document", "headRevisionId"], "Loaded Develop history revision");
   const revision = parseDevelopHistoryRevision(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "document" && key !== "headRevisionId")));
   return { ...revision, document: parseDevelopHistoryDocument(input.document), headRevisionId: parseDevelopRevisionId(input.headRevisionId) };
 }
 export function parseDevelopHistoryRecoveryRevision(value: unknown): DevelopHistoryRecoveryRevision {
   const input = record(value, "Develop history recovery revision");
+  exactKeys(input, ["catalogId", "entryId", "revisionId", "parentRevisionId", "operationId", "ordinal", "label", "documentHash", "checkpoint", "createdAt", "document"], "Develop history recovery revision");
   const revision = parseDevelopHistoryRevision(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "document")));
   return { ...revision, document: parseDevelopHistoryDocument(input.document) };
 }
@@ -408,6 +430,21 @@ export function parseDevelopHistoryCommitResult(value: unknown): DevelopHistoryC
   const input = record(value, "Develop history commit result"); exactKeys(input, ["revision", "idempotent"], "Develop history commit result");
   if (typeof input.idempotent !== "boolean") fail("Develop history idempotence is invalid.");
   return { revision: parseDevelopHistoryRevision(input.revision), idempotent: input.idempotent };
+}
+export function parseDevelopHistoryProjection(value: unknown): DevelopHistoryProjection {
+  const input = record(value, "Develop history projection");
+  exactKeys(input, ["catalogId", "entryId", "revisionId", "contentSha256", "projectedAt"], "Develop history projection");
+  if (typeof input.contentSha256 !== "string" || !SHA256.test(input.contentSha256)) fail("Develop history projection digest is invalid.");
+  return {
+    catalogId: parseCatalogId(input.catalogId),
+    entryId: parseEntryId(input.entryId),
+    revisionId: parseDevelopRevisionId(input.revisionId),
+    contentSha256: input.contentSha256,
+    projectedAt: finite(input.projectedAt, "Develop history projectedAt"),
+  };
+}
+export function parseDevelopHistoryProjectionWriteInput(value: unknown): DevelopHistoryProjectionWriteInput {
+  return parseDevelopHistoryProjection(value);
 }
 export function parseDevelopHistoryRef(value: unknown): DevelopHistoryRef {
   const input = record(value, "Develop history ref"); exactKeys(input, ["catalogId", "entryId", "refId", "kind", "name", "revisionId", "createdAt", "updatedAt"], "Develop history ref");

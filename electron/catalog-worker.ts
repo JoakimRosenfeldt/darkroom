@@ -978,6 +978,12 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
     case "develop-history-ref-mutate":
       post({ kind: "develop-history-ref-mutate", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).mutateRef(request.input) });
       return;
+    case "develop-history-projection-get":
+      post({ kind: "develop-history-projection-get", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).projection(request.catalogId, request.entryId) });
+      return;
+    case "develop-history-projection-set":
+      post({ kind: "develop-history-projection-set", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).recordProjection(request.input) });
+      return;
     case "develop-batch":
       post({ kind: "develop-batch", requestId: request.requestId, result: await handleDevelopBatch(request.command) });
       return;

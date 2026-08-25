@@ -18,6 +18,7 @@ import {
   parseDevelopHistoryListInput,
   parseDevelopHistoryLoadInput,
   parseDevelopHistoryPatch,
+  parseDevelopHistoryProjectionWriteInput,
   parseDevelopHistoryRef,
   parseDevelopHistoryRefMutationInput,
   parseDevelopHistoryRevision,
@@ -28,6 +29,8 @@ import {
   type DevelopHistoryListInput,
   type DevelopHistoryLoadInput,
   type DevelopHistoryLoadResult,
+  type DevelopHistoryProjection,
+  type DevelopHistoryProjectionWriteInput,
   type DevelopHistoryRecoveryRevision,
   type DevelopHistoryRef,
   type DevelopHistoryRefMutationInput,
@@ -361,6 +364,36 @@ export class DevelopHistoryRepository {
       ), 0)
       ORDER BY ordinal DESC LIMIT ?`)
       .all(input.catalogId, input.entryId, input.catalogId, input.entryId, input.limit).map((item) => this.revisionFromRow(item));
+  }
+
+  projection(catalogIdValue: CatalogId, entryIdValue: EntryId): DevelopHistoryProjection | null {
+    const catalogId = parseCatalogId(catalogIdValue);
+    const entryId = parseEntryId(entryIdValue);
+    this.assertActiveEntry(catalogId, entryId);
+    const value = this.database.prepare(`
+      SELECT catalog_id AS catalogId, entry_id AS entryId, revision_id AS revisionId,
+             content_sha256 AS contentSha256, projected_at AS projectedAt
+      FROM develop_xmp_projections WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, entryId);
+    return value === undefined ? null : parseDevelopHistoryProjectionWriteInput(value);
+  }
+
+  recordProjection(inputValue: DevelopHistoryProjectionWriteInput): DevelopHistoryProjection {
+    const input = parseDevelopHistoryProjectionWriteInput(inputValue);
+    return this.transaction(() => {
+      this.assertActiveEntry(input.catalogId, input.entryId);
+      this.revisionRow(input.catalogId, input.entryId, input.revisionId);
+      this.database.prepare(`
+        INSERT INTO develop_xmp_projections (
+          catalog_id, entry_id, revision_id, content_sha256, projected_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (catalog_id, entry_id) DO UPDATE SET
+          revision_id = excluded.revision_id,
+          content_sha256 = excluded.content_sha256,
+          projected_at = excluded.projected_at
+      `).run(input.catalogId, input.entryId, input.revisionId, input.contentSha256, input.projectedAt);
+      return input;
+    });
   }
 
   commit(inputValue: DevelopHistoryCommitInput, alreadyInTransaction = false): DevelopHistoryCommitResult {

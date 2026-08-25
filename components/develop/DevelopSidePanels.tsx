@@ -19,6 +19,7 @@ import type {
   V3CanvasTool,
 } from "@/components/develop/DevelopCanvas";
 import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
+import { DevelopHistoryPanel } from "@/components/develop/DevelopHistoryPanel";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -56,17 +57,21 @@ export function DevelopSidePanels({
     return entryId ? state.sessions[entryId] : undefined;
   });
 
-  const panel = activePanel === "info" ? (
+  const projectionConflict = session?.ui.projection.kind === "divergent";
+  const effectivePanel = projectionConflict ? "history" : activePanel;
+  const panel = effectivePanel === "history" ? (
+    <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} />
+  ) : effectivePanel === "info" ? (
     <MetadataPanel
       entry={entry}
       decodedMetadata={decoded.metadata}
     />
   ) : session?.processKind === "v3" ? (
     <EditPanel
-      key={activePanel ?? "edit"}
+      key={effectivePanel ?? "edit"}
       decoded={decoded}
       entry={entry}
-      activePanel={activePanel}
+      activePanel={effectivePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
       canvasTool={v3CanvasTool}
@@ -93,9 +98,9 @@ export function DevelopSidePanels({
     <>
       {panel}
       <DevelopPanelRail
-        activePanel={activePanel}
+        activePanel={effectivePanel}
         onSelect={onSelect}
-        editingDisabled={session?.processKind !== "v3"}
+        editingDisabled={session?.processKind !== "v3" || projectionConflict}
       />
       <DevelopJobDrawer />
     </>
