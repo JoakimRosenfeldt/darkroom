@@ -111,6 +111,7 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
   let handle: FileHandle | undefined;
   let backupCreated = false;
   let published = false;
+  let committed = false;
   try {
     handle = await fs.open(temporary, "wx", 0o600);
     await handle.writeFile(contents, "utf8");
@@ -127,11 +128,12 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
     await fs.rename(temporary, filePath);
     published = true;
     await syncDirectory(directory);
+    committed = true;
     published = false;
     if (backupCreated) {
-      await fs.unlink(backup);
+      await fs.unlink(backup).catch(() => undefined);
       backupCreated = false;
-      await syncDirectory(directory);
+      await syncDirectory(directory).catch(() => undefined);
     }
   } catch (error) {
     if (published && backupCreated) {
@@ -144,15 +146,11 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
       });
       await syncDirectory(directory);
     }
-    throw error;
+    if (!committed) throw error;
   } finally {
     await handle?.close().catch(() => undefined);
-    await fs.unlink(temporary).catch((error: unknown) => {
-      if (errorCode(error) !== "ENOENT") throw error;
-    });
-    await fs.unlink(backup).catch((error: unknown) => {
-      if (errorCode(error) !== "ENOENT") throw error;
-    });
+    await fs.unlink(temporary).catch(() => undefined);
+    await fs.unlink(backup).catch(() => undefined);
   }
 }
 

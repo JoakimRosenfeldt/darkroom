@@ -575,13 +575,21 @@ export class DevelopBatchRepository {
     if (input.targetEntryIds.length === 0 || input.targetEntryIds.includes(input.sourceEntryId) || new Set(input.targetEntryIds).size !== input.targetEntryIds.length) throw new Error("Auto Sync target selection is invalid.");
     const targets = input.targetEntryIds.map((entryId) => ({ entryId, expectedRevisionId: this.activeHead(input.catalogId, entryId) }));
     const sourceRevisionId = this.activeHead(input.catalogId, input.sourceEntryId);
+    const latest = row(this.database.prepare(`
+      SELECT COALESCE(MAX(emission_sequence), 0) AS emissionSequence
+      FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'
+    `).get(input.catalogId), "Auto Sync latest emission");
+    const sourceEmissionSequence = integer(latest, "emissionSequence");
     this.transaction(() => this.database.prepare(`
-      INSERT INTO develop_auto_sync (catalog_id, source_entry_id, source_revision_id, targets_json, fields_json, enabled, updated_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
+      INSERT INTO develop_auto_sync (
+        catalog_id, source_entry_id, source_revision_id, targets_json, fields_json,
+        enabled, updated_at, source_emission_sequence
+      ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT (catalog_id) DO UPDATE SET source_entry_id = excluded.source_entry_id,
         source_revision_id = excluded.source_revision_id, targets_json = excluded.targets_json,
-        fields_json = excluded.fields_json, enabled = 1, updated_at = excluded.updated_at
-    `).run(input.catalogId, input.sourceEntryId, sourceRevisionId, canonicalDevelopBatchJson(targets), canonicalDevelopBatchJson(input.fields), input.updatedAt));
+        fields_json = excluded.fields_json, enabled = 1, updated_at = excluded.updated_at,
+        source_emission_sequence = excluded.source_emission_sequence
+    `).run(input.catalogId, input.sourceEntryId, sourceRevisionId, canonicalDevelopBatchJson(targets), canonicalDevelopBatchJson(input.fields), input.updatedAt, sourceEmissionSequence));
   }
 
   disableAutoSync(catalogIdValue: CatalogId, updatedAt = Date.now()): void {
@@ -596,7 +604,8 @@ export class DevelopBatchRepository {
     return this.transaction(() => {
       const value = this.database.prepare(`
         SELECT source_entry_id AS sourceEntryId, source_revision_id AS previousSourceRevisionId,
-               targets_json AS targetsJson, fields_json AS fieldsJson
+               targets_json AS targetsJson, fields_json AS fieldsJson,
+               source_emission_sequence AS sourceEmissionSequence
         FROM develop_auto_sync WHERE catalog_id = ? AND enabled = 1
       `).get(input.catalogId);
       if (value === undefined) throw new Error("Auto Sync is not enabled.");
@@ -607,23 +616,32 @@ export class DevelopBatchRepository {
         if (existing.batchId !== input.batchId || existing.kind !== "auto-sync" || existing.sourceRevisionId !== input.sourceRevisionId || existing.createdAt !== input.createdAt) {
           throw new Error("Auto Sync operation ID conflicts with a different request.");
         }
-        const latestValue = this.database.prepare(`
-          SELECT source_revision_id AS sourceRevisionId
-          FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'
-          ORDER BY created_at DESC, batch_id DESC LIMIT 1
-        `).get(input.catalogId);
-        if (latestValue === undefined) throw new Error("Auto Sync replay has no durable Receipt.");
-        const latestRevisionId = parseDevelopRevisionId(string(row(latestValue, "Auto Sync latest Receipt"), "sourceRevisionId"));
-        if (string(config, "previousSourceRevisionId") !== latestRevisionId) {
-          this.database.prepare("UPDATE develop_auto_sync SET source_revision_id = ?, updated_at = ? WHERE catalog_id = ?")
-            .run(latestRevisionId, input.createdAt, input.catalogId);
+        const emissionValue = this.database.prepare(`
+          SELECT source_entry_id AS sourceEntryId, emission_sequence AS emissionSequence
+          FROM develop_batch_jobs
+          WHERE catalog_id = ? AND operation_id = ? AND kind = 'auto-sync'
+        `).get(input.catalogId, input.operationId);
+        if (emissionValue === undefined) throw new Error("Auto Sync replay has no durable emission sequence.");
+        const emission = row(emissionValue, "Auto Sync replay emission");
+        const emissionSequence = integer(emission, "emissionSequence");
+        const cursorSequence = integer(config, "sourceEmissionSequence");
+        const sameSource = parseEntryId(string(emission, "sourceEntryId")) === sourceEntryId;
+        if (sameSource && cursorSequence === emissionSequence && string(config, "previousSourceRevisionId") !== input.sourceRevisionId) {
+          throw new Error("Auto Sync cursor revision conflicts with its emission sequence.");
+        }
+        if (sameSource && cursorSequence < emissionSequence) {
+          this.database.prepare(`
+            UPDATE develop_auto_sync
+            SET source_revision_id = ?, source_emission_sequence = ?, updated_at = ?
+            WHERE catalog_id = ? AND source_emission_sequence = ?
+          `).run(input.sourceRevisionId, emissionSequence, input.createdAt, input.catalogId, cursorSequence);
         }
         return existing;
       }
       const duplicate = this.database.prepare(`
         SELECT operation_id AS operationId FROM develop_batch_jobs
-        WHERE catalog_id = ? AND kind = 'auto-sync' AND source_revision_id = ?
-      `).get(input.catalogId, input.sourceRevisionId);
+        WHERE catalog_id = ? AND kind = 'auto-sync' AND source_entry_id = ? AND source_revision_id = ?
+      `).get(input.catalogId, sourceEntryId, input.sourceRevisionId);
       if (duplicate !== undefined) throw new Error("Auto Sync source revision was already emitted by another operation.");
       if (this.activeHead(input.catalogId, sourceEntryId) !== input.sourceRevisionId) throw new Error("Auto Sync source revision is stale.");
       if (string(config, "previousSourceRevisionId") === input.sourceRevisionId) throw new Error("Auto Sync already emitted this source revision.");
@@ -635,15 +653,33 @@ export class DevelopBatchRepository {
       });
       const operation = parseDevelopBatchOperation({ kind: "copy-fields", fields: JSON.parse(string(config, "fieldsJson")) as unknown });
       if (operation.kind !== "copy-fields") throw new Error("Auto Sync fields are invalid.");
+      const latest = row(this.database.prepare(`
+        SELECT COALESCE(MAX(emission_sequence), 0) AS emissionSequence
+        FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'
+      `).get(input.catalogId), "Auto Sync latest emission");
+      const emissionSequence = integer(latest, "emissionSequence") + 1;
       const receipt = this.create({
         schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
         operationId: input.operationId, kind: "auto-sync", sourceEntryId, sourceRevisionId: input.sourceRevisionId,
         targets, operation, createdAt: input.createdAt,
       });
+      const emitted = this.database.prepare(`
+        UPDATE develop_batch_jobs SET emission_sequence = ?
+        WHERE catalog_id = ? AND operation_id = ? AND kind = 'auto-sync' AND emission_sequence IS NULL
+      `).run(emissionSequence, input.catalogId, input.operationId);
+      if (emitted.changes !== 1) throw new Error("Auto Sync Receipt emission sequence was not recorded.");
       const updated = this.database.prepare(`
-        UPDATE develop_auto_sync SET source_revision_id = ?, updated_at = ?
-        WHERE catalog_id = ? AND source_revision_id = ? AND enabled = 1
-      `).run(input.sourceRevisionId, input.createdAt, input.catalogId, string(config, "previousSourceRevisionId"));
+        UPDATE develop_auto_sync
+        SET source_revision_id = ?, source_emission_sequence = ?, updated_at = ?
+        WHERE catalog_id = ? AND source_revision_id = ? AND source_emission_sequence = ? AND enabled = 1
+      `).run(
+        input.sourceRevisionId,
+        emissionSequence,
+        input.createdAt,
+        input.catalogId,
+        string(config, "previousSourceRevisionId"),
+        integer(config, "sourceEmissionSequence"),
+      );
       if (updated.changes !== 1) throw new Error("Auto Sync cursor changed while emitting a Receipt.");
       return receipt;
     });

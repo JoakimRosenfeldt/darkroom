@@ -36,6 +36,11 @@ interface StoredRegistry {
   readonly replacements: Readonly<Record<string, string>>;
 }
 
+interface DirectoryIdentity {
+  readonly dev: number;
+  readonly ino: number;
+}
+
 const CAMERA_PROFILE_REGISTRY_LIMIT = 16 * 1024 * 1024;
 const CAMERA_PROFILE_PENDING_LIMIT = 100;
 const CAMERA_PROFILE_PENDING_TTL_MS = 15 * 60 * 1_000;
@@ -50,11 +55,55 @@ function errorCode(error: unknown): string | null {
     : null;
 }
 
-async function syncDirectory(directory: string): Promise<void> {
+function sameIdentity(left: DirectoryIdentity, right: DirectoryIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function stableDirectoryIdentity(
+  directory: string,
+  expected: DirectoryIdentity | null,
+  label: string,
+): Promise<DirectoryIdentity> {
+  const pathBefore = await fs.lstat(directory);
+  if (!pathBefore.isDirectory() || pathBefore.isSymbolicLink()) {
+    throw new Error(`${label} is not a supported directory.`);
+  }
+  let handle: FileHandle | undefined;
+  try {
+    try {
+      handle = await fs.open(directory, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    } catch (error) {
+      if (!["EINVAL", "ENOTSUP", "ENOSYS"].includes(errorCode(error) ?? "")) {
+        if (errorCode(error) === "ELOOP") throw new Error(`${label} cannot be a symbolic link.`);
+        throw error;
+      }
+      handle = await fs.open(directory, fsConstants.O_RDONLY);
+    }
+    const opened = await handle.stat();
+    const pathAfter = await fs.lstat(directory);
+    const identity = { dev: opened.dev, ino: opened.ino };
+    if (
+      !opened.isDirectory() || !pathAfter.isDirectory() || pathAfter.isSymbolicLink() ||
+      !sameIdentity(pathBefore, identity) || !sameIdentity(identity, pathAfter) ||
+      (expected !== null && !sameIdentity(expected, identity))
+    ) {
+      throw new Error(`${label} identity changed.`);
+    }
+    return identity;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function syncDirectory(directory: string, expected: DirectoryIdentity): Promise<void> {
   if (process.platform === "win32") return;
   let handle: FileHandle | undefined;
   try {
     handle = await fs.open(directory, fsConstants.O_RDONLY);
+    const opened = await handle.stat();
+    if (!opened.isDirectory() || !sameIdentity(expected, opened)) {
+      throw new Error("Camera profile storage directory identity changed.");
+    }
     await handle.sync();
   } catch (error) {
     if (!["EINVAL", "ENOTSUP", "ENOSYS"].includes(errorCode(error) ?? "")) throw error;
@@ -195,8 +244,11 @@ function parseStoredRegistry(value: unknown): StoredRegistry {
 }
 
 export class CameraProfileService {
+  private readonly userDataPath: string;
   private readonly directory: string;
   private readonly indexPath: string;
+  private userDataIdentity: DirectoryIdentity | null = null;
+  private directoryIdentity: DirectoryIdentity | null = null;
   private state: StoredRegistry = {
     version: CAMERA_PROFILE_REGISTRY_VERSION,
     generation: 0,
@@ -209,7 +261,8 @@ export class CameraProfileService {
 
   constructor(userDataPath: string) {
     if (!path.isAbsolute(userDataPath)) throw new Error("Camera profile storage needs an absolute path.");
-    this.directory = path.join(userDataPath, "camera-profiles");
+    this.userDataPath = path.resolve(userDataPath);
+    this.directory = path.join(this.userDataPath, "camera-profiles");
     this.indexPath = path.join(this.directory, "registry.json");
   }
 
@@ -224,7 +277,7 @@ export class CameraProfileService {
   }
 
   private async initializeInternal(): Promise<CameraProfileRegistrySnapshot> {
-    await fs.mkdir(this.directory, { recursive: true });
+    await this.ensureStorageRoot(true);
     try {
       const contents = await boundedRegularFile(this.indexPath, CAMERA_PROFILE_REGISTRY_LIMIT, "Camera profile registry");
       this.state = parseStoredRegistry(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(contents)));
@@ -243,6 +296,7 @@ export class CameraProfileService {
   }
 
   private async importFileInternal(filePath: string): Promise<CameraProfileImportResult> {
+    await this.ensureStorageRoot(false);
     const filename = sourceFilename(filePath);
     const profileFormat = cameraProfileFormatFromFilename(filename);
     const bytes = await boundedRegularFile(filePath, CAMERA_PROFILE_FILE_LIMIT, "Camera profile import");
@@ -371,7 +425,7 @@ export class CameraProfileService {
   }
 
   private async rescanInternal(): Promise<CameraProfileRegistrySnapshot> {
-    await fs.mkdir(this.directory, { recursive: true });
+    await this.ensureStorageRoot(false);
     const existingByHash = new Map<string, CameraProfileRecord[]>();
     for (const record of this.state.profiles) {
       const records = existingByHash.get(record.hash) ?? [];
@@ -379,7 +433,10 @@ export class CameraProfileService {
       existingByHash.set(record.hash, records);
     }
     const records: CameraProfileRecord[] = [];
-    const retiredHashes = new Set(this.state.retiredProfiles.map((record) => record.hash));
+    const activeHashes = new Set(this.state.profiles.map((record) => record.hash));
+    const retiredHashes = new Set(this.state.retiredProfiles
+      .filter((record) => !activeHashes.has(record.hash))
+      .map((record) => record.hash));
     const names = (await fs.readdir(this.directory)).sort();
     for (const name of names) {
       const match = /^([a-f0-9]{64})\.(dcp|xmp)$/.exec(name);
@@ -457,6 +514,7 @@ export class CameraProfileService {
     bytes: Uint8Array,
     replaceProfileId?: string,
   ): Promise<void> {
+    await this.ensureStorageRoot(false);
     const destination = path.join(this.directory, record.storedFilename);
     let created = false;
     try {
@@ -469,7 +527,8 @@ export class CameraProfileService {
       } finally {
         await handle?.close();
       }
-      await syncDirectory(this.directory);
+      await this.ensureStorageRoot(false);
+      await syncDirectory(this.directory, this.requiredDirectoryIdentity());
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
       const stored = await boundedRegularFile(destination, CAMERA_PROFILE_FILE_LIMIT, "Stored camera profile");
@@ -487,9 +546,9 @@ export class CameraProfileService {
       generation: this.state.generation + 1,
       profiles,
       retiredProfiles: replaceProfileId === undefined
-        ? this.state.retiredProfiles
+        ? this.state.retiredProfiles.filter((candidate) => candidate.hash !== record.hash)
         : [
-            ...this.state.retiredProfiles,
+            ...this.state.retiredProfiles.filter((candidate) => candidate.hash !== record.hash),
             ...this.state.profiles.filter((candidate) =>
               candidate.kind === "ready" && candidate.profile.id === replaceProfileId,
             ),
@@ -499,9 +558,44 @@ export class CameraProfileService {
       await this.persist(nextState);
       this.state = nextState;
     } catch (error) {
-      if (created) await fs.unlink(destination).catch(() => undefined);
+      if (created) {
+        await this.ensureStorageRoot(false);
+        await fs.unlink(destination).catch(() => undefined);
+        await syncDirectory(this.directory, this.requiredDirectoryIdentity()).catch(() => undefined);
+      }
       throw error;
     }
+  }
+
+  private requiredDirectoryIdentity(): DirectoryIdentity {
+    if (this.directoryIdentity === null) throw new Error("Camera profile storage is not initialized.");
+    return this.directoryIdentity;
+  }
+
+  private async ensureStorageRoot(create: boolean): Promise<void> {
+    if (create) await fs.mkdir(this.userDataPath, { recursive: true, mode: 0o700 });
+    this.userDataIdentity = await stableDirectoryIdentity(
+      this.userDataPath,
+      this.userDataIdentity,
+      "Camera profile user-data root",
+    );
+    if (create) {
+      try {
+        await fs.mkdir(this.directory, { mode: 0o700 });
+      } catch (error) {
+        if (errorCode(error) !== "EEXIST") throw error;
+      }
+    }
+    this.directoryIdentity = await stableDirectoryIdentity(
+      this.directory,
+      this.directoryIdentity,
+      "Camera profile storage root",
+    );
+    await stableDirectoryIdentity(
+      this.userDataPath,
+      this.userDataIdentity,
+      "Camera profile user-data root",
+    );
   }
 
   private async indexExists(): Promise<boolean> {
@@ -519,8 +613,13 @@ export class CameraProfileService {
     if (Buffer.byteLength(contents, "utf8") > CAMERA_PROFILE_REGISTRY_LIMIT) {
       throw new Error("Camera profile registry exceeds the 16 MiB limit.");
     }
+    await this.ensureStorageRoot(false);
     const temporary = `${this.indexPath}.${process.pid}.${randomUUID()}.tmp`;
+    const backup = `${this.indexPath}.${process.pid}.${randomUUID()}.backup`;
     let handle: FileHandle | undefined;
+    let backupCreated = false;
+    let published = false;
+    let committed = false;
     try {
       const existing = await fs.lstat(this.indexPath).catch((error: unknown) => {
         if (isMissing(error)) return null;
@@ -532,13 +631,58 @@ export class CameraProfileService {
       await handle.sync();
       await handle.close();
       handle = undefined;
+      if (existing !== null) {
+        await fs.link(this.indexPath, backup);
+        backupCreated = true;
+        await syncDirectory(this.directory, this.requiredDirectoryIdentity());
+      }
+      await this.ensureStorageRoot(false);
       await fs.rename(temporary, this.indexPath);
-      await syncDirectory(this.directory);
+      published = true;
+      await this.ensureStorageRoot(false);
+      await syncDirectory(this.directory, this.requiredDirectoryIdentity());
+      committed = true;
+      published = false;
+    } catch (error) {
+      if (published) {
+        try {
+          await this.ensureStorageRoot(false);
+          if (backupCreated) {
+            await fs.rename(backup, this.indexPath);
+            backupCreated = false;
+          } else {
+            await fs.unlink(this.indexPath);
+          }
+          await syncDirectory(this.directory, this.requiredDirectoryIdentity());
+          published = false;
+        } catch (rollbackError) {
+          try {
+            const current = await boundedRegularFile(
+              this.indexPath,
+              CAMERA_PROFILE_REGISTRY_LIMIT,
+              "Camera profile registry",
+            );
+            if (new TextDecoder("utf-8", { fatal: true }).decode(current) === contents) {
+              committed = true;
+              published = false;
+            } else {
+              throw rollbackError;
+            }
+          } catch {
+            throw new Error("Camera profile registry rollback failed after publish.", { cause: rollbackError });
+          }
+        }
+      }
+      if (!committed) throw error;
     } finally {
       await handle?.close().catch(() => undefined);
-      await fs.unlink(temporary).catch((error: unknown) => {
-        if (!isMissing(error)) throw error;
-      });
+      await fs.unlink(temporary).catch(() => undefined);
+      if (committed && backupCreated) {
+        await fs.unlink(backup).catch(() => undefined);
+        await syncDirectory(this.directory, this.requiredDirectoryIdentity()).catch(() => undefined);
+      } else if (!published) {
+        await fs.unlink(backup).catch(() => undefined);
+      }
     }
   }
 }
