@@ -172,6 +172,8 @@ import {
   type ExactDuplicateTrashItemResult,
 } from "../lib/library/duplicate-actions.ts";
 import { DevelopPresetStore } from "./develop-preset-store.ts";
+import { DevelopDefaultsStore } from "./develop-defaults-store.ts";
+import { DevelopDefaultsService } from "./develop-defaults-service.ts";
 import { BUILT_IN_DEVELOP_PRESETS } from "../lib/develop/presets/built-ins.ts";
 import {
   parseDevelopPresetConflictRequest,
@@ -756,6 +758,10 @@ function registerIpcHandlers(): void {
     BUILT_IN_DEVELOP_PRESETS,
   );
   const developPresetsReady = developPresets.initialize();
+  const developDefaults = new DevelopDefaultsStore(
+    path.join(app.getPath("userData"), "develop-defaults"),
+  );
+  const developDefaultsReady = developDefaults.initialize();
   const developJobRuntime = new DevelopJobRuntime({
     journalPath: path.join(
       app.getPath("userData"),
@@ -929,6 +935,39 @@ function registerIpcHandlers(): void {
       items: [...resolutionFailures, ...analyzed.items],
     };
   };
+  const developDefaultsService = new DevelopDefaultsService({
+    store: developDefaults,
+    presets: developPresets,
+    worker,
+    cameraProfiles,
+    verifyEntry: async (request) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const entry = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      if (!entry || !entry.sourceId) throw new Error("Develop default entry is not active in this catalog session.");
+      const analysis = await runMetadataAnalysis({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        operationId: createOperationId(),
+        entryIds: [entry.assetId],
+        force: false,
+      }, new AbortController().signal);
+      const verified = analysis.items.find((item) => item.entryId === entry.assetId)?.analysis;
+      return {
+        entry: {
+          ...entry,
+          cameraMake: verified?.cameraMake ?? entry.cameraMake,
+          cameraModel: verified?.cameraModel ?? entry.cameraModel,
+        },
+        iso: verified?.iso !== null && verified?.iso !== undefined && Number.isSafeInteger(verified.iso) && verified.iso >= 1
+          ? verified.iso
+          : null,
+      };
+    },
+  });
   let manualImportBinding: {
     readonly catalogId: CatalogId;
     readonly sessionId: SessionId;
@@ -1740,6 +1779,46 @@ function registerIpcHandlers(): void {
       kind: "imported",
       preset: await developPresets.resolveImport(request.token, request.action),
     };
+  });
+  ipcMain.handle("darkroom:develop-defaults-list", async (event) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
+    return developDefaultsService.list();
+  });
+  ipcMain.handle("darkroom:develop-defaults-create", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.create(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-update", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.update(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-enabled", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    return developDefaultsService.setEnabled(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-delete", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    await developDefaultsService.delete(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-preview", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.preview(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-installed", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    return developDefaultsService.installed(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-install", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
+    return developDefaultsService.install(value);
   });
   ipcMain.handle("darkroom:develop-clipboard-write", async (event, value: unknown) => {
     assertTrustedRenderer(event);

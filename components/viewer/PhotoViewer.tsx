@@ -30,6 +30,8 @@ import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { isEditableTarget } from "@/hooks/is-editable-target";
 import { refreshViewerSession, updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
+import { developDefaultFactsFromSource } from "@/lib/develop/defaults/matcher";
+import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -65,6 +67,16 @@ function captureSummary(metadata: Record<string, unknown>): string[] {
     summary.push(shutter);
   }
   return summary;
+}
+
+function sourceIso(metadata: Record<string, unknown>): number | null {
+  const value = metadata.iso_speed ?? metadata.iso;
+  const parsed = typeof value === "string" && value.trim().length > 0
+    ? Number(value)
+    : value;
+  return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed >= 1
+    ? parsed
+    : null;
 }
 
 export function PhotoViewer({
@@ -158,12 +170,20 @@ export function PhotoViewer({
     },
     [entry.id, hydrateEntryKeywords],
   );
+  const defaultFacts = useMemo(() => {
+    if (!decoded) return null;
+    const source = buildV3SourceRecord(entry, decoded, "preview");
+    return source.kind === "source"
+      ? developDefaultFactsFromSource(source.source, sourceIso(decoded.metadata))
+      : null;
+  }, [decoded, entry]);
 
   useDevelopSettingsSync({
     entry,
     metadata,
     persistCatalog,
     hydrateKeywords,
+    defaultFacts,
   });
   const visibleV3Document = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
@@ -663,6 +683,7 @@ export function PhotoViewer({
               v3RenderDiagnostics={v3RenderDiagnostics}
               v3CanvasTool={v3CanvasTool}
               onV3CanvasToolChange={setV3CanvasTool}
+              defaultFacts={defaultFacts}
               activePanel={activePanel}
               onSelect={selectDevelopPanel}
             />

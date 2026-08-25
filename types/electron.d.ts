@@ -144,6 +144,17 @@ import type {
   DevelopHistoryRevision,
   DevelopHistoryTargetInput,
 } from "../lib/develop/history";
+import type {
+  DevelopDefaultRuleDeleteRequest,
+  DevelopDefaultRuleEnabledRequest,
+  DevelopDefaultsEntryRequest,
+  DevelopDefaultsInstallRequest,
+  DevelopDefaultsPreviewRequest,
+  DevelopDefaultsPreviewResult,
+  DevelopDefaultsProductionResult,
+} from "../lib/develop/defaults/api";
+import type { InstalledDevelopDefault } from "../lib/develop/defaults/installed";
+import type { DevelopDefaultRule } from "../lib/develop/defaults/schema";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -191,6 +202,14 @@ export interface DarkroomAPI {
   developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]>;
   developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null>;
   developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection>;
+  developDefaultsList(): Promise<readonly DevelopDefaultRule[]>;
+  developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
+  developDefaultsUpdate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
+  developDefaultsSetEnabled(request: DevelopDefaultRuleEnabledRequest): Promise<DevelopDefaultRule>;
+  developDefaultsDelete(request: DevelopDefaultRuleDeleteRequest): Promise<void>;
+  developDefaultsPreview(request: DevelopDefaultsPreviewRequest): Promise<DevelopDefaultsPreviewResult>;
+  developDefaultsInstalled(request: DevelopDefaultsEntryRequest): Promise<InstalledDevelopDefault | null>;
+  developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult>;
   cameraProfilesList(): Promise<CameraProfileRegistrySnapshot>;
   cameraProfilesImport(): Promise<CameraProfileImportResult>;
   cameraProfilesResolveConflict(

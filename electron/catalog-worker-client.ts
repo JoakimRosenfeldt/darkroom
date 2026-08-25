@@ -24,6 +24,7 @@ import type {
 } from "../lib/develop/history.ts";
 import type { EntryId } from "../lib/catalog/ids.ts";
 import type { DevelopBatchCommand, DevelopBatchCommandResult } from "../lib/develop/batch/domain.ts";
+import type { DevelopDefaultInstallInput, DevelopDefaultInstallResult, InstalledDevelopDefault } from "../lib/develop/defaults/installed.ts";
 import type {
   CatalogV3ActivationResult,
   CatalogV3AlbumAssetPage,
@@ -415,6 +416,14 @@ export class CatalogWorkerClient {
 
   async recordDevelopHistoryProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection> {
     return requireKind(await this.send({ kind: "develop-history-projection-set", requestId: requestId(), input }), "develop-history-projection-set").result;
+  }
+
+  async installDevelopDefault(input: DevelopDefaultInstallInput): Promise<DevelopDefaultInstallResult> {
+    return requireKind(await this.send({ kind: "develop-default-install", requestId: requestId(), input }), "develop-default-install").result;
+  }
+
+  async getInstalledDevelopDefault(catalogId: CatalogId, entryId: EntryId): Promise<InstalledDevelopDefault | null> {
+    return requireKind(await this.send({ kind: "develop-default-installed-get", requestId: requestId(), catalogId, entryId }), "develop-default-installed-get").result;
   }
 
   async developBatch(command: DevelopBatchCommand): Promise<DevelopBatchCommandResult> {

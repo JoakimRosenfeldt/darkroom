@@ -33,6 +33,8 @@ import {
 } from "@/lib/develop/v3/document";
 import { MAX_DEVELOP_XMP_PAYLOAD_BYTES } from "@/lib/develop/xmp";
 import type { LibraryEntry } from "@/lib/fs/types";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
 
 const PERSIST_DEBOUNCE_MS = 500;
 const MAX_WRITE_ATTEMPTS_PER_REVISION = 3;
@@ -294,6 +296,7 @@ export class DevelopRepository {
   #detachCommittedCommands: (() => void) | null = null;
   #lastCommandWrite: Promise<void> = Promise.resolve();
   #configurationRevision = 0;
+  #installedDefault: InstalledDevelopDefault | null = null;
 
   constructor(entry: LibraryEntry) {
     this.#entry = entry;
@@ -380,6 +383,11 @@ export class DevelopRepository {
           throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
         }
         this.#head = loaded.value;
+        this.#installedDefault = await getDarkroomAPI().developDefaultsInstalled({
+          catalogId: this.#entry.catalogId,
+          sessionId: this.#entry.sessionId,
+          entryId: this.#entry.id,
+        });
         adapters.onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(loaded.value.document)));
         const sidecar = await readDevelopSidecar(this.#entry);
         this.#sidecarContentsKnown = true;
@@ -406,6 +414,36 @@ export class DevelopRepository {
 
   projectionState(): DevelopProjectionState {
     return structuredClone(this.#projectionState);
+  }
+
+  installedDefault(): InstalledDevelopDefault | null {
+    return this.#installedDefault ? structuredClone(this.#installedDefault) : null;
+  }
+
+  async installDefault(facts: DevelopDefaultFacts): Promise<InstalledDevelopDefault | null> {
+    await this.#hydration;
+    if (!isElectronApp() || this.#projectionState.kind === "divergent") return null;
+    const result = await getDarkroomAPI().developDefaultsInstall({
+      catalogId: this.#entry.catalogId,
+      sessionId: this.#entry.sessionId,
+      entryId: this.#entry.id,
+      facts,
+    });
+    if (result.kind === "installed" || result.kind === "already-installed") {
+      this.#head = result.head;
+      this.#installedDefault = result.installed;
+      const session = this.#requireSession();
+      this.#requireAdapters().onSessionChanged(
+        session.hydrateAuthoritative(openDevelopSessionDocument(result.head.document)),
+      );
+      if (this.#entry.entryKind === "original") {
+        await this.#projectHead(result.head.revisionId, result.head.document);
+      }
+      this.#adapters?.setStatus("saved");
+      return structuredClone(result.installed);
+    }
+    this.#head = result.head;
+    return null;
   }
 
   async resolveProjection(choice: "keep-darkroom" | "import-xmp"): Promise<void> {

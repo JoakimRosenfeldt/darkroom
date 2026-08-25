@@ -38,6 +38,14 @@ import {
   type DevelopRevisionId,
 } from "../lib/develop/history.ts";
 import { upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
+import {
+  parseDevelopDefaultInstallInput,
+  parseInstalledDevelopDefault,
+  type DevelopDefaultInstallInput,
+  type DevelopDefaultInstallResult,
+  type InstalledDevelopDefault,
+} from "../lib/develop/defaults/installed.ts";
+import { createDefaultV3DevelopDocument } from "../lib/develop/v3/document.ts";
 
 type Row = Record<string, unknown>;
 
@@ -393,6 +401,75 @@ export class DevelopHistoryRepository {
           projected_at = excluded.projected_at
       `).run(input.catalogId, input.entryId, input.revisionId, input.contentSha256, input.projectedAt);
       return input;
+    });
+  }
+
+  installedDefault(catalogIdValue: CatalogId, entryIdValue: EntryId): InstalledDevelopDefault | null {
+    const catalogId = parseCatalogId(catalogIdValue);
+    const entryId = parseEntryId(entryIdValue);
+    this.assertActiveEntry(catalogId, entryId);
+    const value = this.database.prepare(`
+      SELECT provenance_json AS provenanceJson
+      FROM develop_default_installs WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, entryId);
+    return value === undefined
+      ? null
+      : parseInstalledDevelopDefault(JSON.parse(string(row(value, "Develop default install"), "provenanceJson")));
+  }
+
+  installDefault(inputValue: DevelopDefaultInstallInput): DevelopDefaultInstallResult {
+    const input = parseDevelopDefaultInstallInput(inputValue);
+    return this.transaction(() => {
+      const existing = this.installedDefault(input.catalogId, input.entryId);
+      if (existing) {
+        const loaded = this.load({ catalogId: input.catalogId, entryId: input.entryId, revisionId: null });
+        if (loaded.kind !== "loaded") throw new Error("Installed Develop default Head needs recovery.");
+        return { kind: "already-installed", head: loaded.value, installed: existing };
+      }
+      const loaded = this.load({ catalogId: input.catalogId, entryId: input.entryId, revisionId: null });
+      if (loaded.kind !== "loaded") throw new Error("Develop default Head needs recovery.");
+      const metadata = row(this.database.prepare(`
+        SELECT raw_xmp AS rawXmp, xmp_state AS xmpState
+        FROM entry_metadata WHERE catalog_id = ? AND entry_id = ?
+      `).get(input.catalogId, input.entryId), "Develop default metadata");
+      const neutralJson = canonicalDevelopHistoryDocument(createDefaultV3DevelopDocument());
+      const currentJson = canonicalDevelopHistoryDocument(loaded.value.document);
+      const pristine = loaded.value.ordinal === 0 &&
+        loaded.value.revisionId === input.expectedParentRevisionId &&
+        metadata.rawXmp === null &&
+        metadata.xmpState !== "preserved" &&
+        (loaded.value.document === null || currentJson === neutralJson);
+      if (!pristine) return { kind: "not-pristine", head: loaded.value, installed: null };
+      this.commit({
+        catalogId: input.catalogId,
+        entryId: input.entryId,
+        revisionId: input.revisionId,
+        expectedParentRevisionId: input.expectedParentRevisionId,
+        operationId: input.operationId,
+        label: input.label,
+        document: input.document,
+        createdAt: input.installed.createdAt,
+      }, true);
+      const installed = parseInstalledDevelopDefault({
+        catalogId: input.catalogId,
+        entryId: input.entryId,
+        revisionId: input.revisionId,
+        ...input.installed,
+      });
+      this.database.prepare(`
+        INSERT INTO develop_default_installs (
+          catalog_id, entry_id, revision_id, provenance_json, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(
+        input.catalogId,
+        input.entryId,
+        input.revisionId,
+        JSON.stringify(installed),
+        input.installed.createdAt,
+      );
+      const installedHead = this.load({ catalogId: input.catalogId, entryId: input.entryId, revisionId: null });
+      if (installedHead.kind !== "loaded") throw new Error("Installed Develop default Head could not be loaded.");
+      return { kind: "installed", head: installedHead.value, installed };
     });
   }
 

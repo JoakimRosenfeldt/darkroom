@@ -173,6 +173,24 @@ import {
   type DevelopHistoryTargetInput,
 } from "../lib/develop/history.ts";
 import {
+  parseDevelopDefaultRuleDeleteRequest,
+  parseDevelopDefaultRuleEnabledRequest,
+  parseDevelopDefaultsEntryRequest,
+  parseDevelopDefaultsInstallRequest,
+  parseDevelopDefaultsPreviewRequest,
+  parseDevelopDefaultsPreviewResult,
+  parseDevelopDefaultsProductionResult,
+  type DevelopDefaultRuleDeleteRequest,
+  type DevelopDefaultRuleEnabledRequest,
+  type DevelopDefaultsEntryRequest,
+  type DevelopDefaultsInstallRequest,
+  type DevelopDefaultsPreviewRequest,
+  type DevelopDefaultsPreviewResult,
+  type DevelopDefaultsProductionResult,
+} from "../lib/develop/defaults/api.ts";
+import { parseInstalledDevelopDefault, type InstalledDevelopDefault } from "../lib/develop/defaults/installed.ts";
+import { parseDevelopDefaultRule, type DevelopDefaultRule } from "../lib/develop/defaults/schema.ts";
+import {
   parseDevelopJobAcceptanceResult,
   parseDevelopJobAcceptRequest,
   parseDevelopJobRetryRequest,
@@ -498,6 +516,41 @@ const darkroom = {
       "darkroom:develop-history-projection-set",
       parseDevelopHistoryProjectionWriteInput(input),
     ));
+  },
+
+  async developDefaultsList(): Promise<readonly DevelopDefaultRule[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-defaults-list");
+    if (!Array.isArray(result)) throw new Error("Develop defaults list response is invalid.");
+    return result.map(parseDevelopDefaultRule);
+  },
+
+  async developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-create", parseDevelopDefaultRule(rule)));
+  },
+
+  async developDefaultsUpdate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-update", parseDevelopDefaultRule(rule)));
+  },
+
+  async developDefaultsSetEnabled(request: DevelopDefaultRuleEnabledRequest): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-enabled", parseDevelopDefaultRuleEnabledRequest(request)));
+  },
+
+  async developDefaultsDelete(request: DevelopDefaultRuleDeleteRequest): Promise<void> {
+    await ipcRenderer.invoke("darkroom:develop-defaults-delete", parseDevelopDefaultRuleDeleteRequest(request));
+  },
+
+  async developDefaultsPreview(request: DevelopDefaultsPreviewRequest): Promise<DevelopDefaultsPreviewResult> {
+    return parseDevelopDefaultsPreviewResult(await ipcRenderer.invoke("darkroom:develop-defaults-preview", parseDevelopDefaultsPreviewRequest(request)));
+  },
+
+  async developDefaultsInstalled(request: DevelopDefaultsEntryRequest): Promise<InstalledDevelopDefault | null> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-defaults-installed", parseDevelopDefaultsEntryRequest(request));
+    return result === null ? null : parseInstalledDevelopDefault(result);
+  },
+
+  async developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult> {
+    return parseDevelopDefaultsProductionResult(await ipcRenderer.invoke("darkroom:develop-defaults-install", parseDevelopDefaultsInstallRequest(request)));
   },
 
   async cameraProfilesList(): Promise<CameraProfileRegistrySnapshot> {

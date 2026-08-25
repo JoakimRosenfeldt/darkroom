@@ -14,6 +14,7 @@ import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { useLibraryStore } from "@/stores/library-store";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
@@ -29,6 +30,7 @@ interface UseDevelopSettingsSyncOptions {
     metadataPatch?: SidecarMetadataPatch,
     sourceUpdatedAt?: number,
   ) => void;
+  defaultFacts?: DevelopDefaultFacts | null;
 }
 
 export function useDevelopSettingsSync({
@@ -36,6 +38,7 @@ export function useDevelopSettingsSync({
   metadata,
   persistCatalog,
   hydrateKeywords,
+  defaultFacts = null,
 }: UseDevelopSettingsSyncOptions): void {
   const sessionState = useDevelopStore((state) => state.sessions[entry.id]);
   const documentRevision = sessionState?.documentRevision;
@@ -153,6 +156,23 @@ export function useDevelopSettingsSync({
     setProjectionState,
     synchronizeSession,
   ]);
+
+  useEffect(() => {
+    if (!defaultFacts) return;
+    let active = true;
+    const repository = getDevelopRepository(entry);
+    void repository.installDefault(defaultFacts).catch((error: unknown) => {
+      if (!active) return;
+      const state = useDevelopStore.getState();
+      if (state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id) {
+        setSidecarStatus(
+          "error",
+          error instanceof Error ? error.message : "Could not apply the Develop default.",
+        );
+      }
+    });
+    return () => { active = false; };
+  }, [defaultFacts, entry, setSidecarStatus]);
 
   useEffect(() => {
     const alreadyScheduled =

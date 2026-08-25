@@ -984,6 +984,12 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
     case "develop-history-projection-set":
       post({ kind: "develop-history-projection-set", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).recordProjection(request.input) });
       return;
+    case "develop-default-install":
+      post({ kind: "develop-default-install", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).installDefault(request.input) });
+      return;
+    case "develop-default-installed-get":
+      post({ kind: "develop-default-installed-get", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).installedDefault(request.catalogId, request.entryId) });
+      return;
     case "develop-batch":
       post({ kind: "develop-batch", requestId: request.requestId, result: await handleDevelopBatch(request.command) });
       return;

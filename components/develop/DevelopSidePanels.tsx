@@ -20,6 +20,9 @@ import type {
 } from "@/components/develop/DevelopCanvas";
 import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
 import { DevelopHistoryPanel } from "@/components/develop/DevelopHistoryPanel";
+import { DevelopDefaultsPanel } from "@/components/develop/DevelopDefaultsPanel";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import { StatusCard } from "@/components/develop/V3PanelControls";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -35,6 +38,7 @@ interface DevelopSidePanelsProps {
   v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
   v3CanvasTool: V3CanvasTool;
   onV3CanvasToolChange: (tool: V3CanvasTool) => void;
+  defaultFacts: DevelopDefaultFacts | null;
 }
 
 export function DevelopSidePanels({
@@ -51,6 +55,7 @@ export function DevelopSidePanels({
   v3RenderDiagnostics,
   v3CanvasTool,
   onV3CanvasToolChange,
+  defaultFacts,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
@@ -61,6 +66,10 @@ export function DevelopSidePanels({
   const effectivePanel = projectionConflict ? "history" : activePanel;
   const panel = effectivePanel === "history" ? (
     <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} />
+  ) : effectivePanel === "defaults" && defaultFacts ? (
+    <DevelopDefaultsPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} facts={defaultFacts} />
+  ) : effectivePanel === "defaults" ? (
+    <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="Source facts unavailable">Defaults need verified decoder, camera-profile, and source facts.</StatusCard></aside>
   ) : effectivePanel === "info" ? (
     <MetadataPanel
       entry={entry}

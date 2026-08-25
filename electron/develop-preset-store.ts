@@ -257,6 +257,21 @@ export class DevelopPresetStore {
     });
   }
 
+  getRevision(presetIdValue: unknown, revisionValue: unknown): Promise<DevelopPresetRecord | null> {
+    const presetId = parseDevelopPresetId(presetIdValue);
+    if (typeof revisionValue !== "number" || !Number.isSafeInteger(revisionValue) || revisionValue < 1) {
+      return Promise.reject(new Error("Develop preset revision is invalid."));
+    }
+    return this.#serialize(async () => {
+      const manifest = await this.#requiredManifest();
+      if (manifest.deletedPresetIds.includes(presetId)) return null;
+      const stored = manifest.records.find((item) => item.preset.presetId === presetId && item.preset.revision === revisionValue)?.preset;
+      const builtIn = this.#builtIns.find((item) => item.presetId === presetId && item.revision === revisionValue);
+      const preset = stored ?? builtIn;
+      return preset ? cloneDevelopPreset(preset) : null;
+    });
+  }
+
   create(value: unknown): Promise<DevelopPresetRecord> {
     return this.#mutate(async (manifest) => {
       const preset = parseDevelopPresetRecord(value);

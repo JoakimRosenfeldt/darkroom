@@ -89,6 +89,14 @@ import {
   type DevelopHistoryRevision,
 } from "../lib/develop/history.ts";
 import {
+  parseDevelopDefaultInstallInput,
+  parseDevelopDefaultInstallResult,
+  parseInstalledDevelopDefault,
+  type DevelopDefaultInstallInput,
+  type DevelopDefaultInstallResult,
+  type InstalledDevelopDefault,
+} from "../lib/develop/defaults/installed.ts";
+import {
   parseCatalogFaultPoint,
   parseCatalogFaultStage,
   type CatalogFaultPoint,
@@ -410,6 +418,10 @@ export interface CatalogWorkerDevelopHistoryProjectionGetRequest { readonly kind
 export interface CatalogWorkerDevelopHistoryProjectionGetResponse { readonly kind: "develop-history-projection-get"; readonly requestId: string; readonly result: DevelopHistoryProjection | null }
 export interface CatalogWorkerDevelopHistoryProjectionSetRequest { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly input: DevelopHistoryProjectionWriteInput }
 export interface CatalogWorkerDevelopHistoryProjectionSetResponse { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly result: DevelopHistoryProjection }
+export interface CatalogWorkerDevelopDefaultInstallRequest { readonly kind: "develop-default-install"; readonly requestId: string; readonly input: DevelopDefaultInstallInput }
+export interface CatalogWorkerDevelopDefaultInstallResponse { readonly kind: "develop-default-install"; readonly requestId: string; readonly result: DevelopDefaultInstallResult }
+export interface CatalogWorkerDevelopDefaultInstalledGetRequest { readonly kind: "develop-default-installed-get"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopDefaultInstalledGetResponse { readonly kind: "develop-default-installed-get"; readonly requestId: string; readonly result: InstalledDevelopDefault | null }
 export interface CatalogWorkerDevelopBatchRequest { readonly kind: "develop-batch"; readonly requestId: string; readonly command: DevelopBatchCommand }
 export interface CatalogWorkerDevelopBatchResponse { readonly kind: "develop-batch"; readonly requestId: string; readonly result: DevelopBatchCommandResult }
 
@@ -488,6 +500,8 @@ export type CatalogWorkerRequest =
   | CatalogWorkerDevelopHistoryRefMutateRequest
   | CatalogWorkerDevelopHistoryProjectionGetRequest
   | CatalogWorkerDevelopHistoryProjectionSetRequest
+  | CatalogWorkerDevelopDefaultInstallRequest
+  | CatalogWorkerDevelopDefaultInstalledGetRequest
   | CatalogWorkerDevelopBatchRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
@@ -553,6 +567,8 @@ export type CatalogWorkerResponse =
   | CatalogWorkerDevelopHistoryRefMutateResponse
   | CatalogWorkerDevelopHistoryProjectionGetResponse
   | CatalogWorkerDevelopHistoryProjectionSetResponse
+  | CatalogWorkerDevelopDefaultInstallResponse
+  | CatalogWorkerDevelopDefaultInstalledGetResponse
   | CatalogWorkerDevelopBatchResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
@@ -1361,6 +1377,10 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
     case "develop-history-projection-set":
       return { kind, requestId, input: parseDevelopHistoryProjectionWriteInput(record.input) };
+    case "develop-default-install":
+      return { kind, requestId, input: parseDevelopDefaultInstallInput(record.input) };
+    case "develop-default-installed-get":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
     case "develop-batch":
       return { kind, requestId, command: parseDevelopBatchCommand(record.command) };
     case "test-tracer-run":
@@ -1550,6 +1570,12 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "develop-history-projection-set":
       if (requestId === null) throw new Error("Develop history projection response needs a requestId.");
       return { kind, requestId, result: parseDevelopHistoryProjection(record.result) };
+    case "develop-default-install":
+      if (requestId === null) throw new Error("Develop default install response needs a requestId.");
+      return { kind, requestId, result: parseDevelopDefaultInstallResult(record.result) };
+    case "develop-default-installed-get":
+      if (requestId === null) throw new Error("Installed Develop default response needs a requestId.");
+      return { kind, requestId, result: record.result === null ? null : parseInstalledDevelopDefault(record.result) };
     case "develop-batch":
       if (requestId === null) throw new Error("Develop batch response needs a requestId.");
       return { kind, requestId, result: parseDevelopBatchCommandResult(record.result) };
