@@ -22,6 +22,7 @@ import { COLOR_LABELS } from "@/lib/catalog/types";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { MetadataBatchDialog } from "@/components/library/MetadataBatchDialog";
 import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
+import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
 
 export default function HomePage() {
   const router = useRouter();
@@ -350,6 +351,7 @@ export default function HomePage() {
       {metadataEntryIds ? (
         <MetadataBatchDialog entryIds={metadataEntryIds} onClose={() => setMetadataEntryIds(null)} />
       ) : null}
+      <DevelopJobDrawer />
     </div>
   );
 }

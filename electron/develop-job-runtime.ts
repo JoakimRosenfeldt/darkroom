@@ -441,9 +441,16 @@ async function decodeSelection(input: {
   if (result.kind !== "ready") {
     throw new Error("Generative Remove selection is unavailable.");
   }
-  const decoded = await sharp(result.bytes).ensureAlpha().raw().toBuffer({
-    resolveWithObject: true,
-  });
+  const decoded = await sharp(result.bytes)
+    .resize({
+      width: input.image.dimensions.width,
+      height: input.image.dimensions.height,
+      fit: "fill",
+      kernel: "nearest",
+    })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
   if (
     decoded.info.width !== input.image.dimensions.width ||
     decoded.info.height !== input.image.dimensions.height ||

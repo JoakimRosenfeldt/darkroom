@@ -35,6 +35,8 @@ import {
   V3HistogramPanel,
 } from "@/components/develop/V3AnalysisControls";
 import { MaskExpressionEditor } from "@/components/develop/MaskExpressionEditor";
+import { PrototypeOperations } from "@/components/develop/PrototypeOperations";
+import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { V3CleanupComponentEditor } from "@/components/develop/V3CleanupComponentEditor";
 import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
@@ -129,6 +131,8 @@ function saveLabel(input: {
 }
 
 export function EditPanel({
+  decoded,
+  entry,
   activePanel,
   batch,
   analysis,
@@ -136,6 +140,8 @@ export function EditPanel({
   canvasTool,
   onCanvasToolChange,
 }: {
+  readonly decoded: DevelopImage;
+  readonly entry: LibraryEntry;
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
   readonly analysis: readonly CpuAnalysisTapResult[];
@@ -188,6 +194,8 @@ export function EditPanel({
         <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
         <ActionButton onClick={resetAll}>Reset all</ActionButton>
       </div>
+
+      <PrototypeOperations decoded={decoded} document={document} entry={entry} />
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
