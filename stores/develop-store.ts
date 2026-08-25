@@ -124,6 +124,9 @@ interface DevelopStore {
   beginEditGroup: (label: string) => void;
   endEditGroup: () => void;
   cancelEditGroup: () => void;
+  beginEditGroupForEntry: (catalogId: string, entryId: string, label: string) => void;
+  endEditGroupForEntry: (catalogId: string, entryId: string) => void;
+  cancelEditGroupForEntry: (catalogId: string, entryId: string) => void;
   undo: () => void;
   redo: () => void;
   recordMetadataEdit: (
@@ -227,33 +230,35 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   ),
   resetV3All: () => get().dispatchV3({ kind: "reset-v3-all" }, "Reset all"),
 
-  beginEditGroup: (label) => set((state) => {
-    const entryId = state.activeEntryId;
-    const catalogId = state.activeCatalogId;
-    const session = catalogId && entryId
-      ? getDevelopSession(catalogId, entryId)
-      : null;
-    return entryId && session
+  beginEditGroup: (label) => {
+    const { activeCatalogId, activeEntryId, beginEditGroupForEntry } = get();
+    if (activeCatalogId && activeEntryId) {
+      beginEditGroupForEntry(activeCatalogId, activeEntryId, label);
+    }
+  },
+  endEditGroup: () => {
+    const { activeCatalogId, activeEntryId, endEditGroupForEntry } = get();
+    if (activeCatalogId && activeEntryId) endEditGroupForEntry(activeCatalogId, activeEntryId);
+  },
+  cancelEditGroup: () => {
+    const { activeCatalogId, activeEntryId, cancelEditGroupForEntry } = get();
+    if (activeCatalogId && activeEntryId) cancelEditGroupForEntry(activeCatalogId, activeEntryId);
+  },
+  beginEditGroupForEntry: (catalogId, entryId, label) => set((state) => {
+    const session = getDevelopSession(catalogId, entryId);
+    return session
       ? replaceCoreState(state, entryId, session.beginEditGroup(label))
       : state;
   }),
-  endEditGroup: () => set((state) => {
-    const entryId = state.activeEntryId;
-    const catalogId = state.activeCatalogId;
-    const session = catalogId && entryId
-      ? getDevelopSession(catalogId, entryId)
-      : null;
-    return entryId && session
+  endEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    const session = getDevelopSession(catalogId, entryId);
+    return session
       ? replaceCoreState(state, entryId, session.endEditGroup())
       : state;
   }),
-  cancelEditGroup: () => set((state) => {
-    const entryId = state.activeEntryId;
-    const catalogId = state.activeCatalogId;
-    const session = catalogId && entryId
-      ? getDevelopSession(catalogId, entryId)
-      : null;
-    return entryId && session
+  cancelEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    const session = getDevelopSession(catalogId, entryId);
+    return session
       ? replaceCoreState(state, entryId, session.cancelEditGroup())
       : state;
   }),

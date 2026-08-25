@@ -144,19 +144,23 @@ function MaskNameInput({
 }
 
 function PreviewColorInput({
+  catalogId,
+  entryId,
   label,
   value,
   onPreview,
 }: {
+  readonly catalogId: string;
+  readonly entryId: string;
   readonly label: string;
   readonly value: string;
   readonly onPreview: (value: string) => void;
 }) {
   const editing = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
-  const endEditGroup = useDevelopStore((state) => state.endEditGroup);
-  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+  const beginEditGroup = useDevelopStore((state) => state.beginEditGroupForEntry);
+  const endEditGroup = useDevelopStore((state) => state.endEditGroupForEntry);
+  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroupForEntry);
 
   useEffect(() => {
     const input = inputRef.current;
@@ -164,26 +168,31 @@ function PreviewColorInput({
     const commitAcceptedColor = () => {
       if (!editing.current) return;
       editing.current = false;
-      endEditGroup();
+      endEditGroup(catalogId, entryId);
     };
     input.addEventListener("change", commitAcceptedColor);
-    return () => input.removeEventListener("change", commitAcceptedColor);
-  }, [endEditGroup]);
+    return () => {
+      input.removeEventListener("change", commitAcceptedColor);
+      if (!editing.current) return;
+      editing.current = false;
+      cancelEditGroup(catalogId, entryId);
+    };
+  }, [cancelEditGroup, catalogId, endEditGroup, entryId]);
 
   const begin = () => {
     if (editing.current) return;
     editing.current = true;
-    beginEditGroup(label);
+    beginEditGroup(catalogId, entryId, label);
   };
   const commit = () => {
     if (!editing.current) return;
     editing.current = false;
-    endEditGroup();
+    endEditGroup(catalogId, entryId);
   };
   const cancel = () => {
     if (!editing.current) return;
     editing.current = false;
-    cancelEditGroup();
+    cancelEditGroup(catalogId, entryId);
   };
 
   return (
@@ -199,7 +208,7 @@ function PreviewColorInput({
         begin();
         onPreview(event.currentTarget.value);
       }}
-      onBlur={commit}
+      onBlur={cancel}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -338,7 +347,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
       {selectedNode?.kind === "source" && selectedSource?.kind === "brush" ? <div className="mt-3 border-t border-lr-border-subtle pt-2">
         <ToggleRow label="Auto Mask, Prototype" checked={selectedSource.autoMask.kind !== "off"} onChange={(enabled) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: enabled ? { kind: "auto-mask-prototype-v1", samplePolicy: "explicit-working-rgb", samples: [[0.5, 0.5, 0.5]], radius: 0.25, algorithm: "analysis-color-edge-v1" } : { kind: "off" } } })} />
         {selectedAutoMask ? <>
-          <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:auto-mask-sample`} label="Adjust Auto Mask sample" value={hexColor(selectedAutoMask.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, samplePolicy: "explicit-working-rgb", samples: [colorFromHex(value)] } } })} /></label>
+          <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:auto-mask-sample`} catalogId={entry.catalogId} entryId={entry.id} label="Adjust Auto Mask sample" value={hexColor(selectedAutoMask.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, samplePolicy: "explicit-working-rgb", samples: [colorFromHex(value)] } } })} /></label>
           <SliderRow label="Analysis radius" value={selectedAutoMask.radius} min={0.001} max={1} step={0.01} onChange={(radius) => replaceNode({ ...selectedNode, source: { ...selectedSource, autoMask: { ...selectedAutoMask, radius } } })} />
           <p className="text-[9px] text-lr-text-faint">Prototype analysis is required. It never falls back to an ordinary brush.</p>
         </> : null}
@@ -351,7 +360,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
       </div> : null}
       {selectedNode?.kind === "source" && selectedSource?.kind === "color-range" ? <div className="mt-3 border-t border-lr-border-subtle pt-2">
         <SectionLabel>Color Range</SectionLabel>
-        <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:color-range-sample`} label="Adjust Color Range sample" value={hexColor(selectedSource.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, samples: [colorFromHex(value)] } })} /></label>
+        <label className="flex items-center justify-between text-[10px] text-lr-text-muted">Sample <PreviewColorInput key={`${entry.id}:${selectedNode.id}:color-range-sample`} catalogId={entry.catalogId} entryId={entry.id} label="Adjust Color Range sample" value={hexColor(selectedSource.samples[0] ?? [0.5, 0.5, 0.5])} onPreview={(value) => replaceNode({ ...selectedNode, source: { ...selectedSource, samples: [colorFromHex(value)] } })} /></label>
         <SliderRow label="Tolerance" value={selectedSource.tolerance} min={0.001} max={2} step={0.01} onChange={(tolerance) => replaceNode({ ...selectedNode, source: { ...selectedSource, tolerance } })} />
         <SliderRow label="Feather" value={selectedSource.feather} min={0} max={1} step={0.01} onChange={(feather) => replaceNode({ ...selectedNode, source: { ...selectedSource, feather } })} />
       </div> : null}
@@ -385,7 +394,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
             writeMask({ ...selectedMask, adjustments }, `Adjust mask ${definition.field}`);
           }} />;
         })}
-        <label className="mt-1 flex items-center justify-between text-[10px] text-lr-text-muted">Colorize color <PreviewColorInput key={`${entry.id}:${selectedMask.id}:colorize`} label="Adjust mask colorize color" value={hexColor(selectedMask.adjustments.colorize.color)} onPreview={(value) => writeMask({ ...selectedMask, adjustments: { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, color: colorFromHex(value) } } }, "Adjust mask colorize color")} /></label>
+        <label className="mt-1 flex items-center justify-between text-[10px] text-lr-text-muted">Colorize color <PreviewColorInput key={`${entry.id}:${selectedMask.id}:colorize`} catalogId={entry.catalogId} entryId={entry.id} label="Adjust mask colorize color" value={hexColor(selectedMask.adjustments.colorize.color)} onPreview={(value) => writeMask({ ...selectedMask, adjustments: { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, color: colorFromHex(value) } } }, "Adjust mask colorize color")} /></label>
       </div> : null}
       <button type="button" onClick={() => reset("local")} className="mt-3 text-[9px] text-lr-text-faint hover:text-lr-text">Reset masks</button>
       <span className="ml-2 font-mono text-[9px] text-lr-text-faint">{masks.length}/{MAX_MASKS}</span>
