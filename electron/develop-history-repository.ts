@@ -409,12 +409,25 @@ export class DevelopHistoryRepository {
     const entryId = parseEntryId(entryIdValue);
     this.assertActiveEntry(catalogId, entryId);
     const value = this.database.prepare(`
-      SELECT provenance_json AS provenanceJson
+      SELECT catalog_id AS catalogId, entry_id AS entryId, revision_id AS revisionId,
+             provenance_json AS provenanceJson
       FROM develop_default_installs WHERE catalog_id = ? AND entry_id = ?
     `).get(catalogId, entryId);
-    return value === undefined
-      ? null
-      : parseInstalledDevelopDefault(JSON.parse(string(row(value, "Develop default install"), "provenanceJson")));
+    if (value === undefined) return null;
+    const stored = row(value, "Develop default install");
+    const installed = parseInstalledDevelopDefault(JSON.parse(string(stored, "provenanceJson")));
+    if (
+      parseCatalogId(string(stored, "catalogId")) !== installed.catalogId ||
+      parseEntryId(string(stored, "entryId")) !== installed.entryId ||
+      parseDevelopRevisionId(string(stored, "revisionId")) !== installed.revisionId
+    ) {
+      throw new Error("Installed Develop default provenance does not match its storage identity.");
+    }
+    const document = this.reconstruct(catalogId, entryId, installed.revisionId);
+    if (canonicalDevelopHistoryDocument(document) !== canonicalDevelopHistoryDocument(installed.baselineDocument)) {
+      throw new Error("Installed Develop default baseline does not match its revision.");
+    }
+    return installed;
   }
 
   installDefault(inputValue: DevelopDefaultInstallInput): DevelopDefaultInstallResult {

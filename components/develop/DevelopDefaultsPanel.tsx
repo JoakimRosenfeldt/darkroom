@@ -13,7 +13,7 @@ import { DEVELOP_PRESET_FIELDS, type DevelopPresetField, type DevelopPresetRecor
 import { getDevelopRepository } from "@/lib/develop/repository";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isDevelopDefaultResolutionPending, useDevelopStore } from "@/stores/develop-store";
 
 const FIELD_LABELS: Readonly<Record<DevelopPresetField, string>> = {
   basic: "Basic",
@@ -131,7 +131,15 @@ function buildRule(
   });
 }
 
-export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: LibraryEntry; readonly facts: DevelopDefaultFacts }) {
+export function DevelopDefaultsPanel({
+  entry,
+  facts,
+  editingDisabled,
+}: {
+  readonly entry: LibraryEntry;
+  readonly facts: DevelopDefaultFacts;
+  readonly editingDisabled: boolean;
+}) {
   const session = useDevelopStore((state) => state.sessions[entry.id]);
   const commitCompleteState = useDevelopStore((state) => state.commitV3CompleteState);
   const [rules, setRules] = useState<readonly DevelopDefaultRule[]>([]);
@@ -145,7 +153,7 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
   const generation = useRef(0);
   const busyRef = useRef(false);
   const selected = useMemo(() => rules.find((rule) => rule.ruleId === selectedId) ?? null, [rules, selectedId]);
-  const durable = session?.processKind === "v3" && session.ui.sidecarStatus === "saved";
+  const durable = !editingDisabled && session?.processKind === "v3" && session.ui.sidecarStatus === "saved";
   const controlsMessage = session?.processKind !== "v3"
     ? "This photo is read-only or uses a newer Develop process. Rules remain viewable, but editing and reset are unavailable."
     : "Rule controls unlock after the initial Develop Head is durable.";
@@ -188,7 +196,7 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
   }, [refresh, session?.persistedDocumentRevision]);
 
   const run = async (operation: () => Promise<void>): Promise<void> => {
-    if (busyRef.current) return;
+    if (busyRef.current || editingDisabled) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -230,6 +238,9 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
     if (state.activeCatalogId !== entry.catalogId || state.activeEntryId !== entry.id) {
       throw new Error("The active photo changed before reset.");
     }
+    if (isDevelopDefaultResolutionPending(entry.catalogId, entry.id)) {
+      throw new Error("Reset is unavailable until the initial default resolution finishes.");
+    }
     commitCompleteState(entry.catalogId, entry.id, baseline.baselineDocument, "Reset to matched default");
     await getDevelopRepository(entry).flush();
   });
@@ -246,7 +257,7 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
       <header className="border-b border-lr-border-subtle px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div><h2 className="text-xs font-semibold text-lr-text">Develop defaults</h2><p className="mt-0.5 text-[10px] text-lr-text-faint">Applied once when a new photo gets its first durable edit.</p></div>
-          <ActionButton disabled={busy} onClick={newRule}>New</ActionButton>
+          <ActionButton disabled={editingDisabled || busy} onClick={newRule}>New</ActionButton>
         </div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -256,7 +267,7 @@ export function DevelopDefaultsPanel({ entry, facts }: { readonly entry: Library
           <h3 id="default-rules-heading" className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Rules</h3>
           {rules.length === 0 ? <p className="mt-2 text-[11px] leading-4 text-lr-text-faint">No rules yet. Create one from this photo’s verified camera facts.</p> : (
             <ul className="mt-2 space-y-1">{rules.map((rule) => (
-              <li key={rule.ruleId}><button type="button" onClick={() => selectRule(rule)} className={`w-full rounded-md border px-2.5 py-2 text-left ${selectedId === rule.ruleId ? "border-lr-text-dim bg-lr-panel-raised" : "border-transparent hover:bg-lr-panel-raised/60"}`}>
+              <li key={rule.ruleId}><button type="button" disabled={editingDisabled} onClick={() => selectRule(rule)} className={`w-full rounded-md border px-2.5 py-2 text-left disabled:opacity-40 ${selectedId === rule.ruleId ? "border-lr-text-dim bg-lr-panel-raised" : "border-transparent hover:bg-lr-panel-raised/60"}`}>
                 <span className="flex items-center gap-2 text-[11px] text-lr-text"><span className={`size-1.5 rounded-full ${rule.enabled ? "bg-lr-accent" : "bg-lr-text-faint"}`} /> <span className="truncate">{rule.name}</span><span className="ml-auto text-[9px] text-lr-text-faint">P{rule.priority}</span></span>
                 <span className="mt-1 block truncate text-[9px] text-lr-text-faint">{rule.camera.kind === "exact" ? `${rule.camera.make} ${rule.camera.model}` : "Unknown camera fallback"}</span>
               </button></li>

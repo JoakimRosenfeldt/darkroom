@@ -5,7 +5,7 @@ import { createDevelopRefId, type DevelopHistoryLoadResult, type DevelopHistoryR
 import { getDevelopRepository } from "@/lib/develop/repository";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isDevelopDefaultResolutionPending, useDevelopStore } from "@/stores/develop-store";
 import { openDevelopSessionDocument } from "@/lib/develop/session";
 import { useLibraryStore } from "@/stores/library-store";
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
@@ -24,7 +24,13 @@ function refButtonLabel(kind: DevelopHistoryRef["kind"]): string {
   return kind === "version" ? "Activate" : "Recall";
 }
 
-export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry }) {
+export function DevelopHistoryPanel({
+  entry,
+  editingDisabled,
+}: {
+  readonly entry: LibraryEntry;
+  readonly editingDisabled: boolean;
+}) {
   const projection = useDevelopStore((state) => state.sessions[entry.id]?.ui.projection);
   const processKind = useDevelopStore((state) => state.sessions[entry.id]?.processKind);
   const persistedDocumentRevision = useDevelopStore((state) => state.sessions[entry.id]?.persistedDocumentRevision);
@@ -69,7 +75,7 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
   }, [persistedDocumentRevision, refresh]);
 
   const act = async (operation: () => Promise<void>): Promise<void> => {
-    if (busyRef.current) return;
+    if (busyRef.current || editingDisabled) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -100,9 +106,10 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
     if (
       !mounted.current ||
       state.activeCatalogId !== entry.catalogId ||
-      state.activeEntryId !== entry.id
+      state.activeEntryId !== entry.id ||
+      isDevelopDefaultResolutionPending(entry.catalogId, entry.id)
     ) {
-      throw new Error("The active photo changed before the History action completed.");
+      throw new Error("The active photo changed or its initial default is still pending.");
     }
   };
   const createRef = (kind: DevelopHistoryRef["kind"]): Promise<void> => act(async () => {
@@ -161,10 +168,10 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
               {inspect ? <ul className="mt-2 list-disc pl-4">{projection.differences.map((item) => <li key={item}>{item}</li>)}</ul> : null}
             </StatusCard>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <ActionButton disabled={busy} onClick={() => void act(() => getDevelopRepository(entry).resolveProjection("keep-darkroom"))}>Keep Darkroom</ActionButton>
-              <ActionButton disabled={busy || projection.externalDigest === null} onClick={() => void act(() => getDevelopRepository(entry).resolveProjection("import-xmp"))}>Import XMP</ActionButton>
-              <ActionButton disabled={busy} pressed={inspect} onClick={() => setInspect((value) => !value)}>Inspect differences</ActionButton>
-              <ActionButton disabled={busy || projection.externalDigest === null} onClick={() => void act(async () => {
+              <ActionButton disabled={editingDisabled || busy} onClick={() => void act(() => getDevelopRepository(entry).resolveProjection("keep-darkroom"))}>Keep Darkroom</ActionButton>
+              <ActionButton disabled={editingDisabled || busy || projection.externalDigest === null} onClick={() => void act(() => getDevelopRepository(entry).resolveProjection("import-xmp"))}>Import XMP</ActionButton>
+              <ActionButton disabled={editingDisabled || busy} pressed={inspect} onClick={() => setInspect((value) => !value)}>Inspect differences</ActionButton>
+              <ActionButton disabled={editingDisabled || busy || projection.externalDigest === null} onClick={() => void act(async () => {
                 await getDevelopRepository(entry).preserveBoth(
                   () => createVirtualCopy(entry.id, "Darkroom before external XMP"),
                 );
@@ -192,7 +199,7 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
 
         <section className="border-b border-lr-border-subtle px-4 py-3">
           <label className="text-[10px] text-lr-text-muted" htmlFor="develop-ref-name">Reference name</label>
-          <div className="mt-1 flex gap-1.5"><input id="develop-ref-name" value={name} maxLength={120} onChange={(event) => setName(event.target.value)} className="min-w-0 flex-1 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text outline-none focus:border-lr-text-dim" /><ActionButton disabled={busy || !headRevisionId} onClick={() => void createRef("version")}>Version</ActionButton><ActionButton disabled={busy || !headRevisionId} onClick={() => void createRef("snapshot")}>Snapshot</ActionButton></div>
+          <div className="mt-1 flex gap-1.5"><input id="develop-ref-name" value={name} maxLength={120} disabled={editingDisabled} onChange={(event) => setName(event.target.value)} className="min-w-0 flex-1 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text outline-none focus:border-lr-text-dim disabled:opacity-40" /><ActionButton disabled={editingDisabled || busy || !headRevisionId} onClick={() => void createRef("version")}>Version</ActionButton><ActionButton disabled={editingDisabled || busy || !headRevisionId} onClick={() => void createRef("snapshot")}>Snapshot</ActionButton></div>
         </section>
 
         {(["version", "snapshot"] as const).map((kind) => (
@@ -201,8 +208,8 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
             {refs(kind).length === 0 ? <p className="mt-2 text-[11px] text-lr-text-faint">No {kind === "version" ? "versions" : "snapshots"} yet.</p> : (
               <ul className="mt-2 space-y-2">{refs(kind).map((ref) => (
                 <li key={ref.refId} className="rounded-md bg-lr-panel-raised/45 p-2">
-                  {renaming === ref.refId ? <input autoFocus value={renameValue} maxLength={120} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); if (event.key === "Enter") void act(async () => { await getDarkroomAPI().developHistoryRefMutate({ kind: "rename", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, name: renameValue, updatedAt: Date.now() }); setRenaming(null); }); }} className="w-full rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[11px] text-lr-text" /> : <p className="truncate text-[11px] text-lr-text-muted">{ref.name}</p>}
-                  <div className="mt-1.5 flex flex-wrap gap-1"><ActionButton disabled={busy || processKind !== "v3"} onClick={() => void restore(ref)}>{refButtonLabel(kind)}</ActionButton>{kind === "version" ? <ActionButton disabled={busy || !headRevisionId || ref.revisionId === headRevisionId} onClick={() => void act(async () => { assertActiveEntry(); const head = await loadCurrentHead(); assertActiveEntry(); await getDarkroomAPI().developHistoryRefMutate({ kind: "move", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, revisionId: head.revisionId, expectedHeadRevisionId: head.revisionId, updatedAt: Date.now() }); })}>Move here</ActionButton> : null}<ActionButton disabled={busy} onClick={() => { setRenaming(ref.refId); setRenameValue(ref.name); }}>Rename</ActionButton><ActionButton disabled={busy} onClick={() => void act(async () => { await getDarkroomAPI().developHistoryRefMutate({ kind: "delete", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId }); })}>Delete</ActionButton></div>
+                  {renaming === ref.refId ? <input autoFocus value={renameValue} maxLength={120} disabled={editingDisabled} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); if (event.key === "Enter") void act(async () => { assertActiveEntry(); await getDarkroomAPI().developHistoryRefMutate({ kind: "rename", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, name: renameValue, updatedAt: Date.now() }); setRenaming(null); }); }} className="w-full rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[11px] text-lr-text disabled:opacity-40" /> : <p className="truncate text-[11px] text-lr-text-muted">{ref.name}</p>}
+                  <div className="mt-1.5 flex flex-wrap gap-1"><ActionButton disabled={editingDisabled || busy || processKind !== "v3"} onClick={() => void restore(ref)}>{refButtonLabel(kind)}</ActionButton>{kind === "version" ? <ActionButton disabled={editingDisabled || busy || !headRevisionId || ref.revisionId === headRevisionId} onClick={() => void act(async () => { assertActiveEntry(); const head = await loadCurrentHead(); assertActiveEntry(); await getDarkroomAPI().developHistoryRefMutate({ kind: "move", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, revisionId: head.revisionId, expectedHeadRevisionId: head.revisionId, updatedAt: Date.now() }); })}>Move here</ActionButton> : null}<ActionButton disabled={editingDisabled || busy} onClick={() => { setRenaming(ref.refId); setRenameValue(ref.name); }}>Rename</ActionButton><ActionButton disabled={editingDisabled || busy} onClick={() => void act(async () => { assertActiveEntry(); await getDarkroomAPI().developHistoryRefMutate({ kind: "delete", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId }); })}>Delete</ActionButton></div>
                 </li>
               ))}</ul>
             )}

@@ -1,120 +1,87 @@
-import { createRequire } from "node:module";
-import fs from "node:fs/promises";
-import { matrixCameraProfileFromLibRawMetadata, type MatrixCameraProfile } from "../lib/camera-profiles/matrix.ts";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
+import type { MatrixCameraProfile } from "../lib/camera-profiles/matrix.ts";
+import {
+  LIBRAW_PROFILE_MAX_INPUT_BYTES,
+  LIBRAW_PROFILE_TIMEOUT_MS,
+  parseLibRawProfileWorkerResponse,
+} from "./libraw-profile-protocol.ts";
 
-interface NativeLibRawImage {
-  readonly data: Uint16Array;
-  readonly width: number;
-  readonly height: number;
-  readonly bits: number;
-  readonly colors: number;
+export interface LibRawProfileVerificationOptions {
+  readonly workerPath?: string | URL;
+  readonly timeoutMs?: number;
 }
 
-interface NativeLibRaw {
-  readonly open: (bytes: Uint8Array, settings: Record<string, unknown>) => void;
-  readonly metadata: (full: boolean) => unknown;
-  readonly imageData: () => unknown;
-  readonly delete?: () => void;
-}
-
-interface NativeLibRawModule {
-  readonly create: () => unknown;
-}
-
-const require = createRequire(__filename);
-let libRawModulePromise: Promise<NativeLibRawModule> | null = null;
 let verificationQueue: Promise<void> = Promise.resolve();
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("LibRaw verification returned invalid data.");
+function positiveTimeout(value: number | undefined): number {
+  if (value === undefined) return LIBRAW_PROFILE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(value) || value < 1 || value > LIBRAW_PROFILE_TIMEOUT_MS) {
+    throw new Error("LibRaw profile verification timeout is invalid.");
   }
-  return Object.fromEntries(Object.entries(value));
+  return value;
 }
 
-function nativeModule(value: unknown): NativeLibRawModule {
-  const input = object(value);
-  const LibRaw = Reflect.get(input, "LibRaw");
-  if (typeof LibRaw !== "function") throw new Error("LibRaw verification module is unavailable.");
-  return { create: () => Reflect.construct(LibRaw, []) };
-}
-
-function nativeImage(value: unknown): NativeLibRawImage {
-  const input = object(value);
-  const data = Reflect.get(input, "data");
-  const width = Reflect.get(input, "width");
-  const height = Reflect.get(input, "height");
-  const bits = Reflect.get(input, "bits");
-  const colors = Reflect.get(input, "colors");
-  if (
-    !(data instanceof Uint16Array) ||
-    typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 ||
-    typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 ||
-    bits !== 16 || colors !== 3 || data.length !== width * height * colors
-  ) {
-    throw new Error("LibRaw did not produce verified linear RGB16 camera pixels.");
+function transferableBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (bytes.byteLength < 1 || bytes.byteLength > LIBRAW_PROFILE_MAX_INPUT_BYTES) {
+    throw new Error("LibRaw profile input is invalid or too large.");
   }
-  return { data, width, height, bits, colors };
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
 }
 
-function nativeRaw(value: unknown): NativeLibRaw {
-  const input = object(value);
-  const open = Reflect.get(input, "open");
-  const metadata = Reflect.get(input, "metadata");
-  const imageData = Reflect.get(input, "imageData");
-  const dispose = Reflect.get(input, "delete");
-  if (
-    typeof open !== "function" || typeof metadata !== "function" ||
-    typeof imageData !== "function" || (dispose !== undefined && typeof dispose !== "function")
-  ) {
-    throw new Error("LibRaw verification decoder is invalid.");
-  }
-  return {
-    open: (bytes, settings) => Reflect.apply(open, input, [bytes, settings]),
-    metadata: (full) => Reflect.apply(metadata, input, [full]),
-    imageData: () => Reflect.apply(imageData, input, []),
-    ...(typeof dispose === "function" ? { delete: () => { Reflect.apply(dispose, input, []); } } : {}),
-  };
+function runWorker(
+  bytes: Uint8Array,
+  options: LibRawProfileVerificationOptions,
+): Promise<MatrixCameraProfile> {
+  const input = transferableBytes(bytes);
+  const workerPath = options.workerPath ?? path.join(__dirname, "libraw-profile-worker.js");
+  const timeoutMs = positiveTimeout(options.timeoutMs);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(workerPath, {
+      workerData: input,
+      transferList: [input.buffer],
+      resourceLimits: {
+        maxOldGenerationSizeMb: 384,
+        maxYoungGenerationSizeMb: 32,
+        stackSizeMb: 4,
+      },
+    });
+    let settled = false;
+    const finish = (result: { readonly kind: "resolve"; readonly profile: MatrixCameraProfile } | { readonly kind: "reject"; readonly error: Error }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.removeAllListeners();
+      void worker.terminate().catch(() => undefined);
+      if (result.kind === "resolve") resolve(result.profile);
+      else reject(result.error);
+    };
+    const timer = setTimeout(() => {
+      finish({ kind: "reject", error: new Error("LibRaw profile verification timed out.") });
+    }, timeoutMs);
+    worker.once("message", (value: unknown) => {
+      try {
+        const response = parseLibRawProfileWorkerResponse(value);
+        if (response.kind === "failed") finish({ kind: "reject", error: new Error(response.message) });
+        else finish({ kind: "resolve", profile: response.profile });
+      } catch (error) {
+        finish({ kind: "reject", error: error instanceof Error ? error : new Error("LibRaw profile worker returned invalid data.") });
+      }
+    });
+    worker.once("error", (error) => finish({ kind: "reject", error }));
+    worker.once("exit", (code) => {
+      if (code !== 0) finish({ kind: "reject", error: new Error("LibRaw profile worker stopped unexpectedly.") });
+    });
+  });
 }
 
-async function loadModule(): Promise<NativeLibRawModule> {
-  if (libRawModulePromise) return libRawModulePromise;
-  libRawModulePromise = (async () => {
-    const moduleName: string = "libraw-wasm/dist/libraw.js";
-    const imported: unknown = await import(moduleName);
-    const factory = typeof imported === "object" && imported !== null
-      ? Reflect.get(imported, "default")
-      : null;
-    if (typeof factory !== "function") throw new Error("LibRaw verification factory is unavailable.");
-    const wasmPath = require.resolve("libraw-wasm/dist/libraw.wasm");
-    const wasmBinary = new Uint8Array(await fs.readFile(wasmPath));
-    return nativeModule(await Reflect.apply(factory, undefined, [{ wasmBinary }]));
-  })();
-  return libRawModulePromise;
-}
-
-export function verifyLibRawInputProfile(bytes: Uint8Array): Promise<MatrixCameraProfile> {
-  const execute = async (): Promise<MatrixCameraProfile> => {
-    const runtime = await loadModule();
-    const raw = nativeRaw(runtime.create());
-    try {
-      raw.open(bytes.slice(), {
-        halfSize: true,
-        outputBps: 16,
-        outputColor: 0,
-        gamm: [1, 1],
-        noAutoBright: true,
-        useCameraMatrix: 0,
-        useCameraWb: true,
-        userQual: 0,
-      });
-      const metadata = structuredClone(object(raw.metadata(true)));
-      nativeImage(raw.imageData());
-      return matrixCameraProfileFromLibRawMetadata(metadata);
-    } finally {
-      raw.delete?.();
-    }
-  };
+export function verifyLibRawInputProfile(
+  bytes: Uint8Array,
+  options: LibRawProfileVerificationOptions = {},
+): Promise<MatrixCameraProfile> {
+  const execute = () => runWorker(bytes, options);
   const result = verificationQueue.then(execute, execute);
   verificationQueue = result.then(() => undefined, () => undefined);
   return result;

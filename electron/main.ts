@@ -7,7 +7,7 @@ import {
   shell,
   type IpcMainInvokeEvent,
 } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -175,6 +175,7 @@ import { DevelopPresetStore } from "./develop-preset-store.ts";
 import { DevelopDefaultsStore } from "./develop-defaults-store.ts";
 import { DevelopDefaultsService } from "./develop-defaults-service.ts";
 import { verifyLibRawInputProfile } from "./libraw-profile-verifier.ts";
+import { LIBRAW_PROFILE_MAX_INPUT_BYTES } from "./libraw-profile-protocol.ts";
 import type { DevelopDefaultFacts } from "../lib/develop/defaults/matcher.ts";
 import { BUILT_IN_DEVELOP_PRESETS } from "../lib/develop/presets/built-ins.ts";
 import {
@@ -995,7 +996,7 @@ function registerIpcHandlers(): void {
         inputProfile: { kind: "unknown", reason: "A verified before-tone input profile is unavailable." },
         iso,
       };
-      if (entry.formatId !== "nef" || entry.observation.byteLength > 512 * 1024 * 1024) {
+      if (entry.formatId !== "nef" || entry.observation.byteLength > LIBRAW_PROFILE_MAX_INPUT_BYTES) {
         return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
       }
       const root = coordinatorRuntime.getNativeSessionRoots()
@@ -1013,9 +1014,14 @@ function registerIpcHandlers(): void {
       if (before.size !== entry.observation.byteLength || before.lastModified !== entry.observation.modifiedAt) {
         throw new Error("Develop default source changed after analysis.");
       }
+      const sourceBytes = await nativeAssetAccess.read(location);
+      const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+      if (sourceSha256 !== verified.sourceSha256) {
+        throw new Error("Develop default source bytes do not match verified metadata.");
+      }
       let decoderProfile;
       try {
-        decoderProfile = await verifyLibRawInputProfile(await nativeAssetAccess.read(location));
+        decoderProfile = await verifyLibRawInputProfile(sourceBytes);
       } catch {
         return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
       }

@@ -65,6 +65,8 @@ export function useDevelopSettingsSync({
   const persistedMetadataRevision = sessionState?.persistedMetadataRevision;
   const sidecarStatus = sessionState?.ui.sidecarStatus;
   const activateEntry = useDevelopStore((state) => state.activateEntry);
+  const beginDefaultResolution = useDevelopStore((state) => state.beginDefaultResolution);
+  const finishDefaultResolution = useDevelopStore((state) => state.finishDefaultResolution);
   const synchronizeSession = useDevelopStore((state) => state.synchronizeSession);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
   const setProjectionState = useDevelopStore((state) => state.setProjectionState);
@@ -177,11 +179,20 @@ export function useDevelopSettingsSync({
   ]);
 
   useEffect(() => {
+    if (defaultFacts !== undefined) return;
+    const operationId = crypto.randomUUID();
+    beginDefaultResolution(entry.catalogId, entry.id, operationId);
+    return () => finishDefaultResolution(entry.catalogId, entry.id, operationId);
+  }, [beginDefaultResolution, defaultFacts, entry.catalogId, entry.id, finishDefaultResolution]);
+
+  useEffect(() => {
     if (!defaultFacts || !defaultsKey) return;
     let active = true;
+    let settled = false;
     const repository = getDevelopRepository(entry);
     const requestId = parseOperationId(crypto.randomUUID());
-    void repository.installDefault(defaultFacts, requestId).then((result) => {
+    beginDefaultResolution(entry.catalogId, entry.id, requestId);
+    const operation = repository.installDefault(defaultFacts, requestId).then((result) => {
       if (!active) return;
       if (result.kind === "installed" || result.kind === "already-installed") {
         setDefaultsResolution({ key: defaultsKey, value: { kind: "installed", installed: result.installed } });
@@ -199,11 +210,15 @@ export function useDevelopSettingsSync({
         setSidecarStatus("error", message);
       }
     });
+    void operation.finally(() => {
+      settled = true;
+      finishDefaultResolution(entry.catalogId, entry.id, requestId);
+    });
     return () => {
       active = false;
-      void repository.cancelDefault(requestId);
+      if (!settled) void repository.cancelDefault(requestId);
     };
-  }, [defaultFacts, defaultsKey, entry, setSidecarStatus]);
+  }, [beginDefaultResolution, defaultFacts, defaultsKey, entry, finishDefaultResolution, setSidecarStatus]);
 
   useEffect(() => {
     const alreadyScheduled =
@@ -276,6 +291,6 @@ export function useDevelopSettingsSync({
   ]);
 
   if (defaultFacts === undefined) return { kind: "pending" };
-  if (defaultFacts === null) return { kind: "failed", message: "Verified source facts are unavailable." };
+  if (defaultFacts === null) return { kind: "no-match" };
   return defaultsResolution?.key === defaultsKey ? defaultsResolution.value : { kind: "pending" };
 }

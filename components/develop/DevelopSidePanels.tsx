@@ -67,10 +67,11 @@ export function DevelopSidePanels({
 
   const projectionConflict = session?.ui.projection.kind === "divergent";
   const effectivePanel = projectionConflict ? "history" : activePanel;
+  const defaultsPending = defaultsResolution.kind === "pending";
   const panel = effectivePanel === "history" ? (
-    <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} />
+    <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} editingDisabled={defaultsPending} />
   ) : effectivePanel === "defaults" && defaultFacts ? (
-    <DevelopDefaultsPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} facts={defaultFacts} />
+    <DevelopDefaultsPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} facts={defaultFacts} editingDisabled={defaultsPending} />
   ) : effectivePanel === "defaults" ? (
     <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="Source facts unavailable">Defaults need verified decoder, camera-profile, and source facts.</StatusCard></aside>
   ) : effectivePanel === "info" ? (
@@ -112,7 +113,7 @@ export function DevelopSidePanels({
       <DevelopPanelRail
         activePanel={effectivePanel}
         onSelect={onSelect}
-        editingDisabled={session?.processKind !== "v3" || projectionConflict || defaultsResolution.kind === "pending"}
+    editingDisabled={session?.processKind !== "v3" || projectionConflict || defaultsPending}
       />
       <DevelopJobDrawer />
     </>

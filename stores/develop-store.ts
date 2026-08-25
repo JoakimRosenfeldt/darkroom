@@ -98,6 +98,9 @@ interface DevelopStore {
   activeCatalogId: string | null;
   activeEntryId: string | null;
   sessions: Record<string, DevelopSessionState>;
+  pendingDefaultOperations: Record<string, string>;
+  beginDefaultResolution: (catalogId: string, entryId: string, operationId: string) => void;
+  finishDefaultResolution: (catalogId: string, entryId: string, operationId: string) => void;
   activateEntry: (
     catalogId: string,
     entryId: string,
@@ -177,6 +180,14 @@ export function isPresetTransientEdit(
     transientEdit?.label.startsWith("Preview preset: ") === true;
 }
 
+function defaultOperationKey(catalogId: string, entryId: string): string {
+  return JSON.stringify([catalogId, entryId]);
+}
+
+function defaultResolutionPending(state: DevelopStore, catalogId: string, entryId: string): boolean {
+  return state.pendingDefaultOperations[defaultOperationKey(catalogId, entryId)] !== undefined;
+}
+
 function replaceCoreState(
   state: DevelopStore,
   entryId: string,
@@ -194,6 +205,31 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   activeCatalogId: null,
   activeEntryId: null,
   sessions: {},
+  pendingDefaultOperations: {},
+
+  beginDefaultResolution: (catalogId, entryId, operationId) => set((state) => {
+    const key = defaultOperationKey(catalogId, entryId);
+    const session = getDevelopSession(catalogId, entryId);
+    const sessions = session
+      ? replaceCoreState(state, entryId, session.beginEditBlock(operationId)).sessions
+      : state.sessions;
+    return {
+      pendingDefaultOperations: { ...state.pendingDefaultOperations, [key]: operationId },
+      sessions,
+    };
+  }),
+
+  finishDefaultResolution: (catalogId, entryId, operationId) => set((state) => {
+    const key = defaultOperationKey(catalogId, entryId);
+    if (state.pendingDefaultOperations[key] !== operationId) return state;
+    const pendingDefaultOperations = { ...state.pendingDefaultOperations };
+    delete pendingDefaultOperations[key];
+    const session = getDevelopSession(catalogId, entryId);
+    const sessions = session
+      ? replaceCoreState(state, entryId, session.finishEditBlock(operationId)).sessions
+      : state.sessions;
+    return { pendingDefaultOperations, sessions };
+  }),
 
   activateEntry: (catalogId, entryId, document) => set((state) => {
     const previousSession = state.activeCatalogId && state.activeEntryId &&
@@ -208,6 +244,8 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       );
     }
     const session = getOrCreateDevelopSession(catalogId, entryId, document);
+    const pendingOperation = state.pendingDefaultOperations[defaultOperationKey(catalogId, entryId)];
+    if (pendingOperation) session.beginEditBlock(pendingOperation);
     activateDevelopSession(catalogId, entryId);
     return {
       activeCatalogId: catalogId,
@@ -233,6 +271,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     const entryId = state.activeEntryId;
     const catalogId = state.activeCatalogId;
     if (!catalogId || !entryId) return state;
+    if (defaultResolutionPending(state, catalogId, entryId)) return state;
     const session = getDevelopSession(catalogId, entryId);
     if (!session || session.snapshot().processKind !== "v3") return state;
     if (isPresetTransientEdit(session.snapshot().transientEdit)) return state;
@@ -240,6 +279,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   }),
   dispatchV3ToEntry: (catalogId, entryId, command, label = "Edit") =>
     set((state) => {
+      if (defaultResolutionPending(state, catalogId, entryId)) return state;
       const session = getDevelopSession(catalogId, entryId);
       if (!session || session.snapshot().processKind !== "v3") return state;
       if (isPresetTransientEdit(session.snapshot().transientEdit)) return state;
@@ -247,6 +287,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     }),
   dispatchPresetV3ToEntry: (catalogId, entryId, command, label) =>
     set((state) => {
+      if (defaultResolutionPending(state, catalogId, entryId)) return state;
       const session = getDevelopSession(catalogId, entryId);
       if (
         !session ||
@@ -270,6 +311,9 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     afterMetadata,
     label,
   ) => {
+    if (defaultResolutionPending(get(), catalogId, entryId)) {
+      return { documentChanged: false, metadataChanged: false };
+    }
     const session = getDevelopSession(catalogId, entryId);
     if (
       !session ||
@@ -312,12 +356,14 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     if (activeCatalogId && activeEntryId) cancelEditGroupForEntry(activeCatalogId, activeEntryId);
   },
   beginEditGroupForEntry: (catalogId, entryId, label) => set((state) => {
+    if (defaultResolutionPending(state, catalogId, entryId)) return state;
     const session = getDevelopSession(catalogId, entryId);
     return session
       ? replaceCoreState(state, entryId, session.beginEditGroup(label))
       : state;
   }),
   endEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    if (defaultResolutionPending(state, catalogId, entryId)) return state;
     const session = getDevelopSession(catalogId, entryId);
     if (isPresetTransientEdit(session?.snapshot().transientEdit)) return state;
     return session
@@ -332,6 +378,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       : state;
   }),
   endPresetEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    if (defaultResolutionPending(state, catalogId, entryId)) return state;
     const session = getDevelopSession(catalogId, entryId);
     return session && isPresetTransientEdit(session.snapshot().transientEdit)
       ? replaceCoreState(state, entryId, session.endEditGroup())
@@ -354,6 +401,8 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     if (
       !entryId ||
       !session ||
+      !catalogId ||
+      defaultResolutionPending(state, catalogId, entryId) ||
       isPresetTransientEdit(session.snapshot().transientEdit) ||
       session.snapshot().undo.length === 0
     ) return;
@@ -373,6 +422,8 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     if (
       !entryId ||
       !session ||
+      !catalogId ||
+      defaultResolutionPending(state, catalogId, entryId) ||
       isPresetTransientEdit(session.snapshot().transientEdit) ||
       session.snapshot().redo.length === 0
     ) return;
@@ -390,6 +441,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     after,
     document = createDefaultV3DevelopDocument(),
   ) => set((state) => {
+    if (defaultResolutionPending(state, catalogId, entryId)) return state;
     const session = getOrCreateDevelopSession(
       catalogId,
       entryId,
@@ -430,6 +482,7 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       activeCatalogId: null,
       activeEntryId: null,
       sessions: {},
+      pendingDefaultOperations: {},
     });
   },
   setSidecarStatus: (sidecarStatus, sidecarError = null) => set((state) => {
@@ -511,6 +564,10 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     };
   }),
 }));
+
+export function isDevelopDefaultResolutionPending(catalogId: string, entryId: string): boolean {
+  return defaultResolutionPending(useDevelopStore.getState(), catalogId, entryId);
+}
 
 export function activeDevelopSession(state: DevelopStore): DevelopSessionState | null {
   return state.activeEntryId ? state.sessions[state.activeEntryId] ?? null : null;

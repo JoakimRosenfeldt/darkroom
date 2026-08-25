@@ -44,8 +44,27 @@ interface DevelopDefaultsServiceOptions {
   readonly recheckEntry: (request: DevelopDefaultsEntryRequest, verified: VerifiedEntry) => Promise<void>;
 }
 
+interface ActiveDefaultInstall {
+  readonly binding: string;
+  readonly generation: number;
+  cancelled: boolean;
+}
+
+interface PendingDefaultCancellation {
+  readonly binding: string;
+  readonly expiresAt: number;
+}
+
+const MAX_ACTIVE_DEFAULT_INSTALLS = 1_024;
+const MAX_PENDING_DEFAULT_CANCELLATIONS = 1_024;
+const PENDING_DEFAULT_CANCELLATION_TTL_MS = 60_000;
+
 function normalize(value: string): string {
   return value.trim().toLocaleLowerCase();
+}
+
+function installBinding(request: DevelopDefaultsEntryRequest): string {
+  return `${request.catalogId}:${request.sessionId}:${request.entryId}`;
 }
 
 function factsMatch(input: DevelopDefaultFacts, verified: DevelopDefaultFacts): boolean {
@@ -68,7 +87,9 @@ function factsMatch(input: DevelopDefaultFacts, verified: DevelopDefaultFacts): 
 
 export class DevelopDefaultsService {
   readonly #options: DevelopDefaultsServiceOptions;
-  readonly #cancelledInstalls = new Map<string, number>();
+  readonly #activeInstalls = new Map<string, ActiveDefaultInstall>();
+  readonly #pendingCancellations = new Map<string, PendingDefaultCancellation>();
+  #nextInstallGeneration = 0;
 
   constructor(options: DevelopDefaultsServiceOptions) {
     this.#options = options;
@@ -136,40 +157,79 @@ export class DevelopDefaultsService {
 
   cancel(value: unknown): void {
     const request = parseDevelopDefaultsCancelRequest(value);
+    const binding = installBinding(request);
+    const active = this.#activeInstalls.get(request.requestId);
+    if (active) {
+      if (active.binding !== binding) throw new Error("Develop default cancellation does not match its active request.");
+      active.cancelled = true;
+      return;
+    }
     const now = Date.now();
-    for (const [requestId, expiresAt] of this.#cancelledInstalls) {
-      if (expiresAt <= now) this.#cancelledInstalls.delete(requestId);
+    for (const [requestId, pending] of this.#pendingCancellations) {
+      if (pending.expiresAt <= now) this.#pendingCancellations.delete(requestId);
     }
-    if (this.#cancelledInstalls.size >= 1_024) {
-      const oldest = this.#cancelledInstalls.keys().next().value;
-      if (oldest !== undefined) this.#cancelledInstalls.delete(oldest);
+    const existing = this.#pendingCancellations.get(request.requestId);
+    if (existing && existing.binding !== binding) {
+      throw new Error("Develop default cancellation request ID is already bound to another entry.");
     }
-    this.#cancelledInstalls.set(request.requestId, now + 60_000);
+    if (!existing && this.#pendingCancellations.size >= MAX_PENDING_DEFAULT_CANCELLATIONS) {
+      const oldest = this.#pendingCancellations.keys().next().value;
+      if (oldest !== undefined) this.#pendingCancellations.delete(oldest);
+    }
+    this.#pendingCancellations.set(request.requestId, {
+      binding,
+      expiresAt: now + PENDING_DEFAULT_CANCELLATION_TTL_MS,
+    });
   }
 
   async install(value: unknown): Promise<DevelopDefaultsProductionResult> {
     const request: DevelopDefaultsInstallRequest = parseDevelopDefaultsInstallRequest(value);
+    const binding = installBinding(request);
+    if (this.#activeInstalls.has(request.requestId)) {
+      throw new Error("Develop default request ID is already active.");
+    }
+    if (this.#activeInstalls.size >= MAX_ACTIVE_DEFAULT_INSTALLS) {
+      throw new Error("Too many Develop default installations are active.");
+    }
+    const now = Date.now();
+    for (const [requestId, pending] of this.#pendingCancellations) {
+      if (pending.expiresAt <= now) this.#pendingCancellations.delete(requestId);
+    }
+    const pending = this.#pendingCancellations.get(request.requestId);
+    if (pending && pending.binding !== binding) {
+      throw new Error("Develop default request ID is already bound to another entry.");
+    }
+    this.#pendingCancellations.delete(request.requestId);
+    const active: ActiveDefaultInstall = {
+      binding,
+      generation: ++this.#nextInstallGeneration,
+      cancelled: pending !== undefined,
+    };
+    this.#activeInstalls.set(request.requestId, active);
     const assertCurrent = (): void => {
-      if (this.#cancelledInstalls.has(request.requestId)) {
+      if (this.#activeInstalls.get(request.requestId) !== active || active.cancelled) {
         throw new Error("Develop default installation was cancelled because the active photo changed.");
       }
     };
     try {
       const verified = await this.#options.verifyEntry(request);
       assertCurrent();
-      if (!factsMatch(request.facts, verified.facts)) {
-        throw new Error("Develop default facts do not match main-verified source provenance.");
-      }
       const facts = verified.facts;
       const existing = await this.#options.worker.getInstalledDevelopDefault(request.catalogId, request.entryId);
+      assertCurrent();
       const loaded = await this.#options.worker.loadDevelopHistory({ catalogId: request.catalogId, entryId: request.entryId, revisionId: null });
+      assertCurrent();
       if (loaded.kind !== "loaded") throw new Error("Develop Head needs recovery before defaults can run.");
       if (existing) return { kind: "already-installed", head: loaded.value, installed: existing };
       if (loaded.value.ordinal !== 0 || verified.entry.metadata.developJson !== null || verified.entry.metadata.rawXmp !== null || verified.entry.metadata.xmpState === "preserved") {
         return { kind: "not-pristine", head: loaded.value, installed: null };
       }
       if (!verified.installAvailable) return { kind: "no-match", head: loaded.value, installed: null };
+      if (!factsMatch(request.facts, facts)) {
+        throw new Error("Develop default facts do not match main-verified source provenance.");
+      }
       const match = await this.#match(facts);
+      assertCurrent();
       if (match.kind !== "matched") return { kind: "no-match", head: loaded.value, installed: null };
       const registry = this.#options.cameraProfiles.list();
       const camera = facts.camera;
@@ -235,7 +295,9 @@ export class DevelopDefaultsService {
         ? result
         : { kind: result.kind, head: result.head, installed: result.installed };
     } finally {
-      this.#cancelledInstalls.delete(request.requestId);
+      if (this.#activeInstalls.get(request.requestId) === active) {
+        this.#activeInstalls.delete(request.requestId);
+      }
     }
   }
 

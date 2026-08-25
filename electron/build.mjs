@@ -38,4 +38,11 @@ await esbuild.build({
   format: "cjs",
 });
 
-console.log("Built Electron main, preload, and catalog worker to electron-dist/");
+await esbuild.build({
+  ...shared,
+  entryPoints: [path.join(rootDir, "electron/libraw-profile-worker.ts")],
+  outfile: path.join(outDir, "libraw-profile-worker.js"),
+  format: "cjs",
+});
+
+console.log("Built Electron main, preload, catalog worker, and LibRaw profile worker to electron-dist/");

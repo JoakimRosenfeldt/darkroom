@@ -1,5 +1,11 @@
 import { parseCatalogId, parseEntryId, parseOperationId, type CatalogId, type EntryId, type OperationId } from "../../catalog/ids.ts";
-import { parseDevelopHistoryLoadedRevision, parseDevelopRevisionId, type DevelopHistoryLoadedRevision, type DevelopRevisionId } from "../history.ts";
+import {
+  canonicalDevelopHistoryDocument,
+  parseDevelopHistoryLoadedRevision,
+  parseDevelopRevisionId,
+  type DevelopHistoryLoadedRevision,
+  type DevelopRevisionId,
+} from "../history.ts";
 import { validateV3CommandDocument } from "../v3/commands.ts";
 import type { DevelopDocumentV3 } from "../v3/document.ts";
 import { parseDevelopPresetId, type DevelopPresetId } from "../presets/schema.ts";
@@ -105,6 +111,10 @@ export function parseDevelopDefaultInstallInput(value: unknown): DevelopDefaultI
     entryId,
     revisionId,
   });
+  const document = validateV3CommandDocument(input.document);
+  if (canonicalDevelopHistoryDocument(document) !== canonicalDevelopHistoryDocument(installed.baselineDocument)) {
+    fail("Develop default baseline does not match its installed document.");
+  }
   return {
     catalogId,
     entryId,
@@ -112,7 +122,7 @@ export function parseDevelopDefaultInstallInput(value: unknown): DevelopDefaultI
     revisionId,
     operationId: parseOperationId(input.operationId),
     label: text(input.label, "Develop default install label", 120),
-    document: validateV3CommandDocument(input.document),
+    document,
     installed: {
       ruleId: installed.ruleId,
       ruleRevision: installed.ruleRevision,

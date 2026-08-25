@@ -214,6 +214,7 @@ export type DevelopSessionCommandErrorCode =
   | "asset-copy-failed"
   | "asset-copy-invalid"
   | "invalid-document"
+  | "edit-blocked"
   | "process-mismatch"
   | "read-only"
   | "upgrade-stale";
@@ -249,6 +250,8 @@ export interface DevelopSession {
   subscribeCommittedCommands(
     listener: (command: CommittedDevelopCommand) => void,
   ): () => void;
+  beginEditBlock(token: string): DevelopSessionSnapshot;
+  finishEditBlock(token: string): DevelopSessionSnapshot;
   beginEditGroup(label: string): DevelopSessionSnapshot;
   endEditGroup(): DevelopSessionSnapshot;
   cancelEditGroup(): DevelopSessionSnapshot;
@@ -420,6 +423,7 @@ export class DevelopSessionCore implements DevelopSession {
   #repository: DevelopSessionRepository | null;
   #assetCopy: V3UpgradeAssetCopyAdapter | null = null;
   #sourceSignatureProvider: (() => Readonly<SourceSignature> | null) | null = null;
+  #editBlockToken: string | null = null;
   #committedCommandListeners = new Set<
     (command: CommittedDevelopCommand) => void
   >();
@@ -513,6 +517,27 @@ export class DevelopSessionCore implements DevelopSession {
     return () => this.#committedCommandListeners.delete(listener);
   }
 
+  beginEditBlock(token: string): DevelopSessionSnapshot {
+    if (!token) throw new Error("Develop edit block token is invalid.");
+    this.#editBlockToken = token;
+    this.#state.transientEdit = null;
+    return this.snapshot();
+  }
+
+  finishEditBlock(token: string): DevelopSessionSnapshot {
+    if (this.#editBlockToken === token) this.#editBlockToken = null;
+    return this.snapshot();
+  }
+
+  #assertEditingAllowed(): void {
+    if (this.#editBlockToken !== null) {
+      throw new DevelopSessionCommandError(
+        "edit-blocked",
+        "Develop edits are unavailable until the initial default resolution finishes.",
+      );
+    }
+  }
+
   hydrate(process: DevelopSessionOpenDocument): DevelopSessionSnapshot {
     if (this.#state.documentRevision !== this.#state.persistedDocumentRevision) {
       return this.snapshot();
@@ -547,6 +572,7 @@ export class DevelopSessionCore implements DevelopSession {
     command: DevelopSessionCommand,
     label = "Edit",
   ): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     if (command.kind === "undo") {
       this.undo();
       return this.snapshot();
@@ -652,6 +678,7 @@ export class DevelopSessionCore implements DevelopSession {
     afterMetadata: DevelopMetadataValues,
     label: string,
   ): DevelopCompositeCommitResult {
+    this.#assertEditingAllowed();
     return this.#commitV3DocumentWithMetadata(document, label, {
       before: metadataValues(beforeMetadata),
       after: metadataValues(afterMetadata),
@@ -735,6 +762,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   async upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot> {
+    this.#assertEditingAllowed();
     if (this.#state.process.kind === "read-only-newer") {
       throw new DevelopSessionCommandError("read-only", this.#state.process.reason.message);
     }
@@ -795,6 +823,7 @@ export class DevelopSessionCore implements DevelopSession {
       }
     }
     const latestSourceSignature = this.#sourceSignatureProvider?.() ?? null;
+    this.#assertEditingAllowed();
     if (
       this.#state.documentRevision !== sourceDocumentRevision ||
       this.#state.process.kind !== "editable" ||
@@ -817,6 +846,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   beginEditGroup(label: string): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     if (!this.#state.transientEdit) {
       if (
         this.#state.process.kind === "editable" &&
@@ -840,6 +870,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   endEditGroup(): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     const transientEdit = this.#state.transientEdit;
     this.#state.transientEdit = null;
     return transientEdit?.kind === "v3"
@@ -853,6 +884,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   undo(): DevelopMetadataMutation | null {
+    this.#assertEditingAllowed();
     const history = this.#state.undo.at(-1);
     if (!history) return null;
     if (
@@ -924,6 +956,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   redo(): DevelopMetadataMutation | null {
+    this.#assertEditingAllowed();
     const history = this.#state.redo.at(-1);
     if (!history) return null;
     if (
@@ -998,6 +1031,7 @@ export class DevelopSessionCore implements DevelopSession {
     before: DevelopMetadataValues,
     after: DevelopMetadataValues,
   ): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     const beforeMetadata = metadataValues(before);
     const afterMetadata = metadataValues(after);
     if (JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata)) {

@@ -264,7 +264,6 @@ export class DevelopPresetStore {
     }
     return this.#serialize(async () => {
       const manifest = await this.#requiredManifest();
-      if (manifest.deletedPresetIds.includes(presetId)) return null;
       const stored = manifest.records.find((item) => item.preset.presetId === presetId && item.preset.revision === revisionValue)?.preset;
       const builtIn = this.#builtIns.find((item) => item.presetId === presetId && item.revision === revisionValue);
       const preset = stored ?? builtIn;
