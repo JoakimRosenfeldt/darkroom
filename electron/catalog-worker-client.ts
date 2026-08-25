@@ -11,6 +11,17 @@ import type {
   CatalogLiveState,
 } from "../lib/catalog/live.ts";
 import type {
+  DevelopHistoryCommitInput,
+  DevelopHistoryCommitResult,
+  DevelopHistoryListInput,
+  DevelopHistoryLoadInput,
+  DevelopHistoryLoadedRevision,
+  DevelopHistoryRef,
+  DevelopHistoryRefMutationInput,
+  DevelopHistoryRevision,
+} from "../lib/develop/history.ts";
+import type { EntryId } from "../lib/catalog/ids.ts";
+import type {
   CatalogV3ActivationResult,
   CatalogV3AlbumAssetPage,
   CatalogV3AlbumAssetPageInput,
@@ -373,6 +384,26 @@ export class CatalogWorkerClient {
   async integrityCheck(): Promise<CatalogWorkerIntegrityCheckResponse> {
     const response = await this.send({ kind: "integrity-check", requestId: requestId() });
     return requireKind(response, "integrity-check");
+  }
+
+  async loadDevelopHistory(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadedRevision> {
+    return requireKind(await this.send({ kind: "develop-history-load", requestId: requestId(), input }), "develop-history-load").result;
+  }
+
+  async listDevelopHistory(input: DevelopHistoryListInput): Promise<readonly DevelopHistoryRevision[]> {
+    return requireKind(await this.send({ kind: "develop-history-list", requestId: requestId(), input }), "develop-history-list").result;
+  }
+
+  async commitDevelopHistory(input: DevelopHistoryCommitInput): Promise<DevelopHistoryCommitResult> {
+    return requireKind(await this.send({ kind: "develop-history-commit", requestId: requestId(), input }), "develop-history-commit").result;
+  }
+
+  async listDevelopHistoryRefs(catalogId: CatalogId, entryId: EntryId): Promise<readonly DevelopHistoryRef[]> {
+    return requireKind(await this.send({ kind: "develop-history-refs", requestId: requestId(), catalogId, entryId }), "develop-history-refs").result;
+  }
+
+  async mutateDevelopHistoryRef(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]> {
+    return requireKind(await this.send({ kind: "develop-history-ref-mutate", requestId: requestId(), input }), "develop-history-ref-mutate").result;
   }
 
   async close(): Promise<CatalogWorkerCloseResponse> {

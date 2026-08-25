@@ -64,6 +64,8 @@ import {
   upgradeCatalogV3IdentitySchema,
   verifyCatalogV3Schema,
 } from "./catalog-v3-schema.ts";
+import { upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
+import { DevelopHistoryRepository } from "./develop-history-repository.ts";
 
 type Row = Record<string, unknown>;
 
@@ -396,6 +398,7 @@ export class CatalogLiveRepository {
 
   private schema(): void {
     upgradeCatalogV3IdentitySchema(this.database);
+    upgradeDevelopHistorySchema(this.database);
     verifyCatalogV3Schema(this.database);
     ensureLibraryStateTable(this.database);
   }
@@ -1581,6 +1584,8 @@ export class CatalogLiveRepository {
     const validated = parseCatalogLiveCreateInput(input);
     prepareFreshCatalogV3Database(this.database);
     ensureLibraryStateTable(this.database);
+    upgradeCatalogV3IdentitySchema(this.database);
+    upgradeDevelopHistorySchema(this.database);
     const now = validated.now ?? Date.now();
     return this.transaction(() => {
       this.database.prepare(`
@@ -1619,6 +1624,7 @@ export class CatalogLiveRepository {
 
   public apply(input: CatalogLiveApplyInput): CatalogLiveApplyResult {
     this.schema();
+    const history = new DevelopHistoryRepository(this.database);
     const validated = parseCatalogLiveApplyInput(input);
     return this.transaction(() => {
       const catalog = this.catalog(validated.catalogId);
@@ -1633,6 +1639,7 @@ export class CatalogLiveRepository {
         kinds.push(parsed.kind);
         changed = this.applyMutation(validated.catalogId, parsed, now) || changed;
       }
+      history.ensureRoots(validated.catalogId, true);
       if (!changed) {
         return parseCatalogLiveApplyResult({ catalogId: validated.catalogId, revision: catalog.revision, changed: false, appliedMutations: validated.mutations.length, auditId: null });
       }

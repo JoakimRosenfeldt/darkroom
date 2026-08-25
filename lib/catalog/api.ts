@@ -467,6 +467,7 @@ function parsedSizedMutation(value: unknown): CatalogLiveMutation {
     throw new Error("Catalog mutation is not serializable.");
   }
   const maximum = parsed.kind === "library-state-replace" ||
+      parsed.kind === "edit-entry-create" ||
       (parsed.kind === "metadata-patch" &&
         (parsed.patch.developJson !== undefined || parsed.patch.rawXmp !== undefined))
     ? MAX_STATE_MUTATION_BYTES

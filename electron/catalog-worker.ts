@@ -39,6 +39,8 @@ import {
 } from "./catalog-worker-protocol.ts";
 import { CatalogV3Repository } from "./catalog-v3-repository.ts";
 import { CatalogLiveRepository } from "./catalog-live-repository.ts";
+import { DEVELOP_HISTORY_TABLES, upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
+import { DevelopHistoryRepository } from "./develop-history-repository.ts";
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -199,6 +201,8 @@ function openDatabase(targetPath: string): boolean {
   });
   try {
     opened.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    upgradeCatalogV3IdentitySchema(opened);
+    upgradeDevelopHistorySchema(opened);
   } catch (error) {
     opened.close();
     throw error;
@@ -332,6 +336,7 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       timeout: 500,
     });
     upgradeCatalogV3IdentitySchema(cloned);
+    upgradeDevelopHistorySchema(cloned);
     verifyCatalogV3Schema(cloned);
     cloned.exec("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; BEGIN IMMEDIATE;");
     cloned.prepare(`
@@ -347,6 +352,12 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       );
     }
     for (const table of CATALOG_V3_IDENTITY_TABLES) {
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of DEVELOP_HISTORY_TABLES) {
       cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
         request.catalogId,
         sourceCatalogId,
@@ -870,6 +881,21 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
         requestId: request.requestId,
         result: catalogLiveRepository().apply(request.input),
       });
+      return;
+    case "develop-history-load":
+      post({ kind: "develop-history-load", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).load(request.input) });
+      return;
+    case "develop-history-list":
+      post({ kind: "develop-history-list", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).list(request.input) });
+      return;
+    case "develop-history-commit":
+      post({ kind: "develop-history-commit", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).commit(request.input) });
+      return;
+    case "develop-history-refs":
+      post({ kind: "develop-history-refs", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).refs(request.catalogId, request.entryId) });
+      return;
+    case "develop-history-ref-mutate":
+      post({ kind: "develop-history-ref-mutate", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).mutateRef(request.input) });
       return;
     case "test-tracer-run": {
       const result = await runTestTracer(request);

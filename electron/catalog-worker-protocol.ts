@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   parseAssetId,
   parseCatalogId,
+  parseEntryId,
   parseOperationId,
   parseRootId,
   type AssetId,
@@ -59,6 +60,24 @@ import {
   type CatalogLiveQueryInput,
   type CatalogLiveState,
 } from "../lib/catalog/live.ts";
+import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryCommitResult,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryLoadedRevision,
+  parseDevelopHistoryRef,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryRevision,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
+  type DevelopHistoryListInput,
+  type DevelopHistoryLoadInput,
+  type DevelopHistoryLoadedRevision,
+  type DevelopHistoryRef,
+  type DevelopHistoryRefMutationInput,
+  type DevelopHistoryRevision,
+} from "../lib/develop/history.ts";
 import {
   parseCatalogFaultPoint,
   parseCatalogFaultStage,
@@ -367,6 +386,17 @@ export interface CatalogWorkerCatalogLiveApplyResponse {
   readonly result: CatalogLiveApplyResult;
 }
 
+export interface CatalogWorkerDevelopHistoryLoadRequest { readonly kind: "develop-history-load"; readonly requestId: string; readonly input: DevelopHistoryLoadInput }
+export interface CatalogWorkerDevelopHistoryLoadResponse { readonly kind: "develop-history-load"; readonly requestId: string; readonly result: DevelopHistoryLoadedRevision }
+export interface CatalogWorkerDevelopHistoryListRequest { readonly kind: "develop-history-list"; readonly requestId: string; readonly input: DevelopHistoryListInput }
+export interface CatalogWorkerDevelopHistoryListResponse { readonly kind: "develop-history-list"; readonly requestId: string; readonly result: readonly DevelopHistoryRevision[] }
+export interface CatalogWorkerDevelopHistoryCommitRequest { readonly kind: "develop-history-commit"; readonly requestId: string; readonly input: DevelopHistoryCommitInput }
+export interface CatalogWorkerDevelopHistoryCommitResponse { readonly kind: "develop-history-commit"; readonly requestId: string; readonly result: DevelopHistoryCommitResult }
+export interface CatalogWorkerDevelopHistoryRefsRequest { readonly kind: "develop-history-refs"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopHistoryRefsResponse { readonly kind: "develop-history-refs"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+export interface CatalogWorkerDevelopHistoryRefMutateRequest { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly input: DevelopHistoryRefMutationInput }
+export interface CatalogWorkerDevelopHistoryRefMutateResponse { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+
 export interface CatalogWorkerTestTracerRunRequest {
   readonly kind: "test-tracer-run";
   readonly requestId: string;
@@ -435,6 +465,11 @@ export type CatalogWorkerRequest =
   | CatalogWorkerCatalogLiveCreateRequest
   | CatalogWorkerCatalogLiveQueryRequest
   | CatalogWorkerCatalogLiveApplyRequest
+  | CatalogWorkerDevelopHistoryLoadRequest
+  | CatalogWorkerDevelopHistoryListRequest
+  | CatalogWorkerDevelopHistoryCommitRequest
+  | CatalogWorkerDevelopHistoryRefsRequest
+  | CatalogWorkerDevelopHistoryRefMutateRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
   | CatalogWorkerTestTracerInspectRequest;
@@ -492,6 +527,11 @@ export type CatalogWorkerResponse =
   | CatalogWorkerCatalogLiveCreateResponse
   | CatalogWorkerCatalogLiveQueryResponse
   | CatalogWorkerCatalogLiveApplyResponse
+  | CatalogWorkerDevelopHistoryLoadResponse
+  | CatalogWorkerDevelopHistoryListResponse
+  | CatalogWorkerDevelopHistoryCommitResponse
+  | CatalogWorkerDevelopHistoryRefsResponse
+  | CatalogWorkerDevelopHistoryRefMutateResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
   | CatalogWorkerTestTracerInspectResponse
@@ -1285,6 +1325,16 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, input: parseCatalogLiveQueryInput(record.input) };
     case "live-apply":
       return { kind, requestId, input: parseCatalogLiveApplyInput(record.input) };
+    case "develop-history-load":
+      return { kind, requestId, input: parseDevelopHistoryLoadInput(record.input) };
+    case "develop-history-list":
+      return { kind, requestId, input: parseDevelopHistoryListInput(record.input) };
+    case "develop-history-commit":
+      return { kind, requestId, input: parseDevelopHistoryCommitInput(record.input) };
+    case "develop-history-refs":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
+    case "develop-history-ref-mutate":
+      return { kind, requestId, input: parseDevelopHistoryRefMutationInput(record.input) };
     case "test-tracer-run":
       return {
         kind,
@@ -1453,6 +1503,19 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "live-apply":
       if (requestId === null) throw new Error("Catalog live apply response needs a requestId.");
       return { kind, requestId, result: parseCatalogLiveApplyResult(requiredRecord(record.result, "live apply result")) };
+    case "develop-history-load":
+      if (requestId === null) throw new Error("Develop history load response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryLoadedRevision(record.result) };
+    case "develop-history-list":
+      if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history list response is invalid.");
+      return { kind, requestId, result: record.result.map(parseDevelopHistoryRevision) };
+    case "develop-history-commit":
+      if (requestId === null) throw new Error("Develop history commit response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryCommitResult(record.result) };
+    case "develop-history-refs":
+    case "develop-history-ref-mutate":
+      if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history refs response is invalid.");
+      return { kind, requestId, result: record.result.map(parseDevelopHistoryRef) };
     case "test-tracer-run":
     case "test-tracer-recover":
     case "test-tracer-inspect":

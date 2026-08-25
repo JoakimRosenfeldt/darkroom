@@ -1011,7 +1011,7 @@ function parseMutation(value: unknown): CatalogLiveMutation {
           ? null
           : (() => {
               const value = stringValue(input.developJson, "developJson");
-              if (new TextEncoder().encode(value).byteLength > 2 * 1024 * 1024) {
+              if (new TextEncoder().encode(value).byteLength > MAX_EMBEDDED_JSON_BYTES) {
                 return fail("developJson is too large");
               }
               try { JSON.parse(value); } catch { return fail("developJson is invalid"); }
