@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   createAssetId,
+  createOperationId,
   parseAssetId,
   parseCatalogId,
   parseEntryId,
@@ -66,6 +67,11 @@ import {
 } from "./catalog-v3-schema.ts";
 import { upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
 import { DevelopHistoryRepository } from "./develop-history-repository.ts";
+import {
+  canonicalDevelopHistoryDocument,
+  createDevelopRevisionId,
+  parseDevelopHistoryDocument,
+} from "../lib/develop/history.ts";
 
 type Row = Record<string, unknown>;
 
@@ -1641,13 +1647,50 @@ export class CatalogLiveRepository {
       if (catalog.revision !== validated.expectedRevision) {
         throw new Error(`Catalog live revision ${validated.expectedRevision} is stale; current revision is ${catalog.revision}.`);
       }
+      history.assertHeadsComplete(validated.catalogId);
       const now = validated.now ?? Date.now();
       let changed = false;
       const kinds: string[] = [];
       for (const mutation of validated.mutations) {
         const parsed = parseCatalogLiveMutation(mutation);
         kinds.push(parsed.kind);
-        changed = this.applyMutation(validated.catalogId, parsed, now) || changed;
+        if (parsed.kind === "metadata-patch" && parsed.patch.developJson !== undefined) {
+          const entryId = mutationEntryId(parsed);
+          const current = this.metadata(validated.catalogId, entryId);
+          const document = parseDevelopHistoryDocument(
+            parsed.patch.developJson === null ? null : JSON.parse(parsed.patch.developJson) as unknown,
+          );
+          const metadataMutation = {
+            ...parsed,
+            patch: { ...parsed.patch, developJson: undefined },
+          };
+          changed = this.applyMutation(validated.catalogId, metadataMutation, now) || changed;
+          const currentJson = current.developJson === null
+            ? "null"
+            : canonicalDevelopHistoryDocument(JSON.parse(current.developJson) as unknown);
+          const nextJson = canonicalDevelopHistoryDocument(document);
+          if (currentJson !== nextJson) {
+            const head = history.load({ catalogId: validated.catalogId, entryId, revisionId: null });
+            if (head.kind !== "loaded") throw new Error("Develop history needs recovery before this edit can be saved.");
+            const createdAt = parsed.patch.developUpdatedAt ?? parsed.patch.updatedAt ?? now;
+            history.commit({
+              catalogId: validated.catalogId,
+              entryId,
+              revisionId: createDevelopRevisionId(),
+              expectedParentRevisionId: head.value.headRevisionId,
+              operationId: createOperationId(),
+              label: "Edit",
+              document,
+              createdAt,
+            }, true);
+            changed = true;
+          }
+        } else {
+          changed = this.applyMutation(validated.catalogId, parsed, now) || changed;
+        }
+        if (parsed.kind === "edit-entry-create" || parsed.kind === "reconcile" || parsed.kind === "reconcile-complete") {
+          history.ensureRoots(validated.catalogId, true);
+        }
       }
       history.ensureRoots(validated.catalogId, true);
       if (!changed) {

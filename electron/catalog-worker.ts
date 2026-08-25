@@ -41,6 +41,13 @@ import { CatalogV3Repository } from "./catalog-v3-repository.ts";
 import { CatalogLiveRepository } from "./catalog-live-repository.ts";
 import { DEVELOP_HISTORY_TABLES, upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
 import { DevelopHistoryRepository } from "./develop-history-repository.ts";
+import { installDevelopHistoryDocumentDecoder } from "../lib/develop/history.ts";
+
+const developDocumentDecoderReady = process.execArgv.includes("--experimental-strip-types")
+  ? Promise.resolve()
+  : import("../lib/develop/v3/codec.ts").then(({ decodePersistedDevelopDocument }) => {
+      installDevelopHistoryDocumentDecoder(decodePersistedDevelopDocument);
+    });
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -923,6 +930,7 @@ let queue = Promise.resolve();
 
 workerPort.on("message", (value: unknown) => {
   queue = queue.then(async () => {
+    await developDocumentDecoderReady;
     let request: CatalogWorkerRequest;
     try {
       request = parseCatalogWorkerRequest(value);

@@ -65,7 +65,7 @@ import {
   parseDevelopHistoryCommitResult,
   parseDevelopHistoryListInput,
   parseDevelopHistoryLoadInput,
-  parseDevelopHistoryLoadedRevision,
+  parseDevelopHistoryLoadResult,
   parseDevelopHistoryRef,
   parseDevelopHistoryRefMutationInput,
   parseDevelopHistoryRevision,
@@ -73,7 +73,7 @@ import {
   type DevelopHistoryCommitResult,
   type DevelopHistoryListInput,
   type DevelopHistoryLoadInput,
-  type DevelopHistoryLoadedRevision,
+  type DevelopHistoryLoadResult,
   type DevelopHistoryRef,
   type DevelopHistoryRefMutationInput,
   type DevelopHistoryRevision,
@@ -387,7 +387,7 @@ export interface CatalogWorkerCatalogLiveApplyResponse {
 }
 
 export interface CatalogWorkerDevelopHistoryLoadRequest { readonly kind: "develop-history-load"; readonly requestId: string; readonly input: DevelopHistoryLoadInput }
-export interface CatalogWorkerDevelopHistoryLoadResponse { readonly kind: "develop-history-load"; readonly requestId: string; readonly result: DevelopHistoryLoadedRevision }
+export interface CatalogWorkerDevelopHistoryLoadResponse { readonly kind: "develop-history-load"; readonly requestId: string; readonly result: DevelopHistoryLoadResult }
 export interface CatalogWorkerDevelopHistoryListRequest { readonly kind: "develop-history-list"; readonly requestId: string; readonly input: DevelopHistoryListInput }
 export interface CatalogWorkerDevelopHistoryListResponse { readonly kind: "develop-history-list"; readonly requestId: string; readonly result: readonly DevelopHistoryRevision[] }
 export interface CatalogWorkerDevelopHistoryCommitRequest { readonly kind: "develop-history-commit"; readonly requestId: string; readonly input: DevelopHistoryCommitInput }
@@ -1505,7 +1505,7 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
       return { kind, requestId, result: parseCatalogLiveApplyResult(requiredRecord(record.result, "live apply result")) };
     case "develop-history-load":
       if (requestId === null) throw new Error("Develop history load response needs a requestId.");
-      return { kind, requestId, result: parseDevelopHistoryLoadedRevision(record.result) };
+      return { kind, requestId, result: parseDevelopHistoryLoadResult(record.result) };
     case "develop-history-list":
       if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history list response is invalid.");
       return { kind, requestId, result: record.result.map(parseDevelopHistoryRevision) };

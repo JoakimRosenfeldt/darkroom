@@ -15,7 +15,7 @@ import type {
   DevelopHistoryCommitResult,
   DevelopHistoryListInput,
   DevelopHistoryLoadInput,
-  DevelopHistoryLoadedRevision,
+  DevelopHistoryLoadResult,
   DevelopHistoryRef,
   DevelopHistoryRefMutationInput,
   DevelopHistoryRevision,
@@ -386,7 +386,7 @@ export class CatalogWorkerClient {
     return requireKind(response, "integrity-check");
   }
 
-  async loadDevelopHistory(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadedRevision> {
+  async loadDevelopHistory(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadResult> {
     return requireKind(await this.send({ kind: "develop-history-load", requestId: requestId(), input }), "develop-history-load").result;
   }
 

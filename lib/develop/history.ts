@@ -1,4 +1,5 @@
 import { parseCatalogId, parseEntryId, parseOperationId, type CatalogId, type EntryId, type OperationId } from "../catalog/ids.ts";
+import type { PersistedDevelopDocument } from "./v3/document.ts";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
 
@@ -14,10 +15,25 @@ export const DEVELOP_HISTORY_MAX_OPERATIONS = 100_000;
 export const DEVELOP_HISTORY_MAX_DEPTH = 16;
 export const DEVELOP_HISTORY_RETAINED_REVISIONS = 500;
 export const DEVELOP_HISTORY_MAX_REFS_PER_KIND = 100;
+export const DEVELOP_HISTORY_MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+export const DEVELOP_HISTORY_MAX_CATALOG_BYTES = 1024 * 1024 * 1024;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
-const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+export type DevelopHistoryDocument = PersistedDevelopDocument | { readonly [key: string]: DevelopHistoryJson } | null;
+
+type DevelopHistoryDocumentDecodeResult =
+  | { readonly kind: "editable"; readonly document: PersistedDevelopDocument }
+  | { readonly kind: "read-only-newer" }
+  | { readonly kind: "invalid"; readonly message: string };
+
+let documentDecoder: ((value: unknown) => DevelopHistoryDocumentDecodeResult) | null = null;
+
+export function installDevelopHistoryDocumentDecoder(
+  decoder: (value: unknown) => DevelopHistoryDocumentDecodeResult,
+): void {
+  documentDecoder = decoder;
+}
 
 export type DevelopPatchOperation =
   | { readonly kind: "set"; readonly path: readonly string[]; readonly value: DevelopHistoryJson }
@@ -41,10 +57,31 @@ export interface DevelopHistoryRevision {
   readonly createdAt: number;
 }
 
-export interface DevelopHistoryLoadedRevision extends DevelopHistoryRevision {
-  readonly document: DevelopHistoryJson;
+export interface DevelopHistoryRecoveryRevision extends DevelopHistoryRevision {
+  readonly document: DevelopHistoryDocument;
+}
+
+export interface DevelopHistoryLoadedRevision extends DevelopHistoryRecoveryRevision {
   readonly headRevisionId: DevelopRevisionId;
 }
+
+export interface DevelopHistoryCorruption {
+  readonly kind: "missing-head" | "missing-revision" | "cycle" | "checkpoint" | "patch" | "hash" | "document";
+  readonly message: string;
+  readonly failedRevisionId: DevelopRevisionId | null;
+}
+
+export type DevelopHistoryLoadResult =
+  | { readonly kind: "loaded"; readonly value: DevelopHistoryLoadedRevision }
+  | {
+      readonly kind: "recovery";
+      readonly catalogId: CatalogId;
+      readonly entryId: EntryId;
+      readonly requestedRevisionId: DevelopRevisionId | null;
+      readonly headRevisionId: DevelopRevisionId | null;
+      readonly lastValidRevision: DevelopHistoryRecoveryRevision | null;
+      readonly corruption: DevelopHistoryCorruption;
+    };
 
 export type DevelopHistoryRefKind = "version" | "snapshot";
 
@@ -78,7 +115,7 @@ export interface DevelopHistoryCommitInput {
   readonly expectedParentRevisionId: DevelopRevisionId;
   readonly operationId: OperationId;
   readonly label: string;
-  readonly document: DevelopHistoryJson;
+  readonly document: DevelopHistoryDocument;
   readonly createdAt: number;
 }
 
@@ -104,6 +141,14 @@ export type DevelopHistoryRefMutationInput =
       readonly entryId: EntryId;
       readonly refId: DevelopRefId;
       readonly name: string;
+      readonly updatedAt: number;
+    }
+  | {
+      readonly kind: "move";
+      readonly catalogId: CatalogId;
+      readonly entryId: EntryId;
+      readonly refId: DevelopRefId;
+      readonly revisionId: DevelopRevisionId;
       readonly updatedAt: number;
     }
   | {
@@ -154,9 +199,9 @@ export function parseDevelopHistoryJson(value: unknown, depth = 0, seen = new Se
   seen.add(value);
   try {
     if (Array.isArray(value)) return value.map((item) => parseDevelopHistoryJson(item, depth + 1, seen));
-    const output: { [key: string]: DevelopHistoryJson } = {};
+    const output = Object.create(null) as { [key: string]: DevelopHistoryJson };
     for (const key of Object.keys(value).sort()) {
-      if (FORBIDDEN_KEYS.has(key) || key.includes("\0")) fail("Develop history JSON key is invalid.");
+      if (key.includes("\0")) fail("Develop history JSON key is invalid.");
       output[key] = parseDevelopHistoryJson(Reflect.get(value, key), depth + 1, seen);
     }
     return output;
@@ -167,6 +212,57 @@ export function parseDevelopHistoryJson(value: unknown, depth = 0, seen = new Se
 
 export function canonicalDevelopHistoryJson(value: unknown): string {
   return JSON.stringify(parseDevelopHistoryJson(value));
+}
+
+export function parseDevelopHistoryDocument(value: unknown): DevelopHistoryDocument {
+  if (value === null) return null;
+  const parsed = parseDevelopHistoryJson(value);
+  const input = record(parsed, "Develop document");
+  if (input.version === undefined) {
+    return parsed as { readonly [key: string]: DevelopHistoryJson };
+  }
+  if (input.version !== 2 && input.version !== 3) {
+    if (typeof input.version === "number" && input.version > 3) fail("Newer Develop documents are read-only.");
+    fail("Develop document version is invalid.");
+  }
+  if (documentDecoder !== null) {
+    const decoded = documentDecoder(value);
+    if (decoded.kind === "editable") return decoded.document;
+    if (decoded.kind === "read-only-newer") fail("Newer Develop documents are read-only.");
+    fail(decoded.message);
+  }
+  if (input.version === 2) {
+    record(input.settings, "Develop document settings");
+    record(input.maskAssets, "Develop document mask assets");
+  } else {
+    if (input.process !== "darkroom-v3" || typeof input.schemaRevision !== "string") fail("Develop V3 document identity is invalid.");
+    for (const key of ["tone", "color", "optics", "geometry", "local", "cleanup", "presence", "detail", "effects", "hdr", "compatibility"] as const) {
+      record(input[key], `Develop V3 ${key}`);
+    }
+  }
+  return parsed as unknown as PersistedDevelopDocument;
+}
+
+export function canonicalDevelopHistoryDocument(value: unknown): string {
+  return JSON.stringify(parseDevelopHistoryDocument(value));
+}
+
+export function collectDevelopHistoryAssetHashes(document: DevelopHistoryDocument): readonly string[] {
+  if (document === null || document.version !== 3) return [];
+  const hashes = new Set<string>();
+  const visit = (value: DevelopHistoryJson): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    const assetId = value.assetId;
+    const sha256 = value.sha256;
+    if (typeof assetId === "string" && assetId === sha256 && SHA256.test(assetId)) hashes.add(assetId);
+    for (const child of Object.values(value)) visit(child);
+  };
+  visit(parseDevelopHistoryJson(document));
+  return [...hashes].sort();
 }
 
 function sameJson(left: DevelopHistoryJson, right: DevelopHistoryJson): boolean {
@@ -185,9 +281,9 @@ export function diffDevelopHistory(before: unknown, after: unknown): DevelopHist
     }
     const oldRecord = oldValue as { [key: string]: DevelopHistoryJson };
     const newRecord = newValue as { [key: string]: DevelopHistoryJson };
-    for (const key of Object.keys(oldRecord).sort()) if (!(key in newRecord)) operations.push({ kind: "remove", path: [...path, key] });
+    for (const key of Object.keys(oldRecord).sort()) if (!Object.hasOwn(newRecord, key)) operations.push({ kind: "remove", path: [...path, key] });
     for (const key of Object.keys(newRecord).sort()) {
-      if (!(key in oldRecord)) operations.push({ kind: "set", path: [...path, key], value: newRecord[key]! });
+      if (!Object.hasOwn(oldRecord, key)) operations.push({ kind: "set", path: [...path, key], value: newRecord[key]! });
       else visit(oldRecord[key]!, newRecord[key]!, [...path, key], depth + 1);
       if (operations.length > DEVELOP_HISTORY_MAX_OPERATIONS) fail("Develop history patch exceeds the operation limit.");
     }
@@ -203,7 +299,7 @@ export function parseDevelopHistoryPatch(value: unknown): DevelopHistoryPatch {
   const operations = input.operations.map((item, index): DevelopPatchOperation => {
     const operation = record(item, `Develop history patch operation ${index}`);
     const kind = operation.kind;
-    if (!Array.isArray(operation.path) || operation.path.length > DEVELOP_HISTORY_MAX_DEPTH || operation.path.some((part) => typeof part !== "string" || FORBIDDEN_KEYS.has(part) || part.includes("\0"))) fail("Develop history patch path is invalid.");
+    if (!Array.isArray(operation.path) || operation.path.length > DEVELOP_HISTORY_MAX_DEPTH || operation.path.some((part) => typeof part !== "string" || part.includes("\0"))) fail("Develop history patch path is invalid.");
     const path = operation.path as string[];
     if (kind === "remove") { exactKeys(operation, ["kind", "path"], "Develop history remove operation"); return { kind, path }; }
     if (kind === "set") { exactKeys(operation, ["kind", "path", "value"], "Develop history set operation"); return { kind, path, value: parseDevelopHistoryJson(operation.value) }; }
@@ -215,12 +311,12 @@ export function parseDevelopHistoryPatch(value: unknown): DevelopHistoryPatch {
 }
 
 export function replayDevelopHistory(base: unknown, patchValue: unknown): DevelopHistoryJson {
-  let document = structuredClone(parseDevelopHistoryJson(base));
+  let document = parseDevelopHistoryJson(base);
   const patch = parseDevelopHistoryPatch(patchValue);
   for (const operation of patch.operations) {
     if (operation.path.length === 0) {
       if (operation.kind === "remove") fail("Develop history cannot remove the document root.");
-      document = structuredClone(operation.value);
+      document = parseDevelopHistoryJson(operation.value);
       continue;
     }
     if (typeof document !== "object" || document === null || Array.isArray(document)) fail("Develop history patch parent is invalid.");
@@ -232,7 +328,12 @@ export function replayDevelopHistory(base: unknown, patchValue: unknown): Develo
     }
     const key = operation.path.at(-1)!;
     if (operation.kind === "remove") delete parent[key];
-    else parent[key] = structuredClone(operation.value);
+    else Object.defineProperty(parent, key, {
+      value: parseDevelopHistoryJson(operation.value),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return parseDevelopHistoryJson(document);
 }
@@ -251,12 +352,13 @@ export function parseDevelopHistoryListInput(value: unknown): DevelopHistoryList
 }
 export function parseDevelopHistoryCommitInput(value: unknown): DevelopHistoryCommitInput {
   const input = record(value, "Develop history commit input"); exactKeys(input, ["catalogId", "entryId", "revisionId", "expectedParentRevisionId", "operationId", "label", "document", "createdAt"], "Develop history commit input");
-  return { catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), revisionId: parseDevelopRevisionId(input.revisionId), expectedParentRevisionId: parseDevelopRevisionId(input.expectedParentRevisionId), operationId: parseOperationId(input.operationId), label: text(input.label, "Develop history label"), document: parseDevelopHistoryJson(input.document), createdAt: finite(input.createdAt, "Develop history createdAt") };
+  return { catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), revisionId: parseDevelopRevisionId(input.revisionId), expectedParentRevisionId: parseDevelopRevisionId(input.expectedParentRevisionId), operationId: parseOperationId(input.operationId), label: text(input.label, "Develop history label"), document: parseDevelopHistoryDocument(input.document), createdAt: finite(input.createdAt, "Develop history createdAt") };
 }
 export function parseDevelopHistoryRefMutationInput(value: unknown): DevelopHistoryRefMutationInput {
   const input = record(value, "Develop history ref mutation");
   if (input.kind === "create") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "refKind", "name", "revisionId", "createdAt"], "Develop history ref create"); return { kind: "create", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), refKind: refKind(input.refKind), name: text(input.name, "Develop history ref name"), revisionId: parseDevelopRevisionId(input.revisionId), createdAt: finite(input.createdAt, "Develop history ref createdAt") }; }
   if (input.kind === "rename") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "name", "updatedAt"], "Develop history ref rename"); return { kind: "rename", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), name: text(input.name, "Develop history ref name"), updatedAt: finite(input.updatedAt, "Develop history ref updatedAt") }; }
+  if (input.kind === "move") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "revisionId", "updatedAt"], "Develop history ref move"); return { kind: "move", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), revisionId: parseDevelopRevisionId(input.revisionId), updatedAt: finite(input.updatedAt, "Develop history ref updatedAt") }; }
   if (input.kind === "delete") { exactKeys(input, ["kind", "catalogId", "entryId", "refId"], "Develop history ref delete"); return { kind: "delete", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId) }; }
   return fail("Develop history ref mutation kind is invalid.");
 }
@@ -269,7 +371,38 @@ export function parseDevelopHistoryRevision(value: unknown): DevelopHistoryRevis
 export function parseDevelopHistoryLoadedRevision(value: unknown): DevelopHistoryLoadedRevision {
   const input = record(value, "Loaded Develop history revision");
   const revision = parseDevelopHistoryRevision(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "document" && key !== "headRevisionId")));
-  return { ...revision, document: parseDevelopHistoryJson(input.document), headRevisionId: parseDevelopRevisionId(input.headRevisionId) };
+  return { ...revision, document: parseDevelopHistoryDocument(input.document), headRevisionId: parseDevelopRevisionId(input.headRevisionId) };
+}
+export function parseDevelopHistoryRecoveryRevision(value: unknown): DevelopHistoryRecoveryRevision {
+  const input = record(value, "Develop history recovery revision");
+  const revision = parseDevelopHistoryRevision(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "document")));
+  return { ...revision, document: parseDevelopHistoryDocument(input.document) };
+}
+export function parseDevelopHistoryLoadResult(value: unknown): DevelopHistoryLoadResult {
+  const input = record(value, "Develop history load result");
+  if (input.kind === "loaded") {
+    exactKeys(input, ["kind", "value"], "Develop history loaded result");
+    return { kind: "loaded", value: parseDevelopHistoryLoadedRevision(input.value) };
+  }
+  if (input.kind !== "recovery") return fail("Develop history load result kind is invalid.");
+  exactKeys(input, ["kind", "catalogId", "entryId", "requestedRevisionId", "headRevisionId", "lastValidRevision", "corruption"], "Develop history recovery result");
+  const corruption = record(input.corruption, "Develop history corruption");
+  exactKeys(corruption, ["kind", "message", "failedRevisionId"], "Develop history corruption");
+  const corruptionKind = corruption.kind;
+  if (corruptionKind !== "missing-head" && corruptionKind !== "missing-revision" && corruptionKind !== "cycle" && corruptionKind !== "checkpoint" && corruptionKind !== "patch" && corruptionKind !== "hash" && corruptionKind !== "document") fail("Develop history corruption kind is invalid.");
+  return {
+    kind: "recovery",
+    catalogId: parseCatalogId(input.catalogId),
+    entryId: parseEntryId(input.entryId),
+    requestedRevisionId: input.requestedRevisionId === null ? null : parseDevelopRevisionId(input.requestedRevisionId),
+    headRevisionId: input.headRevisionId === null ? null : parseDevelopRevisionId(input.headRevisionId),
+    lastValidRevision: input.lastValidRevision === null ? null : parseDevelopHistoryRecoveryRevision(input.lastValidRevision),
+    corruption: {
+      kind: corruptionKind,
+      message: text(corruption.message, "Develop history corruption message", 1_024),
+      failedRevisionId: corruption.failedRevisionId === null ? null : parseDevelopRevisionId(corruption.failedRevisionId),
+    },
+  };
 }
 export function parseDevelopHistoryCommitResult(value: unknown): DevelopHistoryCommitResult {
   const input = record(value, "Develop history commit result"); exactKeys(input, ["revision", "idempotent"], "Develop history commit result");
