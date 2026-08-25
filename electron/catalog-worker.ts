@@ -10,7 +10,12 @@ import {
   type AssetId,
   type OperationId,
 } from "../lib/catalog/ids.ts";
-import { CATALOG_V3_IDENTITY_TABLES, CATALOG_V3_TABLES, verifyCatalogV3Schema } from "./catalog-v3-schema.ts";
+import {
+  CATALOG_V3_IDENTITY_TABLES,
+  CATALOG_V3_TABLES,
+  upgradeCatalogV3IdentitySchema,
+  verifyCatalogV3Schema,
+} from "./catalog-v3-schema.ts";
 import {
   CatalogFaultInjectedError,
   createCatalogFaultInjectorForTests,
@@ -326,6 +331,7 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       enableForeignKeyConstraints: true,
       timeout: 500,
     });
+    upgradeCatalogV3IdentitySchema(cloned);
     verifyCatalogV3Schema(cloned);
     cloned.exec("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; BEGIN IMMEDIATE;");
     cloned.prepare(`

@@ -20,6 +20,7 @@ export interface DevelopSidecar {
 export async function readDevelopSidecar(
   entry: LibraryEntry,
 ): Promise<DevelopSidecar | null> {
+  if (entry.entryKind === "virtual") return null;
   const sidecar = await getDarkroomAPI().catalogReadSidecar(getAssetRequest(entry));
   if (!sidecar) {
     return null;
@@ -40,6 +41,7 @@ export async function writeDevelopSidecar(
   existingContents: string | null,
   expectedLastModified: number | null,
 ): Promise<{ readonly contents: string; readonly lastModified: number } | null> {
+  if (entry.entryKind === "virtual") return null;
   const contents = serializeDevelopXmp(document, metadata, existingContents);
   if (contents === null) {
     return null;

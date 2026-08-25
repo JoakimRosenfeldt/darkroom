@@ -100,6 +100,7 @@ const ASSET_SNAPSHOT_SELECT = `
     a.catalog_id AS catalogId,
     e.entry_id AS entryId,
     e.source_id AS sourceId,
+    e.is_original AS isOriginal,
     a.asset_id AS assetId,
     a.root_id AS rootId,
     a.relative_path AS relativePath,
@@ -469,9 +470,19 @@ export class CatalogLiveRepository {
     return albums.map((value) => {
       if (!isRow(value)) throw new Error("Catalog live album row is invalid.");
       const albumId = requiredString(value, "albumId");
-      const members = this.database.prepare("SELECT entry_id AS entryId FROM album_entries WHERE catalog_id = ? AND album_id = ? ORDER BY position").all(catalogId, albumId).map((member) => {
+      const members = this.database.prepare(`
+        SELECT ae.entry_id AS entryId, ee.source_id AS sourceId
+        FROM album_entries AS ae
+        JOIN edit_entries AS ee
+          ON ee.catalog_id = ae.catalog_id AND ee.entry_id = ae.entry_id
+        WHERE ae.catalog_id = ? AND ae.album_id = ?
+        ORDER BY ae.position
+      `).all(catalogId, albumId).map((member) => {
         if (!isRow(member)) throw new Error("Catalog live album member row is invalid.");
-        return parseEntryId(requiredString(member, "entryId"));
+        return {
+          entryId: parseEntryId(requiredString(member, "entryId")),
+          assetId: parseAssetId(requiredString(member, "sourceId")),
+        };
       });
       return {
         albumId,
@@ -479,8 +490,8 @@ export class CatalogLiveRepository {
         createdAt: numberValue(value, "createdAt"),
         updatedAt: numberValue(value, "updatedAt"),
         position: integerValue(value, "position"),
-        entryIds: members,
-        assetIds: members.map((entryId) => parseAssetId(entryId)),
+        entryIds: members.map((member) => member.entryId),
+        assetIds: members.map((member) => member.assetId),
       };
     });
   }
@@ -1272,6 +1283,7 @@ export class CatalogLiveRepository {
       catalogId: parseCatalogId(requiredString(value, "catalogId")),
       entryId: parseEntryId(requiredString(value, "entryId")),
       sourceId: parseSourceId(requiredString(value, "sourceId")),
+      entryKind: booleanValue(value, "isOriginal") ? "original" : "virtual",
       assetId: parseAssetId(requiredString(value, "assetId")),
       rootId: parseRootId(requiredString(value, "rootId")),
       relativePath: requiredString(value, "relativePath"),

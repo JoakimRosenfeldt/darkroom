@@ -8,6 +8,7 @@ export async function writeKeywordSidecar(
   flat: readonly string[],
   hierarchical: readonly string[],
 ): Promise<void> {
+  if (entry.entryKind === "virtual") return;
   const api = getDarkroomAPI();
   const request = getAssetRequest(entry);
   const current = await api.catalogReadSidecar(request);

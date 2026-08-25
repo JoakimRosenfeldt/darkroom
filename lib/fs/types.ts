@@ -11,7 +11,7 @@ export interface EntryFormatAvailability {
   readonly reason: string | null;
 }
 
-export interface LibraryEntry {
+interface LibraryEntryBase {
   id: EntryId;
   sourceId: SourceId;
   assetId: AssetId;
@@ -30,6 +30,16 @@ export interface LibraryEntry {
   fingerprintStatus?: "missing" | "hashing" | "valid" | "stale" | "failed";
   fingerprintSha256?: string | null;
 }
+
+export interface OriginalLibraryEntry extends LibraryEntryBase {
+  readonly entryKind: "original";
+}
+
+export interface VirtualLibraryEntry extends LibraryEntryBase {
+  readonly entryKind: "virtual";
+}
+
+export type LibraryEntry = OriginalLibraryEntry | VirtualLibraryEntry;
 
 export const SUPPORTED_EXTENSIONS = SUPPORTED_INPUT_EXTENSIONS;
 

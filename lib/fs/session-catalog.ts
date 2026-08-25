@@ -300,10 +300,12 @@ function entryFromAsset(
   const capability = asset.formatId === null
     ? getFormatCapabilityForFileName(name)
     : getFormatCapability(asset.formatId);
+  const entryId = asset.entryId ?? parseEntryId(asset.assetId);
   return {
-    id: asset.entryId ?? parseEntryId(asset.assetId),
+    id: entryId,
     sourceId: asset.sourceId ?? parseSourceId(asset.assetId),
     assetId: asset.assetId,
+    entryKind: asset.entryKind ?? (String(entryId) === String(asset.assetId) ? "original" : "virtual"),
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     rootId: asset.rootId,

@@ -1,4 +1,5 @@
 import type { Album, EntryMetadata } from "../catalog/types";
+import type { AssetId } from "../catalog/ids";
 import type { LibraryEntry } from "../fs/types";
 import type { LibraryWorkspaceState } from "./model";
 
@@ -28,8 +29,13 @@ export function buildExactDuplicateGroups(
   workspace: LibraryWorkspaceState,
 ): ExactDuplicateGroup[] {
   const archived = new Set(archivedEntryIds);
-  const byHash = new Map<string, LibraryEntry[]>();
+  const entriesBySource = new Map<AssetId, LibraryEntry>();
   for (const entry of entries) {
+    const current = entriesBySource.get(entry.assetId);
+    if (!current || entry.entryKind === "original") entriesBySource.set(entry.assetId, entry);
+  }
+  const byHash = new Map<string, LibraryEntry[]>();
+  for (const entry of entriesBySource.values()) {
     if (entry.fingerprintStatus !== "valid" || !entry.fingerprintSha256) continue;
     const key = `${entry.size}:${entry.fingerprintSha256}`;
     const group = byHash.get(key) ?? [];

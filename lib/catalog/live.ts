@@ -183,6 +183,7 @@ export interface CatalogLiveAlbum {
 export interface CatalogLiveEntrySnapshot extends CatalogV3AssetSnapshot {
   readonly entryId?: EntryId;
   readonly sourceId?: SourceId;
+  readonly entryKind?: "original" | "virtual";
 }
 
 export interface CatalogLiveCatalogIdentity {
@@ -765,6 +766,12 @@ function parseAlbumOutput(value: unknown): CatalogLiveAlbum {
   const ids = input.entryIds ?? input.assetIds;
   if (!Array.isArray(ids)) return fail("live album.entryIds are invalid");
   const entryIds = ids.map((entryId) => parseEntryId(entryId));
+  const assetIds = input.assetIds === undefined
+    ? entryIds.map((entryId) => parseAssetId(entryId))
+    : Array.isArray(input.assetIds)
+      ? input.assetIds.map((assetId) => parseAssetId(assetId))
+      : fail("live album.assetIds are invalid");
+  if (assetIds.length !== entryIds.length) return fail("live album identities are inconsistent");
   return {
     albumId: stringValue(input.albumId, "live album.albumId"),
     name: stringValue(input.name, "live album.name", true),
@@ -772,7 +779,7 @@ function parseAlbumOutput(value: unknown): CatalogLiveAlbum {
     updatedAt: finiteNumber(input.updatedAt, "live album.updatedAt"),
     position: integer(input.position, "live album.position"),
     entryIds,
-    assetIds: entryIds.map((entryId) => parseAssetId(entryId)),
+    assetIds,
   };
 }
 
@@ -817,6 +824,9 @@ function parseAssetSnapshot(value: unknown): CatalogLiveEntrySnapshot {
     catalogId: parseCatalogId(input.catalogId),
     entryId: parseEntryId(input.entryId ?? input.assetId),
     sourceId: parseSourceId(input.sourceId ?? input.assetId),
+    entryKind: input.entryKind === undefined
+      ? input.entryId === undefined || input.entryId === input.assetId ? "original" : "virtual"
+      : enumValue(input.entryKind, "live asset.entryKind", ["original", "virtual"] as const),
     assetId: parseAssetId(input.assetId),
     rootId: parseRootId(input.rootId),
     relativePath: parseCatalogLiveRelativePath(input.relativePath),

@@ -724,6 +724,8 @@ function startMetadataAnalysis(
       entryAnalysisCacheSignature(entry.size, entry.lastModified)
     ));
   if (analysisEntries.length === 0) return;
+  const entryIdsByAssetId = new Map(analysisEntries.map((entry) => [entry.assetId, [] as string[]]));
+  for (const entry of analysisEntries) entryIdsByAssetId.get(entry.assetId)?.push(entry.id);
 
   let api: ReturnType<typeof getDarkroomAPI>;
   try {
@@ -744,7 +746,7 @@ function startMetadataAnalysis(
   set({
     metadataAnalysis: {
       operationId,
-      total: analysisEntries.length,
+      total: entryIdsByAssetId.size,
       completed: 0,
       failed: 0,
       cancelled: false,
@@ -755,7 +757,7 @@ function startMetadataAnalysis(
     catalogId,
     sessionId,
     operationId,
-    entryIds: analysisEntries.map((entry) => entry.assetId),
+    entryIds: [...entryIdsByAssetId.keys()],
     force: options.force === true,
   }).then(
     (result) => {
@@ -769,7 +771,9 @@ function startMetadataAnalysis(
       }
       const analysisByEntryId = { ...latest.libraryWorkspace.analysisByEntryId };
       for (const item of result.items) {
-        analysisByEntryId[item.entryId] = item.analysis;
+        for (const entryId of entryIdsByAssetId.get(item.entryId) ?? []) {
+          analysisByEntryId[entryId] = item.analysis;
+        }
       }
       set({
         libraryWorkspace: { ...latest.libraryWorkspace, analysisByEntryId },
@@ -1037,6 +1041,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const entry = started.entries.find((item) => item.id === entryId);
     if (!entry || started.catalogId === null || started.sessionId === null) {
       throw new Error("Photo is unavailable.");
+    }
+    if (entry.entryKind === "virtual") {
+      throw new Error("Virtual copies keep metadata in the catalog and cannot publish source XMP.");
     }
     const api = getDarkroomAPI();
     const request = getAssetRequest(entry);
@@ -2068,7 +2075,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
 
   deleteEntriesFromDisk: async (entryIds) => {
     if (entryIds.length === 0) return;
-    const targets = get().entries.filter((entry) => entryIds.includes(entry.id));
+    const selected = get().entries.filter((entry) => entryIds.includes(entry.id));
+    const targets = [...new Map(selected.map((entry) => [entry.assetId, entry])).values()];
     try {
       await Promise.all(targets.map((entry) => getDarkroomAPI().catalogTrashAsset(getAssetRequest(entry))));
     } catch (error) {
@@ -2076,8 +2084,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       set({ importError: message });
       throw new Error(message);
     }
-    const removeSet = new Set(entryIds);
-    const entries = get().entries.filter((entry) => !removeSet.has(entry.id));
+    const removedAssetIds = new Set(targets.map((entry) => entry.assetId));
+    const entries = get().entries.filter((entry) => !removedAssetIds.has(entry.assetId));
     const remainingIds = new Set<string>(entries.map((entry) => entry.id));
     const entryMetadata = pruneMetadataForEntries(get().entryMetadata, remainingIds);
     const albums = pruneAlbumsForEntries(get().albums, remainingIds);
