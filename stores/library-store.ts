@@ -29,6 +29,7 @@ import type {
 } from "@/lib/catalog/api";
 import {
   createOperationId,
+  type AssetId,
   type CatalogId,
   type OperationId,
   type RootId,
@@ -375,6 +376,38 @@ function pruneWorkspaceForEntries(
       }];
     }),
   };
+}
+
+function removeEntriesForAssets(
+  assetIds: ReadonlySet<AssetId>,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+): void {
+  if (assetIds.size === 0) return;
+  const current = get();
+  const entries = current.entries.filter((entry) => !assetIds.has(entry.assetId));
+  const remainingIds = new Set<string>(entries.map((entry) => entry.id));
+  const entryMetadata = pruneMetadataForEntries(current.entryMetadata, remainingIds);
+  const albums = pruneAlbumsForEntries(current.albums, remainingIds);
+  const archivedEntryIds = current.archivedEntryIds.filter((id) => remainingIds.has(id));
+  const libraryWorkspace = pruneWorkspaceForEntries(current.libraryWorkspace, remainingIds);
+  const visible = current.catalogView.type === "archive"
+    ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+    : filterArchivedEntries(entries, archivedEntryIds);
+  set({
+    entries,
+    entryMetadata,
+    albums,
+    archivedEntryIds,
+    libraryWorkspace,
+    importError: null,
+    ...restoreSelection(
+      visible,
+      current.selectedEntryIds.filter((id) => remainingIds.has(id)),
+      current.selectionAnchorId,
+    ),
+  });
+  scheduleStateSync(set, get);
 }
 
 function keywordPath(
@@ -2051,9 +2084,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     if (!keeper || current.catalogId === null || current.sessionId === null) {
       throw new Error("The duplicate keeper is no longer available.");
     }
-    const targets = current.entries
-      .filter((entry) => entry.id !== keeperId && targetIds.includes(entry.id))
-      .map((entry) => entry.assetId);
+    const targets = [...new Set(current.entries
+      .filter((entry) => entry.assetId !== keeper.assetId && targetIds.includes(entry.id))
+      .map((entry) => entry.assetId))];
     if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
     await backupCatalogAdmin();
     const result = await getDarkroomAPI().catalogTrashExactDuplicates({
@@ -2062,8 +2095,10 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       keeperId: keeper.assetId,
       targetIds: targets,
     });
-    const trashed = result.items.filter((item) => item.trashed).map((item) => item.entryId);
-    if (trashed.length > 0) get().excludeEntries(trashed);
+    const trashed = new Set(result.items
+      .filter((item) => item.trashed)
+      .map((item) => item.entryId));
+    removeEntriesForAssets(trashed, set, get);
     const failures = result.items.filter((item) => !item.trashed);
     if (failures.length > 0) {
       set({
@@ -2084,30 +2119,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       set({ importError: message });
       throw new Error(message);
     }
-    const removedAssetIds = new Set(targets.map((entry) => entry.assetId));
-    const entries = get().entries.filter((entry) => !removedAssetIds.has(entry.assetId));
-    const remainingIds = new Set<string>(entries.map((entry) => entry.id));
-    const entryMetadata = pruneMetadataForEntries(get().entryMetadata, remainingIds);
-    const albums = pruneAlbumsForEntries(get().albums, remainingIds);
-    const archivedEntryIds = get().archivedEntryIds.filter((id) => remainingIds.has(id));
-    const libraryWorkspace = pruneWorkspaceForEntries(get().libraryWorkspace, remainingIds);
-    const visible = get().catalogView.type === "archive"
-      ? filterOnlyArchivedEntries(entries, archivedEntryIds)
-      : filterArchivedEntries(entries, archivedEntryIds);
-    set({
-      entries,
-      entryMetadata,
-      albums,
-      archivedEntryIds,
-      libraryWorkspace,
-      importError: null,
-      ...restoreSelection(
-        visible,
-        get().selectedEntryIds.filter((id) => remainingIds.has(id)),
-        get().selectionAnchorId,
-      ),
-    });
-    scheduleStateSync(set, get);
+    removeEntriesForAssets(new Set(targets.map((entry) => entry.assetId)), set, get);
   },
 
   createCatalog: async (displayName) => {
