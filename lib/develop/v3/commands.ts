@@ -1,11 +1,11 @@
-import { decodePersistedDevelopDocument } from "./codec";
+import { decodePersistedDevelopDocument } from "./codec.ts";
 import {
   createDefaultV3DevelopDocument,
   type DevelopDocumentV3,
   type PersistedCrop,
-} from "./document";
-import type { GeneratedAcceptanceResult } from "./generated-jobs";
-import { markAppliedPresetModified } from "../presets/apply";
+} from "./document.ts";
+import type { GeneratedAcceptanceResult } from "./generated-jobs.ts";
+import { markAppliedPresetModified } from "../presets/apply.ts";
 
 export const V3_SEMANTIC_GROUP_IDS = [
   "tone",

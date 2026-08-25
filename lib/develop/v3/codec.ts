@@ -1,27 +1,27 @@
-import { ASPECT_RATIO_PRESETS } from "../crop-geometry";
-import { parseDevelopDocument, parseDevelopLocalMasks } from "../document";
+import { ASPECT_RATIO_PRESETS } from "../crop-geometry.ts";
+import { parseDevelopDocument, parseDevelopLocalMasks } from "../document.ts";
 import {
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_ID,
   DEVELOP_PROCESS_VERSION,
   type DevelopDiagnostic,
-} from "../process";
+} from "../process.ts";
 import {
   parseDevelopAssetRefs,
   type DevelopAssetRef,
-} from "./assets";
-import { parseCleanupLayer } from "./cleanup";
+} from "./assets.ts";
+import { parseCleanupLayer } from "./cleanup.ts";
 import type {
   CurvePoint,
   CurveSettings,
   MixerBandSettings,
   MixerColor,
   MixerSettings,
-} from "../types";
+} from "../types.ts";
 import {
   MAX_POINT_COLOR_SAMPLES,
   type PointColorAdjustment,
-} from "./point-color";
+} from "./point-color.ts";
 import {
   LEGACY_V3_DOCUMENT_SCHEMA_REVISION,
   V3_DOCUMENT_SCHEMA_REVISION,
@@ -39,16 +39,16 @@ import {
   type PostCropEffects,
   type QuarantinedV3Field,
   type V3Compatibility,
-} from "./document";
+} from "./document.ts";
 import {
   migrateLegacyMask,
   maskSourceNodes,
   parseLocalMasksV3,
   referencedMaskArtifacts,
-} from "./masking";
-import type { Homography, QuarterTurns } from "./geometry";
-import { parseLensBlurSettings } from "./lens-blur";
-import type { Matrix3, Rgb } from "./profiles";
+} from "./masking.ts";
+import type { Homography, QuarterTurns } from "./geometry.ts";
+import { parseLensBlurSettings } from "./lens-blur.ts";
+import type { Matrix3, Rgb } from "./profiles.ts";
 import { parseAppliedPresetState } from "../presets/schema.ts";
 
 export const MAX_V3_PAYLOAD_BYTES = 32 * 1024 * 1024;

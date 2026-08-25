@@ -270,8 +270,18 @@ export function createAppV3BatchAdapter(
         entry.id,
         input,
       ),
-      hydrateKeywords: (flat, hierarchical) => {
-        useLibraryStore.getState().hydrateEntryKeywords(entry.id, flat, hierarchical);
+      applyExternalMetadata: (sidecar) => {
+        const library = useLibraryStore.getState();
+        library.hydrateEntryKeywords(
+          entry.id,
+          sidecar.keywords.flat,
+          sidecar.keywords.hierarchical,
+          {
+            ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+            ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
+          },
+          sidecar.lastModified,
+        );
       },
       setStatus: (status, error = null) => {
         const develop = useDevelopStore.getState();

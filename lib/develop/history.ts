@@ -17,6 +17,8 @@ export const DEVELOP_HISTORY_RETAINED_REVISIONS = 500;
 export const DEVELOP_HISTORY_MAX_REFS_PER_KIND = 100;
 export const DEVELOP_HISTORY_MAX_ENTRY_BYTES = 64 * 1024 * 1024;
 export const DEVELOP_HISTORY_MAX_CATALOG_BYTES = 1024 * 1024 * 1024;
+export const DEVELOP_HISTORY_MAX_DOCUMENT_BYTES = 32 * 1024 * 1024;
+export const DEVELOP_HISTORY_MAX_NODES = 250_000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -148,6 +150,7 @@ export type DevelopHistoryRefMutationInput =
       readonly refKind: DevelopHistoryRefKind;
       readonly name: string;
       readonly revisionId: DevelopRevisionId;
+      readonly expectedHeadRevisionId: DevelopRevisionId;
       readonly createdAt: number;
     }
   | {
@@ -164,6 +167,7 @@ export type DevelopHistoryRefMutationInput =
       readonly entryId: EntryId;
       readonly refId: DevelopRefId;
       readonly revisionId: DevelopRevisionId;
+      readonly expectedHeadRevisionId: DevelopRevisionId;
       readonly updatedAt: number;
     }
   | {
@@ -205,19 +209,31 @@ export function parseDevelopDocumentHash(value: unknown): DevelopDocumentHash {
   return typeof value === "string" && SHA256.test(value) ? value as DevelopDocumentHash : fail("Develop document hash is invalid.");
 }
 
-export function parseDevelopHistoryJson(value: unknown, depth = 0, seen = new Set<object>()): DevelopHistoryJson {
+export function parseDevelopHistoryJson(
+  value: unknown,
+  depth = 0,
+  seen = new Set<object>(),
+  budget = { nodes: 0, bytes: 0 },
+): DevelopHistoryJson {
   if (depth > DEVELOP_HISTORY_MAX_DEPTH) fail("Develop history JSON exceeds the depth limit.");
+  budget.nodes += 1;
+  if (budget.nodes > DEVELOP_HISTORY_MAX_NODES) fail("Develop history JSON exceeds the node limit.");
+  if (typeof value === "string") budget.bytes += value.length * 3 + 2;
+  else budget.bytes += 16;
+  if (budget.bytes > DEVELOP_HISTORY_MAX_DOCUMENT_BYTES) fail("Develop history JSON exceeds the byte limit.");
   if (value === null || typeof value === "boolean" || typeof value === "string") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : fail("Develop history JSON number is invalid.");
   if (typeof value !== "object") fail("Develop history JSON value is invalid.");
   if (seen.has(value)) fail("Develop history JSON cannot be cyclic.");
   seen.add(value);
   try {
-    if (Array.isArray(value)) return value.map((item) => parseDevelopHistoryJson(item, depth + 1, seen));
+    if (Array.isArray(value)) return value.map((item) => parseDevelopHistoryJson(item, depth + 1, seen, budget));
     const output = Object.create(null) as { [key: string]: DevelopHistoryJson };
     for (const key of Object.keys(value).sort()) {
       if (key.includes("\0")) fail("Develop history JSON key is invalid.");
-      output[key] = parseDevelopHistoryJson(Reflect.get(value, key), depth + 1, seen);
+      budget.bytes += key.length * 3 + 3;
+      if (budget.bytes > DEVELOP_HISTORY_MAX_DOCUMENT_BYTES) fail("Develop history JSON exceeds the byte limit.");
+      output[key] = parseDevelopHistoryJson(Reflect.get(value, key), depth + 1, seen, budget);
     }
     return output;
   } finally {
@@ -376,9 +392,9 @@ export function parseDevelopHistoryCommitInput(value: unknown): DevelopHistoryCo
 }
 export function parseDevelopHistoryRefMutationInput(value: unknown): DevelopHistoryRefMutationInput {
   const input = record(value, "Develop history ref mutation");
-  if (input.kind === "create") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "refKind", "name", "revisionId", "createdAt"], "Develop history ref create"); return { kind: "create", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), refKind: refKind(input.refKind), name: text(input.name, "Develop history ref name"), revisionId: parseDevelopRevisionId(input.revisionId), createdAt: finite(input.createdAt, "Develop history ref createdAt") }; }
+  if (input.kind === "create") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "refKind", "name", "revisionId", "expectedHeadRevisionId", "createdAt"], "Develop history ref create"); return { kind: "create", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), refKind: refKind(input.refKind), name: text(input.name, "Develop history ref name"), revisionId: parseDevelopRevisionId(input.revisionId), expectedHeadRevisionId: parseDevelopRevisionId(input.expectedHeadRevisionId), createdAt: finite(input.createdAt, "Develop history ref createdAt") }; }
   if (input.kind === "rename") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "name", "updatedAt"], "Develop history ref rename"); return { kind: "rename", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), name: text(input.name, "Develop history ref name"), updatedAt: finite(input.updatedAt, "Develop history ref updatedAt") }; }
-  if (input.kind === "move") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "revisionId", "updatedAt"], "Develop history ref move"); return { kind: "move", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), revisionId: parseDevelopRevisionId(input.revisionId), updatedAt: finite(input.updatedAt, "Develop history ref updatedAt") }; }
+  if (input.kind === "move") { exactKeys(input, ["kind", "catalogId", "entryId", "refId", "revisionId", "expectedHeadRevisionId", "updatedAt"], "Develop history ref move"); return { kind: "move", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId), revisionId: parseDevelopRevisionId(input.revisionId), expectedHeadRevisionId: parseDevelopRevisionId(input.expectedHeadRevisionId), updatedAt: finite(input.updatedAt, "Develop history ref updatedAt") }; }
   if (input.kind === "delete") { exactKeys(input, ["kind", "catalogId", "entryId", "refId"], "Develop history ref delete"); return { kind: "delete", catalogId: parseCatalogId(input.catalogId), entryId: parseEntryId(input.entryId), refId: parseDevelopRefId(input.refId) }; }
   return fail("Develop history ref mutation kind is invalid.");
 }

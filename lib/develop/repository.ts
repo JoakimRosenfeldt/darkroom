@@ -15,6 +15,8 @@ import {
 } from "@/lib/develop/sidecar";
 import {
   createDevelopRevisionId,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
   type DevelopHistoryLoadedRevision,
   type DevelopHistoryProjection,
   type DevelopRevisionId,
@@ -98,10 +100,7 @@ export interface DevelopRepositoryAdapters {
     readonly sourceUpdatedAt: number;
     readonly metadataPatch: SidecarMetadataPatch;
   }) => Promise<void>;
-  readonly hydrateKeywords?: (
-    flat: readonly string[],
-    hierarchical: readonly string[],
-  ) => void;
+  readonly applyExternalMetadata?: (sidecar: DevelopSidecar) => void | Promise<void>;
   readonly setStatus: (
     status: DevelopSidecarStatus,
     error?: string | null,
@@ -259,6 +258,22 @@ function clearJournal(entry: LibraryEntry): void {
   }
 }
 
+async function journalUuid(journal: RecoveryJournal, purpose: string): Promise<string> {
+  const input = JSON.stringify([
+    purpose,
+    journal.catalogId,
+    journal.entryId,
+    journal.createdAt,
+    journal.sourceUpdatedAt,
+    journal.document,
+  ]);
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes.slice(0, 16), (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export class DevelopRepository {
   readonly #entry: LibraryEntry;
   #adapters: DevelopRepositoryAdapters | null = null;
@@ -302,7 +317,9 @@ export class DevelopRepository {
     this.#detachCommittedCommands?.();
     this.#detachCommittedCommands = session.subscribeCommittedCommands((command) => {
       const documentRevision = session.snapshot().documentRevision;
-      this.#lastCommandWrite = this.#enqueueCommittedCommand(command, documentRevision);
+      const write = this.#enqueueCommittedCommand(command, documentRevision);
+      void write.catch(() => undefined);
+      this.#lastCommandWrite = write;
     });
     const revision = ++this.#configurationRevision;
     return () => {
@@ -333,13 +350,12 @@ export class DevelopRepository {
       try {
         const adapters = this.#requireAdapters();
         const session = this.#requireSession();
-        await this.#recoverJournal();
         if (!isElectronApp()) {
           this.#setProjectionState({ kind: "unavailable", reason: "Persistent Develop history needs the desktop app." });
           this.#adapters?.setStatus("saved");
           return;
         }
-        const loaded = await getDarkroomAPI().developHistoryLoad({
+        let loaded = await getDarkroomAPI().developHistoryLoad({
           catalogId: this.#entry.catalogId,
           entryId: this.#entry.id,
           revisionId: null,
@@ -354,11 +370,20 @@ export class DevelopRepository {
           return;
         }
         this.#head = loaded.value;
+        await this.#recoverJournal();
+        loaded = await getDarkroomAPI().developHistoryLoad({
+          catalogId: this.#entry.catalogId,
+          entryId: this.#entry.id,
+          revisionId: null,
+        });
+        if (loaded.kind !== "loaded") {
+          throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
+        }
+        this.#head = loaded.value;
         adapters.onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(loaded.value.document)));
         const sidecar = await readDevelopSidecar(this.#entry);
         this.#sidecarContentsKnown = true;
         this.#failedWrite = null;
-        if (sidecar) adapters.hydrateKeywords?.(sidecar.keywords.flat, sidecar.keywords.hierarchical);
         await this.#reconcileProjection(sidecar);
         this.#adapters?.setStatus("saved");
       } catch (error) {
@@ -384,12 +409,19 @@ export class DevelopRepository {
   }
 
   async resolveProjection(choice: "keep-darkroom" | "import-xmp"): Promise<void> {
+    await this.#queue;
     const head = this.#head;
     if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
     if (choice === "keep-darkroom") {
-      this.#requireAdapters().onSessionChanged(this.#requireSession().hydrateAuthoritative(openDevelopSessionDocument(head.document)));
-      await this.#projectHead(head.revisionId, head.document);
-      return;
+      const execute = async (): Promise<void> => {
+        this.#requireAdapters().onSessionChanged(this.#requireSession().hydrateAuthoritative(openDevelopSessionDocument(head.document)));
+        await this.#projectHead(head.revisionId, head.document);
+      };
+      const write = this.#queue.then(execute);
+      this.#queue = write.catch((error: unknown) => {
+        this.#adapters?.setStatus("error", errorMessage(error, "XMP resolution failed."));
+      });
+      return write;
     }
     const sidecar = this.#divergentSidecar;
     const session = this.#requireSession();
@@ -401,6 +433,7 @@ export class DevelopRepository {
     this.#requireAdapters().onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(head.document)));
     const externalDigest = await digestDevelopSidecarContents(sidecar.contents);
     if (JSON.stringify(process.document) === JSON.stringify(head.document)) {
+      await this.#requireAdapters().applyExternalMetadata?.(sidecar);
       await this.#recordProjection(head.revisionId, externalDigest);
       return;
     }
@@ -410,13 +443,21 @@ export class DevelopRepository {
   }
 
   async preserveBoth(createVirtualCopy: () => Promise<unknown>): Promise<void> {
+    await this.#queue;
     const sidecar = this.#divergentSidecar;
     if (!this.#head || !sidecar) {
       throw new DevelopRepositoryError("recovery-conflict", "Both states are not available to preserve.");
     }
-    const digest = await digestDevelopSidecarContents(sidecar.contents);
-    await createVirtualCopy();
-    await this.#importExternalOnly(sidecar, digest);
+    const execute = async (): Promise<void> => {
+      const digest = await digestDevelopSidecarContents(sidecar.contents);
+      await createVirtualCopy();
+      await this.#importExternalOnly(sidecar, digest);
+    };
+    const write = this.#queue.then(execute);
+    this.#queue = write.catch((error: unknown) => {
+      this.#adapters?.setStatus("error", errorMessage(error, "XMP preservation failed."));
+    });
+    return write;
   }
 
   commitProcessUpgrade(snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v3" }>): Promise<void> {
@@ -472,7 +513,7 @@ export class DevelopRepository {
         throw new DevelopRepositoryError("recovery-conflict", "Develop Head changed before this command could be committed. Reopen the photo.");
       }
       this.#adapters?.setStatus("saving");
-      const result = await getDarkroomAPI().developHistoryCommit({
+      const request: DevelopHistoryCommitInput = {
         catalogId: this.#entry.catalogId,
         entryId: this.#entry.id,
         revisionId: createDevelopRevisionId(),
@@ -481,7 +522,8 @@ export class DevelopRepository {
         label: command.label,
         document: command.after,
         createdAt: Date.now(),
-      });
+      };
+      const result = await this.#commitWithRecovery(request);
       const reloaded = await getDarkroomAPI().developHistoryLoad({ catalogId: this.#entry.catalogId, entryId: this.#entry.id, revisionId: null });
       if (reloaded.kind !== "loaded" || reloaded.value.revisionId !== result.revision.revisionId) {
         throw new DevelopRepositoryError("recovery-conflict", "Committed Develop Head could not be verified.");
@@ -508,12 +550,67 @@ export class DevelopRepository {
       this.#failedWrite = null;
       this.#adapters?.setStatus("saved");
     };
-    const write = this.#queue.then(execute, execute);
-    this.#queue = write.catch((error: unknown) => {
+    const write = this.#queue.then(execute);
+    this.#queue = write.then(() => undefined, async (error: unknown) => {
+      await this.#restoreSessionFromHead();
       this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
       this.#adapters?.setStatus("error", errorMessage(error, "Develop command could not be committed."));
     });
     return write;
+  }
+
+  async #commitWithRecovery(
+    request: DevelopHistoryCommitInput,
+  ): Promise<DevelopHistoryCommitResult> {
+    let lastError: unknown = new Error("Develop history commit failed.");
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS_PER_REVISION; attempt += 1) {
+      try {
+        return await getDarkroomAPI().developHistoryCommit(request);
+      } catch (error) {
+        lastError = error;
+        try {
+          const loaded = await getDarkroomAPI().developHistoryLoad({
+            catalogId: request.catalogId,
+            entryId: request.entryId,
+            revisionId: null,
+          });
+          if (loaded.kind === "loaded" && loaded.value.revisionId === request.revisionId) {
+            return { revision: loaded.value, idempotent: true };
+          }
+          if (
+            loaded.kind !== "loaded" ||
+            loaded.value.revisionId !== request.expectedParentRevisionId
+          ) {
+            throw new DevelopRepositoryError(
+              "recovery-conflict",
+              "Develop Head changed while commit status was unknown.",
+            );
+          }
+        } catch (loadError) {
+          if (loadError instanceof DevelopRepositoryError) throw loadError;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  async #restoreSessionFromHead(): Promise<void> {
+    try {
+      const loaded = await getDarkroomAPI().developHistoryLoad({
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: null,
+      });
+      if (loaded.kind !== "loaded") return;
+      this.#head = loaded.value;
+      if (this.#session && this.#adapters) {
+        this.#adapters.onSessionChanged(
+          this.#session.hydrateAuthoritative(openDevelopSessionDocument(loaded.value.document)),
+        );
+      }
+    } catch {
+      // The original commit error remains the actionable failure.
+    }
   }
 
   #setProjectionState(state: DevelopProjectionState): void {
@@ -618,6 +715,7 @@ export class DevelopRepository {
     if (this.#adapters && this.#session) {
       this.#adapters.onSessionChanged(this.#session.hydrateAuthoritative(process));
     }
+    await this.#adapters?.applyExternalMetadata?.(sidecar);
     await this.#recordProjection(result.revision.revisionId, digest);
   }
 
@@ -646,7 +744,21 @@ export class DevelopRepository {
     }
     const digest = await digestDevelopSidecarContents(sidecar.contents);
     if (JSON.stringify(sidecar.document) === JSON.stringify(head.document)) {
-      await this.#recordProjection(head.revisionId, digest);
+      if (this.#projection === null) {
+        await this.#adapters?.applyExternalMetadata?.(sidecar);
+        await this.#recordProjection(head.revisionId, digest);
+      } else if (digest === this.#projection.contentSha256) {
+        this.#setProjectionState({ kind: "clean", revisionId: head.revisionId });
+      } else {
+        this.#divergentSidecar = sidecar;
+        this.#setProjectionState({
+          kind: "divergent",
+          headRevisionId: head.revisionId,
+          projectedRevisionId: this.#projection.revisionId,
+          externalDigest: digest,
+          differences: ["XMP metadata"],
+        });
+      }
       return;
     }
     if (this.#projection && digest === this.#projection.contentSha256 && this.#projection.revisionId !== head.revisionId) {
@@ -737,7 +849,11 @@ export class DevelopRepository {
     }
     const pending = this.#pending;
     this.#pending = null;
-    if (!pending) return this.#queue;
+    if (!pending) {
+      const queue = this.#queue;
+      const command = this.#lastCommandWrite;
+      return Promise.all([queue, command]).then(() => undefined);
+    }
     const write = () => this.#writeCaptured(pending);
     this.#queue = this.#queue.then(write, write).catch((error: unknown) => {
       const previousFailure = this.#failedWrite;
@@ -756,7 +872,9 @@ export class DevelopRepository {
         errorMessage(error, "Could not save Develop settings."),
       );
     });
-    return this.#queue;
+    const queue = this.#queue;
+    const command = this.#lastCommandWrite;
+    return Promise.all([queue, command]).then(() => undefined);
   }
 
   async #writeCaptured(pending: PendingWrite): Promise<void> {
@@ -808,17 +926,60 @@ export class DevelopRepository {
     const journal = readJournal(this.#entry);
     if (!journal) return;
     const adapters = this.#adapters;
-    if (!adapters) {
+    const head = this.#head;
+    if (!adapters || !head) {
       throw new DevelopRepositoryError(
         "recovery-adapter-unavailable",
         "Develop recovery needs the original catalog. Reopen it before editing or exporting.",
       );
+    }
+    if (journal.documentDirty && JSON.stringify(head.document) !== JSON.stringify(journal.document)) {
+      if (head.createdAt > journal.createdAt) {
+        throw new DevelopRepositoryError(
+          "recovery-conflict",
+          "Develop Head changed after the recovery journal was created.",
+        );
+      }
+      const currentSidecar = await readDevelopSidecar(this.#entry);
+      const sidecarIsPrior = currentSidecar?.contents === journal.existingContents;
+      const sidecarIsRecovered = currentSidecar !== null &&
+        JSON.stringify(currentSidecar.document) === JSON.stringify(journal.document);
+      if (!sidecarIsPrior && !sidecarIsRecovered) {
+        throw new DevelopRepositoryError(
+          "recovery-conflict",
+          "The XMP sidecar changed after the recovery journal was created.",
+        );
+      }
+      const request: DevelopHistoryCommitInput = {
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: createDevelopRevisionId(await journalUuid(journal, "revision")),
+        expectedParentRevisionId: head.revisionId,
+        operationId: parseOperationId(await journalUuid(journal, "operation")),
+        label: "Recover interrupted Develop save",
+        document: journal.document,
+        createdAt: journal.createdAt,
+      };
+      await this.#commitWithRecovery(request);
+      const recovered = await getDarkroomAPI().developHistoryLoad({
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: null,
+      });
+      if (recovered.kind !== "loaded" || recovered.value.revisionId !== request.revisionId) {
+        throw new DevelopRepositoryError("recovery-conflict", "Recovered Develop Head could not be verified.");
+      }
+      this.#head = recovered.value;
     }
     if (journal.metadataDirty) {
       await adapters.mirrorCatalog({
         sourceUpdatedAt: journal.sourceUpdatedAt,
         metadataPatch: journal.metadata,
       });
+      if (this.#metadata) this.#metadata = { ...this.#metadata, ...journal.metadata };
+    }
+    if (journal.documentDirty && this.#head && this.#entry.entryKind === "original") {
+      await this.#projectHead(this.#head.revisionId, this.#head.document);
     }
     clearJournal(this.#entry);
   }

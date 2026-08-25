@@ -1,9 +1,9 @@
-import type { GeometryPoint } from "./geometry";
+import type { GeometryPoint } from "./geometry.ts";
 import {
   MAX_DEVELOP_ASSET_REFS,
   parseDevelopAssetRef,
   type DevelopAssetRef,
-} from "./assets";
+} from "./assets.ts";
 
 export const MAX_CLEANUP_COMPONENTS = Math.min(MAX_DEVELOP_ASSET_REFS, 256);
 

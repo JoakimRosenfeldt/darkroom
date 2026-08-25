@@ -26,6 +26,8 @@ interface UseDevelopSettingsSyncOptions {
   hydrateKeywords?: (
     flat: readonly string[],
     hierarchical: readonly string[],
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
   ) => void;
 }
 
@@ -89,7 +91,18 @@ export function useDevelopSettingsSync({
     }));
     const disconnectRepository = repository.configure(session, metadataRef.current, {
       mirrorCatalog: persistCatalog,
-      hydrateKeywords,
+      applyExternalMetadata: (sidecar) => {
+        const patch: SidecarMetadataPatch = {
+          ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+          ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
+        };
+        hydrateKeywords?.(
+          sidecar.keywords.flat,
+          sidecar.keywords.hierarchical,
+          patch,
+          sidecar.lastModified,
+        );
+      },
       setStatus: (status, error = null) => {
         const state = useDevelopStore.getState();
         if (

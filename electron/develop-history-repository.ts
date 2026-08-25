@@ -491,6 +491,9 @@ export class DevelopHistoryRepository {
     return this.transaction(() => {
       this.assertActiveEntry(input.catalogId, input.entryId);
       if (input.kind === "create") {
+        if (this.headId(input.catalogId, input.entryId) !== input.expectedHeadRevisionId) {
+          throw new Error("Develop history Head changed before the reference was created.");
+        }
         const countRow = row(this.database.prepare("SELECT COUNT(*) AS count FROM develop_history_refs WHERE catalog_id = ? AND entry_id = ? AND kind = ?").get(input.catalogId, input.entryId, input.refKind), "Develop history ref count");
         if (integer(countRow, "count") >= DEVELOP_HISTORY_MAX_REFS_PER_KIND) throw new Error(`Develop history ${input.refKind} limit reached.`);
         this.revisionRow(input.catalogId, input.entryId, input.revisionId);
@@ -501,6 +504,9 @@ export class DevelopHistoryRepository {
           .run(input.name, input.updatedAt, input.catalogId, input.entryId, input.refId);
         if (result.changes !== 1) throw new Error("Develop history ref is missing.");
       } else if (input.kind === "move") {
+        if (this.headId(input.catalogId, input.entryId) !== input.expectedHeadRevisionId) {
+          throw new Error("Develop history Head changed before the reference was moved.");
+        }
         const existing = this.database.prepare("SELECT kind FROM develop_history_refs WHERE catalog_id = ? AND entry_id = ? AND ref_id = ?")
           .get(input.catalogId, input.entryId, input.refId);
         if (existing === undefined) throw new Error("Develop history ref is missing.");

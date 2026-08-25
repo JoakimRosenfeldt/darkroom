@@ -148,8 +148,13 @@ export function PhotoViewer({
     [entry.catalogId, entry.id, persistDevelopState],
   );
   const hydrateKeywords = useCallback(
-    (flat: readonly string[], hierarchical: readonly string[]) => {
-      hydrateEntryKeywords(entry.id, flat, hierarchical);
+    (
+      flat: readonly string[],
+      hierarchical: readonly string[],
+      metadataPatch?: Parameters<typeof hydrateEntryKeywords>[3],
+      sourceUpdatedAt?: number,
+    ) => {
+      hydrateEntryKeywords(entry.id, flat, hierarchical, metadataPatch, sourceUpdatedAt);
     },
     [entry.id, hydrateEntryKeywords],
   );

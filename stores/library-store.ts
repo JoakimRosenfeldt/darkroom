@@ -242,6 +242,8 @@ interface LibraryStore {
     entryId: string,
     flat: readonly string[],
     hierarchical: readonly string[],
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
   ) => void;
   stackEntries: (entryIds: string[]) => string;
   addEntriesToStack: (stackId: string, entryIds: string[]) => void;
@@ -1965,10 +1967,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     scheduleStateSync(set, get);
   },
 
-  hydrateEntryKeywords: (entryId, flat, hierarchical) => {
+  hydrateEntryKeywords: (
+    entryId,
+    flat,
+    hierarchical,
+    metadataPatch = {},
+    sourceUpdatedAt = Date.now(),
+  ) => {
     const workspace = get().libraryWorkspace;
     const keywords = [...workspace.keywords];
-    const assigned = new Set(workspace.entryKeywordIds[entryId] ?? []);
+    const assigned = new Set<string>();
     const ensurePath = (parts: readonly string[]): string | null => {
       let parentId: string | null = null;
       let leafId: string | null = null;
@@ -2010,9 +2018,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       }
     }
     const nextIds = [...assigned];
+    const previousIds = workspace.entryKeywordIds[entryId] ?? [];
+    const currentMetadata = getEntryMetadata(get().entryMetadata, entryId);
+    const metadataChanged =
+      (metadataPatch.rating !== undefined && metadataPatch.rating !== currentMetadata.rating) ||
+      (metadataPatch.colorLabel !== undefined && metadataPatch.colorLabel !== currentMetadata.colorLabel);
     if (
       keywords.length === workspace.keywords.length &&
-      nextIds.length === (workspace.entryKeywordIds[entryId]?.length ?? 0)
+      nextIds.length === previousIds.length &&
+      nextIds.every((id) => previousIds.includes(id)) &&
+      !metadataChanged
     ) return;
     set({
       libraryWorkspace: {
@@ -2020,6 +2035,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
         keywords,
         entryKeywordIds: { ...workspace.entryKeywordIds, [entryId]: nextIds },
       },
+      ...(metadataChanged ? {
+        entryMetadata: {
+          ...get().entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...currentMetadata,
+            ...metadataPatch,
+            updatedAt: Math.max(sourceUpdatedAt, currentMetadata.updatedAt + 1),
+          }),
+        },
+      } : {}),
     });
     scheduleStateSync(set, get);
   },

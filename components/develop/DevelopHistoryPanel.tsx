@@ -27,6 +27,7 @@ function refButtonLabel(kind: DevelopHistoryRef["kind"]): string {
 export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry }) {
   const projection = useDevelopStore((state) => state.sessions[entry.id]?.ui.projection);
   const processKind = useDevelopStore((state) => state.sessions[entry.id]?.processKind);
+  const persistedDocumentRevision = useDevelopStore((state) => state.sessions[entry.id]?.persistedDocumentRevision);
   const commitCompleteState = useDevelopStore((state) => state.commitV3CompleteState);
   const createVirtualCopy = useLibraryStore((state) => state.createVirtualCopy);
   const [view, setView] = useState<HistoryView | null>(null);
@@ -38,6 +39,7 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
   const [error, setError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
   const mounted = useRef(true);
+  const busyRef = useRef(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!isElectronApp()) return;
@@ -61,8 +63,14 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
     return () => { current = false; mounted.current = false; loadGeneration.current += 1; };
   }, [refresh]);
 
+  useEffect(() => {
+    if (persistedDocumentRevision === undefined) return;
+    void refresh().catch(() => undefined);
+  }, [persistedDocumentRevision, refresh]);
+
   const act = async (operation: () => Promise<void>): Promise<void> => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -71,29 +79,62 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : "History action failed.");
     } finally {
+      busyRef.current = false;
       if (mounted.current) setBusy(false);
     }
   };
 
   const headRevisionId = view?.load.kind === "loaded" ? view.load.value.headRevisionId : view?.load.headRevisionId ?? null;
+  const loadCurrentHead = async () => {
+    await getDevelopRepository(entry).flush();
+    const loaded = await getDarkroomAPI().developHistoryLoad({
+      catalogId: entry.catalogId,
+      entryId: entry.id,
+      revisionId: null,
+    });
+    if (loaded.kind !== "loaded") throw new Error(loaded.corruption.message);
+    return loaded.value;
+  };
+  const assertActiveEntry = (): void => {
+    const state = useDevelopStore.getState();
+    if (
+      !mounted.current ||
+      state.activeCatalogId !== entry.catalogId ||
+      state.activeEntryId !== entry.id
+    ) {
+      throw new Error("The active photo changed before the History action completed.");
+    }
+  };
   const createRef = (kind: DevelopHistoryRef["kind"]): Promise<void> => act(async () => {
     const trimmed = name.trim();
-    if (!trimmed || !headRevisionId) throw new Error("A name and live Head are required.");
+    if (!trimmed) throw new Error("A name and live Head are required.");
+    assertActiveEntry();
+    const head = await loadCurrentHead();
+    assertActiveEntry();
     await getDarkroomAPI().developHistoryRefMutate({
       kind: "create", catalogId: entry.catalogId, entryId: entry.id,
       refId: createDevelopRefId(), refKind: kind, name: trimmed,
-      revisionId: headRevisionId, createdAt: Date.now(),
+      revisionId: head.revisionId, expectedHeadRevisionId: head.revisionId, createdAt: Date.now(),
     });
     setName("");
   });
 
   const restore = (ref: DevelopHistoryRef): Promise<void> => act(async () => {
+    assertActiveEntry();
+    const expectedHead = await loadCurrentHead();
+    assertActiveEntry();
     const loaded = await getDarkroomAPI().developHistoryLoad({ catalogId: entry.catalogId, entryId: entry.id, revisionId: ref.revisionId });
+    assertActiveEntry();
     if (loaded.kind !== "loaded") {
       throw new Error("This reference is not an editable V3 revision.");
     }
     const process = openDevelopSessionDocument(loaded.value.document);
     if (process.kind !== "editable" || process.document.version !== 3) throw new Error("This reference is not an editable V3 revision.");
+    const currentHead = await loadCurrentHead();
+    assertActiveEntry();
+    if (currentHead.revisionId !== expectedHead.revisionId) {
+      throw new Error("Develop Head changed before the History action completed.");
+    }
     commitCompleteState(entry.catalogId, entry.id, process.document, `${ref.kind === "version" ? "Activate version" : "Recall snapshot"}: ${ref.name}`);
     await getDevelopRepository(entry).flush();
   });
@@ -161,7 +202,7 @@ export function DevelopHistoryPanel({ entry }: { readonly entry: LibraryEntry })
               <ul className="mt-2 space-y-2">{refs(kind).map((ref) => (
                 <li key={ref.refId} className="rounded-md bg-lr-panel-raised/45 p-2">
                   {renaming === ref.refId ? <input autoFocus value={renameValue} maxLength={120} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); if (event.key === "Enter") void act(async () => { await getDarkroomAPI().developHistoryRefMutate({ kind: "rename", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, name: renameValue, updatedAt: Date.now() }); setRenaming(null); }); }} className="w-full rounded border border-lr-border-subtle bg-lr-panel px-2 py-1 text-[11px] text-lr-text" /> : <p className="truncate text-[11px] text-lr-text-muted">{ref.name}</p>}
-                  <div className="mt-1.5 flex flex-wrap gap-1"><ActionButton disabled={busy || processKind !== "v3"} onClick={() => void restore(ref)}>{refButtonLabel(kind)}</ActionButton>{kind === "version" ? <ActionButton disabled={busy || !headRevisionId || ref.revisionId === headRevisionId} onClick={() => void act(async () => { if (!headRevisionId) return; await getDarkroomAPI().developHistoryRefMutate({ kind: "move", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, revisionId: headRevisionId, updatedAt: Date.now() }); })}>Move here</ActionButton> : null}<ActionButton disabled={busy} onClick={() => { setRenaming(ref.refId); setRenameValue(ref.name); }}>Rename</ActionButton><ActionButton disabled={busy} onClick={() => void act(async () => { await getDarkroomAPI().developHistoryRefMutate({ kind: "delete", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId }); })}>Delete</ActionButton></div>
+                  <div className="mt-1.5 flex flex-wrap gap-1"><ActionButton disabled={busy || processKind !== "v3"} onClick={() => void restore(ref)}>{refButtonLabel(kind)}</ActionButton>{kind === "version" ? <ActionButton disabled={busy || !headRevisionId || ref.revisionId === headRevisionId} onClick={() => void act(async () => { assertActiveEntry(); const head = await loadCurrentHead(); assertActiveEntry(); await getDarkroomAPI().developHistoryRefMutate({ kind: "move", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId, revisionId: head.revisionId, expectedHeadRevisionId: head.revisionId, updatedAt: Date.now() }); })}>Move here</ActionButton> : null}<ActionButton disabled={busy} onClick={() => { setRenaming(ref.refId); setRenameValue(ref.name); }}>Rename</ActionButton><ActionButton disabled={busy} onClick={() => void act(async () => { await getDarkroomAPI().developHistoryRefMutate({ kind: "delete", catalogId: entry.catalogId, entryId: entry.id, refId: ref.refId }); })}>Delete</ActionButton></div>
                 </li>
               ))}</ul>
             )}
