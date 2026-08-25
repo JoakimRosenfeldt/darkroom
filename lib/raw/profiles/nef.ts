@@ -27,6 +27,7 @@ async function decodeEmbeddedSourcePixels(
       rgb: context.getImageData(0, 0, bitmap.width, bitmap.height).data,
       bits: 8,
       colors: 4,
+      pixelProvenance: embedded.pixelProvenance,
       metadata: embedded.metadata,
     };
   } finally {
@@ -65,6 +66,17 @@ async function decodeDevelopedNef(
           rgb: new Uint16Array(result.pixels),
           bits: result.bitDepth,
           colors: result.channels,
+          pixelProvenance: {
+            decoderPath: result.provenance,
+            decoderRevision: "rgb16le-v1",
+            colorSpace: result.colorSpace,
+            transfer: "encoded",
+            bitDepth: result.bitDepth,
+            cameraProfileStage: {
+              kind: "unavailable",
+              reason: "The Nikon decoder protocol returns rendered sRGB pixels.",
+            },
+          },
           metadata: {
             decoderProvenance: result.provenance,
             developSource: "native",
@@ -110,9 +122,13 @@ export const nefProfile: ImageProfile = {
   extensions: getFormatExtensionsForProfile("nef"),
   detect: (file) =>
     getFormatCapabilityForFileName(file.name)?.profileId === "nef",
-  decode: (input, options: DecodeOptions = {}) =>
-    options.fullResolution ||
-    (options.thumbnail && options.rawSource === "developed")
-      ? decodeDevelopedNef(input, options)
-      : decodeWithLibRaw(input, options),
+  decode: (input, options: DecodeOptions = {}) => {
+    if (options.cameraProfile?.kind === "libraw-camera-matrix") {
+      return decodeWithLibRaw(input, options);
+    }
+    return options.fullResolution ||
+      (options.thumbnail && options.rawSource === "developed")
+        ? decodeDevelopedNef(input, options)
+        : decodeWithLibRaw(input, options);
+  },
 };

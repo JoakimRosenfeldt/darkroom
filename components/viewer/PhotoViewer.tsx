@@ -215,7 +215,11 @@ export function PhotoViewer({
       }
 
       try {
-        const result = await loadDevelopImage(entry);
+        const result = await loadDevelopImage(entry, {
+          rawColorMode: developProcessKind === "v3"
+            ? "libraw-camera-matrix"
+            : "decoder-rendered",
+        });
         if (!active) {
           return;
         }
@@ -241,7 +245,7 @@ export function PhotoViewer({
     return () => {
       active = false;
     };
-  }, [entry, entries, availableActiveIndex]);
+  }, [entry, entries, availableActiveIndex, developProcessKind]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 

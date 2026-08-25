@@ -107,7 +107,9 @@ function currentV3Snapshot(
 
 async function v3Reconciled(context: OpenContext): Promise<Extract<BatchReconciledPhoto, { readonly kind: "v3" }>> {
   const snapshot = currentV3Snapshot(context);
-  const image = await loadDevelopImage(context.entry);
+  const image = await loadDevelopImage(context.entry, {
+    rawColorMode: "libraw-camera-matrix",
+  });
   const source = buildV3SourceRecord(context.entry, image, "preview");
   if (source.kind === "blocked") {
     throw adapterError(

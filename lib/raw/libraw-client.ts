@@ -1,5 +1,6 @@
 import type { LibRawSettings } from "libraw-wasm";
 import type { DecodeOptions, DecodedImage } from "./types";
+import { matrixCameraProfileFromLibRawMetadata } from "../camera-profiles/matrix";
 import { orientedImageSize, rgbDataToBlob } from "./utils";
 
 type LibRawInstance = InstanceType<
@@ -41,6 +42,18 @@ function buildSettings(
   options: DecodeOptions,
   halfSize: boolean,
 ): LibRawSettings {
+  if (options.cameraProfile?.kind === "libraw-camera-matrix") {
+    return {
+      halfSize,
+      outputBps: 16,
+      outputColor: 0,
+      gamm: [1, 1],
+      noAutoBright: true,
+      useCameraMatrix: 0,
+      useCameraWb: true,
+      userQual: options.thumbnail ? 0 : halfSize ? 1 : 2,
+    };
+  }
   return {
     halfSize,
     outputBps: 8,
@@ -65,6 +78,17 @@ function buildFromEmbeddedThumbnail(
     rgb: thumbnail.data,
     bits: 8,
     colors: 3,
+    pixelProvenance: {
+      decoderPath: "embedded-preview",
+      decoderRevision: "libraw-embedded-jpeg-v1",
+      colorSpace: "unknown",
+      transfer: "encoded",
+      bitDepth: 8,
+      cameraProfileStage: {
+        kind: "unavailable",
+        reason: "Embedded RAW previews contain rendered pixels.",
+      },
+    },
     metadata: { ...metadata, decoderProvenance: "embedded" },
     blob,
     objectUrl,
@@ -80,6 +104,7 @@ async function buildFromImageData(
     colors: number;
   },
   metadata: Record<string, unknown>,
+  options: DecodeOptions,
   maxEdge?: number,
 ): Promise<DecodedImage> {
   const scale = maxEdge
@@ -87,25 +112,82 @@ async function buildFromImageData(
     : 1;
   const width = Math.max(1, Math.round(image.width * scale));
   const height = Math.max(1, Math.round(image.height * scale));
-  const blob = await rgbDataToBlob(
-    image.data,
-    image.width,
-    image.height,
-    image.bits,
-    maxEdge,
-  );
+  const rgb = scale === 1
+    ? image.data
+    : resizeRgbData(image.data, image.width, image.height, image.colors, width, height);
+  const blob = await rgbDataToBlob(rgb, width, height, image.bits);
   const objectUrl = URL.createObjectURL(blob);
+  const profiled = options.cameraProfile?.kind === "libraw-camera-matrix";
+  if (
+    profiled &&
+    (!(image.data instanceof Uint16Array) || image.bits !== 16 || image.colors !== 3)
+  ) {
+    throw new Error("The LibRaw camera-profile path did not return RGB16 pixels.");
+  }
+  const cameraProfile = profiled
+    ? matrixCameraProfileFromLibRawMetadata(metadata)
+    : null;
 
   return {
     width,
     height,
-    rgb: scale === 1 ? image.data : new Uint8Array(0),
+    rgb,
     bits: image.bits,
     colors: image.colors,
+    pixelProvenance: cameraProfile
+      ? {
+          decoderPath: "libraw",
+          decoderRevision: "darkroom-libraw-linear-camera-v1",
+          colorSpace: "camera-rgb",
+          transfer: "linear",
+          bitDepth: 16,
+          cameraProfileStage: {
+            kind: "available",
+            stage: "before-develop-tone",
+            profile: cameraProfile,
+            camera: cameraProfile.compatibility,
+          },
+        }
+      : {
+          decoderPath: "libraw",
+          decoderRevision: "darkroom-libraw-settings-v1",
+          colorSpace: "srgb",
+          transfer: "encoded",
+          bitDepth: image.bits,
+          cameraProfileStage: {
+            kind: "unavailable",
+            reason: "The default LibRaw path returns rendered RGB pixels.",
+          },
+        },
     metadata: { ...metadata, decoderProvenance: "libraw" },
     blob,
     objectUrl,
   };
+}
+
+function resizeRgbData(
+  source: Uint8Array | Uint16Array,
+  sourceWidth: number,
+  sourceHeight: number,
+  channels: number,
+  width: number,
+  height: number,
+): Uint8Array | Uint16Array {
+  const output = source instanceof Uint16Array
+    ? new Uint16Array(width * height * channels)
+    : new Uint8Array(width * height * channels);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = Math.min(sourceHeight - 1, Math.floor((y + 0.5) * sourceHeight / height));
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = Math.min(sourceWidth - 1, Math.floor((x + 0.5) * sourceWidth / width));
+      const sourceOffset = (sourceY * sourceWidth + sourceX) * channels;
+      const targetOffset = (y * width + x) * channels;
+      for (let channel = 0; channel < channels; channel += 1) {
+        output[targetOffset + channel] = source[sourceOffset + channel] ?? 0;
+      }
+    }
+  }
+  return output;
 }
 
 async function decodeOpenedRaw(
@@ -132,6 +214,7 @@ async function decodeOpenedRaw(
     return buildFromImageData(
       image,
       metadataRecord,
+      options,
       halfSize ? options.maxEdge : undefined,
     );
   });

@@ -24,6 +24,7 @@ import {
   type Sha256Digest,
 } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { cameraProfileIsCompatible } from "@/lib/camera-profiles/matrix";
 import {
   MAX_EXPORT_EDGE,
   MAX_EXPORT_PIXELS,
@@ -116,7 +117,7 @@ export type V3RuntimePreparationResult =
 
 type RuntimeSourceColorEncoding = Extract<
   SourceColorEncoding,
-  { readonly kind: "decoder-provided" | "uncharacterized" }
+  { readonly kind: "profiled" | "decoder-provided" | "uncharacterized" }
 >;
 
 function blockedSource(reason: string): V3SourceRecordResult {
@@ -124,13 +125,6 @@ function blockedSource(reason: string): V3SourceRecordResult {
     kind: "blocked",
     diagnostic: { kind: "source-pixels-invalid", category: "source", reason },
   };
-}
-
-function metadataText(metadata: Record<string, unknown>, key: string): string | null {
-  const value = metadata[key];
-  return typeof value === "string" && value.length > 0 && value.length <= 256
-    ? value
-    : null;
 }
 
 function sourcePrecision(image: DevelopImage): PixelPrecision | null {
@@ -151,9 +145,8 @@ function decoderProvenance(
   image: DevelopImage,
   purpose: V3SourcePurpose,
 ): DecoderProvenance | null {
-  const metadata = image.metadata;
-  const provenance = metadataText(metadata, "decoderProvenance");
-  const embedded = provenance === "embedded" || metadata.developSource === "embedded";
+  const provenance = image.pixelProvenance;
+  const embedded = provenance.decoderPath === "embedded-preview";
   if (embedded) {
     return {
       kind: "embedded-preview",
@@ -166,21 +159,19 @@ function decoderProvenance(
   }
   let decoderId: string;
   let decoderRevision: string;
-  switch (provenance) {
-    case "standard":
+  switch (provenance.decoderPath) {
+    case "processed-standard":
       decoderId = "browser-image-decoder";
-      decoderRevision = "canvas-rgba8-v1";
+      decoderRevision = provenance.decoderRevision;
       break;
     case "libraw":
       decoderId = "libraw-wasm";
-      decoderRevision = "darkroom-libraw-settings-v1";
+      decoderRevision = provenance.decoderRevision;
       break;
     case "nikon-sdk":
     case "nikon-test-only":
-      decoderId = provenance;
-      decoderRevision = metadata.protocolVersion === 1
-        ? "rgb16le-v1"
-        : "unverified-protocol";
+      decoderId = provenance.decoderPath;
+      decoderRevision = provenance.decoderRevision;
       break;
     default:
       return null;
@@ -199,11 +190,22 @@ function decoderProvenance(
 }
 
 function sourceColor(image: DevelopImage): RuntimeSourceColorEncoding {
-  const provenance = metadataText(image.metadata, "decoderProvenance");
+  const provenance = image.pixelProvenance;
+  if (provenance.cameraProfileStage.kind === "available") {
+    const profile = provenance.cameraProfileStage.profile;
+    return {
+      kind: "profiled",
+      profile: {
+        id: profile.id,
+        revision: profile.revision,
+        source: "decoder",
+      },
+      transfer: { kind: "linear" },
+    };
+  }
   if (
-    provenance === "standard" ||
-    provenance === "embedded" ||
-    image.metadata.developSource === "embedded"
+    provenance.decoderPath === "processed-standard" ||
+    provenance.decoderPath === "embedded-preview"
   ) {
     return {
       kind: "decoder-provided",
@@ -211,17 +213,15 @@ function sourceColor(image: DevelopImage): RuntimeSourceColorEncoding {
       transfer: { kind: "srgb" },
     };
   }
-  if (provenance === "nikon-sdk" || provenance === "nikon-test-only") {
-    const colorSpace = metadataText(image.metadata, "colorSpace");
-    const transfer = metadataText(image.metadata, "transferFunction");
-    if (colorSpace === "srgb" && transfer === "srgb") {
+  if (provenance.decoderPath === "nikon-sdk" || provenance.decoderPath === "nikon-test-only") {
+    if (provenance.colorSpace === "srgb" && provenance.transfer === "encoded") {
       return {
         kind: "decoder-provided",
         decoderColorSpace: STANDARD_SRGB_PROFILE.id,
         transfer: { kind: "srgb" },
       };
     }
-    if (provenance === "nikon-sdk" && colorSpace === "srgb" && transfer === "linear") {
+    if (provenance.decoderPath === "nikon-sdk" && provenance.colorSpace === "srgb" && provenance.transfer === "linear") {
       return {
         kind: "decoder-provided",
         decoderColorSpace: STANDARD_SRGB_PROFILE.id,
@@ -248,11 +248,21 @@ export function buildV3SourceRecord(
   if (!precision) {
     return blockedSource(`The ${image.bits}-bit source does not match its pixel storage.`);
   }
+  if (image.pixelProvenance.bitDepth !== image.bits) {
+    return blockedSource("Pixel provenance does not match the decoded bit depth.");
+  }
   const decoder = decoderProvenance(image, purpose);
   if (!decoder) {
     return blockedSource("Decoder provenance is unavailable for this source.");
   }
   const color = sourceColor(image);
+  const profileStage = image.pixelProvenance.cameraProfileStage;
+  if (
+    profileStage.kind === "available" &&
+    !cameraProfileIsCompatible(profileStage.profile, profileStage.camera)
+  ) {
+    return blockedSource("The camera profile is incompatible with the decoded source.");
+  }
   try {
     return {
       kind: "source",
@@ -274,18 +284,40 @@ export function buildV3SourceRecord(
         decoder,
         precision,
         color,
-        inputProfile: color.kind === "decoder-provided"
+        inputProfile: profileStage.kind === "available"
           ? {
-              kind: "decoder-default",
-              decoderId: decoder.decoderId,
-              decoderColorSpace: color.decoderColorSpace,
+              kind: "available",
+              profile: {
+                id: profileStage.profile.id,
+                revision: profileStage.profile.revision,
+                source: "decoder",
+              },
+              stage: profileStage.stage,
+              transform: profileStage.profile,
             }
-          : { kind: "unavailable", reason: color.reason },
+          : color.kind === "decoder-provided"
+            ? {
+                kind: "decoder-default",
+                decoderId: decoder.decoderId,
+                decoderColorSpace: color.decoderColorSpace,
+              }
+            : {
+                kind: "unavailable",
+                reason: color.kind === "uncharacterized"
+                  ? color.reason
+                  : "Profile provenance is incomplete.",
+              },
         asShotWhiteBalance: {
           kind: "unavailable",
           reason: "The active decoder did not provide validated white-balance multipliers.",
         },
-        camera: { kind: "unavailable" },
+        camera: profileStage.kind === "available"
+          ? {
+              kind: "available",
+              make: profileStage.camera.make,
+              model: profileStage.camera.model,
+            }
+          : { kind: "unavailable" },
         lens: { kind: "unavailable" },
       }),
     };

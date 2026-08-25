@@ -92,7 +92,7 @@ import {
   applyTexturePixel,
   type ReadonlyRgbImage,
 } from "./presence";
-import { applyInputCalibration, type Rgb } from "./profiles";
+import { applyInputCalibration, effectiveInputCalibration, type Rgb } from "./profiles";
 import { MAX_TILE_OVERLAP, type CancellationProbe } from "./source";
 import { applyWhiteBalance } from "./white-balance";
 
@@ -412,7 +412,13 @@ function sourceColorIsSupported(input: CpuRenderInput): CpuBackendBlockingDiagno
   if (input.document.color.inputProfile.selection.kind === "selected") return null;
   switch (input.source.color.kind) {
     case "profiled":
-      return standardSrgbProfileId(input.source.color.profile.id)
+      return standardSrgbProfileId(input.source.color.profile.id) ||
+        (
+          input.source.inputProfile.kind === "available" &&
+          input.source.inputProfile.stage === "before-develop-tone" &&
+          input.source.inputProfile.profile.id === input.source.color.profile.id &&
+          input.source.inputProfile.profile.revision === input.source.color.profile.revision
+        )
         ? null
         : {
             kind: "profile-transform-unavailable",
@@ -928,7 +934,7 @@ function readSourcePixel(
   return applyHueBoundedDefringe(
     applyInputCalibration(
       applyWhiteBalance(decoded, input.document.color.whiteBalance.resolved),
-      input.document.color.inputProfile.calibration,
+      effectiveInputCalibration(input.source, input.document.color.inputProfile),
     ),
     input.document.optics.defringe,
   );

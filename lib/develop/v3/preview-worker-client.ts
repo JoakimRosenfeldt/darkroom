@@ -46,6 +46,7 @@ function sourceImage(image: DevelopImage): V3PreviewWorkerImage {
     rgb: clonePixels(image),
     bits: image.bits,
     colors: image.colors,
+    pixelProvenance: image.pixelProvenance,
   };
 }
 

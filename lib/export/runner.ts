@@ -211,7 +211,11 @@ export async function runExportBatch(
           ...(entryMetadata.keywords.length === 0 ? {} : { keywords: { kind: "set", value: entryMetadata.keywords } }),
           ...metadataOverrides[entry.id],
         };
-        exportImage = await loadDevelopExportImage(entry);
+        exportImage = await loadDevelopExportImage(entry, {
+          rawColorMode: developSnapshot.processKind === "v3"
+            ? "libraw-camera-matrix"
+            : "decoder-rendered",
+        });
 
         progress("rendering");
         let renderSnapshot = developSession.snapshot();
