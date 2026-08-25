@@ -125,6 +125,14 @@ interface DevelopStore {
     document: Extract<PersistedDevelopDocument, { readonly version: 3 }>,
     label: string,
   ) => void;
+  commitV3CompleteStateWithMetadata: (
+    catalogId: string,
+    entryId: string,
+    document: Extract<PersistedDevelopDocument, { readonly version: 3 }>,
+    beforeMetadata: MetadataValues,
+    afterMetadata: MetadataValues,
+    label: string,
+  ) => { readonly documentChanged: boolean; readonly metadataChanged: boolean };
   resetV3Group: (group: V3SemanticGroupId) => void;
   resetV3All: () => void;
   beginEditGroup: (label: string) => void;
@@ -250,6 +258,34 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
       { kind: "replace-v3-complete-state", document },
       label,
     ),
+  commitV3CompleteStateWithMetadata: (
+    catalogId,
+    entryId,
+    document,
+    beforeMetadata,
+    afterMetadata,
+    label,
+  ) => {
+    const session = getDevelopSession(catalogId, entryId);
+    if (
+      !session ||
+      session.snapshot().processKind !== "v3" ||
+      isPresetTransientEdit(session.snapshot().transientEdit)
+    ) {
+      return { documentChanged: false, metadataChanged: false };
+    }
+    const result = session.commitV3CompleteStateWithMetadata(
+      document,
+      beforeMetadata,
+      afterMetadata,
+      label,
+    );
+    set((state) => replaceCoreState(state, entryId, result.snapshot));
+    return {
+      documentChanged: result.documentChanged,
+      metadataChanged: result.metadataChanged,
+    };
+  },
   resetV3Group: (group) =>
     get().dispatchV3(
       { kind: "reset-v3-semantic-group", group },

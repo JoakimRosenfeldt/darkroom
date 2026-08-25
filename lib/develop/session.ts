@@ -120,6 +120,13 @@ export type DevelopHistoryEntry =
       readonly command: CommittedDevelopCommand;
     }
   | {
+      readonly kind: "v3-document-metadata";
+      readonly label: string;
+      readonly command: CommittedDevelopCommand;
+      readonly beforeMetadata: DevelopMetadataValues;
+      readonly afterMetadata: DevelopMetadataValues;
+    }
+  | {
       readonly kind: "metadata";
       readonly label: string;
       readonly before: DevelopMetadataValues;
@@ -171,6 +178,12 @@ export interface DevelopSessionRepository {
 export interface DevelopMetadataMutation {
   readonly entryId: string;
   readonly values: DevelopMetadataValues;
+}
+
+export interface DevelopCompositeCommitResult {
+  readonly snapshot: DevelopSessionSnapshot;
+  readonly documentChanged: boolean;
+  readonly metadataChanged: boolean;
 }
 
 export interface V3AssetCopyReceipt {
@@ -240,6 +253,12 @@ export interface DevelopSession {
   beginEditGroup(label: string): DevelopSessionSnapshot;
   endEditGroup(): DevelopSessionSnapshot;
   cancelEditGroup(): DevelopSessionSnapshot;
+  commitV3CompleteStateWithMetadata(
+    document: DevelopDocumentV3,
+    beforeMetadata: DevelopMetadataValues,
+    afterMetadata: DevelopMetadataValues,
+    label: string,
+  ): DevelopCompositeCommitResult;
   upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot>;
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
@@ -611,6 +630,29 @@ export class DevelopSessionCore implements DevelopSession {
     after: DevelopDocumentV3,
     label: string,
   ): DevelopSessionSnapshot {
+    return this.#commitV3DocumentWithMetadata(after, label).snapshot;
+  }
+
+  commitV3CompleteStateWithMetadata(
+    document: DevelopDocumentV3,
+    beforeMetadata: DevelopMetadataValues,
+    afterMetadata: DevelopMetadataValues,
+    label: string,
+  ): DevelopCompositeCommitResult {
+    return this.#commitV3DocumentWithMetadata(document, label, {
+      before: metadataValues(beforeMetadata),
+      after: metadataValues(afterMetadata),
+    });
+  }
+
+  #commitV3DocumentWithMetadata(
+    after: DevelopDocumentV3,
+    label: string,
+    metadata?: {
+      readonly before: DevelopMetadataValues;
+      readonly after: DevelopMetadataValues;
+    },
+  ): DevelopCompositeCommitResult {
     if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) {
       throw new DevelopSessionCommandError("process-mismatch", "The session is not editable v3.");
     }
@@ -624,8 +666,24 @@ export class DevelopSessionCore implements DevelopSession {
           : "The completed command did not produce an editable v3 document.",
       );
     }
-    if (JSON.stringify(before) === JSON.stringify(validatedAfter.document)) {
-      return this.snapshot();
+    const documentChanged = JSON.stringify(before) !== JSON.stringify(validatedAfter.document);
+    const metadataChanged = metadata !== undefined &&
+      JSON.stringify(metadata.before) !== JSON.stringify(metadata.after);
+    if (!documentChanged) {
+      if (metadataChanged && metadata) {
+        this.#state.undo = boundedHistory([
+          ...this.#state.undo,
+          {
+            kind: "metadata",
+            label,
+            before: metadata.before,
+            after: metadata.after,
+          },
+        ]);
+        this.#state.redo = [];
+        this.#state.metadataRevision += 1;
+      }
+      return { snapshot: this.snapshot(), documentChanged, metadataChanged };
     }
     const command = createCommittedDevelopCommand(
       this.entryId,
@@ -635,13 +693,22 @@ export class DevelopSessionCore implements DevelopSession {
     );
     this.#state.undo = boundedHistory([
       ...this.#state.undo,
-      { kind: "v3-document", label, command },
+      metadataChanged && metadata
+        ? {
+            kind: "v3-document-metadata",
+            label,
+            command,
+            beforeMetadata: metadata.before,
+            afterMetadata: metadata.after,
+          }
+        : { kind: "v3-document", label, command },
     ]);
     this.#state.process = { kind: "editable", document: command.after };
     this.#state.documentRevision += 1;
+    if (metadataChanged) this.#state.metadataRevision += 1;
     this.#state.redo = [];
     this.#emitCommittedCommand(command);
-    return this.snapshot();
+    return { snapshot: this.snapshot(), documentChanged, metadataChanged };
   }
 
   #emitCommittedCommand(command: CommittedDevelopCommand): void {
@@ -782,7 +849,7 @@ export class DevelopSessionCore implements DevelopSession {
       throw new DevelopSessionCommandError("process-mismatch", "V2 undo history is not applicable.");
     }
     if (
-      history.kind === "v3-document" &&
+      (history.kind === "v3-document" || history.kind === "v3-document-metadata") &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V3 undo history is not applicable.");
@@ -816,6 +883,23 @@ export class DevelopSessionCore implements DevelopSession {
         ));
         return null;
       }
+      case "v3-document-metadata": {
+        if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
+        this.#state.process = {
+          kind: "editable",
+          document: history.command.before,
+        };
+        this.#state.documentRevision += 1;
+        this.#state.metadataRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Undo ${history.label}`,
+          before,
+          history.command.before,
+        ));
+        return { entryId: this.entryId, values: history.beforeMetadata };
+      }
       case "metadata":
         this.#state.metadataRevision += 1;
         return { entryId: this.entryId, values: history.before };
@@ -836,7 +920,7 @@ export class DevelopSessionCore implements DevelopSession {
       throw new DevelopSessionCommandError("process-mismatch", "V2 redo history is not applicable.");
     }
     if (
-      history.kind === "v3-document" &&
+      (history.kind === "v3-document" || history.kind === "v3-document-metadata") &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V3 redo history is not applicable.");
@@ -869,6 +953,23 @@ export class DevelopSessionCore implements DevelopSession {
           history.command.after,
         ));
         return null;
+      }
+      case "v3-document-metadata": {
+        if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
+        this.#state.process = {
+          kind: "editable",
+          document: history.command.after,
+        };
+        this.#state.documentRevision += 1;
+        this.#state.metadataRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Redo ${history.label}`,
+          before,
+          history.command.after,
+        ));
+        return { entryId: this.entryId, values: history.afterMetadata };
       }
       case "metadata":
         this.#state.metadataRevision += 1;

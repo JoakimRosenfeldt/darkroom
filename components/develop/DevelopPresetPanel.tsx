@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -60,6 +61,17 @@ interface PreviewBinding {
 interface AmountBinding {
   readonly catalogId: string;
   readonly entryId: string;
+}
+
+interface PresetCameraProfileBinding {
+  readonly entryId: string;
+  readonly image: DevelopImage;
+  readonly resolved: boolean;
+  readonly context: DevelopPresetCameraProfileContext;
+}
+
+function unavailableCameraProfile(reason: string): DevelopPresetCameraProfileContext {
+  return { kind: "unavailable", reason };
 }
 
 function errorMessage(error: unknown): string {
@@ -123,10 +135,17 @@ export function DevelopPresetPanel({
   const [managerCategory, setManagerCategory] = useState("Custom");
   const [fields, setFields] = useState<readonly DevelopPresetField[]>(["basic"]);
   const [conflict, setConflict] = useState<Extract<DevelopPresetImportResult, { kind: "conflict" }> | null>(null);
-  const [cameraProfile, setCameraProfile] = useState<DevelopPresetCameraProfileContext>({
-    kind: "unavailable",
-    reason: "Camera profile registry is loading.",
-  });
+  const initialCameraProfileBinding: PresetCameraProfileBinding = {
+    entryId: entry.id,
+    image,
+    resolved: false,
+    context: unavailableCameraProfile("Camera profile registry is loading."),
+  };
+  const [, setCameraProfileBinding] = useState(
+    initialCameraProfileBinding,
+  );
+  const cameraProfileBindingRef = useRef(initialCameraProfileBinding);
+  const cameraProfileRequestRef = useRef(0);
   const previewRef = useRef<PreviewBinding | null>(null);
   const amountRef = useRef<AmountBinding | null>(null);
   const selectedIdRef = useRef<string | null>(null);
@@ -138,12 +157,24 @@ export function DevelopPresetPanel({
     () => [...new Set(presets.map((preset) => preset.category))].sort(),
     [presets],
   );
-  const context: DevelopPresetApplyContext = useMemo(() => ({
-    sourceId: entry.sourceId,
-    cameraProfile,
-    regenerateAiMasks: false,
-  }), [cameraProfile, entry.sourceId]);
   const desktopAvailable = isElectronApp();
+
+  const publishCameraProfile = useCallback((binding: PresetCameraProfileBinding) => {
+    cameraProfileBindingRef.current = binding;
+    setCameraProfileBinding(binding);
+  }, []);
+
+  const currentApplyContext = (): DevelopPresetApplyContext => {
+    const binding = cameraProfileBindingRef.current;
+    if (binding.entryId !== entry.id || binding.image !== image || !binding.resolved) {
+      throw new Error("Camera profile compatibility is still loading for this photo.");
+    }
+    return {
+      sourceId: entry.sourceId,
+      cameraProfile: binding.context,
+      regenerateAiMasks: false,
+    };
+  };
 
   const cancelPreview = () => {
     const binding = previewRef.current;
@@ -189,41 +220,59 @@ export function DevelopPresetPanel({
 
   useEffect(() => {
     if (!isElectronApp()) return;
+    const request = cameraProfileRequestRef.current + 1;
+    cameraProfileRequestRef.current = request;
     let active = true;
     void getDarkroomAPI().cameraProfilesList().then((registry: CameraProfileRegistrySnapshot) => {
-      if (!active) return;
+      if (!active || cameraProfileRequestRef.current !== request) return;
       const stage = image.pixelProvenance.cameraProfileStage;
       if (stage.kind !== "available" || stage.stage !== "before-develop-tone") {
-        setCameraProfile({
-          kind: "unavailable",
-          reason: stage.kind === "unavailable" ? stage.reason : "Camera profile stage is unavailable.",
+        publishCameraProfile({
+          entryId: entry.id,
+          image,
+          resolved: true,
+          context: unavailableCameraProfile(
+            stage.kind === "unavailable" ? stage.reason : "Camera profile stage is unavailable.",
+          ),
         });
         return;
       }
-      setCameraProfile({
-        kind: "available-before-tone",
-        decoderDefault: {
-          registryRevision: registry.revision,
-          selection: { kind: "decoder-default" },
-          calibration: {
-            matrixToLinearSrgb: IDENTITY_MATRIX_3,
-            channelScale: [1, 1, 1],
-            exposureOffsetEv: 0,
+      publishCameraProfile({
+        entryId: entry.id,
+        image,
+        resolved: true,
+        context: {
+          kind: "available-before-tone",
+          decoderDefault: {
+            registryRevision: registry.revision,
+            selection: { kind: "decoder-default" },
+            calibration: {
+              matrixToLinearSrgb: IDENTITY_MATRIX_3,
+              channelScale: [1, 1, 1],
+              exposureOffsetEv: 0,
+            },
           },
+          compatibleProfiles: registry.profiles.flatMap((record) =>
+            record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
+              ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
+              : [],
+          ),
         },
-        compatibleProfiles: registry.profiles.flatMap((record) =>
-          record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
-            ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
-            : [],
-        ),
       });
     }).catch((error: unknown) => {
-      if (active) setCameraProfile({ kind: "unavailable", reason: errorMessage(error) });
+      if (active && cameraProfileRequestRef.current === request) {
+        publishCameraProfile({
+          entryId: entry.id,
+          image,
+          resolved: true,
+          context: unavailableCameraProfile(errorMessage(error)),
+        });
+      }
     });
     return () => {
       active = false;
     };
-  }, [image]);
+  }, [entry.id, image, publishCameraProfile]);
 
   useEffect(() => () => {
     const preview = previewRef.current;
@@ -271,7 +320,7 @@ export function DevelopPresetPanel({
         document: base,
         preset: selected,
         amount: 100,
-        context,
+        context: currentApplyContext(),
       });
       setReport(result.report);
       if (result.report.included.length === 0) {
@@ -307,7 +356,12 @@ export function DevelopPresetPanel({
     const base = committedDocument(entry.id);
     if (!base) return;
     try {
-      const result = calculateDevelopPresetApplication({ document: base, preset: selected, amount: 100, context });
+      const result = calculateDevelopPresetApplication({
+        document: base,
+        preset: selected,
+        amount: 100,
+        context: currentApplyContext(),
+      });
       setReport(result.report);
       if (result.report.included.length === 0) {
         setMessage("No compatible preset fields were applied.");
@@ -478,7 +532,7 @@ export function DevelopPresetPanel({
     const current = currentDocument(entry.id);
     if (!current || !amountRef.current) return;
     try {
-      const result = setAppliedPresetAmount(current, nextAmount, context);
+      const result = setAppliedPresetAmount(current, nextAmount, currentApplyContext());
       useDevelopStore.getState().dispatchPresetV3ToEntry(entry.catalogId, entry.id, result.command, "Adjust preset Amount");
       setAmountText(String(nextAmount));
       setReport(result.report);
@@ -608,7 +662,11 @@ export function DevelopPresetPanel({
                 const current = committedDocument(entry.id);
                 if (!current) return;
                 try {
-                  const result = setAppliedPresetAmount(current, resetPresetAmount(), context);
+                  const result = setAppliedPresetAmount(
+                    current,
+                    resetPresetAmount(),
+                    currentApplyContext(),
+                  );
                   useDevelopStore.getState().commitV3CompleteState(entry.catalogId, entry.id, result.document, "Reset preset Amount");
                 } catch (error) {
                   setMessage(errorMessage(error));
@@ -623,7 +681,7 @@ export function DevelopPresetPanel({
                 const current = committedDocument(entry.id);
                 if (!current) return;
                 try {
-                  const result = reapplyDevelopPreset(current, context);
+                  const result = reapplyDevelopPreset(current, currentApplyContext());
                   useDevelopStore.getState().commitV3CompleteState(entry.catalogId, entry.id, result.document, "Reapply preset");
                   setReport(result.report);
                   setMessage("Preset reapplied. Amount is linked again.");

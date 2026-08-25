@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -111,6 +111,44 @@ function manifestBytes(value: PresetManifest): number {
 
 function errorCode(error: unknown): string | null {
   return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : null;
+}
+
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs;
+}
+
+function unsupportedNoFollow(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "EINVAL" || code === "ENOTSUP" || code === "EOPNOTSUPP";
+}
+
+async function readBoundedFileHandle(
+  handle: FileHandle,
+  maximumBytes: number,
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let position = 0;
+  while (position <= maximumBytes) {
+    const remaining = maximumBytes + 1 - position;
+    const chunk = new Uint8Array(Math.min(64 * 1024, remaining));
+    const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position);
+    if (bytesRead === 0) break;
+    chunks.push(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  if (position > maximumBytes) {
+    throw new Error("Develop preset import exceeds the byte limit.");
+  }
+  const bytes = new Uint8Array(position);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -385,22 +423,42 @@ export class DevelopPresetStore {
     if (!path.isAbsolute(filePath)) throw new Error("Develop preset import path must be absolute.");
     let handle: FileHandle | undefined;
     try {
-      handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      } catch (error) {
+        if (errorCode(error) === "ELOOP") {
+          throw new Error("Develop preset import cannot be a symbolic link.");
+        }
+        if (!unsupportedNoFollow(error)) throw error;
+        const pathBeforeOpen = await fs.lstat(filePath);
+        if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink()) {
+          throw new Error("Develop preset import is not a supported regular file.");
+        }
+        handle = await fs.open(filePath, fsConstants.O_RDONLY);
+      }
       const before = await handle.stat();
-      if (!before.isFile() || before.size > DEVELOP_PRESET_MAX_BYTES) {
+      const pathBefore = await fs.lstat(filePath);
+      if (
+        !before.isFile() ||
+        !pathBefore.isFile() ||
+        pathBefore.isSymbolicLink() ||
+        before.dev !== pathBefore.dev ||
+        before.ino !== pathBefore.ino ||
+        before.size > DEVELOP_PRESET_MAX_BYTES
+      ) {
         throw new Error("Develop preset import is not a supported regular file.");
       }
-      const bytes = await handle.readFile();
+      const bytes = await readBoundedFileHandle(handle, DEVELOP_PRESET_MAX_BYTES);
       const after = await handle.stat();
+      const pathAfter = await fs.lstat(filePath);
       if (
-        before.dev !== after.dev ||
-        before.ino !== after.ino ||
-        before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs
+        !sameFileIdentity(before, after) ||
+        !sameFileIdentity(before, pathAfter) ||
+        !pathAfter.isFile() ||
+        pathAfter.isSymbolicLink()
       ) {
         throw new Error("Develop preset import changed while it was being read.");
       }
-      if (bytes.byteLength > DEVELOP_PRESET_MAX_BYTES) throw new Error("Develop preset import exceeds the byte limit.");
       return { bytes, sha256: createHash("sha256").update(bytes).digest("hex"), fileName: path.basename(filePath) };
     } catch (error) {
       if (errorCode(error) === "ELOOP") throw new Error("Develop preset import cannot be a symbolic link.");

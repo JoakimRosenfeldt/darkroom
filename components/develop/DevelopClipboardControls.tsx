@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cameraProfileIsCompatible } from "@/lib/camera-profiles/matrix";
 import type { CameraProfileRegistrySnapshot } from "@/lib/camera-profiles/registry";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
@@ -16,6 +16,7 @@ import {
 } from "@/lib/develop/clipboard/schema";
 import {
   captureDevelopPresetPayload,
+  countDevelopMaskTransferClasses,
   type DevelopPresetApplyReport,
   type DevelopPresetCameraProfileContext,
 } from "@/lib/develop/presets/apply";
@@ -47,6 +48,24 @@ const GROUP_LABELS: Readonly<Record<DevelopClipboardGroup, string>> = {
 type ClipboardState =
   | { readonly kind: "loading" }
   | DevelopClipboardReadResult;
+
+interface CameraProfileBinding {
+  readonly entryId: string;
+  readonly image: DevelopImage;
+  readonly resolved: boolean;
+  readonly context: DevelopPresetCameraProfileContext;
+}
+
+function unavailableCameraProfile(reason: string): DevelopPresetCameraProfileContext {
+  return { kind: "unavailable", reason };
+}
+
+function sameClipboardPayload(
+  left: DevelopClipboardPayload,
+  right: DevelopClipboardPayload,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Clipboard operation failed.";
@@ -111,9 +130,8 @@ export function DevelopClipboardControls({
   readonly entry: LibraryEntry;
   readonly disabled?: boolean;
 }) {
-  const entries = useLibraryStore((state) => state.entries);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
-  const applyMetadata = useLibraryStore((state) => state.applyMetadataToEntries);
+  const restoreEntryMetadata = useLibraryStore((state) => state.restoreEntryMetadata);
   const [clipboardState, setClipboardState] = useState<ClipboardState>({ kind: "loading" });
   const [preferences, setPreferences] = useState<readonly DevelopClipboardGroup[]>(
     DEFAULT_DEVELOP_CLIPBOARD_GROUPS,
@@ -125,14 +143,30 @@ export function DevelopClipboardControls({
   const [copyOpen, setCopyOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [requestRegeneration, setRequestRegeneration] = useState(false);
-  const [cameraProfile, setCameraProfile] = useState<DevelopPresetCameraProfileContext>({
-    kind: "unavailable",
-    reason: "Camera profile registry is loading.",
-  });
+  const initialCameraProfileBinding: CameraProfileBinding = {
+    entryId: entry.id,
+    image,
+    resolved: false,
+    context: unavailableCameraProfile("Camera profile registry is loading."),
+  };
+  const [cameraProfileBinding, setCameraProfileBinding] = useState<CameraProfileBinding>(
+    initialCameraProfileBinding,
+  );
+  const cameraProfileBindingRef = useRef(initialCameraProfileBinding);
+  const cameraProfileRequestRef = useRef(0);
   const [lastReport, setLastReport] = useState<DevelopPresetApplyReport | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const desktopAvailable = isElectronApp();
+  const cameraProfile = cameraProfileBinding.entryId === entry.id &&
+      cameraProfileBinding.image === image
+    ? cameraProfileBinding.context
+    : unavailableCameraProfile("Camera profile compatibility is loading for this photo.");
+
+  const publishCameraProfile = useCallback((binding: CameraProfileBinding) => {
+    cameraProfileBindingRef.current = binding;
+    setCameraProfileBinding(binding);
+  }, []);
 
   const readyPayload = clipboardState.kind === "ready" ? clipboardState.payload : null;
   const plainPasteGroups = useMemo(
@@ -196,41 +230,59 @@ export function DevelopClipboardControls({
 
   useEffect(() => {
     if (!isElectronApp()) return;
+    const request = cameraProfileRequestRef.current + 1;
+    cameraProfileRequestRef.current = request;
     let active = true;
     void getDarkroomAPI().cameraProfilesList().then((registry: CameraProfileRegistrySnapshot) => {
-      if (!active) return;
+      if (!active || cameraProfileRequestRef.current !== request) return;
       const stage = image.pixelProvenance.cameraProfileStage;
       if (stage.kind !== "available" || stage.stage !== "before-develop-tone") {
-        setCameraProfile({
-          kind: "unavailable",
-          reason: stage.kind === "unavailable" ? stage.reason : "Camera profile stage is unavailable.",
+        publishCameraProfile({
+          entryId: entry.id,
+          image,
+          resolved: true,
+          context: unavailableCameraProfile(
+            stage.kind === "unavailable" ? stage.reason : "Camera profile stage is unavailable.",
+          ),
         });
         return;
       }
-      setCameraProfile({
-        kind: "available-before-tone",
-        decoderDefault: {
-          registryRevision: registry.revision,
-          selection: { kind: "decoder-default" },
-          calibration: {
-            matrixToLinearSrgb: IDENTITY_MATRIX_3,
-            channelScale: [1, 1, 1],
-            exposureOffsetEv: 0,
+      publishCameraProfile({
+        entryId: entry.id,
+        image,
+        resolved: true,
+        context: {
+          kind: "available-before-tone",
+          decoderDefault: {
+            registryRevision: registry.revision,
+            selection: { kind: "decoder-default" },
+            calibration: {
+              matrixToLinearSrgb: IDENTITY_MATRIX_3,
+              channelScale: [1, 1, 1],
+              exposureOffsetEv: 0,
+            },
           },
+          compatibleProfiles: registry.profiles.flatMap((record) =>
+            record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
+              ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
+              : [],
+          ),
         },
-        compatibleProfiles: registry.profiles.flatMap((record) =>
-          record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
-            ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
-            : [],
-        ),
       });
     }).catch((error: unknown) => {
-      if (active) setCameraProfile({ kind: "unavailable", reason: errorMessage(error) });
+      if (active && cameraProfileRequestRef.current === request) {
+        publishCameraProfile({
+          entryId: entry.id,
+          image,
+          resolved: true,
+          context: unavailableCameraProfile(errorMessage(error)),
+        });
+      }
     });
     return () => {
       active = false;
     };
-  }, [image]);
+  }, [entry.id, image, publishCameraProfile]);
 
   const chooserReport = (() => {
     if (!readyPayload || pasteGroups.length === 0) return null;
@@ -269,7 +321,20 @@ export function DevelopClipboardControls({
     }
     setBusy(true);
     try {
-      const fields = copyGroups.filter(
+      const maskCounts = countDevelopMaskTransferClasses(committed);
+      const omittedMaskGroups = new Set<DevelopClipboardGroup>();
+      if (copyGroups.includes("manual-masks") && maskCounts.manual === 0) {
+        omittedMaskGroups.add("manual-masks");
+      }
+      if (copyGroups.includes("ai-masks") && maskCounts.ai === 0) {
+        omittedMaskGroups.add("ai-masks");
+      }
+      const transferredGroups = copyGroups.filter((group) => !omittedMaskGroups.has(group));
+      if (transferredGroups.length === 0) {
+        setMessage("The selected groups contain no transferable settings.");
+        return;
+      }
+      const fields = transferredGroups.filter(
         (group): group is DevelopPresetField => group !== "metadata",
       );
       const payload = captureDevelopPresetPayload(committed, fields, entry.sourceId);
@@ -287,10 +352,10 @@ export function DevelopClipboardControls({
         },
         document: { process: "darkroom-v3", schemaRevision: committed.schemaRevision },
         createdAt: Date.now(),
-        selectedGroups: copyGroups,
+        selectedGroups: transferredGroups,
         payload,
         assetRefs: payload.flatMap((item) => item.field === "ai-masks" ? item.value.assetRefs : []),
-        metadata: copyGroups.includes("metadata")
+        metadata: transferredGroups.includes("metadata")
           ? {
               pick: sourceMetadata.pick,
               rating: sourceMetadata.rating,
@@ -299,11 +364,22 @@ export function DevelopClipboardControls({
           : null,
       });
       await getDarkroomAPI().developClipboardWrite(value);
+      await getDarkroomAPI().developClipboardGroupsSet(copyGroups);
       setPreferences(copyGroups);
       setClipboardState({ kind: "ready", payload: value });
-      setPasteGroups(copyGroups);
+      setPasteGroups(transferredGroups);
       setCopyOpen(false);
-      setMessage(`Copied ${copyGroups.map((group) => GROUP_LABELS[group]).join(", ")}.`);
+      const skipped = [
+        ...[...omittedMaskGroups].map((group) => `${GROUP_LABELS[group]} had no transferable masks`),
+        ...(maskCounts["source-specific"] > 0 &&
+            (copyGroups.includes("manual-masks") || copyGroups.includes("ai-masks"))
+          ? [`${maskCounts["source-specific"]} mixed or depth masks are source-specific`]
+          : []),
+      ];
+      setMessage(
+        `Copied ${transferredGroups.map((group) => GROUP_LABELS[group]).join(", ")}.` +
+        (skipped.length > 0 ? ` Skipped: ${skipped.join("; ")}.` : ""),
+      );
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -315,7 +391,7 @@ export function DevelopClipboardControls({
     payload: DevelopClipboardPayload,
     groups: readonly DevelopClipboardGroup[],
   ): Promise<void> => {
-    const source = entries.find((candidate) =>
+    const source = useLibraryStore.getState().entries.find((candidate) =>
       candidate.catalogId === payload.source.catalogId &&
       candidate.id === payload.source.entryId,
     );
@@ -346,67 +422,105 @@ export function DevelopClipboardControls({
   const paste = async (
     groups: readonly DevelopClipboardGroup[],
     regenerateAiMasks: boolean,
+    persistGroups: boolean,
   ) => {
     if (!readyPayload || groups.length === 0) return;
+    const clipboardBefore = readyPayload;
     const sessionBefore = useDevelopStore.getState().sessions[entry.id];
     const revisionBefore = sessionBefore?.documentRevision;
-    const metadataUpdatedBefore = getEntryMetadata(
+    const metadataRevisionBefore = sessionBefore?.metadataRevision;
+    const targetMetadataBefore = getEntryMetadata(
       useLibraryStore.getState().entryMetadata,
       entry.id,
-    ).updatedAt;
+    );
     const committed = currentCommittedDocument(entry.id);
-    if (!committed || sessionBefore?.processKind !== "v3" || revisionBefore === undefined) {
+    if (
+      !committed ||
+      sessionBefore?.processKind !== "v3" ||
+      revisionBefore === undefined ||
+      metadataRevisionBefore === undefined
+    ) {
       setMessage("Paste requires an editable Develop document.");
       return;
     }
     setBusy(true);
     try {
-      await verifySourceAndAssets(readyPayload, groups);
+      const clipboardNow = await getDarkroomAPI().developClipboardRead();
+      setClipboardState(clipboardNow);
+      if (
+        clipboardNow.kind !== "ready" ||
+        !sameClipboardPayload(clipboardBefore, clipboardNow.payload)
+      ) {
+        throw new Error("Clipboard changed while preparing the paste. Review it and try again.");
+      }
+      if (persistGroups) {
+        await getDarkroomAPI().developClipboardGroupsSet(groups);
+        setPreferences(groups);
+      }
+      await verifySourceAndAssets(clipboardNow.payload, groups);
+      const developState = useDevelopStore.getState();
       const latestEntry = useLibraryStore.getState().entries.find(
         (candidate) => candidate.catalogId === entry.catalogId && candidate.id === entry.id,
       );
-      const latestSession = useDevelopStore.getState().sessions[entry.id];
+      const latestSession = developState.sessions[entry.id];
+      const latestCameraProfile = cameraProfileBindingRef.current;
       if (
+        developState.activeCatalogId !== entry.catalogId ||
+        developState.activeEntryId !== entry.id ||
         !latestEntry ||
         latestEntry.assetRevision !== entry.assetRevision ||
         latestEntry.size !== entry.size ||
         latestEntry.lastModified !== entry.lastModified ||
         isPresetTransientEdit(latestSession?.transientEdit) ||
         latestSession?.documentRevision !== revisionBefore ||
-        (groups.includes("metadata") && getEntryMetadata(
+        latestSession?.metadataRevision !== metadataRevisionBefore ||
+        getEntryMetadata(
           useLibraryStore.getState().entryMetadata,
           entry.id,
-        ).updatedAt !== metadataUpdatedBefore)
+        ).updatedAt !== targetMetadataBefore.updatedAt
       ) {
         throw new Error("Target changed while validating clipboard settings.");
+      }
+      if (
+        groups.includes("camera-profile") &&
+        (latestCameraProfile.entryId !== entry.id ||
+          latestCameraProfile.image !== image ||
+          !latestCameraProfile.resolved)
+      ) {
+        throw new Error("Camera profile compatibility changed while preparing the paste.");
       }
       const latestDocument = currentCommittedDocument(entry.id);
       if (!latestDocument) throw new Error("Target Develop document is unavailable.");
       const result = calculateDevelopClipboardApplication({
         document: latestDocument,
-        clipboard: readyPayload,
+        clipboard: clipboardNow.payload,
         selectedGroups: groups,
         context: {
           sourceId: entry.sourceId,
-          cameraProfile,
+          cameraProfile: latestCameraProfile.context,
           regenerateAiMasks,
         },
       });
-      if (result.report.included.length > 0) {
-        useDevelopStore.getState().commitV3CompleteState(
+      const metadataAfter = result.appliedMetadata && clipboardNow.payload.metadata
+        ? clipboardNow.payload.metadata
+        : targetMetadataBefore;
+      const commit = useDevelopStore.getState().commitV3CompleteStateWithMetadata(
           entry.catalogId,
           entry.id,
           result.document,
+          targetMetadataBefore,
+          metadataAfter,
           "Paste Develop settings",
         );
-      }
-      if (result.appliedMetadata && readyPayload.metadata) {
-        applyMetadata([entry.id], readyPayload.metadata);
+      if (commit.metadataChanged) {
+        restoreEntryMetadata(entry.id, metadataAfter);
       }
       setLastReport(result.report);
       const applied = [
-        ...result.report.included.map((field) => GROUP_LABELS[field]),
-        ...(result.appliedMetadata ? [GROUP_LABELS.metadata] : []),
+        ...(commit.documentChanged
+          ? result.report.included.map((field) => GROUP_LABELS[field])
+          : []),
+        ...(commit.metadataChanged ? [GROUP_LABELS.metadata] : []),
       ];
       setMessage(applied.length > 0
         ? `Applied: ${applied.join(", ")}.`
@@ -436,7 +550,7 @@ export function DevelopClipboardControls({
       <div className="flex flex-wrap gap-1.5" aria-label="Develop settings clipboard">
         <ActionButton onClick={() => setCopyOpen((open) => !open)} pressed={copyOpen} disabled={disabled || !desktopAvailable}>Copy</ActionButton>
         <ActionButton
-          onClick={() => void paste(plainPasteGroups, false)}
+          onClick={() => void paste(plainPasteGroups, false, false)}
           disabled={disabled || busy || pasteReason !== null}
           title={pasteReason ?? undefined}
         >
@@ -511,7 +625,7 @@ export function DevelopClipboardControls({
             </div>
           ) : null}
           <div className="mt-2 flex gap-1.5">
-            <ActionButton onClick={() => void paste(pasteGroups, requestRegeneration)} disabled={busy || pasteGroups.length === 0}>Apply</ActionButton>
+            <ActionButton onClick={() => void paste(pasteGroups, requestRegeneration, true)} disabled={busy || pasteGroups.length === 0}>Apply</ActionButton>
             <ActionButton onClick={() => setPasteOpen(false)}>Cancel</ActionButton>
           </div>
         </div>
