@@ -13,7 +13,7 @@ import {
 } from "@/lib/viewer/session";
 import { getLibraryResultQuery, type LibraryResultResolution } from "@/lib/library/result-repository";
 import { isLibraryResultId } from "@/lib/library/result-contract";
-import { isAssetId } from "@/lib/catalog/ids";
+import { isEntryId } from "@/lib/catalog/ids";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 
@@ -48,7 +48,7 @@ function PhotoPageContent() {
   const [, updateLibraryViewSettings] = useLibraryViewSettings();
   const photoParam = searchParams.get("id");
   const resultParam = searchParams.get("result");
-  const photoId = isAssetId(photoParam) ? photoParam : null;
+  const photoId = isEntryId(photoParam) ? photoParam : null;
   const resultId = isLibraryResultId(resultParam) ? resultParam : null;
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const query = useMemo(

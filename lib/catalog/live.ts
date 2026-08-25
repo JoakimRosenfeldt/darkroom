@@ -1,14 +1,18 @@
 import {
   parseAssetId,
   parseCatalogId,
+  parseEntryId,
   parseOperationId,
   parsePresetId,
   parseRootId,
+  parseSourceId,
   type AssetId,
   type CatalogId,
+  type EntryId,
   type OperationId,
   type PresetId,
   type RootId,
+  type SourceId,
 } from "./ids.ts";
 import {
   parseJsonValue,
@@ -172,7 +176,13 @@ export interface CatalogLiveAlbum {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly position: number;
+  readonly entryIds: readonly EntryId[];
   readonly assetIds: readonly AssetId[];
+}
+
+export interface CatalogLiveEntrySnapshot extends CatalogV3AssetSnapshot {
+  readonly entryId?: EntryId;
+  readonly sourceId?: SourceId;
 }
 
 export interface CatalogLiveCatalogIdentity {
@@ -192,7 +202,7 @@ export interface CatalogLiveFingerprintMatch {
 export interface CatalogLiveState {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRoot[];
-  readonly assets: readonly CatalogV3AssetSnapshot[];
+  readonly assets: readonly CatalogLiveEntrySnapshot[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogLiveOperation[];
   readonly presets: readonly CatalogLivePreset[];
@@ -206,6 +216,7 @@ export interface CatalogLiveQueryInput {
   readonly catalogId: CatalogId;
   readonly expectedRevision: number | null;
   readonly assetId?: AssetId;
+  readonly entryId?: EntryId;
   readonly rootId?: RootId;
   readonly fingerprintSha256?: string;
 }
@@ -330,7 +341,8 @@ export type CatalogLiveMutation =
       readonly rootId: RootId;
       readonly observations: readonly CatalogLiveObservation[];
     }
-  | { readonly kind: "metadata-patch"; readonly assetId: AssetId; readonly patch: CatalogLiveMetadataPatch }
+  | { readonly kind: "metadata-patch"; readonly entryId: EntryId; readonly assetId?: never; readonly patch: CatalogLiveMetadataPatch }
+  | { readonly kind: "metadata-patch"; readonly assetId: AssetId; readonly entryId?: never; readonly patch: CatalogLiveMetadataPatch }
   | {
       readonly kind: "album-create";
       readonly albumId: string;
@@ -341,8 +353,10 @@ export type CatalogLiveMutation =
     }
   | { readonly kind: "album-rename"; readonly albumId: string; readonly name: string; readonly updatedAt: number }
   | { readonly kind: "album-delete"; readonly albumId: string }
-  | { readonly kind: "album-membership-replace"; readonly albumId: string; readonly assetIds: readonly AssetId[] }
-  | { readonly kind: "archive-set"; readonly assetId: AssetId; readonly archived: boolean }
+  | { readonly kind: "album-membership-replace"; readonly albumId: string; readonly entryIds: readonly EntryId[]; readonly assetIds?: never }
+  | { readonly kind: "album-membership-replace"; readonly albumId: string; readonly assetIds: readonly AssetId[]; readonly entryIds?: never }
+  | { readonly kind: "archive-set"; readonly entryId: EntryId; readonly assetId?: never; readonly archived: boolean }
+  | { readonly kind: "archive-set"; readonly assetId: AssetId; readonly entryId?: never; readonly archived: boolean }
   | { readonly kind: "library-state-replace"; readonly stateJson: string }
   | { readonly kind: "fingerprint-set"; readonly fingerprint: CatalogLiveFingerprintTransition }
   | {
@@ -748,14 +762,17 @@ function parseState(value: unknown): CatalogLiveState {
 
 function parseAlbumOutput(value: unknown): CatalogLiveAlbum {
   const input = record(value, "live album");
-  if (!Array.isArray(input.assetIds)) return fail("live album.assetIds are invalid");
+  const ids = input.entryIds ?? input.assetIds;
+  if (!Array.isArray(ids)) return fail("live album.entryIds are invalid");
+  const entryIds = ids.map((entryId) => parseEntryId(entryId));
   return {
     albumId: stringValue(input.albumId, "live album.albumId"),
     name: stringValue(input.name, "live album.name", true),
     createdAt: finiteNumber(input.createdAt, "live album.createdAt"),
     updatedAt: finiteNumber(input.updatedAt, "live album.updatedAt"),
     position: integer(input.position, "live album.position"),
-    assetIds: input.assetIds.map((assetId) => parseAssetId(assetId)),
+    entryIds,
+    assetIds: entryIds.map((entryId) => parseAssetId(entryId)),
   };
 }
 
@@ -783,7 +800,7 @@ function parseFingerprintCoverage(value: unknown): CatalogV3FingerprintCoverage 
   return result;
 }
 
-function parseAssetSnapshot(value: unknown): CatalogV3AssetSnapshot {
+function parseAssetSnapshot(value: unknown): CatalogLiveEntrySnapshot {
   const input = record(value, "live asset");
   const health = enumValue(input.health, "live asset.health", ["present", "missing", "ambiguous", "unreadable"] as const);
   const observation = parseObservation(input.observation, "live asset.observation");
@@ -798,6 +815,8 @@ function parseAssetSnapshot(value: unknown): CatalogV3AssetSnapshot {
   if (fingerprintStatus === "valid" && (fingerprintObservedAt === null || (fingerprintObservedByteLength === null && fingerprintObservedModifiedAt === null && fingerprintLocalFileId === null))) return fail("live valid fingerprint proof is missing");
   return {
     catalogId: parseCatalogId(input.catalogId),
+    entryId: parseEntryId(input.entryId ?? input.assetId),
+    sourceId: parseSourceId(input.sourceId ?? input.assetId),
     assetId: parseAssetId(input.assetId),
     rootId: parseRootId(input.rootId),
     relativePath: parseCatalogLiveRelativePath(input.relativePath),
@@ -961,7 +980,11 @@ function parseMutation(value: unknown): CatalogLiveMutation {
       return { kind, rootId: parseRootId(input.rootId), complete: booleanValue(input.complete, "reconcile complete"), observations: input.observations.map(parseObservationInput) };
     }
     case "metadata-patch":
-      return { kind, assetId: parseAssetId(input.assetId), patch: parseMetadataPatch(input.patch) };
+      return {
+        kind,
+        entryId: parseEntryId(input.entryId ?? input.assetId),
+        patch: parseMetadataPatch(input.patch),
+      };
     case "album-create":
       return {
         kind,
@@ -976,11 +999,12 @@ function parseMutation(value: unknown): CatalogLiveMutation {
     case "album-delete":
       return { kind, albumId: stringValue(input.albumId, "albumId") };
     case "album-membership-replace": {
-      if (!Array.isArray(input.assetIds)) return fail("album assetIds are invalid");
-      return { kind, albumId: stringValue(input.albumId, "albumId"), assetIds: input.assetIds.map((item) => parseAssetId(item)) };
+      const ids = input.entryIds ?? input.assetIds;
+      if (!Array.isArray(ids)) return fail("album entryIds are invalid");
+      return { kind, albumId: stringValue(input.albumId, "albumId"), entryIds: ids.map((item) => parseEntryId(item)) };
     }
     case "archive-set":
-      return { kind, assetId: parseAssetId(input.assetId), archived: booleanValue(input.archived, "archived") };
+      return { kind, entryId: parseEntryId(input.entryId ?? input.assetId), archived: booleanValue(input.archived, "archived") };
     case "library-state-replace":
       return { kind, stateJson: parseLibraryStateJson(input.stateJson, "library state") };
     case "fingerprint-set":
@@ -1079,6 +1103,7 @@ export function parseCatalogLiveQueryInput(value: unknown): CatalogLiveQueryInpu
       ? null
       : integer(input.expectedRevision, "expectedRevision"),
     ...(input.assetId === undefined ? {} : { assetId: parseAssetId(input.assetId) }),
+    ...(input.entryId === undefined ? {} : { entryId: parseEntryId(input.entryId) }),
     ...(input.rootId === undefined ? {} : { rootId: parseRootId(input.rootId) }),
     ...(input.fingerprintSha256 === undefined ? {} : { fingerprintSha256: hash(input.fingerprintSha256, "fingerprintSha256") }),
   };

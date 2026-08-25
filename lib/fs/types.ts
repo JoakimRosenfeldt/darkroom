@@ -3,7 +3,7 @@ import {
   SUPPORTED_INPUT_EXTENSIONS,
 } from "../formats/registry";
 import type { CapabilityStatus } from "../formats/types";
-import type { AssetId, CatalogId, RootId } from "../catalog/ids";
+import type { AssetId, CatalogId, EntryId, RootId, SourceId } from "../catalog/ids";
 import type { SessionId } from "../catalog/runtime";
 
 export interface EntryFormatAvailability {
@@ -12,7 +12,9 @@ export interface EntryFormatAvailability {
 }
 
 export interface LibraryEntry {
-  id: AssetId;
+  id: EntryId;
+  sourceId: SourceId;
+  assetId: AssetId;
   catalogId: CatalogId;
   sessionId: SessionId;
   rootId: RootId;

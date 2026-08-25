@@ -1,7 +1,7 @@
 import {
-  parseAssetId,
+  parseEntryId,
   parseCatalogId,
-  type AssetId,
+  type EntryId,
   type CatalogId,
 } from "@/lib/catalog/ids";
 import type { ExportOutputIntent } from "../render-contract";
@@ -32,7 +32,7 @@ export interface ExactBatchSelection {
   readonly resultId: string;
   readonly catalogId: CatalogId;
   readonly catalogRevision: number;
-  readonly entryIds: readonly [AssetId, ...AssetId[]];
+  readonly entryIds: readonly [EntryId, ...EntryId[]];
 }
 
 export type BatchCopyScope =
@@ -58,7 +58,7 @@ export type BatchOutputAction =
 
 export interface BatchPlan {
   readonly selection: ExactBatchSelection;
-  readonly sourceEntryId: AssetId;
+  readonly sourceEntryId: EntryId;
   readonly scope: BatchCopyScope;
   readonly output: BatchOutputAction;
 }
@@ -164,7 +164,7 @@ export type BatchFailurePhase =
 export type BatchPhotoResult =
   | {
       readonly kind: "changed";
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly changedGroups: readonly [BatchSemanticGroup, ...BatchSemanticGroup[]];
       readonly skippedGroups: readonly BatchGroupSkip[];
       readonly documentRevision: string;
@@ -172,14 +172,14 @@ export type BatchPhotoResult =
     }
   | {
       readonly kind: "skipped";
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly reason: BatchSkipReason;
       readonly message: string;
       readonly skippedGroups: readonly BatchGroupSkip[];
     }
   | {
       readonly kind: "failed";
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly phase: BatchFailurePhase;
       readonly code: string;
       readonly message: string;
@@ -203,7 +203,7 @@ export type BatchProgress =
       readonly kind: "running";
       readonly completed: number;
       readonly total: number;
-      readonly currentEntryId: AssetId;
+      readonly currentEntryId: EntryId;
     }
   | {
       readonly kind: "complete";
@@ -276,7 +276,7 @@ export function parseExactBatchSelection(value: unknown): ExactBatchSelection {
   ) {
     throw new Error("Exact batch selection is invalid.");
   }
-  const entryIds = value.entryIds.map(parseAssetId);
+  const entryIds = value.entryIds.map(parseEntryId);
   if (new Set(entryIds).size !== entryIds.length) {
     throw new Error("Exact batch selection contains duplicate photos.");
   }
@@ -293,7 +293,7 @@ export function parseExactBatchSelection(value: unknown): ExactBatchSelection {
 
 export function defaultBatchPlan(input: {
   readonly selection: ExactBatchSelection;
-  readonly sourceEntryId: AssetId;
+  readonly sourceEntryId: EntryId;
   readonly currentGroup: BatchSemanticGroup;
   readonly output?: BatchOutputAction;
 }): BatchPlan {

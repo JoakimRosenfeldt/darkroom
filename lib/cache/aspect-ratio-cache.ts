@@ -5,10 +5,10 @@ import { assetCacheKey } from "./asset-cache-key";
 const CACHE_PREFIX = "darkroom-aspect:";
 const memoryCache = new Map<string, number>();
 
-function cacheKey(entry: Pick<LibraryEntry, "catalogId" | "id" | "assetRevision">): string {
+function cacheKey(entry: Pick<LibraryEntry, "catalogId" | "assetId" | "assetRevision">): string {
   return assetCacheKey({
     catalogId: entry.catalogId,
-    assetId: entry.id,
+    assetId: entry.assetId,
     revision: entry.assetRevision,
   }, "aspect");
 }

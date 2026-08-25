@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { parseAssetId, type CatalogId } from "@/lib/catalog/ids";
+import { parseEntryId, type CatalogId } from "@/lib/catalog/ids";
 import type { LibraryEntry } from "@/lib/fs/types";
 import {
   BATCH_SEMANTIC_GROUPS,
@@ -186,7 +186,7 @@ export function V3BatchDialog({
 
   const run = async () => {
     try {
-      const entryIds = selectedInOrder.map(parseAssetId);
+      const entryIds = selectedInOrder.map(parseEntryId);
       const firstEntryId = entryIds[0];
       if (!firstEntryId) throw new Error("Select at least one photo.");
       const selection = parseExactBatchSelection({
@@ -219,7 +219,7 @@ export function V3BatchDialog({
           resultId,
           catalogId,
           catalogRevision,
-          orderedEntryIds: resultEntryIds.map(parseAssetId),
+          orderedEntryIds: resultEntryIds.map(parseEntryId),
         },
         isCancelled: () => cancelledRef.current,
         onProgress: (progress) => {

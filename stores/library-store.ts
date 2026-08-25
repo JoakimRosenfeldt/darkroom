@@ -716,15 +716,14 @@ function startMetadataAnalysis(
     return;
   }
   const requestedIds = options.entryIds === undefined ? null : new Set(options.entryIds);
-  const entryIds = current.entries
+  const analysisEntries = current.entries
     .filter((entry) => requestedIds === null || requestedIds.has(entry.id))
     .filter((entry) => (
       options.force ||
       current.libraryWorkspace.analysisByEntryId[entry.id]?.cacheSignature !==
       entryAnalysisCacheSignature(entry.size, entry.lastModified)
-    ))
-    .map((entry) => entry.id);
-  if (entryIds.length === 0) return;
+    ));
+  if (analysisEntries.length === 0) return;
 
   let api: ReturnType<typeof getDarkroomAPI>;
   try {
@@ -745,7 +744,7 @@ function startMetadataAnalysis(
   set({
     metadataAnalysis: {
       operationId,
-      total: entryIds.length,
+      total: analysisEntries.length,
       completed: 0,
       failed: 0,
       cancelled: false,
@@ -756,7 +755,7 @@ function startMetadataAnalysis(
     catalogId,
     sessionId,
     operationId,
-    entryIds,
+    entryIds: analysisEntries.map((entry) => entry.assetId),
     force: options.force === true,
   }).then(
     (result) => {
@@ -2047,13 +2046,13 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     }
     const targets = current.entries
       .filter((entry) => entry.id !== keeperId && targetIds.includes(entry.id))
-      .map((entry) => entry.id);
+      .map((entry) => entry.assetId);
     if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
     await backupCatalogAdmin();
     const result = await getDarkroomAPI().catalogTrashExactDuplicates({
       catalogId: current.catalogId,
       sessionId: current.sessionId,
-      keeperId: keeper.id,
+      keeperId: keeper.assetId,
       targetIds: targets,
     });
     const trashed = result.items.filter((item) => item.trashed).map((item) => item.entryId);

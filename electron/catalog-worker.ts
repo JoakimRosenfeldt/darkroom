@@ -10,7 +10,7 @@ import {
   type AssetId,
   type OperationId,
 } from "../lib/catalog/ids.ts";
-import { CATALOG_V3_TABLES, verifyCatalogV3Schema } from "./catalog-v3-schema.ts";
+import { CATALOG_V3_IDENTITY_TABLES, CATALOG_V3_TABLES, verifyCatalogV3Schema } from "./catalog-v3-schema.ts";
 import {
   CatalogFaultInjectedError,
   createCatalogFaultInjectorForTests,
@@ -335,6 +335,12 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
     `).run(request.catalogId, request.displayName, request.appVersion, sourceCatalogId);
     for (const table of CATALOG_V3_TABLES) {
       if (table === "catalog_meta") continue;
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of CATALOG_V3_IDENTITY_TABLES) {
       cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
         request.catalogId,
         sourceCatalogId,

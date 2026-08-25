@@ -328,7 +328,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       const destinationRequest: ExportDestinationRequest = {
         catalogId: entries[0]!.catalogId,
         sessionId: entries[0]!.sessionId,
-        assetIds: entries.map((entry) => entry.id),
+        assetIds: entries.map((entry) => entry.assetId),
         count: entries.length,
         format: selectedFormat.id,
         suggestedFilename: safeSuggestedFilename(entries[0], suffix, selectedFormat),

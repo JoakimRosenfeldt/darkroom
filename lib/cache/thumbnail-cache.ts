@@ -119,7 +119,7 @@ export async function loadThumbnailBlob(
 ): Promise<Blob> {
   const key = {
     catalogId: entry.catalogId,
-    assetId: entry.id,
+    assetId: entry.assetId,
     revision: entry.assetRevision,
     thumbnail: true,
   };

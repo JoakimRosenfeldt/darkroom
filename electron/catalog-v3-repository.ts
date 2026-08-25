@@ -56,6 +56,7 @@ import type { ColorLabel, PickStatus, StarRating } from "../lib/catalog/types.ts
 import {
   installCatalogV3Schema,
   isCatalogV3DatabaseEmpty,
+  upgradeCatalogV3IdentitySchema,
   verifyCatalogV3Schema,
 } from "./catalog-v3-schema.ts";
 import {
@@ -591,6 +592,7 @@ export class CatalogV3Repository {
   }
 
   private schema(): void {
+    upgradeCatalogV3IdentitySchema(this.database);
     verifyCatalogV3Schema(this.database);
   }
 

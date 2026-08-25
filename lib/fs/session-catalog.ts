@@ -28,7 +28,7 @@ import type {
   CatalogBackupPolicy,
   CatalogBackupPolicyState,
 } from "../catalog/admin";
-import { createPresetId, type AssetId, type CatalogId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
+import { createPresetId, parseEntryId, parseSourceId, type AssetId, type CatalogId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
 import type {
   LibraryOperationStatus,
   ScanProgressPhase,
@@ -301,7 +301,9 @@ function entryFromAsset(
     ? getFormatCapabilityForFileName(name)
     : getFormatCapability(asset.formatId);
   return {
-    id: asset.assetId,
+    id: asset.entryId ?? parseEntryId(asset.assetId),
+    sourceId: asset.sourceId ?? parseSourceId(asset.assetId),
+    assetId: asset.assetId,
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     rootId: asset.rootId,
@@ -329,19 +331,20 @@ function hydrate(
   const entryMetadata: Record<string, EntryMetadata> = {};
   const archivedEntryIds: string[] = [];
   for (const asset of view.assets) {
-    entryMetadata[asset.assetId] = metadataFromAsset(asset);
+    const entryId = asset.entryId ?? parseEntryId(asset.assetId);
+    entryMetadata[entryId] = metadataFromAsset(asset);
     if (asset.metadata.archive) {
-      archivedEntryIds.push(asset.assetId);
+      archivedEntryIds.push(entryId);
     }
   }
   const albums = view.albums.map((album) => ({
     id: album.albumId,
     name: album.name,
-    entryIds: [...album.assetIds],
+    entryIds: [...album.entryIds],
     createdAt: album.createdAt,
     updatedAt: album.updatedAt,
   }));
-  const validEntryIds = new Set(view.assets.map((asset) => asset.assetId));
+  const validEntryIds = new Set(view.assets.map((asset) => asset.entryId ?? parseEntryId(asset.assetId)));
   const libraryWorkspace = parseLibraryWorkspaceJson(
     view.libraryStateJson,
     albums,
@@ -429,7 +432,7 @@ export function getActiveCatalogView(): CatalogLiveStateView | null {
 }
 
 export function getAssetRequest(
-  entry: Pick<LibraryEntry, "catalogId" | "sessionId" | "id">,
+  entry: Pick<LibraryEntry, "catalogId" | "sessionId" | "assetId">,
 ): {
   catalogId: CatalogId;
   sessionId: SessionId;
@@ -438,7 +441,7 @@ export function getAssetRequest(
   return {
     catalogId: entry.catalogId,
     sessionId: entry.sessionId,
-    assetId: entry.id,
+    assetId: entry.assetId,
   };
 }
 
@@ -1080,17 +1083,18 @@ async function syncCatalogStateForBinding(
   const mutations: CatalogApplyMutation[] = [];
   const archived = new Set(archivedEntryIds);
   for (const asset of view.assets) {
-    const desired = entryMetadata[asset.assetId];
+    const entryId = asset.entryId ?? parseEntryId(asset.assetId);
+    const desired = entryMetadata[entryId];
     if (desired) {
-      const patch = metadataPatchFor(asset, desired, archived.has(asset.assetId));
+      const patch = metadataPatchFor(asset, desired, archived.has(entryId));
       if (patch) {
-        mutations.push({ kind: "metadata-patch", assetId: asset.assetId, patch });
+        mutations.push({ kind: "metadata-patch", entryId, patch });
       }
-    } else if (asset.metadata.archive !== archived.has(asset.assetId)) {
+    } else if (asset.metadata.archive !== archived.has(entryId)) {
       mutations.push({
         kind: "metadata-patch",
-        assetId: asset.assetId,
-        patch: { version: 1, archive: archived.has(asset.assetId) },
+        entryId,
+        patch: { version: 1, archive: archived.has(entryId) },
       });
     }
   }
@@ -1111,11 +1115,11 @@ async function syncCatalogStateForBinding(
         updatedAt: desired.album.updatedAt,
       });
     }
-    if (current.assetIds.join("\u001f") !== desired.album.entryIds.join("\u001f")) {
+    if (current.entryIds.join("\u001f") !== desired.album.entryIds.join("\u001f")) {
       mutations.push({
         kind: "album-membership-replace",
         albumId: current.albumId,
-        assetIds: desired.album.entryIds as AssetId[],
+        entryIds: desired.album.entryIds.map(parseEntryId),
       });
     }
     desiredAlbums.delete(current.albumId);
@@ -1133,7 +1137,7 @@ async function syncCatalogStateForBinding(
       mutations.push({
         kind: "album-membership-replace",
         albumId: album.id,
-        assetIds: album.entryIds as AssetId[],
+        entryIds: album.entryIds.map(parseEntryId),
       });
     }
   }

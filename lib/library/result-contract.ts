@@ -1,4 +1,4 @@
-import { isAssetId, isCatalogId, type CatalogId } from "../catalog/ids";
+import { isCatalogId, isEntryId, type CatalogId } from "../catalog/ids";
 import type { CurationFilter, FilterOption, SortOption } from "./curation";
 import type { LibraryFacets, NumericFacetRange } from "./query";
 import type { LibraryPrimaryScope } from "./result";
@@ -241,7 +241,7 @@ export function parseLibraryResultSnapshot(value: unknown): LibraryResultSnapsho
   const orderedEntryIdSet = orderedEntryIds === null ? null : new Set(orderedEntryIds);
   if (
     id === null || queryRecordId !== id || orderedEntryIds === null || orderedEntryIds.length === 0 ||
-    orderedEntryIds.some((entryId) => !isAssetId(entryId)) ||
+    orderedEntryIds.some((entryId) => !isEntryId(entryId)) ||
     missingEntryIds === null || missingEntryIds.some((entryId) => !orderedEntryIdSet?.has(entryId)) ||
     activeEntryId === null || !orderedEntryIdSet?.has(activeEntryId) ||
     typeof value.catalogRevision !== "number" || !Number.isSafeInteger(value.catalogRevision) || value.catalogRevision < 0 ||

@@ -21,7 +21,7 @@ const inFlightProbes = new Map<string, Promise<number>>();
 function probeKey(entry: LibraryEntry): string {
   return assetCacheKey({
     catalogId: entry.catalogId,
-    assetId: entry.id,
+    assetId: entry.assetId,
     revision: entry.assetRevision,
   }, "dimensions");
 }
@@ -35,7 +35,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 async function ratioFromCachedThumbnail(entry: LibraryEntry): Promise<number | null> {
   const blob = await getCachedThumbnail({
     catalogId: entry.catalogId,
-    assetId: entry.id,
+    assetId: entry.assetId,
     revision: entry.assetRevision,
     thumbnail: true,
   });

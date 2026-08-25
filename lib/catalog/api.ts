@@ -4,6 +4,7 @@ import {
   parseRootId,
   type AssetId,
   type CatalogId,
+  type EntryId,
   type OperationId,
   type RootId,
 } from "./ids.ts";
@@ -29,6 +30,7 @@ import {
   type CatalogLiveApplyResult,
   type CatalogLiveAutoImportConfig,
   type CatalogLiveCatalogIdentity,
+  type CatalogLiveEntrySnapshot,
   type CatalogLiveFingerprintMatch,
   type CatalogLiveMutation,
   type CatalogLiveOperationItem,
@@ -45,7 +47,7 @@ import {
   type ReconcileStartedPayload,
   type WatchStatePayload,
 } from "./watch.ts";
-import type { CatalogV3AssetSnapshot, CatalogV3FingerprintCoverage } from "./v3.ts";
+import type { CatalogV3FingerprintCoverage } from "./v3.ts";
 
 type RecordValue = Record<string, unknown>;
 const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
@@ -225,6 +227,7 @@ export interface CatalogOperationRequest {
 
 export interface CatalogQueryRequest extends CatalogSessionRequest {
   readonly expectedRevision: number | null;
+  readonly entryId?: EntryId;
   readonly assetId?: AssetId;
   readonly rootId?: RootId;
   readonly fingerprintSha256?: string;
@@ -292,7 +295,7 @@ export interface CatalogPresetView {
 export interface CatalogLiveStateView {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRootView[];
-  readonly assets: readonly CatalogV3AssetSnapshot[];
+  readonly assets: readonly CatalogLiveEntrySnapshot[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogOperationView[];
   readonly presets: readonly CatalogPresetView[];
