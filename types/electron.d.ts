@@ -126,6 +126,11 @@ import type {
   DevelopPresetSearchRequest,
 } from "../lib/develop/presets/api";
 import type { DevelopPresetRecord } from "../lib/develop/presets/schema";
+import type {
+  DevelopClipboardGroup,
+  DevelopClipboardPayload,
+  DevelopClipboardReadResult,
+} from "../lib/develop/clipboard/schema";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -188,6 +193,10 @@ export interface DarkroomAPI {
   developPresetsResolveConflict(
     request: DevelopPresetConflictRequest,
   ): Promise<DevelopPresetImportResult>;
+  developClipboardWrite(payload: DevelopClipboardPayload): Promise<void>;
+  developClipboardRead(): Promise<DevelopClipboardReadResult>;
+  developClipboardGroupsGet(): Promise<readonly DevelopClipboardGroup[]>;
+  developClipboardGroupsSet(groups: readonly DevelopClipboardGroup[]): Promise<void>;
   developAssetCollectGarbage(
     request: DevelopAssetGcRequest,
   ): Promise<DevelopAssetGcResult>;

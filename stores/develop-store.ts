@@ -113,6 +113,12 @@ interface DevelopStore {
     command: V3EditCommand,
     label?: string,
   ) => void;
+  dispatchPresetV3ToEntry: (
+    catalogId: string,
+    entryId: string,
+    command: V3EditCommand,
+    label: string,
+  ) => void;
   commitV3CompleteState: (
     catalogId: string,
     entryId: string,
@@ -127,6 +133,8 @@ interface DevelopStore {
   beginEditGroupForEntry: (catalogId: string, entryId: string, label: string) => void;
   endEditGroupForEntry: (catalogId: string, entryId: string) => void;
   cancelEditGroupForEntry: (catalogId: string, entryId: string) => void;
+  endPresetEditGroupForEntry: (catalogId: string, entryId: string) => void;
+  cancelPresetEditGroupForEntry: (catalogId: string, entryId: string) => void;
   undo: () => void;
   redo: () => void;
   recordMetadataEdit: (
@@ -148,6 +156,13 @@ interface DevelopStore {
   setSelectedComponent: (componentId: string | null) => void;
   setMaskOverlayVisible: (visible: boolean) => void;
   setMaskTool: (tool: DevelopSessionUi["tool"]) => void;
+}
+
+export function isPresetTransientEdit(
+  transientEdit: { readonly label: string } | null | undefined,
+): boolean {
+  return transientEdit?.label === "Adjust preset Amount" ||
+    transientEdit?.label.startsWith("Preview preset: ") === true;
 }
 
 function replaceCoreState(
@@ -208,12 +223,24 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     if (!catalogId || !entryId) return state;
     const session = getDevelopSession(catalogId, entryId);
     if (!session || session.snapshot().processKind !== "v3") return state;
+    if (isPresetTransientEdit(session.snapshot().transientEdit)) return state;
     return replaceCoreState(state, entryId, session.dispatch(command, label));
   }),
   dispatchV3ToEntry: (catalogId, entryId, command, label = "Edit") =>
     set((state) => {
       const session = getDevelopSession(catalogId, entryId);
       if (!session || session.snapshot().processKind !== "v3") return state;
+      if (isPresetTransientEdit(session.snapshot().transientEdit)) return state;
+      return replaceCoreState(state, entryId, session.dispatch(command, label));
+    }),
+  dispatchPresetV3ToEntry: (catalogId, entryId, command, label) =>
+    set((state) => {
+      const session = getDevelopSession(catalogId, entryId);
+      if (
+        !session ||
+        session.snapshot().processKind !== "v3" ||
+        !isPresetTransientEdit(session.snapshot().transientEdit)
+      ) return state;
       return replaceCoreState(state, entryId, session.dispatch(command, label));
     }),
   commitV3CompleteState: (catalogId, entryId, document, label) =>
@@ -252,13 +279,27 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
   }),
   endEditGroupForEntry: (catalogId, entryId) => set((state) => {
     const session = getDevelopSession(catalogId, entryId);
+    if (isPresetTransientEdit(session?.snapshot().transientEdit)) return state;
     return session
       ? replaceCoreState(state, entryId, session.endEditGroup())
       : state;
   }),
   cancelEditGroupForEntry: (catalogId, entryId) => set((state) => {
     const session = getDevelopSession(catalogId, entryId);
+    if (isPresetTransientEdit(session?.snapshot().transientEdit)) return state;
     return session
+      ? replaceCoreState(state, entryId, session.cancelEditGroup())
+      : state;
+  }),
+  endPresetEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    const session = getDevelopSession(catalogId, entryId);
+    return session && isPresetTransientEdit(session.snapshot().transientEdit)
+      ? replaceCoreState(state, entryId, session.endEditGroup())
+      : state;
+  }),
+  cancelPresetEditGroupForEntry: (catalogId, entryId) => set((state) => {
+    const session = getDevelopSession(catalogId, entryId);
+    return session && isPresetTransientEdit(session.snapshot().transientEdit)
       ? replaceCoreState(state, entryId, session.cancelEditGroup())
       : state;
   }),
@@ -270,7 +311,12 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     const session = catalogId && entryId
       ? getDevelopSession(catalogId, entryId)
       : null;
-    if (!entryId || !session || session.snapshot().undo.length === 0) return;
+    if (
+      !entryId ||
+      !session ||
+      isPresetTransientEdit(session.snapshot().transientEdit) ||
+      session.snapshot().undo.length === 0
+    ) return;
     const metadataMutation = session.undo();
     set(replaceCoreState(state, entryId, session.snapshot()));
     if (metadataMutation) {
@@ -284,7 +330,12 @@ export const useDevelopStore = create<DevelopStore>((set, get) => ({
     const session = catalogId && entryId
       ? getDevelopSession(catalogId, entryId)
       : null;
-    if (!entryId || !session || session.snapshot().redo.length === 0) return;
+    if (
+      !entryId ||
+      !session ||
+      isPresetTransientEdit(session.snapshot().transientEdit) ||
+      session.snapshot().redo.length === 0
+    ) return;
     const metadataMutation = session.redo();
     set(replaceCoreState(state, entryId, session.snapshot()));
     if (metadataMutation) {

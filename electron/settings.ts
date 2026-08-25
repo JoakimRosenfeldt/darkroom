@@ -8,6 +8,11 @@ import {
   type ExportSizeOptions,
 } from "../lib/export/types.ts";
 import { parseCatalogId, type CatalogId } from "../lib/catalog/ids.ts";
+import {
+  DEFAULT_DEVELOP_CLIPBOARD_GROUPS,
+  parseDevelopClipboardGroups,
+  type DevelopClipboardGroup,
+} from "../lib/develop/clipboard/schema.ts";
 
 export interface ExportOptionsSettings {
   format: ExportFormatId;
@@ -22,6 +27,7 @@ export interface AppSettings {
   lastFolderPath: string | null;
   lastCatalogId: CatalogId | null;
   exportOptions: ExportOptionsSettings;
+  developClipboardGroups: readonly DevelopClipboardGroup[];
 }
 
 export type ExportOptionsSettingsInput = Partial<ExportOptionsSettings>;
@@ -39,6 +45,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   lastFolderPath: null,
   lastCatalogId: null,
   exportOptions: DEFAULT_EXPORT_OPTIONS,
+  developClipboardGroups: DEFAULT_DEVELOP_CLIPBOARD_GROUPS,
 };
 
 const MAX_EXPORT_EDGE = 100_000;
@@ -148,6 +155,13 @@ function normalizeSettings(value: unknown): AppSettings {
       : null,
     lastCatalogId,
     exportOptions: normalizeExportOptions(input.exportOptions),
+    developClipboardGroups: (() => {
+      try {
+        return parseDevelopClipboardGroups(input.developClipboardGroups);
+      } catch {
+        return DEFAULT_DEVELOP_CLIPBOARD_GROUPS;
+      }
+    })(),
   };
 }
 
@@ -241,6 +255,18 @@ export function createSettingsStore(userDataPath: string) {
           ...settings.exportOptions,
           ...(isRecord(options) ? options : {}),
         });
+      });
+    },
+
+    async getDevelopClipboardGroups(): Promise<readonly DevelopClipboardGroup[]> {
+      await writes;
+      return (await read()).developClipboardGroups;
+    },
+
+    async setDevelopClipboardGroups(groups: unknown): Promise<void> {
+      const parsed = parseDevelopClipboardGroups(groups);
+      await update((settings) => {
+        settings.developClipboardGroups = parsed;
       });
     },
   };

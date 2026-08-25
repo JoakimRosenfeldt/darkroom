@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { cameraProfileIsCompatible } from "@/lib/camera-profiles/matrix";
+import type { CameraProfileRegistrySnapshot } from "@/lib/camera-profiles/registry";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   appliedPresetAmountAvailable,
@@ -19,6 +20,7 @@ import {
   setAppliedPresetAmount,
   type DevelopPresetApplyContext,
   type DevelopPresetApplyReport,
+  type DevelopPresetCameraProfileContext,
 } from "@/lib/develop/presets/apply";
 import type { DevelopPresetImportResult } from "@/lib/develop/presets/api";
 import {
@@ -29,9 +31,13 @@ import {
   type DevelopPresetRecord,
 } from "@/lib/develop/presets/schema";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
+import {
+  IDENTITY_MATRIX_3,
+  persistedInputProfileFromMatrix,
+} from "@/lib/develop/v3/profiles";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
 import { ActionButton, StatusCard } from "./V3PanelControls";
 
 const FIELD_LABELS: Readonly<Record<DevelopPresetField, string>> = {
@@ -117,10 +123,14 @@ export function DevelopPresetPanel({
   const [managerCategory, setManagerCategory] = useState("Custom");
   const [fields, setFields] = useState<readonly DevelopPresetField[]>(["basic"]);
   const [conflict, setConflict] = useState<Extract<DevelopPresetImportResult, { kind: "conflict" }> | null>(null);
-  const [compatibleProfileIds, setCompatibleProfileIds] = useState<readonly string[]>([]);
+  const [cameraProfile, setCameraProfile] = useState<DevelopPresetCameraProfileContext>({
+    kind: "unavailable",
+    reason: "Camera profile registry is loading.",
+  });
   const previewRef = useRef<PreviewBinding | null>(null);
   const amountRef = useRef<AmountBinding | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const optionRefs = useRef(new Map<string, HTMLButtonElement>());
   const [amountText, setAmountText] = useState(String(document.appliedPreset?.amount ?? 100));
 
   const selected = presets.find((preset) => preset.presetId === selectedId) ?? null;
@@ -130,14 +140,15 @@ export function DevelopPresetPanel({
   );
   const context: DevelopPresetApplyContext = useMemo(() => ({
     sourceId: entry.sourceId,
-    compatibleInputProfileIds: compatibleProfileIds,
+    cameraProfile,
     regenerateAiMasks: false,
-  }), [compatibleProfileIds, entry.sourceId]);
+  }), [cameraProfile, entry.sourceId]);
+  const desktopAvailable = isElectronApp();
 
   const cancelPreview = () => {
     const binding = previewRef.current;
     if (!binding) return;
-    useDevelopStore.getState().cancelEditGroupForEntry(binding.catalogId, binding.entryId);
+    useDevelopStore.getState().cancelPresetEditGroupForEntry(binding.catalogId, binding.entryId);
     previewRef.current = null;
     setPreviewingId(null);
     setMessage("Preview cancelled.");
@@ -146,7 +157,7 @@ export function DevelopPresetPanel({
   const cancelAmount = () => {
     const binding = amountRef.current;
     if (!binding) return;
-    useDevelopStore.getState().cancelEditGroupForEntry(binding.catalogId, binding.entryId);
+    useDevelopStore.getState().cancelPresetEditGroupForEntry(binding.catalogId, binding.entryId);
     amountRef.current = null;
   };
 
@@ -161,7 +172,7 @@ export function DevelopPresetPanel({
         : next[0]?.presetId ?? null;
       const binding = previewRef.current;
       if (binding && binding.presetId !== nextSelectedId) {
-        useDevelopStore.getState().cancelEditGroupForEntry(binding.catalogId, binding.entryId);
+        useDevelopStore.getState().cancelPresetEditGroupForEntry(binding.catalogId, binding.entryId);
         previewRef.current = null;
         setPreviewingId(null);
       }
@@ -179,18 +190,35 @@ export function DevelopPresetPanel({
   useEffect(() => {
     if (!isElectronApp()) return;
     let active = true;
-    void getDarkroomAPI().cameraProfilesList().then((registry) => {
+    void getDarkroomAPI().cameraProfilesList().then((registry: CameraProfileRegistrySnapshot) => {
       if (!active) return;
       const stage = image.pixelProvenance.cameraProfileStage;
-      setCompatibleProfileIds(stage.kind === "available"
-        ? registry.profiles.flatMap((record) =>
-            record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
-              ? [record.profile.id]
-              : [],
-          )
-        : []);
-    }).catch(() => {
-      if (active) setCompatibleProfileIds([]);
+      if (stage.kind !== "available" || stage.stage !== "before-develop-tone") {
+        setCameraProfile({
+          kind: "unavailable",
+          reason: stage.kind === "unavailable" ? stage.reason : "Camera profile stage is unavailable.",
+        });
+        return;
+      }
+      setCameraProfile({
+        kind: "available-before-tone",
+        decoderDefault: {
+          registryRevision: registry.revision,
+          selection: { kind: "decoder-default" },
+          calibration: {
+            matrixToLinearSrgb: IDENTITY_MATRIX_3,
+            channelScale: [1, 1, 1],
+            exposureOffsetEv: 0,
+          },
+        },
+        compatibleProfiles: registry.profiles.flatMap((record) =>
+          record.kind === "ready" && cameraProfileIsCompatible(record.profile, stage.camera)
+            ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
+            : [],
+        ),
+      });
+    }).catch((error: unknown) => {
+      if (active) setCameraProfile({ kind: "unavailable", reason: errorMessage(error) });
     });
     return () => {
       active = false;
@@ -200,12 +228,12 @@ export function DevelopPresetPanel({
   useEffect(() => () => {
     const preview = previewRef.current;
     if (preview) {
-      useDevelopStore.getState().cancelEditGroupForEntry(preview.catalogId, preview.entryId);
+      useDevelopStore.getState().cancelPresetEditGroupForEntry(preview.catalogId, preview.entryId);
       previewRef.current = null;
     }
     const amount = amountRef.current;
     if (amount) {
-      useDevelopStore.getState().cancelEditGroupForEntry(amount.catalogId, amount.entryId);
+      useDevelopStore.getState().cancelPresetEditGroupForEntry(amount.catalogId, amount.entryId);
       amountRef.current = null;
     }
   }, [entry.catalogId, entry.id]);
@@ -223,7 +251,7 @@ export function DevelopPresetPanel({
         : next[0]?.presetId ?? null;
     const binding = previewRef.current;
     if (binding && binding.presetId !== nextSelectedId) {
-      useDevelopStore.getState().cancelEditGroupForEntry(binding.catalogId, binding.entryId);
+      useDevelopStore.getState().cancelPresetEditGroupForEntry(binding.catalogId, binding.entryId);
       previewRef.current = null;
       setPreviewingId(null);
     }
@@ -251,8 +279,12 @@ export function DevelopPresetPanel({
         return;
       }
       const store = useDevelopStore.getState();
-      store.beginEditGroupForEntry(entry.catalogId, entry.id, `Preview ${selected.name}`);
-      store.dispatchV3ToEntry(entry.catalogId, entry.id, result.command, `Apply ${selected.name}`);
+      store.beginEditGroupForEntry(entry.catalogId, entry.id, `Preview preset: ${selected.name}`);
+      if (!isPresetTransientEdit(useDevelopStore.getState().sessions[entry.id]?.transientEdit)) {
+        setMessage("Finish the current edit before previewing a preset.");
+        return;
+      }
+      store.dispatchPresetV3ToEntry(entry.catalogId, entry.id, result.command, `Apply ${selected.name}`);
       previewRef.current = { catalogId: entry.catalogId, entryId: entry.id, presetId: selected.presetId };
       setPreviewingId(selected.presetId);
       setMessage(`Previewing ${selected.name}.`);
@@ -265,7 +297,7 @@ export function DevelopPresetPanel({
     if (!selected) return;
     const previewBinding = previewRef.current;
     if (previewBinding?.presetId === selected.presetId) {
-      useDevelopStore.getState().endEditGroupForEntry(previewBinding.catalogId, previewBinding.entryId);
+      useDevelopStore.getState().endPresetEditGroupForEntry(previewBinding.catalogId, previewBinding.entryId);
       previewRef.current = null;
       setPreviewingId(null);
       setMessage(`${selected.name} applied.`);
@@ -433,6 +465,10 @@ export function DevelopPresetPanel({
     if (amountRef.current || previewRef.current) return;
     const store = useDevelopStore.getState();
     store.beginEditGroupForEntry(entry.catalogId, entry.id, "Adjust preset Amount");
+    if (!isPresetTransientEdit(useDevelopStore.getState().sessions[entry.id]?.transientEdit)) {
+      setMessage("Finish the current edit before adjusting preset Amount.");
+      return;
+    }
     amountRef.current = { catalogId: entry.catalogId, entryId: entry.id };
   };
 
@@ -443,7 +479,7 @@ export function DevelopPresetPanel({
     if (!current || !amountRef.current) return;
     try {
       const result = setAppliedPresetAmount(current, nextAmount, context);
-      useDevelopStore.getState().dispatchV3ToEntry(entry.catalogId, entry.id, result.command, "Adjust preset Amount");
+      useDevelopStore.getState().dispatchPresetV3ToEntry(entry.catalogId, entry.id, result.command, "Adjust preset Amount");
       setAmountText(String(nextAmount));
       setReport(result.report);
     } catch (error) {
@@ -455,7 +491,7 @@ export function DevelopPresetPanel({
   const finishAmount = () => {
     const binding = amountRef.current;
     if (!binding) return;
-    useDevelopStore.getState().endEditGroupForEntry(binding.catalogId, binding.entryId);
+    useDevelopStore.getState().endPresetEditGroupForEntry(binding.catalogId, binding.entryId);
     amountRef.current = null;
   };
 
@@ -466,12 +502,41 @@ export function DevelopPresetPanel({
       setAmountText(String(committedDocument(entry.id)?.appliedPreset?.amount ?? 100));
       return;
     }
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowDown" && event.key !== "ArrowRight" && event.key !== "ArrowUp") return;
+    const handled = ["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key);
+    if (!handled) return;
     event.preventDefault();
     const current = currentDocument(entry.id)?.appliedPreset?.amount;
     if (current === undefined) return;
-    const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-    changeAmount(incrementPresetAmount(current, direction, event.shiftKey ? 10 : 1));
+    if (event.key === "Home" || event.key === "End") {
+      changeAmount(event.key === "Home" ? 0 : 100);
+      return;
+    }
+    const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" || event.key === "PageDown" ? -1 : 1;
+    const step = event.key === "PageDown" || event.key === "PageUp" || event.shiftKey ? 10 : 1;
+    changeAmount(incrementPresetAmount(current, direction, step));
+  };
+
+  const selectPreset = (presetId: string) => {
+    if (previewRef.current?.presetId !== presetId) cancelPreview();
+    selectedIdRef.current = presetId;
+    setSelectedId(presetId);
+    setReport(null);
+  };
+
+  const movePresetFocus = (event: KeyboardEvent<HTMLButtonElement>, presetId: string) => {
+    const currentIndex = presets.findIndex((preset) => preset.presetId === presetId);
+    if (currentIndex < 0) return;
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % presets.length;
+    else if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + presets.length) % presets.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = presets.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextId = presets[nextIndex]?.presetId;
+    if (!nextId) return;
+    selectPreset(nextId);
+    optionRefs.current.get(nextId)?.focus();
   };
 
   const amount = document.appliedPreset;
@@ -510,8 +575,9 @@ export function DevelopPresetPanel({
               onChange={(event) => changeAmount(Number(event.target.value))}
               onKeyDown={amountKeyDown}
               onKeyUp={(event) => {
-                if (event.key.startsWith("Arrow")) finishAmount();
+                if (["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key)) finishAmount();
               }}
+              onBlur={finishAmount}
               className="w-full accent-lr-accent disabled:opacity-40"
             />
             <input
@@ -605,19 +671,21 @@ export function DevelopPresetPanel({
       </section>
 
       <div className="max-h-[220px] overflow-auto border-b border-lr-border-subtle p-2" role="listbox" aria-label="Develop presets">
-        {presets.length === 0 ? <p className="px-2 py-3 text-[10px] text-lr-text-faint">No presets match.</p> : null}
+        {!desktopAvailable ? <p className="px-2 py-3 text-[10px] text-lr-text-faint">Desktop preset storage is unavailable.</p> : null}
+        {desktopAvailable && presets.length === 0 ? <p className="px-2 py-3 text-[10px] text-lr-text-faint">No presets match.</p> : null}
         {presets.map((preset) => (
           <button
             key={preset.presetId}
             type="button"
             role="option"
             aria-selected={selected?.presetId === preset.presetId}
-            onClick={() => {
-              if (previewRef.current?.presetId !== preset.presetId) cancelPreview();
-              selectedIdRef.current = preset.presetId;
-              setSelectedId(preset.presetId);
-              setReport(null);
+            tabIndex={selected?.presetId === preset.presetId ? 0 : -1}
+            ref={(node) => {
+              if (node) optionRefs.current.set(preset.presetId, node);
+              else optionRefs.current.delete(preset.presetId);
             }}
+            onClick={() => selectPreset(preset.presetId)}
+            onKeyDown={(event) => movePresetFocus(event, preset.presetId)}
             className={`mb-1 flex w-full items-start gap-2 rounded-[7px] border px-2.5 py-2 text-left last:mb-0 ${selected?.presetId === preset.presetId ? "border-lr-text-dim bg-lr-panel-raised" : "border-transparent hover:bg-lr-panel-raised/60"}`}
           >
             <span className="min-w-0 flex-1">
@@ -659,8 +727,9 @@ export function DevelopPresetPanel({
       <section className="px-4 py-3.5">
         <div className="flex flex-wrap gap-1.5">
           <ActionButton onClick={() => setManagerOpen((value) => !value)} pressed={managerOpen}>Manage</ActionButton>
-          <ActionButton onClick={() => void importPreset()} disabled={busy || !isElectronApp()}>Import</ActionButton>
+          <ActionButton onClick={() => void importPreset()} disabled={busy || !desktopAvailable}>Import</ActionButton>
         </div>
+        {!desktopAvailable ? <p className="mt-2 text-[9px] leading-3 text-lr-text-faint">Preset management requires the desktop app.</p> : null}
         {managerOpen ? (
           <div className="mt-3 space-y-2">
             <StatusCard title="Create from current">

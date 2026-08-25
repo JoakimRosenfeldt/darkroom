@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { MixerColor } from "@/lib/develop/types";
@@ -48,9 +48,10 @@ import {
   StatusCard,
   ToggleRow,
 } from "@/components/develop/V3PanelControls";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
 import { CameraProfileControls } from "@/components/develop/CameraProfileControls";
 import { DevelopPresetPanel } from "@/components/develop/DevelopPresetPanel";
+import { DevelopClipboardControls } from "@/components/develop/DevelopClipboardControls";
 
 type V3Tab = "presets" | "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
 type MixerMode = "hue" | "saturation" | "luminance";
@@ -164,6 +165,7 @@ export function EditPanel({
     tabForPanel(activePanel) ?? "light",
   );
   const [batchOpen, setBatchOpen] = useState(false);
+  const tabRefs = useRef(new Map<V3Tab, HTMLButtonElement>());
 
   const document = session?.previewDocument ?? session?.persistedDocument;
   if (!session || session.processKind !== "v3" || document?.version !== 3) {
@@ -179,6 +181,21 @@ export function EditPanel({
     persistedMetadataRevision: session.persistedMetadataRevision,
   });
   const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
+  const presetTransient = isPresetTransientEdit(session.transientEdit);
+  const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, tabId: V3Tab) => {
+    const currentIndex = TABS.findIndex((tab) => tab.id === tabId);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = TABS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = TABS[nextIndex];
+    if (!nextTab) return;
+    setActiveTab(nextTab.id);
+    tabRefs.current.get(nextTab.id)?.focus();
+  };
 
   return (
     <>
@@ -198,11 +215,14 @@ export function EditPanel({
           ) : null}
         </div>
         <div className="flex-1" />
-        <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
-        <ActionButton onClick={resetAll}>Reset all</ActionButton>
+        <ActionButton onClick={() => setBatchOpen(true)} disabled={presetTransient}>Batch</ActionButton>
+        <ActionButton onClick={resetAll} disabled={presetTransient}>Reset all</ActionButton>
       </div>
 
-      <PrototypeOperations decoded={decoded} document={document} entry={entry} />
+      <div className={presetTransient ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient}>
+        <PrototypeOperations decoded={decoded} document={document} entry={entry} />
+      </div>
+      <DevelopClipboardControls document={document} image={decoded} entry={entry} disabled={presetTransient} />
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
@@ -216,7 +236,13 @@ export function EditPanel({
               type="button"
               role="tab"
               aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              ref={(node) => {
+                if (node) tabRefs.current.set(tab.id, node);
+                else tabRefs.current.delete(tab.id);
+              }}
               onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(event) => moveTabFocus(event, tab.id)}
               className={`rounded-[7px] px-1 py-1.5 text-[10px] transition ${
                 activeTab === tab.id
                   ? "bg-lr-panel-raised text-lr-text"
@@ -231,6 +257,7 @@ export function EditPanel({
 
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
+        <div className={presetTransient && activeTab !== "presets" ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient && activeTab !== "presets"}>
         {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
         {activeTab === "color" ? <ColorTab document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
@@ -240,6 +267,7 @@ export function EditPanel({
         ) : null}
         {activeTab === "cleanup" ? <CleanupTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "output" ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
+        </div>
       </div>
       </aside>
       {batchOpen ? (

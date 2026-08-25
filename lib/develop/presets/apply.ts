@@ -1,7 +1,7 @@
 import type { SourceId } from "../../catalog/ids.ts";
 import type { CurvePoint, CurveSettings } from "../types.ts";
 import { validateV3CommandDocument, type V3DirectEditCommand } from "../v3/commands.ts";
-import type { DevelopDocumentV3 } from "../v3/document.ts";
+import type { DevelopDocumentV3, PersistedInputProfile } from "../v3/document.ts";
 import { referencedMaskArtifacts, type LocalMaskV3, type MaskExpression } from "../v3/masking.ts";
 import { resolveAdjustedWhiteBalance } from "../v3/white-balance.ts";
 import {
@@ -14,9 +14,22 @@ import {
   type DevelopPresetRecord,
 } from "./schema.ts";
 
+export type DevelopPresetCameraProfileContext =
+  | {
+      readonly kind: "unavailable";
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "available-before-tone";
+      readonly decoderDefault: PersistedInputProfile;
+      readonly compatibleProfiles: readonly PersistedInputProfile[];
+    };
+
 export interface DevelopPresetApplyContext {
   readonly sourceId: SourceId;
-  readonly compatibleInputProfileIds: readonly string[];
+  readonly cameraProfile?: DevelopPresetCameraProfileContext;
+  /** @deprecated Callers without a full stage/profile snapshot safely skip profile fields. */
+  readonly compatibleInputProfileIds?: readonly string[];
   readonly regenerateAiMasks: boolean;
 }
 
@@ -172,9 +185,25 @@ export function expandDevelopPresetPayload(
   });
 }
 
+function sameCalibration(left: PersistedInputProfile, right: PersistedInputProfile): boolean {
+  return canonical(left.calibration) === canonical(right.calibration);
+}
+
 function compatibleProfile(entry: Extract<DevelopPresetPayloadEntry, { readonly field: "camera-profile" }>, context: DevelopPresetApplyContext): boolean {
-  if (entry.value.selection.kind === "unavailable") return false;
-  return entry.value.selection.kind === "decoder-default" || context.compatibleInputProfileIds.includes(entry.value.selection.profileId);
+  const target = entry.value;
+  const available = context.cameraProfile;
+  if (target.selection.kind === "unavailable" || available?.kind !== "available-before-tone") return false;
+  if (target.selection.kind === "decoder-default") {
+    return available.decoderDefault.selection.kind === "decoder-default" &&
+      sameCalibration(target, available.decoderDefault);
+  }
+  const targetSelection = target.selection;
+  return available.compatibleProfiles.some((candidate) =>
+    candidate.selection.kind === "selected" &&
+    candidate.selection.profileId === targetSelection.profileId &&
+    candidate.selection.profileRevision === targetSelection.profileRevision &&
+    sameCalibration(candidate, target),
+  );
 }
 
 function payloadByField(entries: readonly DevelopPresetPayloadEntry[]): Map<DevelopPresetField, DevelopPresetPayloadEntry> {

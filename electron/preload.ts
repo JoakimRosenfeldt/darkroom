@@ -199,6 +199,14 @@ import {
   parseDevelopPresetRecord,
   type DevelopPresetRecord,
 } from "../lib/develop/presets/schema.ts";
+import {
+  parseDevelopClipboardGroups,
+  parseDevelopClipboardPayload,
+  parseDevelopClipboardReadResult,
+  type DevelopClipboardGroup,
+  type DevelopClipboardPayload,
+  type DevelopClipboardReadResult,
+} from "../lib/develop/clipboard/schema.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -519,6 +527,30 @@ const darkroom = {
       parseDevelopPresetConflictRequest(request),
     );
     return parseDevelopPresetImportResult(result);
+  },
+
+  developClipboardWrite(payload: DevelopClipboardPayload): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-clipboard-write",
+      parseDevelopClipboardPayload(payload),
+    );
+  },
+
+  async developClipboardRead(): Promise<DevelopClipboardReadResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-clipboard-read");
+    return parseDevelopClipboardReadResult(result);
+  },
+
+  async developClipboardGroupsGet(): Promise<readonly DevelopClipboardGroup[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-clipboard-groups-get");
+    return parseDevelopClipboardGroups(result);
+  },
+
+  developClipboardGroupsSet(groups: readonly DevelopClipboardGroup[]): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-clipboard-groups-set",
+      parseDevelopClipboardGroups(groups),
+    );
   },
 
   async developAssetCollectGarbage(

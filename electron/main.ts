@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   shell,
@@ -171,6 +172,12 @@ import {
   parseDevelopPresetSearchRequest,
 } from "../lib/develop/presets/api.ts";
 import { parseDevelopPresetRecord } from "../lib/develop/presets/schema.ts";
+import {
+  parseDevelopClipboardGroups,
+  parseDevelopClipboardPayload,
+  parseDevelopClipboardText,
+  serializeDevelopClipboardPayload,
+} from "../lib/develop/clipboard/schema.ts";
 
 registerAiModelScheme();
 
@@ -1725,6 +1732,35 @@ function registerIpcHandlers(): void {
       kind: "imported",
       preset: await developPresets.resolveImport(request.token, request.action),
     };
+  });
+  ipcMain.handle("darkroom:develop-clipboard-write", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const payload = parseDevelopClipboardPayload(value);
+    clipboard.writeText(serializeDevelopClipboardPayload(payload));
+    await settingsStore.setDevelopClipboardGroups(payload.selectedGroups);
+  });
+  ipcMain.handle("darkroom:develop-clipboard-read", async (event) => {
+    assertTrustedRenderer(event);
+    const text = clipboard.readText();
+    if (text.length === 0) return { kind: "empty" };
+    try {
+      return { kind: "ready", payload: parseDevelopClipboardText(text) };
+    } catch (error) {
+      return {
+        kind: "invalid",
+        reason: error instanceof Error
+          ? error.message.slice(0, 512)
+          : "Clipboard does not contain valid Darkroom Develop settings.",
+      };
+    }
+  });
+  ipcMain.handle("darkroom:develop-clipboard-groups-get", async (event) => {
+    assertTrustedRenderer(event);
+    return settingsStore.getDevelopClipboardGroups();
+  });
+  ipcMain.handle("darkroom:develop-clipboard-groups-set", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await settingsStore.setDevelopClipboardGroups(parseDevelopClipboardGroups(value));
   });
   ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
     assertTrustedRenderer(event);

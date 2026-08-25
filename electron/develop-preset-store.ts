@@ -383,11 +383,31 @@ export class DevelopPresetStore {
 
   async #readImport(filePath: string): Promise<{ readonly bytes: Uint8Array; readonly sha256: string; readonly fileName: string }> {
     if (!path.isAbsolute(filePath)) throw new Error("Develop preset import path must be absolute.");
-    const info = await fs.lstat(filePath);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > DEVELOP_PRESET_MAX_BYTES) throw new Error("Develop preset import is not a supported regular file.");
-    const bytes = await fs.readFile(filePath);
-    if (bytes.byteLength > DEVELOP_PRESET_MAX_BYTES) throw new Error("Develop preset import exceeds the byte limit.");
-    return { bytes, sha256: createHash("sha256").update(bytes).digest("hex"), fileName: path.basename(filePath) };
+    let handle: FileHandle | undefined;
+    try {
+      handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      const before = await handle.stat();
+      if (!before.isFile() || before.size > DEVELOP_PRESET_MAX_BYTES) {
+        throw new Error("Develop preset import is not a supported regular file.");
+      }
+      const bytes = await handle.readFile();
+      const after = await handle.stat();
+      if (
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs
+      ) {
+        throw new Error("Develop preset import changed while it was being read.");
+      }
+      if (bytes.byteLength > DEVELOP_PRESET_MAX_BYTES) throw new Error("Develop preset import exceeds the byte limit.");
+      return { bytes, sha256: createHash("sha256").update(bytes).digest("hex"), fileName: path.basename(filePath) };
+    } catch (error) {
+      if (errorCode(error) === "ELOOP") throw new Error("Develop preset import cannot be a symbolic link.");
+      throw error;
+    } finally {
+      await handle?.close();
+    }
   }
 
   async #storeImportCopy(sha256Value: string, bytes: Uint8Array): Promise<boolean> {
