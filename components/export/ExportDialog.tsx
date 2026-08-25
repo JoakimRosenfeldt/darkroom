@@ -13,13 +13,16 @@ import type {
   ExportConflictBehavior,
   ExportDestinationRequest,
   ExportFormatDescriptor,
+  ExportFileResult,
   ExportFormatId,
   ExportPreferences,
   ExportRevealCapability,
   ExportSizeOptions,
 } from "@/lib/export/types";
 import {
+  mergeExportBatchSummaries,
   runExportBatch,
+  validateExportEntries,
   virtualCopyFilenameSuffix,
   type ExportBatchSummary,
   type ExportPhase,
@@ -45,14 +48,39 @@ function errorMessage(error: unknown): string {
 
 function phaseLabel(phase: ExportPhase | null): string {
   switch (phase) {
-    case "decoding":
+    case "decode":
       return "Decoding";
-    case "rendering":
+    case "render":
       return "Rendering";
-    case "encoding":
-      return "Encoding";
+    case "encode":
+      return "Preparing encode";
+    case "write":
+      return "Encoding and writing";
     default:
       return "Preparing";
+  }
+}
+
+function mergeProgressRows(
+  previous: readonly ExportFileResult[],
+  retry: readonly ExportFileResult[],
+): readonly ExportFileResult[] {
+  const retryById = new Map(retry.map((result) => [result.entryId, result]));
+  return previous.map((result) => retryById.get(result.entryId) ?? result);
+}
+
+function stateLabel(result: ExportFileResult): string {
+  switch (result.state.kind) {
+    case "queued": return "Queued";
+    case "active": return phaseLabel(result.state.phase);
+    case "completed": return result.state.warnings.length > 0 ? "Completed with warning" : "Completed";
+    case "skipped": return "Skipped";
+    case "cancelled": return "Not started";
+    case "failed": return result.state.retryable ? "Failed, retryable" : "Failed";
+    default: {
+      const exhaustive: never = result.state;
+      return exhaustive;
+    }
   }
 }
 
@@ -217,8 +245,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const [formatsLoading, setFormatsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<ExportPhase | null>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [currentEntry, setCurrentEntry] = useState<LibraryEntry | null>(null);
+  const [liveResults, setLiveResults] = useState<readonly ExportFileResult[]>([]);
   const [summary, setSummary] = useState<ExportBatchSummary | null>(null);
   const [prototypeAcknowledged, setPrototypeAcknowledged] = useState(false);
   const cancelledRef = useRef(false);
@@ -308,42 +336,39 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     onClose();
   }, [dialogState, onClose]);
 
-  const startExport = useCallback(async () => {
-    if (!selectedFormat || entries.length === 0) {
+  const executeExport = useCallback(async (
+    selectedEntries: readonly LibraryEntry[],
+    previous: ExportBatchSummary | null,
+  ) => {
+    if (!selectedFormat) return;
+    const frozenEntries = [...selectedEntries];
+    try {
+      validateExportEntries(frozenEntries);
+    } catch (validationError) {
+      setError(errorMessage(validationError));
       return;
     }
-    const sizeError = validateSize(size);
-    const suffixError = validateSuffix(suffix);
-    if (sizeError || suffixError) {
-      setError(sizeError ?? suffixError);
-      return;
-    }
-    if (selectedFormat.supportsQuality && (!Number.isInteger(quality) || quality < 1 || quality > 100)) {
-      setError("Quality must be a whole number from 1 to 100.");
-      return;
-    }
-
     setError(null);
-    setSummary(null);
+    if (!previous) setSummary(null);
     setDialogState("running");
-    setCurrentIndex(0);
     setCurrentEntry(null);
     setPhase(null);
+    setLiveResults(previous?.results ?? []);
     cancelledRef.current = false;
 
     try {
       const api = getDarkroomAPI();
       const destinationRequest: ExportDestinationRequest = {
-        catalogId: entries[0]!.catalogId,
-        sessionId: entries[0]!.sessionId,
-        assetIds: [...new Set(entries.map((entry) => entry.assetId))],
-        count: entries.length,
+        catalogId: frozenEntries[0]!.catalogId,
+        sessionId: frozenEntries[0]!.sessionId,
+        assetIds: [...new Set(frozenEntries.map((entry) => entry.assetId))],
+        count: frozenEntries.length,
         format: selectedFormat.id,
-        suggestedFilename: safeSuggestedFilename(entries[0], suffix, selectedFormat),
+        suggestedFilename: safeSuggestedFilename(frozenEntries[0], suffix, selectedFormat),
       };
       const destination = await api.chooseExportDestination(destinationRequest);
       if (!destination) {
-        setDialogState("idle");
+        setDialogState(previous ? "done" : "idle");
         return;
       }
 
@@ -358,7 +383,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       await api.setExportOptions(persisted).catch(() => undefined);
 
       const result = await runExportBatch({
-        entries,
+        entries: frozenEntries,
         metadata,
         metadataOverrides,
         destinationToken: destination.token,
@@ -370,22 +395,25 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
           suffix,
           conflict,
         },
-        onProgress: ({ phase: nextPhase, index, entry }) => {
+        onProgress: ({ phase: nextPhase, entry, results }) => {
           setPhase(nextPhase);
-          setCurrentIndex(index);
           setCurrentEntry(entry);
+          setLiveResults(previous ? mergeProgressRows(previous.results, results) : results);
         },
         isCancelled: () => cancelledRef.current,
       });
-      setSummary(result);
+      const nextSummary = previous
+        ? mergeExportBatchSummaries(previous, result)
+        : result;
+      setSummary(nextSummary);
+      setLiveResults(nextSummary.results);
       setDialogState("done");
     } catch (exportError) {
       setError(errorMessage(exportError));
-      setDialogState("idle");
+      setDialogState(previous ? "done" : "idle");
     }
   }, [
     conflict,
-    entries,
     format,
     lossless,
     metadata,
@@ -395,6 +423,37 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     size,
     suffix,
   ]);
+
+  const startExport = useCallback(async () => {
+    if (!selectedFormat || entries.length === 0) return;
+    const sizeError = validateSize(size);
+    const suffixError = validateSuffix(suffix);
+    if (sizeError || suffixError) {
+      setError(sizeError ?? suffixError);
+      return;
+    }
+    if (
+      selectedFormat.supportsQuality &&
+      (!Number.isInteger(quality) || quality < 1 || quality > 100)
+    ) {
+      setError("Quality must be a whole number from 1 to 100.");
+      return;
+    }
+    await executeExport(entries, null);
+  }, [entries, executeExport, quality, selectedFormat, size, suffix]);
+
+  const retryFailed = useCallback(async () => {
+    if (!summary) return;
+    const retryableIds = new Set(summary.results.flatMap((result) =>
+      result.state.kind === "failed" && result.state.retryable ? [result.entryId] : [],
+    ));
+    const retryEntries = entries.filter((entry) => retryableIds.has(entry.id));
+    if (retryEntries.length !== retryableIds.size) {
+      setError("A failed photo is no longer in the frozen export selection.");
+      return;
+    }
+    await executeExport(retryEntries, summary);
+  }, [entries, executeExport, summary]);
 
   const showInFolder = useCallback(() => {
     const capability: ExportRevealCapability | null = summary?.revealCapability ?? null;
@@ -407,18 +466,23 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   }, [summary]);
 
   const progressFraction = useMemo(() => {
-    const phaseFraction = phase === "decoding"
+    const terminal = liveResults.filter((result) =>
+      result.state.kind !== "queued" && result.state.kind !== "active",
+    ).length;
+    const phaseFraction = phase === "decode"
       ? 0.15
-      : phase === "rendering"
+      : phase === "render"
         ? 0.55
-        : phase === "encoding"
-          ? 0.9
-          : 0;
+        : phase === "encode"
+          ? 0.75
+          : phase === "write"
+            ? 0.9
+            : 0;
     return Math.min(
       1,
-      (currentIndex + phaseFraction) / Math.max(1, entries.length),
+      (terminal + phaseFraction) / Math.max(1, liveResults.length),
     );
-  }, [currentIndex, entries.length, phase]);
+  }, [liveResults, phase]);
 
   const content = (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0a0908]/62 p-4" role="presentation">
@@ -616,7 +680,9 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
           <div className="space-y-3.5 px-[18px] py-3.5">
             <div className="flex items-center justify-between text-xs">
               <span className="text-lr-accent">{phaseLabel(phase)}</span>
-              <span className="text-lr-text-muted">{currentIndex + 1} of {entries.length}</span>
+              <span className="text-lr-text-muted">
+                {liveResults.filter((result) => result.state.kind !== "queued" && result.state.kind !== "active").length} of {liveResults.length} terminal
+              </span>
             </div>
             <div className="h-[5px] overflow-hidden rounded-full bg-lr-panel">
               <div className="h-full bg-lr-accent transition-all" style={{ width: `${progressFraction * 100}%` }} />
@@ -625,32 +691,48 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
               <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-lr-text-muted">{currentEntry?.name ?? "Preparing export…"}</p>
               <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Stop after this file</button>
             </div>
+            <div className="max-h-44 space-y-1 overflow-auto rounded border border-lr-border-subtle bg-lr-panel p-1.5">
+              {liveResults.map((result) => <ExportResultRow key={result.entryId} result={result} />)}
+            </div>
           </div>
         ) : null}
 
         {dialogState === "done" && summary ? (
           <div className="space-y-4 p-4">
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-4 gap-2 text-center">
               <SummaryStat label="Exported" value={summary.exported} tone="good" />
               <SummaryStat label="Skipped" value={summary.skipped} tone="muted" />
               <SummaryStat label="Failed" value={summary.failed} tone="bad" />
+              <SummaryStat label="Not started" value={summary.cancelled} tone="muted" />
             </div>
-            {summary.cancelled ? <p className="text-xs text-amber-300">Stopped before the next file.</p> : null}
+            {summary.cancelled > 0 ? (
+              <p className="text-xs text-amber-300">
+                Export stopped. {summary.cancelled} queued file{summary.cancelled === 1 ? " was" : "s were"} not started.
+              </p>
+            ) : null}
             {summary.warnings.length > 0 ? (
               <div className="rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-                <p className="font-medium">Embedded preview warning</p>
+                <p className="font-medium">Completed with warnings</p>
                 <p className="mt-1">{summary.warnings.join(" ")}</p>
               </div>
             ) : null}
-            {summary.results.some((result) => result.status === "error") ? (
-              <div className="max-h-28 overflow-auto rounded border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300">
-                {summary.results.filter((result) => result.status === "error").map((result) => (
-                  <p key={result.entryId}>{result.sourceName}: {result.error}</p>
-                ))}
-              </div>
+            {summary.finalizationError ? (
+              <p className="rounded border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-300">
+                Destination finalization failed: {summary.finalizationError}
+              </p>
             ) : null}
+            <div className="max-h-52 space-y-1 overflow-auto rounded border border-lr-border-subtle bg-lr-panel p-1.5">
+              {summary.results.map((result) => <ExportResultRow key={result.entryId} result={result} />)}
+            </div>
             {error ? <p className="text-xs text-red-400">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
+              {summary.results.some((result) =>
+                result.state.kind === "failed" && result.state.retryable
+              ) ? (
+                <button type="button" onClick={() => void retryFailed()} className="button-secondary">
+                  Retry failed
+                </button>
+              ) : null}
               {summary.revealCapability ? (
                 <button type="button" onClick={showInFolder} className="button-secondary">Show in folder</button>
               ) : null}
@@ -681,6 +763,34 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function ExportResultRow({ result }: { readonly result: ExportFileResult }) {
+  const detail = result.state.kind === "completed"
+    ? result.state.outputPath
+    : result.state.kind === "skipped"
+      ? result.state.reason
+      : result.state.kind === "failed"
+        ? result.state.error
+        : result.state.kind === "cancelled"
+          ? "Cancellation was requested before this file started."
+          : null;
+  const tone = result.state.kind === "completed"
+    ? "text-green-400"
+    : result.state.kind === "failed"
+      ? "text-red-400"
+      : result.state.kind === "active"
+        ? "text-lr-accent"
+        : "text-lr-text-dim";
+  return (
+    <div className="rounded px-2 py-1.5 hover:bg-lr-panel-raised">
+      <div className="flex items-center gap-2 text-[10px]">
+        <span className="min-w-0 flex-1 truncate font-mono text-lr-text-muted">{result.sourceName}</span>
+        <span className={tone}>{stateLabel(result)}</span>
+      </div>
+      {detail ? <p className="mt-0.5 truncate text-[9px] text-lr-text-faint">{detail}</p> : null}
+    </div>
   );
 }
 

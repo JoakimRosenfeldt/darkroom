@@ -176,15 +176,28 @@ export interface ExportEncodeResult {
   warning?: string;
 }
 
-export type ExportFileStatus = "success" | "skipped" | "warning" | "error";
+export type ExportActivePhase = "decode" | "render" | "encode" | "write";
+
+export type ExportItemState =
+  | { readonly kind: "queued" }
+  | { readonly kind: "active"; readonly phase: ExportActivePhase }
+  | {
+      readonly kind: "completed";
+      readonly outputPath: string;
+      readonly warnings: readonly string[];
+    }
+  | { readonly kind: "skipped"; readonly reason: string }
+  | { readonly kind: "cancelled"; readonly reason: "not-started" }
+  | {
+      readonly kind: "failed";
+      readonly error: string;
+      readonly retryable: boolean;
+    };
 
 export interface ExportFileResult {
-  entryId: string;
-  sourceName?: string;
-  outputName?: string;
-  status: ExportFileStatus;
-  warning?: string;
-  error?: string;
+  readonly entryId: string;
+  readonly sourceName: string;
+  readonly state: ExportItemState;
 }
 
 export type ExportRenderProvenance = "decoded" | "embedded-preview";
