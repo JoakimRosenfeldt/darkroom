@@ -13,6 +13,10 @@ import type { PresenceSettings } from "../v3/presence.ts";
 import type { DevelopSharpeningSettings, StandardDenoiseSettings } from "../v3/detail.ts";
 import type { DevelopAssetRef } from "../v3/assets.ts";
 import { parseDevelopAssetRefs } from "../v3/assets.ts";
+import { DEVELOP_PRESET_FIELDS, parseDevelopPresetField, type DevelopPresetField } from "./policy.ts";
+
+export { DEVELOP_PRESET_FIELDS } from "./policy.ts";
+export type { DevelopPresetField } from "./policy.ts";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
 
@@ -27,18 +31,6 @@ export const DEVELOP_PRESET_MAX_AGGREGATE_BYTES = 256 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
 
-export const DEVELOP_PRESET_FIELDS = [
-  "basic",
-  "mixer",
-  "effects",
-  "tone-curves",
-  "camera-profile",
-  "crop",
-  "manual-masks",
-  "ai-masks",
-] as const;
-
-export type DevelopPresetField = (typeof DEVELOP_PRESET_FIELDS)[number];
 export type DevelopPresetSource = "built-in" | "user" | "imported";
 
 export interface BasicPresetValues {
@@ -190,8 +182,7 @@ export function parseDevelopPresetSha256(value: unknown): string {
 }
 
 function presetField(value: unknown): DevelopPresetField {
-  const found = DEVELOP_PRESET_FIELDS.find((field) => field === value);
-  return found ?? fail("Develop preset field is not supported.");
+  return parseDevelopPresetField(value);
 }
 
 function exactObject(value: unknown, label: string, bounds: Readonly<Record<string, readonly [number, number]>>): Record<string, number> {
@@ -344,8 +335,18 @@ function aiMasks(value: unknown): Extract<DevelopPresetPayloadEntry, { readonly 
   const assetRefs = parseDevelopAssetRefs(input.assetRefs);
   if (canonical(input.assetRefs) !== canonical(assetRefs)) fail("AI mask asset references contain unknown or normalized fields.");
   if (assetRefs.some((asset) => asset.kind !== "mask-matte")) fail("AI mask presets support only mask-matte assets.");
-  const referenced = new Set(masks.flatMap((mask) => referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)));
-  if (referenced.size !== assetRefs.length || assetRefs.some((asset) => !referenced.has(asset.assetId))) {
+  const embedded = masks.flatMap((mask) => referencedMaskArtifacts(mask.expression));
+  if (embedded.some((asset) => asset.kind !== "mask-matte")) {
+    fail("AI mask expressions support only mask-matte assets.");
+  }
+  const references = new Map(assetRefs.map((asset) => [asset.assetId, asset]));
+  if (
+    new Set(embedded.map((asset) => asset.assetId)).size !== assetRefs.length ||
+    embedded.some((asset) => {
+      const reference = references.get(asset.assetId);
+      return !reference || canonical(asset) !== canonical(reference);
+    })
+  ) {
     fail("AI mask asset references do not match the masks.");
   }
   return { sourceId: parseSourceId(input.sourceId), masks, assetRefs };

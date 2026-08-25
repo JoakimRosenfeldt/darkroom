@@ -162,6 +162,15 @@ import {
   parseExactDuplicateTrashRequest,
   type ExactDuplicateTrashItemResult,
 } from "../lib/library/duplicate-actions.ts";
+import { DevelopPresetStore } from "./develop-preset-store.ts";
+import { BUILT_IN_DEVELOP_PRESETS } from "../lib/develop/presets/built-ins.ts";
+import {
+  parseDevelopPresetConflictRequest,
+  parseDevelopPresetDeleteRequest,
+  parseDevelopPresetFavoriteRequest,
+  parseDevelopPresetSearchRequest,
+} from "../lib/develop/presets/api.ts";
+import { parseDevelopPresetRecord } from "../lib/develop/presets/schema.ts";
 
 registerAiModelScheme();
 
@@ -727,6 +736,11 @@ function registerIpcHandlers(): void {
   );
   const cameraProfiles = new CameraProfileService(app.getPath("userData"));
   const cameraProfilesReady = cameraProfiles.initialize();
+  const developPresets = new DevelopPresetStore(
+    path.join(app.getPath("userData"), "develop-presets"),
+    BUILT_IN_DEVELOP_PRESETS,
+  );
+  const developPresetsReady = developPresets.initialize();
   const developJobRuntime = new DevelopJobRuntime({
     journalPath: path.join(
       app.getPath("userData"),
@@ -1660,6 +1674,57 @@ function registerIpcHandlers(): void {
     assertTrustedRenderer(event);
     await cameraProfilesReady;
     return cameraProfiles.remove(parseCameraProfileRemoveRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.list(parseDevelopPresetSearchRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-create", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.create(parseDevelopPresetRecord(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-update", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.update(parseDevelopPresetRecord(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-favorite", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetFavoriteRequest(value);
+    return developPresets.setFavorite(request.presetId, request.favorite);
+  });
+  ipcMain.handle("darkroom:develop-presets-delete", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetDeleteRequest(value);
+    await developPresets.delete(request.presetId);
+  });
+  ipcMain.handle("darkroom:develop-presets-import", async (event) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const result = await dialog.showOpenDialog({
+      title: "Import Develop preset",
+      properties: ["openFile"],
+      filters: [{ name: "Darkroom Develop preset", extensions: ["json", "drpreset"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { kind: "cancelled" };
+    return developPresets.importFile(result.filePaths[0]!);
+  });
+  ipcMain.handle("darkroom:develop-presets-resolve-conflict", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetConflictRequest(value);
+    if (request.action === "cancel") {
+      await developPresets.cancelImport(request.token);
+      return { kind: "cancelled" };
+    }
+    return {
+      kind: "imported",
+      preset: await developPresets.resolveImport(request.token, request.action),
+    };
   });
   ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
     assertTrustedRenderer(event);

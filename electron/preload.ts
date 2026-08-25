@@ -182,6 +182,23 @@ import {
   type CameraProfileRegistrySnapshot,
   type CameraProfileRemoveRequest,
 } from "../lib/camera-profiles/registry.ts";
+import {
+  parseDevelopPresetConflictRequest,
+  parseDevelopPresetDeleteRequest,
+  parseDevelopPresetFavoriteRequest,
+  parseDevelopPresetImportResult,
+  parseDevelopPresetList,
+  parseDevelopPresetSearchRequest,
+  type DevelopPresetConflictRequest,
+  type DevelopPresetDeleteRequest,
+  type DevelopPresetFavoriteRequest,
+  type DevelopPresetImportResult,
+  type DevelopPresetSearchRequest,
+} from "../lib/develop/presets/api.ts";
+import {
+  parseDevelopPresetRecord,
+  type DevelopPresetRecord,
+} from "../lib/develop/presets/schema.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -440,6 +457,68 @@ const darkroom = {
       parseCameraProfileRemoveRequest(request),
     );
     return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async developPresetsList(
+    request: DevelopPresetSearchRequest,
+  ): Promise<readonly DevelopPresetRecord[]> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-list",
+      parseDevelopPresetSearchRequest(request),
+    );
+    return parseDevelopPresetList(result);
+  },
+
+  async developPresetsCreate(
+    preset: DevelopPresetRecord,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-create",
+      parseDevelopPresetRecord(preset),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  async developPresetsUpdate(
+    preset: DevelopPresetRecord,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-update",
+      parseDevelopPresetRecord(preset),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  async developPresetsFavorite(
+    request: DevelopPresetFavoriteRequest,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-favorite",
+      parseDevelopPresetFavoriteRequest(request),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  developPresetsDelete(request: DevelopPresetDeleteRequest): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-presets-delete",
+      parseDevelopPresetDeleteRequest(request),
+    );
+  },
+
+  async developPresetsImport(): Promise<DevelopPresetImportResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-presets-import");
+    return parseDevelopPresetImportResult(result);
+  },
+
+  async developPresetsResolveConflict(
+    request: DevelopPresetConflictRequest,
+  ): Promise<DevelopPresetImportResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-resolve-conflict",
+      parseDevelopPresetConflictRequest(request),
+    );
+    return parseDevelopPresetImportResult(result);
   },
 
   async developAssetCollectGarbage(

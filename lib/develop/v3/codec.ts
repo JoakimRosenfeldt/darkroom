@@ -42,6 +42,7 @@ import {
 } from "./document";
 import {
   migrateLegacyMask,
+  maskSourceNodes,
   parseLocalMasksV3,
   referencedMaskArtifacts,
 } from "./masking";
@@ -709,6 +710,27 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
     maskAssetRefs.some((asset) => !referencedMaskAssets.has(asset.assetId))
   ) {
     invalid("local.maskAssetRefs must cover every referenced mask matte.");
+  }
+  const maskAssetsById = new Map(maskAssetRefs.map((asset) => [asset.assetId, asset]));
+  const embeddedMaskAssets = localMasks.flatMap((mask) => referencedMaskArtifacts(mask.expression));
+  const embeddedKindsValid = localMasks.every((mask) =>
+    maskSourceNodes(mask.expression).every((node) =>
+      node.source.kind !== "ai-matte" || node.source.asset.kind === "mask-matte"
+    )
+  );
+  if (!embeddedKindsValid) {
+    invalid("AI matte sources must embed mask-matte asset references.");
+  }
+  if (embeddedMaskAssets.some((asset) => {
+    const reference = maskAssetsById.get(asset.assetId);
+    return !reference ||
+      reference.kind !== asset.kind ||
+      reference.sha256 !== asset.sha256 ||
+      reference.producerRevision !== asset.producerRevision ||
+      reference.coordinateFrameRevision !== asset.coordinateFrameRevision ||
+      reference.colorStageId !== asset.colorStageId;
+  })) {
+    invalid("local.maskAssetRefs must exactly match embedded mask asset references.");
   }
   const presence = record(input.presence, "presence", ["texture", "clarity", "dehaze"], state);
   const detail = record(input.detail, "detail", ["noiseReduction", "sharpening"], state);

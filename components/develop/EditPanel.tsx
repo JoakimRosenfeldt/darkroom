@@ -50,12 +50,14 @@ import {
 } from "@/components/develop/V3PanelControls";
 import { useDevelopStore } from "@/stores/develop-store";
 import { CameraProfileControls } from "@/components/develop/CameraProfileControls";
+import { DevelopPresetPanel } from "@/components/develop/DevelopPresetPanel";
 
-type V3Tab = "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
+type V3Tab = "presets" | "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
 type MixerMode = "hue" | "saturation" | "luminance";
 type GradingRange = "shadows" | "midtones" | "highlights";
 
 const TABS: readonly { readonly id: V3Tab; readonly label: string }[] = [
+  { id: "presets", label: "Presets" },
   { id: "light", label: "Light" },
   { id: "color", label: "Color" },
   { id: "detail", label: "Detail" },
@@ -93,6 +95,7 @@ function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
 
 function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
   switch (tab) {
+    case "presets": return "tone";
     case "light": return "tone";
     case "color": return "curve-and-color";
     case "detail": return "detail";
@@ -203,7 +206,7 @@ export function EditPanel({
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
-          className="grid grid-cols-4 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
+          className="grid grid-cols-5 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"
           role="tablist"
           aria-label="Develop sections"
         >
@@ -227,6 +230,7 @@ export function EditPanel({
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
         {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
         {activeTab === "color" ? <ColorTab document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}

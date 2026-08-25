@@ -14,8 +14,11 @@ import {
   type DevelopPresetId,
   type DevelopPresetRecord,
 } from "../lib/develop/presets/schema.ts";
+import type { DevelopPresetImportResult } from "../lib/develop/presets/api.ts";
 
 const MANIFEST_VERSION = 1;
+const MAX_PENDING_IMPORTS = 100;
+const PENDING_IMPORT_TTL_MS = 15 * 60 * 1_000;
 
 interface StoredPresetRevision {
   readonly preset: DevelopPresetRecord;
@@ -27,24 +30,15 @@ interface PresetManifest {
   readonly version: typeof MANIFEST_VERSION;
   readonly records: readonly StoredPresetRevision[];
   readonly builtInFavorites: readonly DevelopPresetId[];
+  readonly deletedPresetIds: readonly DevelopPresetId[];
 }
 
 interface PendingImport {
   readonly preset: DevelopPresetRecord;
   readonly sha256: string;
   readonly fileName: string;
+  readonly createdAt: number;
 }
-
-export type DevelopPresetImportResult =
-  | { readonly kind: "imported"; readonly preset: DevelopPresetRecord }
-  | { readonly kind: "exact-duplicate"; readonly preset: DevelopPresetRecord }
-  | {
-      readonly kind: "conflict";
-      readonly token: string;
-      readonly existing: DevelopPresetRecord;
-      readonly incoming: DevelopPresetRecord;
-      readonly decisions: readonly ["replace", "import-copy"];
-    };
 
 export interface DevelopPresetSearch {
   readonly query: string;
@@ -88,7 +82,7 @@ function parseStored(value: unknown): StoredPresetRevision {
 }
 
 function parseManifest(value: unknown): PresetManifest {
-  const input = record(value, "Develop preset manifest", ["version", "records", "builtInFavorites"]);
+  const input = record(value, "Develop preset manifest", ["version", "records", "builtInFavorites", "deletedPresetIds"]);
   if (input.version !== MANIFEST_VERSION || !Array.isArray(input.records) || input.records.length > DEVELOP_PRESET_MAX_RECORDS) {
     return fail("Develop preset manifest is invalid.");
   }
@@ -102,7 +96,11 @@ function parseManifest(value: unknown): PresetManifest {
     if (keys.has(key)) fail("Develop preset manifest contains duplicate revisions.");
     keys.add(key);
   }
-  return { version: MANIFEST_VERSION, records, builtInFavorites };
+  const deletedValue = input.deletedPresetIds ?? [];
+  if (!Array.isArray(deletedValue)) fail("Develop preset tombstones are invalid.");
+  const deletedPresetIds = deletedValue.map(parseDevelopPresetId);
+  if (new Set(deletedPresetIds).size !== deletedPresetIds.length) fail("Develop preset tombstones contain duplicates.");
+  return { version: MANIFEST_VERSION, records, builtInFavorites, deletedPresetIds };
 }
 
 function manifestBytes(value: PresetManifest): number {
@@ -194,7 +192,7 @@ export class DevelopPresetStore {
     return this.#serialize(async () => {
       await fs.mkdir(this.#importsDirectory, { recursive: true, mode: 0o700 });
       const manifest = await this.#readManifest();
-      if (manifest === null) await this.#writeManifest({ version: MANIFEST_VERSION, records: [], builtInFavorites: [] });
+      if (manifest === null) await this.#writeManifest({ version: MANIFEST_VERSION, records: [], builtInFavorites: [], deletedPresetIds: [] });
       else await this.#verifyImportCopies(manifest);
     });
   }
@@ -213,6 +211,7 @@ export class DevelopPresetStore {
       ]);
       const query = search.query.toLocaleLowerCase();
       return [...all.values()].map((item) => cloneDevelopPreset(item.preset)).filter((preset) => {
+        if (manifest.deletedPresetIds.includes(preset.presetId)) return false;
         if (search.category !== null && preset.category !== search.category) return false;
         if (search.favoriteOnly && !preset.favorite) return false;
         return query.length === 0 || `${preset.name}\n${preset.author}\n${preset.category}`.toLocaleLowerCase().includes(query);
@@ -234,7 +233,9 @@ export class DevelopPresetStore {
       const preset = parseDevelopPresetRecord(value);
       if (preset.source === "built-in") throw new Error("Built-in presets are immutable.");
       const current = this.#latest(manifest, preset.presetId);
+      if (manifest.deletedPresetIds.includes(preset.presetId)) throw new Error("Deleted Develop presets are immutable.");
       if (!current || preset.revision !== current.preset.revision + 1) throw new Error("Develop preset revision is stale.");
+      if (preset.source !== current.preset.source) throw new Error("Develop preset source provenance is immutable.");
       const importedSourceSha256 = preset.source === "imported" ? current.importedSourceSha256 : null;
       const importedFileName = preset.source === "imported" ? current.importedFileName : null;
       if (preset.source === "imported" && (!importedSourceSha256 || !importedFileName)) throw new Error("Imported preset source metadata is missing.");
@@ -247,6 +248,7 @@ export class DevelopPresetStore {
     const presetId = parseDevelopPresetId(presetIdValue);
     if (typeof favoriteValue !== "boolean") return Promise.reject(new Error("Develop preset favorite is invalid."));
     return this.#mutate(async (manifest) => {
+      if (manifest.deletedPresetIds.includes(presetId)) throw new Error("Develop preset is deleted.");
       const current = this.#latest(manifest, presetId);
       if (!current) {
         const builtIn = this.#latestBuiltIn(presetId);
@@ -267,19 +269,27 @@ export class DevelopPresetStore {
   delete(presetIdValue: unknown): Promise<void> {
     const presetId = parseDevelopPresetId(presetIdValue);
     return this.#mutate(async (manifest) => {
-      const records = manifest.records.filter((item) => item.preset.presetId !== presetId);
-      if (records.length === manifest.records.length) throw new Error("Develop preset is missing or immutable.");
-      return { manifest: { ...manifest, records }, result: undefined };
+      if (!this.#latest(manifest, presetId) || manifest.deletedPresetIds.includes(presetId)) {
+        throw new Error("Develop preset is missing or immutable.");
+      }
+      return {
+        manifest: { ...manifest, deletedPresetIds: [...manifest.deletedPresetIds, presetId].sort() },
+        result: undefined,
+      };
     });
   }
 
   importFile(filePath: string): Promise<DevelopPresetImportResult> {
     return this.#serialize(async () => {
+      const manifest = await this.#requiredManifest();
+      await this.#prunePendingImports(manifest);
+      if (this.#pendingImports.size >= MAX_PENDING_IMPORTS) {
+        throw new Error("Too many unresolved Develop preset imports.");
+      }
       const { bytes, sha256, fileName } = await this.#readImport(filePath);
       const parsed = parseDevelopPresetRecord(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
       const incoming = normalizedImported(parsed);
       const createdCopy = await this.#storeImportCopy(sha256, bytes);
-      const manifest = await this.#requiredManifest();
       try {
         await this.#assertAggregateLimit(manifest);
       } catch (error) {
@@ -287,12 +297,25 @@ export class DevelopPresetStore {
         throw error;
       }
       const duplicate = manifest.records.find((item) => item.importedSourceSha256 === sha256);
-      if (duplicate) return { kind: "exact-duplicate", preset: cloneDevelopPreset(duplicate.preset) };
+      if (duplicate) {
+        if (manifest.deletedPresetIds.includes(duplicate.preset.presetId)) {
+          await this.#writeManifest({
+            ...manifest,
+            deletedPresetIds: manifest.deletedPresetIds.filter(
+              (presetId) => presetId !== duplicate.preset.presetId,
+            ),
+          });
+        }
+        return { kind: "exact-duplicate", preset: cloneDevelopPreset(duplicate.preset) };
+      }
       const existing = this.#latest(manifest, incoming.presetId) ?? this.#latestBuiltIn(incoming.presetId);
       if (existing) {
         const token = randomUUID();
-        this.#pendingImports.set(token, { preset: incoming, sha256, fileName });
-        return { kind: "conflict", token, existing: cloneDevelopPreset(existing.preset), incoming: cloneDevelopPreset(incoming), decisions: ["replace", "import-copy"] };
+        this.#pendingImports.set(token, { preset: incoming, sha256, fileName, createdAt: Date.now() });
+        const decisions = this.#latestBuiltIn(incoming.presetId) && !this.#latest(manifest, incoming.presetId)
+          ? ["import-copy"] as const
+          : ["replace", "import-copy"] as const;
+        return { kind: "conflict", token, existing: cloneDevelopPreset(existing.preset), incoming: cloneDevelopPreset(incoming), decisions };
       }
       const item = { preset: incoming, importedSourceSha256: sha256, importedFileName: fileName };
       await this.#writeManifest({ ...manifest, records: [...manifest.records, item] });
@@ -302,18 +325,50 @@ export class DevelopPresetStore {
 
   resolveImport(token: string, decision: "replace" | "import-copy"): Promise<DevelopPresetRecord> {
     return this.#serialize(async () => {
+      const manifest = await this.#requiredManifest();
+      await this.#prunePendingImports(manifest);
       const pending = this.#pendingImports.get(token);
       if (!pending) throw new Error("Develop preset import conflict is unavailable.");
       if (decision !== "replace" && decision !== "import-copy") throw new Error("Develop preset import decision is invalid.");
-      const manifest = await this.#requiredManifest();
       const current = this.#latest(manifest, pending.preset.presetId) ?? this.#latestBuiltIn(pending.preset.presetId);
+      if (
+        decision === "replace" &&
+        !this.#latest(manifest, pending.preset.presetId) &&
+        this.#latestBuiltIn(pending.preset.presetId)
+      ) {
+        throw new Error("Built-in presets are immutable. Import this preset as a copy.");
+      }
       const preset = decision === "import-copy"
         ? normalizedImported(pending.preset, createDevelopPresetId(), 1)
         : normalizedImported(pending.preset, pending.preset.presetId, (current?.preset.revision ?? 0) + 1);
       const item = { preset, importedSourceSha256: pending.sha256, importedFileName: pending.fileName };
-      await this.#writeManifest({ ...manifest, records: [...manifest.records, item] });
+      await this.#writeManifest({
+        ...manifest,
+        records: [...manifest.records, item],
+        deletedPresetIds: manifest.deletedPresetIds.filter((presetId) => presetId !== preset.presetId),
+      });
       this.#pendingImports.delete(token);
       return cloneDevelopPreset(preset);
+    });
+  }
+
+  cancelImport(token: string): Promise<void> {
+    return this.#serialize(async () => {
+      const manifest = await this.#requiredManifest();
+      await this.#prunePendingImports(manifest);
+      const pending = this.#pendingImports.get(token);
+      if (!pending) throw new Error("Develop preset import conflict is unavailable.");
+      this.#pendingImports.delete(token);
+      if (
+        !manifest.records.some((item) => item.importedSourceSha256 === pending.sha256) &&
+        ![...this.#pendingImports.values()].some((item) => item.sha256 === pending.sha256)
+      ) {
+        await fs.unlink(path.join(this.#importsDirectory, `${pending.sha256}.json`)).catch(
+          (error: unknown) => {
+            if (errorCode(error) !== "ENOENT") throw error;
+          },
+        );
+      }
     });
   }
 
@@ -376,7 +431,32 @@ export class DevelopPresetStore {
       const bytes = await fs.readFile(filePath);
       if (createHash("sha256").update(bytes).digest("hex") !== hash) throw new Error("Stored Develop preset source copy is corrupt.");
     }
+    const entries = await fs.readdir(this.#importsDirectory, { withFileTypes: true });
+    for (const entry of entries) {
+      const hash = entry.name.endsWith(".json") ? entry.name.slice(0, -5) : "";
+      if (entry.isFile() && /^[0-9a-f]{64}$/.test(hash) && !hashes.has(hash)) {
+        await fs.unlink(path.join(this.#importsDirectory, entry.name));
+      }
+    }
     await this.#assertAggregateLimit(manifest);
+  }
+
+  async #prunePendingImports(manifest: PresetManifest): Promise<void> {
+    const cutoff = Date.now() - PENDING_IMPORT_TTL_MS;
+    const expired = [...this.#pendingImports.entries()].filter(([, item]) => item.createdAt < cutoff);
+    for (const [token, item] of expired) {
+      this.#pendingImports.delete(token);
+      if (
+        !manifest.records.some((record) => record.importedSourceSha256 === item.sha256) &&
+        ![...this.#pendingImports.values()].some((pending) => pending.sha256 === item.sha256)
+      ) {
+        await fs.unlink(path.join(this.#importsDirectory, `${item.sha256}.json`)).catch(
+          (error: unknown) => {
+            if (errorCode(error) !== "ENOENT") throw error;
+          },
+        );
+      }
+    }
   }
 
   #serialize<T>(operation: () => Promise<T>): Promise<T> {

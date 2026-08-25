@@ -58,7 +58,7 @@ export type V3EditCommand =
       readonly edit: V3DirectEditCommand;
     };
 
-export type V3GroupPatch = {
+type V3SemanticGroupPatch = {
   [K in V3SemanticGroupId]: {
     readonly kind: "v3-semantic-group";
     readonly group: K;
@@ -66,6 +66,13 @@ export type V3GroupPatch = {
     readonly after: DevelopDocumentV3[K];
   };
 }[V3SemanticGroupId];
+
+export type V3GroupPatch = V3SemanticGroupPatch | {
+  readonly kind: "v3-applied-preset";
+  readonly group: "appliedPreset";
+  readonly before: DevelopDocumentV3["appliedPreset"];
+  readonly after: DevelopDocumentV3["appliedPreset"];
+};
 
 export type V3CommandResult =
   | { readonly changed: false; readonly document: DevelopDocumentV3 }
@@ -161,11 +168,19 @@ function changedResult(
   after: DevelopDocumentV3,
   groups: readonly V3SemanticGroupId[],
 ): V3CommandResult {
-  const patches = groups.flatMap((group) =>
+  const patches: V3GroupPatch[] = groups.flatMap((group) =>
     equal(groupValue(before, group), groupValue(after, group))
       ? []
       : [groupPatch(before, after, group)],
   );
+  if (!equal(before.appliedPreset, after.appliedPreset)) {
+    patches.push({
+      kind: "v3-applied-preset",
+      group: "appliedPreset",
+      before: before.appliedPreset,
+      after: after.appliedPreset,
+    });
+  }
   const first = patches[0];
   return first
     ? { changed: true, document: after, patches: [first, ...patches.slice(1)] }
@@ -236,7 +251,18 @@ export function applyV3EditCommand(
     const edited = applyDirectV3Command(document, command);
     if (!edited.changed || command.kind === "replace-v3-complete-state") return edited;
     const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
-    return { ...edited, document: next };
+    return equal(edited.document.appliedPreset, next.appliedPreset)
+      ? { ...edited, document: next }
+      : {
+          ...edited,
+          document: next,
+          patches: [...edited.patches, {
+            kind: "v3-applied-preset",
+            group: "appliedPreset",
+            before: edited.document.appliedPreset,
+            after: next.appliedPreset,
+          }],
+        };
   }
   const edited = applyDirectV3Command(document, command.edit);
   const referenced = new Map(
@@ -269,7 +295,18 @@ export function applyV3EditCommand(
   }
   if (!edited.changed || command.edit.kind === "replace-v3-complete-state") return edited;
   const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
-  return { ...edited, document: next };
+  return equal(edited.document.appliedPreset, next.appliedPreset)
+    ? { ...edited, document: next }
+    : {
+        ...edited,
+        document: next,
+        patches: [...edited.patches, {
+          kind: "v3-applied-preset",
+          group: "appliedPreset",
+          before: edited.document.appliedPreset,
+          after: next.appliedPreset,
+        }],
+      };
 }
 
 export function replayV3Patches(
@@ -279,11 +316,16 @@ export function replayV3Patches(
 ): DevelopDocumentV3 {
   const ordered = direction === "forward" ? patches : [...patches].reverse();
   return ordered.reduce(
-    (current, patch) => replaceGroup(
-      current,
-      patch.group,
-      direction === "forward" ? patch.after : patch.before,
-    ),
+    (current, patch) => patch.kind === "v3-applied-preset"
+      ? validateV3CommandDocument({
+          ...current,
+          appliedPreset: direction === "forward" ? patch.after : patch.before,
+        })
+      : replaceGroup(
+          current,
+          patch.group,
+          direction === "forward" ? patch.after : patch.before,
+        ),
     document,
   );
 }
@@ -308,6 +350,9 @@ function mergePatchPair(
   last: V3GroupPatch,
 ): V3GroupPatch {
   switch (first.group) {
+    case "appliedPreset":
+      if (last.group !== "appliedPreset") throw new Error("V3 history groups do not match.");
+      return { ...first, after: last.after };
     case "tone":
       if (last.group !== "tone") throw new Error("V3 history groups do not match.");
       return { ...first, after: last.after };

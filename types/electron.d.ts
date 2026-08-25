@@ -118,6 +118,14 @@ import type {
   CameraProfileRegistrySnapshot,
   CameraProfileRemoveRequest,
 } from "../lib/camera-profiles/registry";
+import type {
+  DevelopPresetConflictRequest,
+  DevelopPresetDeleteRequest,
+  DevelopPresetFavoriteRequest,
+  DevelopPresetImportResult,
+  DevelopPresetSearchRequest,
+} from "../lib/develop/presets/api";
+import type { DevelopPresetRecord } from "../lib/develop/presets/schema";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -167,6 +175,19 @@ export interface DarkroomAPI {
   cameraProfilesRemove(
     request: CameraProfileRemoveRequest,
   ): Promise<CameraProfileRegistrySnapshot>;
+  developPresetsList(
+    request: DevelopPresetSearchRequest,
+  ): Promise<readonly DevelopPresetRecord[]>;
+  developPresetsCreate(preset: DevelopPresetRecord): Promise<DevelopPresetRecord>;
+  developPresetsUpdate(preset: DevelopPresetRecord): Promise<DevelopPresetRecord>;
+  developPresetsFavorite(
+    request: DevelopPresetFavoriteRequest,
+  ): Promise<DevelopPresetRecord>;
+  developPresetsDelete(request: DevelopPresetDeleteRequest): Promise<void>;
+  developPresetsImport(): Promise<DevelopPresetImportResult>;
+  developPresetsResolveConflict(
+    request: DevelopPresetConflictRequest,
+  ): Promise<DevelopPresetImportResult>;
   developAssetCollectGarbage(
     request: DevelopAssetGcRequest,
   ): Promise<DevelopAssetGcResult>;
