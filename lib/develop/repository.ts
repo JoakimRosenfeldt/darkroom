@@ -103,6 +103,7 @@ export interface DevelopRepositoryAdapters {
     readonly metadataPatch: SidecarMetadataPatch;
   }) => Promise<void>;
   readonly applyExternalMetadata?: (sidecar: DevelopSidecar) => void | Promise<void>;
+  readonly projectCatalogKeywords?: () => Promise<void>;
   readonly setStatus: (
     status: DevelopSidecarStatus,
     error?: string | null,
@@ -122,6 +123,11 @@ interface FailedWrite {
   readonly documentRevision: number;
   readonly metadataRevision: number;
   readonly attempts: number;
+}
+
+interface AcceptedExternalImport {
+  readonly digest: string;
+  readonly operationId: string | null;
 }
 
 interface RecoveryJournal {
@@ -292,7 +298,7 @@ export class DevelopRepository {
   #projection: DevelopHistoryProjection | null = null;
   #projectionState: DevelopProjectionState = { kind: "clean", revisionId: null };
   #divergentSidecar: DevelopSidecar | null = null;
-  #acceptedExternalDigest: string | null = null;
+  #acceptedExternalImport: AcceptedExternalImport | null = null;
   #detachCommittedCommands: (() => void) | null = null;
   #lastCommandWrite: Promise<void> = Promise.resolve();
   #configurationRevision = 0;
@@ -475,9 +481,14 @@ export class DevelopRepository {
       await this.#recordProjection(head.revisionId, externalDigest);
       return;
     }
-    this.#acceptedExternalDigest = externalDigest;
-    session.dispatch({ kind: "replace-v3-complete-state", document: process.document }, "Import external XMP");
-    await this.#lastCommandWrite;
+    this.#acceptedExternalImport = { digest: externalDigest, operationId: null };
+    try {
+      session.dispatch({ kind: "replace-v3-complete-state", document: process.document }, "Import external XMP");
+      await this.#lastCommandWrite;
+    } catch (error) {
+      this.#acceptedExternalImport = null;
+      throw error;
+    }
   }
 
   async preserveBoth(createVirtualCopy: () => Promise<unknown>): Promise<void> {
@@ -539,12 +550,21 @@ export class DevelopRepository {
   }
 
   async #enqueueCommittedCommand(command: CommittedDevelopCommand, documentRevision: number): Promise<void> {
+    if (this.#acceptedExternalImport?.operationId === null) {
+      this.#acceptedExternalImport = {
+        ...this.#acceptedExternalImport,
+        operationId: command.operationId,
+      };
+    }
     const execute = async (): Promise<void> => {
       await this.#hydration;
       if (!isElectronApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Persistent Develop history needs the desktop app.");
       const head = this.#head;
       if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
-      if (this.#projectionState.kind === "divergent" && this.#acceptedExternalDigest === null) {
+      const acceptedImport = this.#acceptedExternalImport?.operationId === command.operationId
+        ? this.#acceptedExternalImport
+        : null;
+      if (this.#projectionState.kind === "divergent" && acceptedImport === null) {
         throw new DevelopRepositoryError("recovery-conflict", "Resolve the Darkroom and XMP conflict before editing.");
       }
       if (JSON.stringify(head.document) !== JSON.stringify(command.before)) {
@@ -571,14 +591,15 @@ export class DevelopRepository {
       if (this.#entry.entryKind === "original") {
         const currentSidecar = await readDevelopSidecar(this.#entry);
         const currentDigest = currentSidecar ? await digestDevelopSidecarContents(currentSidecar.contents) : null;
-        if (this.#acceptedExternalDigest !== null && currentDigest === this.#acceptedExternalDigest) {
-          this.#acceptedExternalDigest = null;
+        if (acceptedImport !== null && currentDigest === acceptedImport.digest) {
           if (!currentSidecar) throw new Error("Accepted XMP disappeared before projection was recorded.");
+          await this.#requireAdapters().applyExternalMetadata?.(currentSidecar);
           await this.#recordProjection(result.revision.revisionId, currentDigest);
+          this.#acceptedExternalImport = null;
         } else if (await this.#detectConcurrentSidecar(reloaded.value)) {
-          this.#acceptedExternalDigest = null;
+          if (acceptedImport !== null) this.#acceptedExternalImport = null;
         } else {
-          this.#acceptedExternalDigest = null;
+          if (acceptedImport !== null) this.#acceptedExternalImport = null;
           await this.#projectHead(result.revision.revisionId, command.after);
         }
       }
@@ -590,8 +611,23 @@ export class DevelopRepository {
     };
     const write = this.#queue.then(execute);
     this.#queue = write.then(() => undefined, async (error: unknown) => {
+      if (this.#acceptedExternalImport?.operationId === command.operationId) {
+        this.#acceptedExternalImport = null;
+      }
       await this.#restoreSessionFromHead();
-      this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+      const head = this.#head;
+      const sidecar = this.#divergentSidecar;
+      if (head && sidecar) {
+        this.#setProjectionState({
+          kind: "divergent",
+          headRevisionId: head.revisionId,
+          projectedRevisionId: this.#projection?.revisionId ?? null,
+          externalDigest: await digestDevelopSidecarContents(sidecar.contents),
+          differences: this.#differenceSummary(sidecar),
+        });
+      } else {
+        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+      }
       this.#adapters?.setStatus("error", errorMessage(error, "Develop command could not be committed."));
     });
     return write;
@@ -687,9 +723,12 @@ export class DevelopRepository {
       current?.lastModified ?? null,
     );
     if (!written) throw new Error("The XMP projection was not written.");
+    await this.#adapters?.projectCatalogKeywords?.();
+    const projected = await readDevelopSidecar(this.#entry);
+    if (!projected) throw new Error("The projected XMP sidecar disappeared.");
     this.#sidecarContentsKnown = true;
     await this.#adapters?.faultInjector?.("after-xmp-write");
-    await this.#recordProjection(revisionId, await digestDevelopSidecarContents(written.contents));
+    await this.#recordProjection(revisionId, await digestDevelopSidecarContents(projected.contents));
   }
 
   #differenceSummary(external: DevelopSidecar): readonly string[] {
@@ -979,7 +1018,9 @@ export class DevelopRepository {
         );
       }
       const currentSidecar = await readDevelopSidecar(this.#entry);
-      const sidecarIsPrior = currentSidecar?.contents === journal.existingContents;
+      const sidecarIsPrior = currentSidecar === null
+        ? journal.existingContents === null
+        : currentSidecar.contents === journal.existingContents;
       const sidecarIsRecovered = currentSidecar !== null &&
         JSON.stringify(currentSidecar.document) === JSON.stringify(journal.document);
       if (!sidecarIsPrior && !sidecarIsRecovered) {

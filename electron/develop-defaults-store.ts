@@ -24,6 +24,20 @@ interface FileIdentity {
   readonly ino: number;
 }
 
+export class DevelopDefaultsRecoveryError extends Error {
+  readonly backupPath: string;
+
+  constructor(backupPath: string, options?: ErrorOptions) {
+    super("Develop defaults recovery backup needs manual resolution before the store can reopen.", options);
+    this.name = "DevelopDefaultsRecoveryError";
+    this.backupPath = backupPath;
+  }
+}
+
+function recoveryBackupPath(filePath: string): string {
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.recovery-backup`);
+}
+
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -107,12 +121,19 @@ async function assertNoSymlinkComponents(targetPath: string): Promise<void> {
 async function atomicWrite(filePath: string, contents: string): Promise<void> {
   const directory = path.dirname(filePath);
   const temporary = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.tmp`);
-  const backup = path.join(directory, `.${path.basename(filePath)}.${randomUUID()}.backup`);
+  const backup = recoveryBackupPath(filePath);
   let handle: FileHandle | undefined;
   let backupCreated = false;
   let published = false;
   let committed = false;
   try {
+    try {
+      await fs.lstat(backup);
+      throw new DevelopDefaultsRecoveryError(backup);
+    } catch (error) {
+      if (error instanceof DevelopDefaultsRecoveryError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
     handle = await fs.open(temporary, "wx", 0o600);
     await handle.writeFile(contents, "utf8");
     await handle.sync();
@@ -137,7 +158,11 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
     }
   } catch (error) {
     if (published && backupCreated) {
-      await fs.rename(backup, filePath);
+      try {
+        await fs.rename(backup, filePath);
+      } catch (rollbackError) {
+        throw new DevelopDefaultsRecoveryError(backup, { cause: rollbackError });
+      }
       backupCreated = false;
       await syncDirectory(directory);
     } else if (published) {
@@ -150,7 +175,7 @@ async function atomicWrite(filePath: string, contents: string): Promise<void> {
   } finally {
     await handle?.close().catch(() => undefined);
     await fs.unlink(temporary).catch(() => undefined);
-    await fs.unlink(backup).catch(() => undefined);
+    if (committed) await fs.unlink(backup).catch(() => undefined);
   }
 }
 
@@ -289,6 +314,17 @@ export class DevelopDefaultsStore {
 
   async #readManifest(): Promise<DevelopDefaultsManifest | null> {
     await this.#ensureRoot();
+    const recoveryPath = recoveryBackupPath(this.#manifestPath);
+    try {
+      const recovery = await fs.lstat(recoveryPath);
+      if (!recovery.isFile() || recovery.isSymbolicLink()) {
+        throw new Error("Develop defaults recovery backup is not a supported regular file.");
+      }
+      throw new DevelopDefaultsRecoveryError(recoveryPath);
+    } catch (error) {
+      if (error instanceof DevelopDefaultsRecoveryError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
     let handle: FileHandle | undefined;
     try {
       const info = await fs.lstat(this.#manifestPath);

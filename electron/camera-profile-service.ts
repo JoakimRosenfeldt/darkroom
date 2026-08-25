@@ -21,6 +21,10 @@ import {
   type ReadyCameraProfileRecord,
 } from "../lib/camera-profiles/registry.ts";
 import { parseMatrixCameraProfile, type MatrixCameraProfile } from "../lib/camera-profiles/matrix.ts";
+import {
+  hasNativeFileTransactionSupport,
+  nativeAtomicWriteFile,
+} from "./native-file-transaction-helper.ts";
 
 interface PendingConflict {
   readonly record: ReadyCameraProfileRecord;
@@ -518,14 +522,24 @@ export class CameraProfileService {
     const destination = path.join(this.directory, record.storedFilename);
     let created = false;
     try {
-      let handle: FileHandle | undefined;
-      try {
-        handle = await fs.open(destination, "wx", 0o600);
-        await handle.writeFile(bytes);
-        await handle.sync();
+      if (hasNativeFileTransactionSupport()) {
+        await nativeAtomicWriteFile(
+          destination,
+          bytes,
+          this.requiredDirectoryIdentity(),
+          "exclusive",
+        );
         created = true;
-      } finally {
-        await handle?.close();
+      } else {
+        let handle: FileHandle | undefined;
+        try {
+          handle = await fs.open(destination, "wx", 0o600);
+          await handle.writeFile(bytes);
+          await handle.sync();
+          created = true;
+        } finally {
+          await handle?.close();
+        }
       }
       await this.ensureStorageRoot(false);
       await syncDirectory(this.directory, this.requiredDirectoryIdentity());
@@ -614,6 +628,15 @@ export class CameraProfileService {
       throw new Error("Camera profile registry exceeds the 16 MiB limit.");
     }
     await this.ensureStorageRoot(false);
+    if (hasNativeFileTransactionSupport()) {
+      await nativeAtomicWriteFile(
+        this.indexPath,
+        new TextEncoder().encode(contents),
+        this.requiredDirectoryIdentity(),
+        "replace",
+      );
+      return;
+    }
     const temporary = `${this.indexPath}.${process.pid}.${randomUUID()}.tmp`;
     const backup = `${this.indexPath}.${process.pid}.${randomUUID()}.backup`;
     let handle: FileHandle | undefined;

@@ -245,6 +245,14 @@ interface LibraryStore {
     metadataPatch?: SidecarMetadataPatch,
     sourceUpdatedAt?: number,
   ) => void;
+  hydrateEntryKeywordsDurably: (
+    entryId: string,
+    flat: readonly string[],
+    hierarchical: readonly string[],
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
+  ) => Promise<void>;
+  persistEntryKeywords: (entryId: string) => Promise<void>;
   stackEntries: (entryIds: string[]) => string;
   addEntriesToStack: (stackId: string, entryIds: string[]) => void;
   removeEntriesFromStack: (stackId: string, entryIds: string[]) => void;
@@ -2047,6 +2055,94 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       } : {}),
     });
     scheduleStateSync(set, get);
+  },
+
+  hydrateEntryKeywordsDurably: async (
+    entryId,
+    flat,
+    hierarchical,
+    metadataPatch = {},
+    sourceUpdatedAt = Date.now(),
+  ) => {
+    const workspace = get().libraryWorkspace;
+    const keywords = [...workspace.keywords];
+    const assigned = new Set<string>();
+    const ensurePath = (parts: readonly string[]): string | null => {
+      let parentId: string | null = null;
+      let leafId: string | null = null;
+      for (const rawPart of parts) {
+        const name = rawPart.trim();
+        if (!name) continue;
+        let keyword = keywords.find((item) =>
+          item.parentId === parentId && item.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+        );
+        if (!keyword) {
+          const now = Date.now();
+          keyword = {
+            id: crypto.randomUUID(), parentId, name, synonyms: [], export: true,
+            createdAt: now, updatedAt: now,
+          };
+          keywords.push(keyword);
+        }
+        parentId = keyword.id;
+        leafId = keyword.id;
+      }
+      return leafId;
+    };
+    for (const path of hierarchical) {
+      const id = ensurePath(path.split("|").filter(Boolean));
+      if (id) assigned.add(id);
+    }
+    for (const name of flat) {
+      const represented = keywords.some((keyword) =>
+        assigned.has(keyword.id) && keyword.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+      );
+      if (!represented) {
+        const id = ensurePath([name]);
+        if (id) assigned.add(id);
+      }
+    }
+    const currentMetadata = getEntryMetadata(get().entryMetadata, entryId);
+    const metadataChanged =
+      (metadataPatch.rating !== undefined && metadataPatch.rating !== currentMetadata.rating) ||
+      (metadataPatch.colorLabel !== undefined && metadataPatch.colorLabel !== currentMetadata.colorLabel);
+    const previousIds = workspace.entryKeywordIds[entryId] ?? [];
+    const nextIds = [...assigned];
+    const keywordStateChanged = keywords.length !== workspace.keywords.length ||
+      nextIds.length !== previousIds.length || nextIds.some((id) => !previousIds.includes(id));
+    if (!keywordStateChanged && !metadataChanged) return;
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        keywords,
+        entryKeywordIds: { ...workspace.entryKeywordIds, [entryId]: nextIds },
+      },
+      ...(metadataChanged ? {
+        entryMetadata: {
+          ...get().entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...currentMetadata,
+            ...metadataPatch,
+            updatedAt: Math.max(sourceUpdatedAt, currentMetadata.updatedAt + 1),
+          }),
+        },
+      } : {}),
+    });
+    await persistStateSync(set, get);
+  },
+
+  persistEntryKeywords: async (entryId) => {
+    const current = get();
+    const entry = current.entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind === "virtual") return;
+    const assigned = current.libraryWorkspace.entryKeywordIds[entryId] ?? [];
+    const byId = new Map(current.libraryWorkspace.keywords.map((keyword) => [keyword.id, keyword]));
+    const flat = assigned.flatMap((id) => {
+      const keyword = byId.get(id);
+      return keyword ? [keyword.name, ...keyword.synonyms] : [];
+    });
+    const hierarchical = assigned.map((id) => keywordPath(id, current.libraryWorkspace)).filter(Boolean);
+    await writeKeywordSidecar(entry, flat, hierarchical);
   },
 
   stackEntries: (entryIds) => {

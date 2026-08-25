@@ -29,7 +29,7 @@ interface UseDevelopSettingsSyncOptions {
     hierarchical: readonly string[],
     metadataPatch?: SidecarMetadataPatch,
     sourceUpdatedAt?: number,
-  ) => void;
+  ) => Promise<void>;
   defaultFacts?: DevelopDefaultFacts | null;
 }
 
@@ -94,18 +94,19 @@ export function useDevelopSettingsSync({
     }));
     const disconnectRepository = repository.configure(session, metadataRef.current, {
       mirrorCatalog: persistCatalog,
-      applyExternalMetadata: (sidecar) => {
+      applyExternalMetadata: async (sidecar) => {
         const patch: SidecarMetadataPatch = {
-          ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
-          ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
+          rating: sidecar.rating ?? 0,
+          colorLabel: sidecar.colorLabel ?? null,
         };
-        hydrateKeywords?.(
+        await hydrateKeywords?.(
           sidecar.keywords.flat,
           sidecar.keywords.hierarchical,
           patch,
           sidecar.lastModified,
         );
       },
+      projectCatalogKeywords: () => useLibraryStore.getState().persistEntryKeywords(entry.id),
       setStatus: (status, error = null) => {
         const state = useDevelopStore.getState();
         if (

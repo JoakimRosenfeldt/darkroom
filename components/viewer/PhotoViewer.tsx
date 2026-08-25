@@ -153,7 +153,7 @@ export function PhotoViewer({
     [entry.id, selectedEntryIds],
   );
   const persistDevelopState = useLibraryStore((state) => state.persistDevelopState);
-  const hydrateEntryKeywords = useLibraryStore((state) => state.hydrateEntryKeywords);
+  const hydrateEntryKeywordsDurably = useLibraryStore((state) => state.hydrateEntryKeywordsDurably);
   const persistCatalog = useCallback(
     (input: Parameters<typeof persistDevelopState>[2]) =>
       persistDevelopState(entry.catalogId, entry.id, input),
@@ -163,12 +163,12 @@ export function PhotoViewer({
     (
       flat: readonly string[],
       hierarchical: readonly string[],
-      metadataPatch?: Parameters<typeof hydrateEntryKeywords>[3],
+      metadataPatch?: Parameters<typeof hydrateEntryKeywordsDurably>[3],
       sourceUpdatedAt?: number,
     ) => {
-      hydrateEntryKeywords(entry.id, flat, hierarchical, metadataPatch, sourceUpdatedAt);
+      return hydrateEntryKeywordsDurably(entry.id, flat, hierarchical, metadataPatch, sourceUpdatedAt);
     },
-    [entry.id, hydrateEntryKeywords],
+    [entry.id, hydrateEntryKeywordsDurably],
   );
   const defaultFacts = useMemo(() => {
     if (!decoded) return null;

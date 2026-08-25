@@ -43,6 +43,7 @@
 enum {
   OUTPUT_BUFFER_SIZE = 1024 * 1024,
   PAUSE_TIMEOUT_SECONDS = 300,
+  ATOMIC_WRITE_LIMIT = 16 * 1024 * 1024,
 };
 
 typedef struct {
@@ -319,6 +320,48 @@ static int write_all(int fd, const void *buffer, size_t length) {
     offset += (size_t)written;
   }
   return 0;
+}
+
+static int parse_identity(const char *value, uintmax_t *result) {
+  char *end = NULL;
+  uintmax_t parsed;
+  if (value == NULL || value[0] == '\0') return 0;
+  errno = 0;
+  parsed = strtoumax(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0') return 0;
+  *result = parsed;
+  return 1;
+}
+
+static int read_stdin_to_file(int file_fd) {
+  unsigned char buffer[64 * 1024];
+  size_t total = 0;
+  for (;;) {
+    ssize_t count;
+    do {
+      count = read(STDIN_FILENO, buffer, sizeof(buffer));
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) return -1;
+    if (count == 0) return 0;
+    if ((size_t)count > ATOMIC_WRITE_LIMIT - total) {
+      errno = EFBIG;
+      return -1;
+    }
+    if (write_all(file_fd, buffer, (size_t)count) < 0) return -1;
+    total += (size_t)count;
+  }
+}
+
+static int temporary_name(char *buffer, size_t length, const char *suffix, unsigned int attempt) {
+  int written = snprintf(
+    buffer,
+    length,
+    ".darkroom-atomic-%jd-%u.%s",
+    (intmax_t)getpid(),
+    attempt,
+    suffix
+  );
+  return written > 0 && (size_t)written < length;
 }
 
 static int copy_fd(int source_fd, int destination_fd, off_t size) {
@@ -667,6 +710,168 @@ static int command_remove(const char *file_path) {
   return 0;
 }
 
+static int command_atomic_write(
+  const char *file_path,
+  const char *expected_device,
+  const char *expected_inode,
+  const char *mode
+) {
+  parent_ref parent;
+  struct stat parent_stat;
+  struct stat existing_stat;
+  struct stat created_stat;
+  uintmax_t device;
+  uintmax_t inode;
+  char temporary[NAME_MAX + 1];
+  char backup[NAME_MAX + 1];
+  int replace;
+  int existing;
+  int file_fd = -1;
+  int created = 0;
+  int published = 0;
+  int backup_created = 0;
+  int result = 1;
+  int failure_reported = 0;
+  unsigned int attempt;
+
+  if (!parse_identity(expected_device, &device) || !parse_identity(expected_inode, &inode)) return fail_invalid();
+  if (strcmp(mode, "exclusive") == 0) replace = 0;
+  else if (strcmp(mode, "replace") == 0) replace = 1;
+  else return fail_invalid();
+  if (open_parent(file_path, &parent) != 0) return 1;
+  if (fstat(parent.fd, &parent_stat) < 0) goto cleanup;
+  if ((uintmax_t)parent_stat.st_dev != device || (uintmax_t)parent_stat.st_ino != inode) {
+    (void)fail_name("CHANGED");
+    failure_reported = 1;
+    goto cleanup;
+  }
+  if (maybe_pause_after_parents() != 0) goto cleanup;
+  existing = stat_regular_at(parent.fd, parent.name, &existing_stat, 1);
+  if (existing < 0) {
+    if (existing == -2) (void)fail_unsafe();
+    else (void)fail_errno();
+    failure_reported = 1;
+    goto cleanup;
+  }
+  if (!replace && existing == 0) {
+    (void)fail_name("EEXIST");
+    failure_reported = 1;
+    goto cleanup;
+  }
+
+  if (!replace) {
+    do {
+      file_fd = openat(parent.fd, parent.name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    } while (file_fd < 0 && errno == EINTR);
+    if (file_fd < 0) goto cleanup;
+    if (fstat(file_fd, &created_stat) < 0 || !S_ISREG(created_stat.st_mode)) goto cleanup;
+    created = 1;
+  } else {
+    for (attempt = 0; attempt < 100; attempt += 1) {
+      if (!temporary_name(temporary, sizeof(temporary), "tmp", attempt)) {
+        (void)fail_invalid();
+        failure_reported = 1;
+        goto cleanup;
+      }
+      do {
+        file_fd = openat(parent.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+      } while (file_fd < 0 && errno == EINTR);
+      if (file_fd >= 0) break;
+      if (errno != EEXIST) goto cleanup;
+    }
+    if (file_fd < 0) {
+      errno = EEXIST;
+      goto cleanup;
+    }
+    if (fstat(file_fd, &created_stat) < 0 || !S_ISREG(created_stat.st_mode)) goto cleanup;
+    created = 1;
+  }
+  if (read_stdin_to_file(file_fd) < 0 || fsync(file_fd) < 0) goto cleanup;
+  if (close(file_fd) < 0) {
+    file_fd = -1;
+    goto cleanup;
+  }
+  file_fd = -1;
+
+  if (replace) {
+    if (existing == 0) {
+      for (attempt = 0; attempt < 100; attempt += 1) {
+        if (!temporary_name(backup, sizeof(backup), "backup", attempt)) {
+          (void)fail_invalid();
+          failure_reported = 1;
+          goto cleanup;
+        }
+        if (linkat(parent.fd, parent.name, parent.fd, backup, 0) == 0) {
+          backup_created = 1;
+          break;
+        }
+        if (errno != EEXIST) goto cleanup;
+      }
+      if (!backup_created) {
+        errno = EEXIST;
+        goto cleanup;
+      }
+      if (fsync(parent.fd) < 0) goto cleanup;
+    }
+    do {
+      result = renameat(parent.fd, temporary, parent.fd, parent.name);
+    } while (result < 0 && errno == EINTR);
+    if (result < 0) goto cleanup;
+    created = 0;
+    published = 1;
+  } else {
+    published = 1;
+  }
+
+  if (fsync(parent.fd) < 0) {
+    int publish_error = errno;
+    int rollback_result;
+    if (backup_created) {
+      do {
+        rollback_result = renameat(parent.fd, backup, parent.fd, parent.name);
+      } while (rollback_result < 0 && errno == EINTR);
+      if (rollback_result == 0) backup_created = 0;
+    } else {
+      do {
+        rollback_result = unlinkat(parent.fd, parent.name, 0);
+      } while (rollback_result < 0 && errno == EINTR);
+    }
+    if (rollback_result < 0 || fsync(parent.fd) < 0) {
+      (void)fail_name("ROLLBACK");
+      failure_reported = 1;
+      goto cleanup;
+    }
+    published = 0;
+    errno = publish_error;
+    goto cleanup;
+  }
+  if (backup_created) {
+    (void)unlinkat(parent.fd, backup, 0);
+    backup_created = 0;
+    (void)fsync(parent.fd);
+  }
+  close(parent.fd);
+  (void)dprintf(STDOUT_FILENO, "OK\n");
+  return 0;
+
+cleanup:
+  if (file_fd >= 0) close(file_fd);
+  if (backup_created && !published) (void)unlinkat(parent.fd, backup, 0);
+  if (created) {
+    if (replace) (void)unlinkat(parent.fd, temporary, 0);
+    else if (!published) {
+      struct stat current;
+      if (fstatat(parent.fd, parent.name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+          same_identity(&created_stat, &current)) {
+        (void)unlinkat(parent.fd, parent.name, 0);
+      }
+    }
+  }
+  close(parent.fd);
+  if (failure_reported) return 1;
+  return fail_errno();
+}
+
 static int dispatch(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "exists") == 0 && argc == 3) return command_exists(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "mkdir") == 0 && argc == 3) return mkdir_recursive(argv[2]);
@@ -675,10 +880,13 @@ static int dispatch(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "remove") == 0 && argc == 3) return command_remove(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "observe") == 0 && argc == 3) return command_observe(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "digest") == 0 && argc == 3) return command_digest(argv[2]);
+  if (argc >= 2 && strcmp(argv[1], "atomic-write") == 0 && argc == 6) {
+    return command_atomic_write(argv[2], argv[3], argv[4], argv[5]);
+  }
   return fail_invalid();
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2 || argc > 4) return fail_invalid();
+  if (argc < 2 || argc > 6) return fail_invalid();
   return dispatch(argc, argv);
 }
