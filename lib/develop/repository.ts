@@ -494,7 +494,7 @@ export class DevelopRepository {
     this.#requireAdapters().onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(head.document)));
     const externalDigest = await digestDevelopSidecarContents(sidecar.contents);
     if (JSON.stringify(process.document) === JSON.stringify(head.document)) {
-      await this.#requireAdapters().applyExternalMetadata?.(sidecar);
+      await this.#applyExternalSidecar(sidecar, process.document);
       await this.#recordProjection(head.revisionId, externalDigest);
       return;
     }
@@ -610,7 +610,7 @@ export class DevelopRepository {
         const currentDigest = currentSidecar ? await digestDevelopSidecarContents(currentSidecar.contents) : null;
         if (acceptedImport !== null && currentDigest === acceptedImport.digest) {
           if (!currentSidecar) throw new Error("Accepted XMP disappeared before projection was recorded.");
-          await this.#requireAdapters().applyExternalMetadata?.(currentSidecar);
+          await this.#applyExternalSidecar(currentSidecar, command.after);
           await this.#recordProjection(result.revision.revisionId, currentDigest);
           this.#acceptedExternalImport = null;
         } else if (await this.#detectConcurrentSidecar(reloaded.value)) {
@@ -720,6 +720,20 @@ export class DevelopRepository {
     await this.#adapters?.faultInjector?.("after-projection-record");
     this.#divergentSidecar = null;
     this.#setProjectionState({ kind: "clean", revisionId });
+  }
+
+  async #applyExternalSidecar(sidecar: DevelopSidecar, document: PersistedDevelopDocument): Promise<void> {
+    const metadataPatch: SidecarMetadataPatch = {
+      rating: sidecar.rating ?? 0,
+      colorLabel: sidecar.colorLabel ?? null,
+    };
+    await this.#requireAdapters().mirrorCatalog({
+      document,
+      sourceUpdatedAt: sidecar.lastModified,
+      metadataPatch,
+    });
+    await this.#requireAdapters().applyExternalMetadata?.(sidecar);
+    if (this.#metadata) this.#metadata = { ...this.#metadata, ...metadataPatch, develop: document };
   }
 
   async #projectHead(revisionId: DevelopRevisionId, documentValue: unknown): Promise<void> {

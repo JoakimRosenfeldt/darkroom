@@ -90,6 +90,8 @@ function errorMessage(code: string): string {
     case "ELOOP":
     case "UNSAFE":
     case "CHANGED": return "Transaction path or file changed during the operation.";
+    case "CLEANUP": return "Native file transaction cleanup could not be made durable.";
+    case "ROLLBACK": return "Native file transaction rollback could not be made durable.";
     case "PAUSE_TIMEOUT": return "Native file transaction test pause timed out.";
     case "INVALID_ARGUMENT": return "Native file transaction arguments are invalid.";
     default: return "Native file transaction failed.";

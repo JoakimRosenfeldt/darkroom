@@ -24,6 +24,7 @@ import { parseMatrixCameraProfile, type MatrixCameraProfile } from "../lib/camer
 import {
   hasNativeFileTransactionSupport,
   nativeAtomicWriteFile,
+  NativeFileTransactionUnavailableError,
 } from "./native-file-transaction-helper.ts";
 
 interface PendingConflict {
@@ -94,23 +95,6 @@ async function stableDirectoryIdentity(
       throw new Error(`${label} identity changed.`);
     }
     return identity;
-  } finally {
-    await handle?.close();
-  }
-}
-
-async function syncDirectory(directory: string, expected: DirectoryIdentity): Promise<void> {
-  if (process.platform === "win32") return;
-  let handle: FileHandle | undefined;
-  try {
-    handle = await fs.open(directory, fsConstants.O_RDONLY);
-    const opened = await handle.stat();
-    if (!opened.isDirectory() || !sameIdentity(expected, opened)) {
-      throw new Error("Camera profile storage directory identity changed.");
-    }
-    await handle.sync();
-  } catch (error) {
-    if (!["EINVAL", "ENOTSUP", "ENOSYS"].includes(errorCode(error) ?? "")) throw error;
   } finally {
     await handle?.close();
   }
@@ -281,6 +265,7 @@ export class CameraProfileService {
   }
 
   private async initializeInternal(): Promise<CameraProfileRegistrySnapshot> {
+    if (!hasNativeFileTransactionSupport()) throw new NativeFileTransactionUnavailableError();
     await this.ensureStorageRoot(true);
     try {
       const contents = await boundedRegularFile(this.indexPath, CAMERA_PROFILE_REGISTRY_LIMIT, "Camera profile registry");
@@ -520,29 +505,15 @@ export class CameraProfileService {
   ): Promise<void> {
     await this.ensureStorageRoot(false);
     const destination = path.join(this.directory, record.storedFilename);
-    let created = false;
     try {
-      if (hasNativeFileTransactionSupport()) {
-        await nativeAtomicWriteFile(
-          destination,
-          bytes,
-          this.requiredDirectoryIdentity(),
-          "exclusive",
-        );
-        created = true;
-      } else {
-        let handle: FileHandle | undefined;
-        try {
-          handle = await fs.open(destination, "wx", 0o600);
-          await handle.writeFile(bytes);
-          await handle.sync();
-          created = true;
-        } finally {
-          await handle?.close();
-        }
-      }
+      if (!hasNativeFileTransactionSupport()) throw new NativeFileTransactionUnavailableError();
+      await nativeAtomicWriteFile(
+        destination,
+        bytes,
+        this.requiredDirectoryIdentity(),
+        "exclusive",
+      );
       await this.ensureStorageRoot(false);
-      await syncDirectory(this.directory, this.requiredDirectoryIdentity());
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
       const stored = await boundedRegularFile(destination, CAMERA_PROFILE_FILE_LIMIT, "Stored camera profile");
@@ -568,17 +539,8 @@ export class CameraProfileService {
             ),
           ],
     };
-    try {
-      await this.persist(nextState);
-      this.state = nextState;
-    } catch (error) {
-      if (created) {
-        await this.ensureStorageRoot(false);
-        await fs.unlink(destination).catch(() => undefined);
-        await syncDirectory(this.directory, this.requiredDirectoryIdentity()).catch(() => undefined);
-      }
-      throw error;
-    }
+    await this.persist(nextState);
+    this.state = nextState;
   }
 
   private requiredDirectoryIdentity(): DirectoryIdentity {
@@ -628,84 +590,13 @@ export class CameraProfileService {
       throw new Error("Camera profile registry exceeds the 16 MiB limit.");
     }
     await this.ensureStorageRoot(false);
-    if (hasNativeFileTransactionSupport()) {
-      await nativeAtomicWriteFile(
-        this.indexPath,
-        new TextEncoder().encode(contents),
-        this.requiredDirectoryIdentity(),
-        "replace",
-      );
-      return;
-    }
-    const temporary = `${this.indexPath}.${process.pid}.${randomUUID()}.tmp`;
-    const backup = `${this.indexPath}.${process.pid}.${randomUUID()}.backup`;
-    let handle: FileHandle | undefined;
-    let backupCreated = false;
-    let published = false;
-    let committed = false;
-    try {
-      const existing = await fs.lstat(this.indexPath).catch((error: unknown) => {
-        if (isMissing(error)) return null;
-        throw error;
-      });
-      if (existing?.isSymbolicLink()) throw new Error("Camera profile registry cannot be a symbolic link.");
-      handle = await fs.open(temporary, "wx", 0o600);
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      if (existing !== null) {
-        await fs.link(this.indexPath, backup);
-        backupCreated = true;
-        await syncDirectory(this.directory, this.requiredDirectoryIdentity());
-      }
-      await this.ensureStorageRoot(false);
-      await fs.rename(temporary, this.indexPath);
-      published = true;
-      await this.ensureStorageRoot(false);
-      await syncDirectory(this.directory, this.requiredDirectoryIdentity());
-      committed = true;
-      published = false;
-    } catch (error) {
-      if (published) {
-        try {
-          await this.ensureStorageRoot(false);
-          if (backupCreated) {
-            await fs.rename(backup, this.indexPath);
-            backupCreated = false;
-          } else {
-            await fs.unlink(this.indexPath);
-          }
-          await syncDirectory(this.directory, this.requiredDirectoryIdentity());
-          published = false;
-        } catch (rollbackError) {
-          try {
-            const current = await boundedRegularFile(
-              this.indexPath,
-              CAMERA_PROFILE_REGISTRY_LIMIT,
-              "Camera profile registry",
-            );
-            if (new TextDecoder("utf-8", { fatal: true }).decode(current) === contents) {
-              committed = true;
-              published = false;
-            } else {
-              throw rollbackError;
-            }
-          } catch {
-            throw new Error("Camera profile registry rollback failed after publish.", { cause: rollbackError });
-          }
-        }
-      }
-      if (!committed) throw error;
-    } finally {
-      await handle?.close().catch(() => undefined);
-      await fs.unlink(temporary).catch(() => undefined);
-      if (committed && backupCreated) {
-        await fs.unlink(backup).catch(() => undefined);
-        await syncDirectory(this.directory, this.requiredDirectoryIdentity()).catch(() => undefined);
-      } else if (!published) {
-        await fs.unlink(backup).catch(() => undefined);
-      }
-    }
+    if (!hasNativeFileTransactionSupport()) throw new NativeFileTransactionUnavailableError();
+    await nativeAtomicWriteFile(
+      this.indexPath,
+      new TextEncoder().encode(contents),
+      this.requiredDirectoryIdentity(),
+      "replace",
+    );
+    await this.ensureStorageRoot(false);
   }
 }

@@ -1,4 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#if defined(__linux__)
+#define _GNU_SOURCE 1
+#endif
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -12,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -298,6 +304,12 @@ static int same_stable_file(const struct stat *left, const struct stat *right) {
     stat_ctime_ns(left) == stat_ctime_ns(right);
 }
 
+static int same_published_file(const struct stat *left, const struct stat *right) {
+  return same_identity(left, right) &&
+    left->st_size == right->st_size &&
+    stat_mtime_ns(left) == stat_mtime_ns(right);
+}
+
 static void print_observation(const char *prefix, const struct stat *stat_buffer) {
   (void)dprintf(
     STDERR_FILENO,
@@ -362,6 +374,37 @@ static int temporary_name(char *buffer, size_t length, const char *suffix, unsig
     suffix
   );
   return written > 0 && (size_t)written < length;
+}
+
+static int rename_no_replace_at(int directory_fd, const char *source, const char *destination) {
+#if defined(__APPLE__)
+  return renameatx_np(directory_fd, source, directory_fd, destination, RENAME_EXCL);
+#elif defined(__linux__) && defined(SYS_renameat2)
+  return (int)syscall(SYS_renameat2, directory_fd, source, directory_fd, destination, RENAME_NOREPLACE);
+#else
+  if (linkat(directory_fd, source, directory_fd, destination, 0) < 0) return -1;
+  if (unlinkat(directory_fd, source, 0) == 0) return 0;
+  {
+    int unlink_error = errno;
+    (void)unlinkat(directory_fd, destination, 0);
+    errno = unlink_error;
+    return -1;
+  }
+#endif
+}
+
+static int rename_exchange_at(int directory_fd, const char *left, const char *right) {
+#if defined(__APPLE__)
+  return renameatx_np(directory_fd, left, directory_fd, right, RENAME_SWAP);
+#elif defined(__linux__) && defined(SYS_renameat2)
+  return (int)syscall(SYS_renameat2, directory_fd, left, directory_fd, right, RENAME_EXCHANGE);
+#else
+  (void)directory_fd;
+  (void)left;
+  (void)right;
+  errno = ENOTSUP;
+  return -1;
+#endif
 }
 
 static int copy_fd(int source_fd, int destination_fd, off_t size) {
@@ -719,18 +762,16 @@ static int command_atomic_write(
   parent_ref parent;
   struct stat parent_stat;
   struct stat existing_stat;
-  struct stat created_stat;
+  struct stat displaced_stat;
   uintmax_t device;
   uintmax_t inode;
   char temporary[NAME_MAX + 1];
-  char backup[NAME_MAX + 1];
   int replace;
   int existing;
   int file_fd = -1;
-  int created = 0;
+  int temporary_created = 0;
   int published = 0;
-  int backup_created = 0;
-  int result = 1;
+  int exchanged = 0;
   int failure_reported = 0;
   unsigned int attempt;
 
@@ -759,33 +800,23 @@ static int command_atomic_write(
     goto cleanup;
   }
 
-  if (!replace) {
-    do {
-      file_fd = openat(parent.fd, parent.name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-    } while (file_fd < 0 && errno == EINTR);
-    if (file_fd < 0) goto cleanup;
-    if (fstat(file_fd, &created_stat) < 0 || !S_ISREG(created_stat.st_mode)) goto cleanup;
-    created = 1;
-  } else {
-    for (attempt = 0; attempt < 100; attempt += 1) {
-      if (!temporary_name(temporary, sizeof(temporary), "tmp", attempt)) {
-        (void)fail_invalid();
-        failure_reported = 1;
-        goto cleanup;
-      }
-      do {
-        file_fd = openat(parent.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-      } while (file_fd < 0 && errno == EINTR);
-      if (file_fd >= 0) break;
-      if (errno != EEXIST) goto cleanup;
-    }
-    if (file_fd < 0) {
-      errno = EEXIST;
+  for (attempt = 0; attempt < 100; attempt += 1) {
+    if (!temporary_name(temporary, sizeof(temporary), "tmp", attempt)) {
+      (void)fail_invalid();
+      failure_reported = 1;
       goto cleanup;
     }
-    if (fstat(file_fd, &created_stat) < 0 || !S_ISREG(created_stat.st_mode)) goto cleanup;
-    created = 1;
+    do {
+      file_fd = openat(parent.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    } while (file_fd < 0 && errno == EINTR);
+    if (file_fd >= 0) break;
+    if (errno != EEXIST) goto cleanup;
   }
+  if (file_fd < 0) {
+    errno = EEXIST;
+    goto cleanup;
+  }
+  temporary_created = 1;
   if (read_stdin_to_file(file_fd) < 0 || fsync(file_fd) < 0) goto cleanup;
   if (close(file_fd) < 0) {
     file_fd = -1;
@@ -793,48 +824,54 @@ static int command_atomic_write(
   }
   file_fd = -1;
 
-  if (replace) {
-    if (existing == 0) {
-      for (attempt = 0; attempt < 100; attempt += 1) {
-        if (!temporary_name(backup, sizeof(backup), "backup", attempt)) {
-          (void)fail_invalid();
-          failure_reported = 1;
-          goto cleanup;
-        }
-        if (linkat(parent.fd, parent.name, parent.fd, backup, 0) == 0) {
-          backup_created = 1;
-          break;
-        }
-        if (errno != EEXIST) goto cleanup;
-      }
-      if (!backup_created) {
-        errno = EEXIST;
-        goto cleanup;
-      }
-      if (fsync(parent.fd) < 0) goto cleanup;
-    }
+  if (replace && existing == 0) {
     do {
-      result = renameat(parent.fd, temporary, parent.fd, parent.name);
-    } while (result < 0 && errno == EINTR);
-    if (result < 0) goto cleanup;
-    created = 0;
+      published = rename_exchange_at(parent.fd, temporary, parent.name);
+    } while (published < 0 && errno == EINTR);
+    if (published < 0) goto cleanup;
     published = 1;
+    exchanged = 1;
+    if (stat_regular_at(parent.fd, temporary, &displaced_stat, 0) != 0 ||
+        !same_published_file(&existing_stat, &displaced_stat)) {
+      int changed_error = errno;
+      int rollback;
+      do {
+        rollback = rename_exchange_at(parent.fd, temporary, parent.name);
+      } while (rollback < 0 && errno == EINTR);
+      if (rollback < 0 || fsync(parent.fd) < 0) {
+        (void)fail_name("ROLLBACK");
+      } else {
+        (void)fail_name("CHANGED");
+      }
+      failure_reported = 1;
+      published = 0;
+      exchanged = 0;
+      errno = changed_error;
+      goto cleanup;
+    }
   } else {
+    int publish_result;
+    do {
+      publish_result = rename_no_replace_at(parent.fd, temporary, parent.name);
+    } while (publish_result < 0 && errno == EINTR);
+    if (publish_result < 0) goto cleanup;
     published = 1;
+    temporary_created = 0;
   }
 
   if (fsync(parent.fd) < 0) {
     int publish_error = errno;
     int rollback_result;
-    if (backup_created) {
+    if (exchanged) {
       do {
-        rollback_result = renameat(parent.fd, backup, parent.fd, parent.name);
+        rollback_result = rename_exchange_at(parent.fd, temporary, parent.name);
       } while (rollback_result < 0 && errno == EINTR);
-      if (rollback_result == 0) backup_created = 0;
+      if (rollback_result == 0) exchanged = 0;
     } else {
       do {
-        rollback_result = unlinkat(parent.fd, parent.name, 0);
+        rollback_result = renameat(parent.fd, parent.name, parent.fd, temporary);
       } while (rollback_result < 0 && errno == EINTR);
+      if (rollback_result == 0) temporary_created = 1;
     }
     if (rollback_result < 0 || fsync(parent.fd) < 0) {
       (void)fail_name("ROLLBACK");
@@ -845,10 +882,18 @@ static int command_atomic_write(
     errno = publish_error;
     goto cleanup;
   }
-  if (backup_created) {
-    (void)unlinkat(parent.fd, backup, 0);
-    backup_created = 0;
-    (void)fsync(parent.fd);
+  if (exchanged) {
+    int cleanup_result;
+    do {
+      cleanup_result = unlinkat(parent.fd, temporary, 0);
+    } while (cleanup_result < 0 && errno == EINTR);
+    if (cleanup_result < 0 || fsync(parent.fd) < 0) {
+      (void)fail_name("CLEANUP");
+      failure_reported = 1;
+      goto cleanup;
+    }
+    temporary_created = 0;
+    exchanged = 0;
   }
   close(parent.fd);
   (void)dprintf(STDOUT_FILENO, "OK\n");
@@ -856,17 +901,7 @@ static int command_atomic_write(
 
 cleanup:
   if (file_fd >= 0) close(file_fd);
-  if (backup_created && !published) (void)unlinkat(parent.fd, backup, 0);
-  if (created) {
-    if (replace) (void)unlinkat(parent.fd, temporary, 0);
-    else if (!published) {
-      struct stat current;
-      if (fstatat(parent.fd, parent.name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
-          same_identity(&created_stat, &current)) {
-        (void)unlinkat(parent.fd, parent.name, 0);
-      }
-    }
-  }
+  if (temporary_created && !exchanged) (void)unlinkat(parent.fd, temporary, 0);
   close(parent.fd);
   if (failure_reported) return 1;
   return fail_errno();

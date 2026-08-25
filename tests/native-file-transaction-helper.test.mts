@@ -32,16 +32,18 @@ function runHelper(
   executable: string,
   args: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
+  input: Uint8Array | null = null,
 ): Promise<HelperResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer | string) => stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
     child.stderr.on("data", (chunk: Buffer | string) => stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    child.stdin.end(input ?? undefined);
     child.once("error", reject);
     child.once("close", (status) => resolve({
       status,
@@ -49,6 +51,14 @@ function runHelper(
       stderr: Buffer.concat(stderr),
     }));
   });
+}
+
+async function waitForAtomicTemporary(directory: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if ((await fsp.readdir(directory)).some((name) => name.startsWith(".darkroom-atomic-") && name.endsWith(".tmp"))) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Native atomic-write temporary was not created.");
 }
 
 async function waitForFile(filePath: string): Promise<void> {
@@ -147,6 +157,62 @@ test("native helper keeps a parent-fd rename inside the opened tree after a syml
     assert.equal(await fsp.readFile(path.join(displacedParent, "published.jpg"), "utf8"), "staged");
     await assert.rejects(fsp.lstat(outsideDestinationPath));
     assert.equal((await fsp.lstat(destinationParent)).isSymbolicLink(), true);
+  } finally {
+    await fsp.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("native atomic-write publishes complete files and binds replacement identity", { skip: process.platform === "win32" }, async (t) => {
+  const executable = await buildHelperForTest(t);
+  const directory = await temporaryDirectory();
+  try {
+    const parent = await fsp.stat(directory);
+    const identity = [String(parent.dev), String(parent.ino)];
+    const target = path.join(directory, "profile.dcp");
+    let result = await runHelper(executable, ["atomic-write", target, ...identity, "exclusive"], process.env, Buffer.from("first"));
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(await fsp.readFile(target, "utf8"), "first");
+    result = await runHelper(executable, ["atomic-write", target, ...identity, "exclusive"], process.env, Buffer.from("duplicate"));
+    assert.equal(result.status, 1);
+    assert.match(result.stderr.toString(), /^ERR EEXIST$/m);
+    assert.equal(await fsp.readFile(target, "utf8"), "first");
+    result = await runHelper(executable, ["atomic-write", target, ...identity, "replace"], process.env, Buffer.from("second"));
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(await fsp.readFile(target, "utf8"), "second");
+
+    const child = spawn(executable, ["atomic-write", target, ...identity, "replace"], { stdio: ["pipe", "pipe", "pipe"] });
+    const stderr: Buffer[] = [];
+    child.stderr.on("data", (chunk: Buffer | string) => stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    child.stdin.write("third");
+    await waitForAtomicTemporary(directory);
+    const displaced = path.join(directory, "displaced.dcp");
+    await fsp.rename(target, displaced);
+    await fsp.writeFile(target, "concurrent");
+    child.stdin.end();
+    const status = await new Promise<number | null>((resolve) => child.once("close", resolve));
+    assert.equal(status, 1);
+    assert.match(Buffer.concat(stderr).toString(), /^ERR CHANGED$/m);
+    assert.equal(await fsp.readFile(target, "utf8"), "concurrent");
+  } finally {
+    await fsp.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("killing native exclusive atomic-write leaves no final target", { skip: process.platform === "win32" }, async (t) => {
+  const executable = await buildHelperForTest(t);
+  const directory = await temporaryDirectory();
+  try {
+    const parent = await fsp.stat(directory);
+    const target = path.join(directory, "profile.dcp");
+    const child = spawn(executable, ["atomic-write", target, String(parent.dev), String(parent.ino), "exclusive"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(Buffer.alloc(1024 * 1024, 7));
+    await waitForAtomicTemporary(directory);
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("close", resolve));
+    await assert.rejects(fsp.lstat(target));
   } finally {
     await fsp.rm(directory, { recursive: true, force: true });
   }
