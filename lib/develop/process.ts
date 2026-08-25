@@ -637,12 +637,11 @@ export const BASELINE_CAPABILITY_REPORT = {
       ],
     },
     "camera-profile-dataset": {
-      kind: "unavailable",
-      reason: "No licensed camera profile dataset is present.",
-      fallback: {
-        kind: "decoder-provided-color",
-        reason: "Use only decoder-provided color with proven provenance.",
-      },
+      kind: "available",
+      evidence: [
+        "The app-owned camera profile registry accepts only bounded matrix DCP and Darkroom profile-XMP files.",
+        "Imported transforms are validated before their calibration is stored in a Develop document.",
+      ],
     },
     "lens-profile-dataset": {
       kind: "unavailable",

@@ -112,6 +112,12 @@ import type {
   DevelopJobSnapshot,
   GenerativeRemoveConsentReceipt,
 } from "../lib/develop/v3/jobs";
+import type {
+  CameraProfileConflictRequest,
+  CameraProfileImportResult,
+  CameraProfileRegistrySnapshot,
+  CameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -152,6 +158,15 @@ export interface DarkroomAPI {
     request: DevelopAssetTransitionRequest,
   ): Promise<DevelopAssetTransitionResult>;
   developAssetRead(request: DevelopAssetReadRequest): Promise<DevelopAssetReadResult>;
+  cameraProfilesList(): Promise<CameraProfileRegistrySnapshot>;
+  cameraProfilesImport(): Promise<CameraProfileImportResult>;
+  cameraProfilesResolveConflict(
+    request: CameraProfileConflictRequest,
+  ): Promise<CameraProfileImportResult>;
+  cameraProfilesRescan(): Promise<CameraProfileRegistrySnapshot>;
+  cameraProfilesRemove(
+    request: CameraProfileRemoveRequest,
+  ): Promise<CameraProfileRegistrySnapshot>;
   developAssetCollectGarbage(
     request: DevelopAssetGcRequest,
   ): Promise<DevelopAssetGcResult>;

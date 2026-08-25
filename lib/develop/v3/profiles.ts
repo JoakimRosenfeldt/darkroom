@@ -3,6 +3,7 @@ import type {
   SourceRecord,
 } from "../process";
 import type { PersistedInputProfile } from "./document";
+import type { MatrixCameraProfile } from "../../camera-profiles/matrix";
 
 export type Rgb = readonly [number, number, number];
 export type Matrix3 = readonly [
@@ -62,6 +63,25 @@ export const STANDARD_SRGB_INPUT_PROFILE = {
     exposureOffsetEv: 0,
   },
 } as const satisfies InputProfileDescriptor;
+
+export function persistedInputProfileFromMatrix(
+  profile: MatrixCameraProfile,
+  registryRevision: string,
+): PersistedInputProfile {
+  return {
+    registryRevision,
+    selection: {
+      kind: "selected",
+      profileId: profile.id,
+      profileRevision: profile.revision,
+    },
+    calibration: {
+      matrixToLinearSrgb: profile.matrixToLinearSrgb,
+      channelScale: profile.channelScale,
+      exposureOffsetEv: profile.exposureOffsetEv,
+    },
+  };
+}
 
 export type InputProfileResolution =
   | {

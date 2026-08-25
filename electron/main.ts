@@ -151,6 +151,11 @@ import {
   analyzeMetadataTargets,
   type MetadataAnalysisTarget,
 } from "./metadata-analysis-service.ts";
+import { CameraProfileService } from "./camera-profile-service.ts";
+import {
+  parseCameraProfileConflictRequest,
+  parseCameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry.ts";
 import { MetadataCache } from "./metadata-cache.ts";
 import { fingerprintNoFollowFile } from "./catalog-fingerprint-service.ts";
 import {
@@ -720,6 +725,8 @@ function registerIpcHandlers(): void {
   const developAssetStore = new DevelopAssetStore(
     path.join(app.getPath("userData"), "develop-assets-v3"),
   );
+  const cameraProfiles = new CameraProfileService(app.getPath("userData"));
+  const cameraProfilesReady = cameraProfiles.initialize();
   const developJobRuntime = new DevelopJobRuntime({
     journalPath: path.join(
       app.getPath("userData"),
@@ -1622,6 +1629,37 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:develop-asset-read", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return developAssetStore.read(parseDevelopAssetReadRequest(value));
+  });
+  ipcMain.handle("darkroom:camera-profiles-list", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.list();
+  });
+  ipcMain.handle("darkroom:camera-profiles-import", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    const result = await dialog.showOpenDialog({
+      title: "Import camera profile",
+      properties: ["openFile"],
+      filters: [{ name: "Matrix camera profiles", extensions: ["dcp", "xmp"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { kind: "cancelled" };
+    return cameraProfiles.importFile(result.filePaths[0]!);
+  });
+  ipcMain.handle("darkroom:camera-profiles-resolve-conflict", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.resolveConflict(parseCameraProfileConflictRequest(value));
+  });
+  ipcMain.handle("darkroom:camera-profiles-rescan", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.rescan();
+  });
+  ipcMain.handle("darkroom:camera-profiles-remove", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.remove(parseCameraProfileRemoveRequest(value));
   });
   ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
     assertTrustedRenderer(event);

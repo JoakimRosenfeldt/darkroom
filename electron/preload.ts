@@ -172,6 +172,16 @@ import {
   type DevelopJobSnapshot,
   type GenerativeRemoveConsentReceipt,
 } from "../lib/develop/v3/jobs.ts";
+import {
+  parseCameraProfileConflictRequest,
+  parseCameraProfileImportResult,
+  parseCameraProfileRegistrySnapshot,
+  parseCameraProfileRemoveRequest,
+  type CameraProfileConflictRequest,
+  type CameraProfileImportResult,
+  type CameraProfileRegistrySnapshot,
+  type CameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -395,6 +405,41 @@ const darkroom = {
       parseDevelopAssetReadRequest(request),
     );
     return parseDevelopAssetReadResult(result);
+  },
+
+  async cameraProfilesList(): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-list");
+    return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async cameraProfilesImport(): Promise<CameraProfileImportResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-import");
+    return parseCameraProfileImportResult(result);
+  },
+
+  async cameraProfilesResolveConflict(
+    request: CameraProfileConflictRequest,
+  ): Promise<CameraProfileImportResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:camera-profiles-resolve-conflict",
+      parseCameraProfileConflictRequest(request),
+    );
+    return parseCameraProfileImportResult(result);
+  },
+
+  async cameraProfilesRescan(): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-rescan");
+    return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async cameraProfilesRemove(
+    request: CameraProfileRemoveRequest,
+  ): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:camera-profiles-remove",
+      parseCameraProfileRemoveRequest(request),
+    );
+    return parseCameraProfileRegistrySnapshot(result);
   },
 
   async developAssetCollectGarbage(

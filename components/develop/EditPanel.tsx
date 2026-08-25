@@ -49,6 +49,7 @@ import {
   ToggleRow,
 } from "@/components/develop/V3PanelControls";
 import { useDevelopStore } from "@/stores/develop-store";
+import { CameraProfileControls } from "@/components/develop/CameraProfileControls";
 
 type V3Tab = "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
 type MixerMode = "hue" | "saturation" | "luminance";
@@ -227,7 +228,7 @@ export function EditPanel({
 
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
-        {activeTab === "color" ? <ColorTab document={document} pixelProvenance={decoded.pixelProvenance} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
+        {activeTab === "color" ? <ColorTab document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
         {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
         {activeTab === "masking" ? (
@@ -336,17 +337,19 @@ function profileDescription(
     return `Camera profile unavailable: ${stage.reason} Using decoder-provided color.`;
   }
   if (selection.kind === "unavailable") return selection.reason;
-  return `${selection.profileId} · revision ${selection.profileRevision}. Stored calibration only; no registry lookup is available.`;
+  return `${selection.profileId} · revision ${selection.profileRevision}. Validated calibration applied before Develop tone.`;
 }
 
 function ColorTab({
   document,
-  pixelProvenance,
+  image,
+  entry,
   canvasTool,
   onCanvasToolChange,
 }: {
   readonly document: DevelopDocumentV3;
-  readonly pixelProvenance: DevelopImage["pixelProvenance"];
+  readonly image: DevelopImage;
+  readonly entry: LibraryEntry;
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
@@ -430,7 +433,8 @@ function ColorTab({
       <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation")} />
 
       <SectionLabel>Input profile</SectionLabel>
-      <StatusCard title="Profile status">{profileDescription(document, pixelProvenance)}</StatusCard>
+      <StatusCard title="Profile status">{profileDescription(document, image.pixelProvenance)}</StatusCard>
+      <CameraProfileControls document={document} image={image} entry={entry} />
 
       <PointColorControls
         document={document}
