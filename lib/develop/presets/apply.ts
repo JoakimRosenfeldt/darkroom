@@ -67,11 +67,25 @@ function sourceKinds(expression: MaskExpression): readonly string[] {
   }
 }
 
-function maskClass(mask: LocalMaskV3): "manual" | "ai" | "source-specific" {
+export type DevelopMaskTransferClass = "manual" | "ai" | "source-specific";
+
+export function developMaskTransferClass(mask: LocalMaskV3): DevelopMaskTransferClass {
   const kinds = sourceKinds(mask.expression);
   if (kinds.length > 0 && kinds.every((kind) => kind === "ai-matte")) return "ai";
   if (kinds.length > 0 && kinds.every((kind) => kind !== "ai-matte" && kind !== "depth-range")) return "manual";
   return "source-specific";
+}
+
+export function countDevelopMaskTransferClasses(
+  document: DevelopDocumentV3,
+): Readonly<Record<DevelopMaskTransferClass, number>> {
+  const counts: Record<DevelopMaskTransferClass, number> = {
+    manual: 0,
+    ai: 0,
+    "source-specific": 0,
+  };
+  for (const mask of document.local.masks) counts[developMaskTransferClass(mask)] += 1;
+  return counts;
 }
 
 function sampleCurve(points: readonly CurvePoint[], x: number): number {
@@ -147,10 +161,10 @@ function fieldEntry(document: DevelopDocumentV3, field: DevelopPresetField, sour
     case "tone-curves": return { field, value: normalizePresetCurves(document.tone.curves) };
     case "camera-profile": return { field, value: structuredClone(document.color.inputProfile) };
     case "crop": return { field, value: structuredClone(document.geometry.crop) };
-    case "manual-masks": return { field, value: structuredClone(document.local.masks.filter((mask) => maskClass(mask) === "manual")) };
+    case "manual-masks": return { field, value: structuredClone(document.local.masks.filter((mask) => developMaskTransferClass(mask) === "manual")) };
     case "ai-masks": {
       if (sourceId === null) throw new Error("AI mask provenance needs a SourceId.");
-      const masks = document.local.masks.filter((mask) => maskClass(mask) === "ai");
+      const masks = document.local.masks.filter((mask) => developMaskTransferClass(mask) === "ai");
       const ids = new Set(masks.flatMap((mask) => referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)));
       return { field, value: { sourceId, masks: structuredClone(masks), assetRefs: structuredClone(document.local.maskAssetRefs.filter((asset) => ids.has(asset.assetId))) } };
     }
@@ -195,6 +209,7 @@ function compatibleProfile(entry: Extract<DevelopPresetPayloadEntry, { readonly 
   if (target.selection.kind === "unavailable" || available?.kind !== "available-before-tone") return false;
   if (target.selection.kind === "decoder-default") {
     return available.decoderDefault.selection.kind === "decoder-default" &&
+      available.decoderDefault.registryRevision === target.registryRevision &&
       sameCalibration(target, available.decoderDefault);
   }
   const targetSelection = target.selection;
@@ -202,6 +217,7 @@ function compatibleProfile(entry: Extract<DevelopPresetPayloadEntry, { readonly 
     candidate.selection.kind === "selected" &&
     candidate.selection.profileId === targetSelection.profileId &&
     candidate.selection.profileRevision === targetSelection.profileRevision &&
+    candidate.registryRevision === target.registryRevision &&
     sameCalibration(candidate, target),
   );
 }
@@ -242,7 +258,7 @@ function expandedEntry(
 function duplicateMaskId(document: DevelopDocumentV3, entry: DevelopPresetPayloadEntry): boolean {
   if (entry.field !== "manual-masks" && entry.field !== "ai-masks") return false;
   const replacedClass = entry.field === "manual-masks" ? "manual" : "ai";
-  const preserved = new Set(document.local.masks.filter((mask) => maskClass(mask) !== replacedClass).map((mask) => mask.id));
+  const preserved = new Set(document.local.masks.filter((mask) => developMaskTransferClass(mask) !== replacedClass).map((mask) => mask.id));
   const masks = entry.field === "manual-masks" ? entry.value : entry.value.masks;
   return masks.some((mask) => preserved.has(mask.id));
 }
@@ -276,13 +292,13 @@ function applyPayload(document: DevelopDocumentV3, entries: readonly DevelopPres
       case "camera-profile": next = { ...next, color: { ...next.color, inputProfile: entry.value } }; break;
       case "crop": next = { ...next, geometry: { ...next.geometry, crop: entry.value } }; break;
       case "manual-masks": {
-        const masks = [...next.local.masks.filter((mask) => maskClass(mask) !== "manual"), ...entry.value];
+        const masks = [...next.local.masks.filter((mask) => developMaskTransferClass(mask) !== "manual"), ...entry.value];
         next = { ...next, local: { ...next.local, masks } };
         break;
       }
       case "ai-masks": {
-        const replacedAssetIds = new Set(next.local.masks.filter((mask) => maskClass(mask) === "ai").flatMap((mask) => referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)));
-        const masks = [...next.local.masks.filter((mask) => maskClass(mask) !== "ai"), ...entry.value.masks];
+        const replacedAssetIds = new Set(next.local.masks.filter((mask) => developMaskTransferClass(mask) === "ai").flatMap((mask) => referencedMaskArtifacts(mask.expression).map((asset) => asset.assetId)));
+        const masks = [...next.local.masks.filter((mask) => developMaskTransferClass(mask) !== "ai"), ...entry.value.masks];
         const referenced = new Map(next.local.maskAssetRefs.map((asset) => [asset.assetId, asset]));
         for (const assetId of replacedAssetIds) referenced.delete(assetId);
         for (const asset of entry.value.assetRefs) referenced.set(asset.assetId, asset);
@@ -337,6 +353,14 @@ export function calculateDevelopPresetApplication(input: {
   const skipped: DevelopPresetFieldReport[] = preset.fields.filter((field) => !selected.includes(field)).map((field) => ({ field, reason: "Field was not selected." }));
   const regenerationRequests: DevelopPresetFieldReport[] = [];
   const supported = requested.filter((entry) => {
+    if (entry.field === "manual-masks" && entry.value.length === 0) {
+      skipped.push({ field: entry.field, reason: "The source has no transferable manual masks." });
+      return false;
+    }
+    if (entry.field === "ai-masks" && entry.value.masks.length === 0) {
+      skipped.push({ field: entry.field, reason: "The source has no transferable AI masks." });
+      return false;
+    }
     if (entry.field === "camera-profile" && !compatibleProfile(entry, input.context)) {
       unsupported.push({ field: entry.field, reason: "Camera profile is not compatible with this source." });
       return false;

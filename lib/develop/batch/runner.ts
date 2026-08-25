@@ -7,6 +7,7 @@ export interface DevelopBatchRunnerAdapter {
   readonly markActive: (batchId: DevelopBatchId, position: number) => Promise<void>;
   readonly executeAndPersist: (receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem) => Promise<void>;
   readonly cancelQueued: (batchId: DevelopBatchId) => Promise<void>;
+  readonly yieldControl: () => Promise<void>;
 }
 
 export async function runDurableDevelopBatch(
@@ -22,10 +23,12 @@ export async function runDurableDevelopBatch(
     const item = receipt.items.find((candidate) => candidate.state.kind === "queued");
     if (!item) return receipt;
     await adapter.markActive(batchId, item.position);
+    await adapter.yieldControl();
     const activeReceipt = await adapter.load(batchId);
     const active = activeReceipt.items[item.position];
     if (!active || active.state.kind !== "active") throw new Error("Develop batch active item is missing.");
     await adapter.executeAndPersist(activeReceipt, active);
+    await adapter.yieldControl();
   }
 }
 

@@ -197,8 +197,38 @@ function evaluateRule(
         : "ISO is outside the inclusive range.",
   }));
 
-  const resolvedPreset = resolver.getPresetRevision(rule.preset.presetId, rule.preset.presetRevision);
-  const preset = resolvedPreset === null ? null : parseDevelopPresetRecord(resolvedPreset);
+  const factRejected = entries.some((entry) => !entry.matched);
+  if (factRejected) {
+    entries.push(traceFact({
+      fact: "preset",
+      matched: false,
+      expected: `${rule.preset.presetId}@${rule.preset.presetRevision}`,
+      actual: "not resolved",
+      reason: "Preset was not resolved because the rule facts were rejected.",
+    }));
+    return {
+      trace: {
+        ruleId: rule.ruleId,
+        ruleRevision: rule.revision,
+        ruleName: rule.name,
+        matched: false,
+        summary: `Rejected ${rule.name}: ${entries.filter((entry) => !entry.matched).map((entry) => entry.reason).join(" ")}`,
+        facts: entries,
+      },
+      preset: null,
+    };
+  }
+
+  let preset: DevelopPresetRecord | null = null;
+  let presetError: string | null = null;
+  try {
+    const resolvedPreset = resolver.getPresetRevision(rule.preset.presetId, rule.preset.presetRevision);
+    preset = resolvedPreset === null ? null : parseDevelopPresetRecord(resolvedPreset);
+  } catch (error) {
+    presetError = error instanceof Error && error.message.length > 0
+      ? error.message
+      : "The referenced immutable preset revision is invalid.";
+  }
   const declaredFields = preset ? new Set(preset.fields) : null;
   const missingFields = declaredFields
     ? rule.preset.selectedFields.filter((field) => !declaredFields.has(field))
@@ -211,9 +241,13 @@ function evaluateRule(
     fact: "preset",
     matched: presetMatched,
     expected: `${rule.preset.presetId}@${rule.preset.presetRevision}`,
-    actual: preset === null ? "missing preset revision" : `${preset.presetId}@${preset.revision}`,
-    reason: preset === null
-      ? "The referenced immutable preset revision is missing."
+    actual: presetError !== null
+      ? "invalid preset revision"
+      : preset === null ? "missing preset revision" : `${preset.presetId}@${preset.revision}`,
+    reason: presetError !== null
+      ? `The referenced immutable preset revision is invalid: ${presetError}`
+      : preset === null
+        ? "The referenced immutable preset revision is missing."
       : !presetIdentityMatched
         ? "Preset resolver returned a different immutable revision."
       : missingFields.length > 0
@@ -248,12 +282,12 @@ function isoWidth(rule: DevelopDefaultRule): number {
   return rule.iso.kind === "range" ? rule.iso.maximum - rule.iso.minimum : Number.POSITIVE_INFINITY;
 }
 
-function compareMatches(left: MatchedDevelopDefault, right: MatchedDevelopDefault): number {
-  return right.rule.priority - left.rule.priority ||
-    cameraSpecificity(right.rule) - cameraSpecificity(left.rule) ||
-    profileSpecificity(right.rule) - profileSpecificity(left.rule) ||
-    isoWidth(left.rule) - isoWidth(right.rule) ||
-    left.rule.ruleId.localeCompare(right.rule.ruleId);
+function compareRules(left: DevelopDefaultRule, right: DevelopDefaultRule): number {
+  return right.priority - left.priority ||
+    cameraSpecificity(right) - cameraSpecificity(left) ||
+    profileSpecificity(right) - profileSpecificity(left) ||
+    isoWidth(left) - isoWidth(right) ||
+    left.ruleId.localeCompare(right.ruleId);
 }
 
 function currentRevisions(rules: readonly DevelopDefaultRule[]): readonly DevelopDefaultRule[] {
@@ -280,14 +314,14 @@ export function matchDevelopDefault(input: {
     return { kind: "existing-document", source: input.hydration.source, traces: [] };
   }
   const evaluations = [...currentRevisions(input.rules)]
-    .sort((left, right) => left.ruleId.localeCompare(right.ruleId))
+    .sort(compareRules)
     .map((rule) => ({ rule, ...evaluateRule(rule, input.facts, input.presets) }));
   const traces = evaluations.map((evaluation) => evaluation.trace);
   const matches = evaluations.flatMap((evaluation): MatchedDevelopDefault[] =>
     evaluation.preset
       ? [{ rule: evaluation.rule, preset: structuredClone(evaluation.preset), trace: evaluation.trace }]
       : []
-  ).sort(compareMatches);
+  );
   const winner = matches[0];
   return winner
     ? { kind: "matched", match: winner, traces }

@@ -73,6 +73,8 @@ const faultInjector = testHarness?.faultPoint
 
 let database: DatabaseSync | null = null;
 let databasePath: string | null = null;
+let batchRepository: DevelopBatchRepository | null = null;
+const activeBatchRuns = new Map<string, Promise<DevelopBatchCommandResult>>();
 
 class CatalogWorkerTestDisabledError extends Error {
   constructor() {
@@ -129,7 +131,8 @@ function catalogLiveRepository(): CatalogLiveRepository {
 
 function developBatchRepository(): DevelopBatchRepository {
   if (!developBatchOperationExecutor) throw new Error("Develop batch runtime is unavailable.");
-  return new DevelopBatchRepository(requireDatabase(), developBatchOperationExecutor);
+  batchRepository ??= new DevelopBatchRepository(requireDatabase(), developBatchOperationExecutor);
+  return batchRepository;
 }
 
 function rowValue(row: Record<string, unknown>, key: string): unknown {
@@ -231,6 +234,7 @@ function openDatabase(targetPath: string): boolean {
   }
   database = opened;
   databasePath = targetPath;
+  batchRepository = null;
   return created;
 }
 
@@ -242,6 +246,7 @@ function closeDatabase(): boolean {
   database.close();
   database = null;
   databasePath = null;
+  batchRepository = null;
   return true;
 }
 
@@ -387,6 +392,7 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       );
     }
     for (const table of DEVELOP_BATCH_TABLES) {
+      if (table === "develop_batch_schema_meta") continue;
       cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
         request.catalogId,
         sourceCatalogId,
@@ -754,7 +760,18 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
     case "create": return repository.create(command.input);
     case "get": return repository.get(command.catalogId, command.batchId);
     case "list": return repository.list(command.catalogId, command.limit);
-    case "run": return repository.run(command.catalogId, command.batchId);
+    case "run": {
+      const key = JSON.stringify([command.catalogId, command.batchId]);
+      const existing = activeBatchRuns.get(key);
+      if (existing) return existing;
+      const running = repository.run(command.catalogId, command.batchId);
+      activeBatchRuns.set(key, running);
+      try {
+        return await running;
+      } finally {
+        activeBatchRuns.delete(key);
+      }
+    }
     case "cancel": return repository.cancel(command.catalogId, command.batchId);
     case "retry": return repository.retry(command.catalogId, command.batchId);
     case "freeze": return repository.freeze({
@@ -988,7 +1005,34 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
 
 let queue = Promise.resolve();
 
+function handleActiveBatchCancel(value: unknown): boolean {
+  let request: CatalogWorkerRequest;
+  try {
+    request = parseCatalogWorkerRequest(value);
+  } catch {
+    return false;
+  }
+  if (request.kind !== "develop-batch" || request.command.kind !== "cancel") return false;
+  const command = request.command;
+  const key = JSON.stringify([command.catalogId, command.batchId]);
+  const running = activeBatchRuns.get(key);
+  if (!running) return false;
+  void developRuntimeReady.then(async () => {
+    developBatchRepository().cancel(command.catalogId, command.batchId);
+    await running;
+    post({
+      kind: "develop-batch",
+      requestId: request.requestId,
+      result: developBatchRepository().get(command.catalogId, command.batchId),
+    });
+  }).catch((error: unknown) => {
+    postError({ kind: "error", requestId: request.requestId, code: "runtime", message: safeErrorMessage(error) });
+  });
+  return true;
+}
+
 workerPort.on("message", (value: unknown) => {
+  if (handleActiveBatchCancel(value)) return;
   queue = queue.then(async () => {
     await developRuntimeReady;
     let request: CatalogWorkerRequest;

@@ -1,6 +1,10 @@
 import type { SourceId } from "../lib/catalog/ids.ts";
 import type { DevelopBatchOperation, DevelopBatchOperationId } from "../lib/develop/batch/domain.ts";
-import { calculateDevelopPresetApplication, captureDevelopPresetPayload } from "../lib/develop/presets/apply.ts";
+import {
+  calculateDevelopPresetApplication,
+  captureDevelopPresetPayload,
+  type DevelopPresetCameraProfileContext,
+} from "../lib/develop/presets/apply.ts";
 import type { DevelopPresetField, DevelopPresetPayloadEntry } from "../lib/develop/presets/schema.ts";
 import { DEFAULT_V3_DEVELOP_DOCUMENT, type DevelopDocumentV3 } from "../lib/develop/v3/document.ts";
 
@@ -11,6 +15,7 @@ export interface DevelopBatchExecutionInput {
   readonly sourceId: SourceId | null;
   readonly targetDocument: DevelopDocumentV3;
   readonly targetSourceId: SourceId;
+  readonly targetCameraProfile: DevelopPresetCameraProfileContext;
 }
 
 export type DevelopBatchExecutionResult =
@@ -72,9 +77,7 @@ export function executeDevelopBatchOperation(input: DevelopBatchExecutionInput):
     amount: operation.amount,
     context: {
       sourceId: input.targetSourceId,
-      compatibleInputProfileIds: input.targetDocument.color.inputProfile.selection.kind === "selected"
-        ? [input.targetDocument.color.inputProfile.selection.profileId]
-        : [],
+      cameraProfile: input.targetCameraProfile,
       regenerateAiMasks: false,
     },
   });

@@ -221,6 +221,16 @@ function batchKind(value: unknown): DevelopBatchKind {
     : fail("Develop batch kind is invalid.");
 }
 
+function assertBatchKindOperation(kind: DevelopBatchKind, operation: DevelopBatchOperation): void {
+  const valid = kind === "undo"
+    ? operation.kind === "undo"
+    : kind === "previous" || kind === "sync" || kind === "auto-sync"
+      ? operation.kind === "copy-fields"
+      : operation.kind === "preset" || operation.kind === "paste-settings" ||
+        operation.kind === "section-reset" || operation.kind === "selected-control";
+  if (!valid) fail(`Develop batch kind ${kind} cannot use operation ${operation.kind}.`);
+}
+
 export function parseDevelopBatchCreateInput(value: unknown): DevelopBatchCreateInput {
   const input = record(value, "Develop batch create input");
   exact(input, ["schemaVersion", "catalogId", "batchId", "operationId", "kind", "sourceEntryId", "sourceRevisionId", "targets", "operation", "createdAt"], "Develop batch create input");
@@ -238,9 +248,11 @@ export function parseDevelopBatchCreateInput(value: unknown): DevelopBatchCreate
   const sourceRevisionId = input.sourceRevisionId === null ? null : parseDevelopRevisionId(input.sourceRevisionId);
   if ((sourceEntryId === null) !== (sourceRevisionId === null)) fail("Develop batch source is incomplete.");
   if ((kind === "previous" || kind === "sync" || kind === "auto-sync") && sourceEntryId === null) fail("Develop batch source is required.");
+  if (kind === "batch" && sourceEntryId !== null) fail("Batch Develop operations cannot carry an unused source.");
   if (sourceEntryId !== null && targets.some((target) => target.entryId === sourceEntryId)) fail("Develop batch source cannot be a target.");
   const operation = parseDevelopBatchOperation(input.operation);
   if (operation.kind === "undo") fail("Develop batch create operation is invalid.");
+  assertBatchKindOperation(kind, operation);
   const parsed: DevelopBatchCreateInput = {
     schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION,
     catalogId: parseCatalogId(input.catalogId),
@@ -312,6 +324,57 @@ export function parseDevelopBatchReceipt(value: unknown): DevelopBatchReceipt {
     cancellationRequested: input.cancellationRequested,
     createdAt: finite(input.createdAt, "Develop batch createdAt"), updatedAt: finite(input.updatedAt, "Develop batch updatedAt"),
   };
+  assertBatchKindOperation(receipt.kind, receipt.operation);
+  if ((receipt.sourceEntryId === null) !== (receipt.sourceRevisionId === null)) {
+    fail("Develop batch Receipt source is incomplete.");
+  }
+  if ((receipt.kind === "previous" || receipt.kind === "sync" || receipt.kind === "auto-sync") && receipt.sourceEntryId === null) {
+    fail("Develop batch Receipt source is required.");
+  }
+  if ((receipt.kind === "batch" || receipt.kind === "undo") && receipt.sourceEntryId !== null) {
+    fail("Develop batch Receipt carries an unused source.");
+  }
+  if (new Set(items.map((item) => item.operationId)).size !== items.length) {
+    fail("Develop batch Receipt item operation IDs must be unique.");
+  }
+  if (new Set(items.map((item) => item.plannedRevisionId)).size !== items.length) {
+    fail("Develop batch Receipt planned revision IDs must be unique.");
+  }
+  for (const item of items) {
+    const beforeIsExpected = item.beforeRevisionId === item.expectedRevisionId;
+    if (receipt.kind === "undo" ? item.restoreRevisionId === null : item.restoreRevisionId !== null) {
+      fail("Develop batch Receipt restore revision is inconsistent with its kind.");
+    }
+    switch (item.state.kind) {
+      case "queued":
+      case "skipped":
+      case "cancelled":
+        if (item.beforeRevisionId !== null || item.afterRevisionId !== null) fail("Develop batch terminal revisions are inconsistent.");
+        break;
+      case "active":
+        if (item.afterRevisionId !== null || (item.state.phase === "commit" ? !beforeIsExpected : item.beforeRevisionId !== null)) {
+          fail("Develop batch active revisions are inconsistent with its phase.");
+        }
+        break;
+      case "completed":
+        if (
+          item.state.entryId !== item.entryId ||
+          item.state.revisionId !== item.afterRevisionId ||
+          item.afterRevisionId !== item.plannedRevisionId ||
+          !beforeIsExpected
+        ) fail("Develop batch completed state is inconsistent with its item revisions.");
+        break;
+      case "failed":
+        if (item.afterRevisionId !== null || (item.beforeRevisionId !== null && !beforeIsExpected)) {
+          fail("Develop batch failed revisions are inconsistent.");
+        }
+        break;
+      default: {
+        const exhaustive: never = item.state;
+        fail(`Develop batch item state is invalid: ${String(exhaustive)}.`);
+      }
+    }
+  }
   if (new TextEncoder().encode(JSON.stringify(receipt)).byteLength > DEVELOP_BATCH_MAX_JOB_BYTES) fail("Develop batch Receipt exceeds the byte limit.");
   return receipt;
 }

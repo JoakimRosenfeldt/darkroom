@@ -2,6 +2,7 @@ import type { SourceId } from "../../catalog/ids.ts";
 import {
   calculateDevelopPresetApplication,
   immutablePresetSnapshot,
+  type DevelopPresetCameraProfileContext,
   type DevelopPresetFieldReport,
 } from "../presets/apply.ts";
 import type { DevelopPresetField } from "../presets/schema.ts";
@@ -50,12 +51,7 @@ export type DevelopDefaultCreationCandidate =
 
 export interface DevelopDefaultApplicationContext {
   readonly sourceId: SourceId;
-  readonly inputProfile:
-    | {
-        readonly kind: "available-before-tone";
-        readonly compatibleProfileIds: readonly string[];
-      }
-    | { readonly kind: "unavailable"; readonly reason: string };
+  readonly cameraProfile: DevelopPresetCameraProfileContext;
 }
 
 export interface DurableDevelopDefaultDocument<Head> {
@@ -122,9 +118,6 @@ export function prepareDevelopDefaultCandidate(input: {
   const sourceSpecificSkipped: DevelopPresetFieldReport[] = selectedFields.includes("ai-masks")
     ? [{ field: "ai-masks", reason: "Source-specific AI masks never apply as Develop defaults." }]
     : [];
-  const compatibleInputProfileIds = input.context.inputProfile.kind === "available-before-tone"
-    ? [...new Set(input.context.inputProfile.compatibleProfileIds)]
-    : [];
   const application = safeFields.length > 0
     ? calculateDevelopPresetApplication({
         document: initialDocument,
@@ -133,7 +126,7 @@ export function prepareDevelopDefaultCandidate(input: {
         amount: 100,
         context: {
           sourceId: input.context.sourceId,
-          compatibleInputProfileIds,
+          cameraProfile: input.context.cameraProfile,
           regenerateAiMasks: false,
         },
       })

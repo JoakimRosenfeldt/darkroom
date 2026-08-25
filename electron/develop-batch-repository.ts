@@ -32,6 +32,10 @@ import { DevelopHistoryRepository } from "./develop-history-repository.ts";
 type Row = Record<string, unknown>;
 export type DevelopBatchOperationExecutor = (input: DevelopBatchExecutionInput) => DevelopBatchExecutionResult;
 
+type PreparedBatchItem =
+  | { readonly kind: "terminal"; readonly state: DevelopBatchItemState }
+  | { readonly kind: "ready"; readonly document: DevelopHistoryDocument; readonly warnings: readonly string[] };
+
 export interface DevelopBatchFreezeInput {
   readonly catalogId: CatalogId;
   readonly batchId: DevelopBatchId;
@@ -78,6 +82,7 @@ export class DevelopBatchRepository {
   private readonly database: DatabaseSync;
   private readonly history: DevelopHistoryRepository;
   private readonly executeOperation: DevelopBatchOperationExecutor;
+  private transactionDepth = 0;
 
   constructor(database: DatabaseSync, executeOperation: DevelopBatchOperationExecutor) {
     this.database = database;
@@ -88,15 +93,19 @@ export class DevelopBatchRepository {
   }
 
   private transaction<T>(run: () => T): T {
+    if (this.transactionDepth > 0) return run();
     let active = false;
     try {
       this.database.exec("BEGIN IMMEDIATE;");
       active = true;
+      this.transactionDepth += 1;
       const result = run();
+      this.transactionDepth -= 1;
       this.database.exec("COMMIT;");
       active = false;
       return result;
     } catch (error) {
+      this.transactionDepth = 0;
       if (active) try { this.database.exec("ROLLBACK;"); } catch { /* preserve the original failure */ }
       throw error;
     }
@@ -105,7 +114,7 @@ export class DevelopBatchRepository {
   private reclaimActive(): void {
     this.database.prepare(`
       UPDATE develop_batch_items
-      SET state_json = '{"kind":"queued"}'
+      SET state_json = '{"kind":"queued"}', before_revision_id = NULL, after_revision_id = NULL
       WHERE json_extract(state_json, '$.kind') = 'active'
     `).run();
   }
@@ -322,40 +331,57 @@ export class DevelopBatchRepository {
     });
   }
 
-  private terminalInTransaction(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem): void {
-    const now = Date.now();
+  private markPhase(
+    catalogId: CatalogId,
+    batchId: DevelopBatchId,
+    position: number,
+    phase: "apply" | "commit",
+  ): void {
+    this.transaction(() => {
+      const item = this.itemRows(catalogId, batchId)[position];
+      const current = item ? parseDevelopBatchItemState(JSON.parse(string(item, "stateJson")) as unknown) : null;
+      const expected = phase === "apply" ? "reconcile" : "apply";
+      if (current?.kind !== "active" || current.phase !== expected) throw new Error("Develop batch item phase is stale.");
+      const now = Date.now();
+      if (phase === "commit") {
+        this.database.prepare(`
+          UPDATE develop_batch_items SET state_json = ?, before_revision_id = expected_revision_id, updated_at = ?
+          WHERE catalog_id = ? AND batch_id = ? AND position = ?
+        `).run(stateJson({ kind: "active", phase }), now, catalogId, batchId, position);
+        this.database.prepare("UPDATE develop_batch_jobs SET updated_at = ? WHERE catalog_id = ? AND batch_id = ?").run(now, catalogId, batchId);
+      } else {
+        this.updateItemState(catalogId, batchId, position, { kind: "active", phase }, now);
+      }
+    });
+  }
+
+  private prepareItem(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem): PreparedBatchItem {
     let current;
     try {
       current = this.history.load({ catalogId: receipt.catalogId, entryId: item.entryId, revisionId: null });
     } catch {
-      this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Target entry is inactive or missing." }, now);
-      return;
+      return { kind: "terminal", state: { kind: "skipped", reason: "Target entry is inactive or missing." } };
     }
     if (current.kind !== "loaded") {
-      this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Target Develop history needs recovery." }, now);
-      return;
+      return { kind: "terminal", state: { kind: "skipped", reason: "Target Develop history needs recovery." } };
     }
-      if (current.value.headRevisionId === item.plannedRevisionId) {
-        this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "completed", entryId: item.entryId, revisionId: item.plannedRevisionId, warnings: [] }, now);
-        return;
-      }
-      if (current.value.headRevisionId !== item.expectedRevisionId) {
-        this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Target Develop revision changed after the batch was frozen." }, now);
-        return;
-      }
+    if (current.value.headRevisionId === item.plannedRevisionId) {
+      return { kind: "terminal", state: { kind: "completed", entryId: item.entryId, revisionId: item.plannedRevisionId, warnings: [] } };
+    }
+    if (current.value.headRevisionId !== item.expectedRevisionId) {
+      return { kind: "terminal", state: { kind: "skipped", reason: "Target Develop revision changed after the batch was frozen." } };
+    }
       let nextDocument: DevelopHistoryDocument;
       let warnings: readonly string[] = [];
       if (receipt.operation.kind === "undo") {
         if (item.restoreRevisionId === null) {
-          this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Undo has no recorded before revision." }, now);
-          return;
+          return { kind: "terminal", state: { kind: "skipped", reason: "Undo has no recorded before revision." } };
         }
         nextDocument = this.history.loadRetainedRevision(receipt.catalogId, item.entryId, item.restoreRevisionId).document;
       } else {
         const targetDocument = v3Document(current.value.document);
         if (!targetDocument) {
-          this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Target is not an editable V3 Develop document." }, now);
-          return;
+          return { kind: "terminal", state: { kind: "skipped", reason: "Target is not an editable V3 Develop document." } };
         }
         let sourceDocument: DevelopDocumentV3 | null = null;
         let sourceId: SourceId | null = null;
@@ -364,47 +390,76 @@ export class DevelopBatchRepository {
             sourceDocument = v3Document(this.history.loadRetainedRevision(receipt.catalogId, receipt.sourceEntryId, receipt.sourceRevisionId).document);
             sourceId = this.sourceId(receipt.catalogId, receipt.sourceEntryId);
           } catch {
-            this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Source entry is inactive, missing, or needs recovery." }, now);
-            return;
+            return { kind: "terminal", state: { kind: "skipped", reason: "Source entry is inactive, missing, or needs recovery." } };
           }
           if (!sourceDocument) {
-            this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: "Source is not an editable V3 Develop document." }, now);
-            return;
+            return { kind: "terminal", state: { kind: "skipped", reason: "Source is not an editable V3 Develop document." } };
           }
         }
         const application = this.executeOperation({
           operationId: receipt.operationId, operation: receipt.operation, sourceDocument, sourceId,
           targetDocument, targetSourceId: this.sourceId(receipt.catalogId, item.entryId),
+          targetCameraProfile: {
+            kind: "unavailable",
+            reason: "Batch profile application requires a verified before-tone registry snapshot.",
+          },
         });
         if (application.kind === "skipped") {
-          this.updateItemState(receipt.catalogId, receipt.batchId, item.position, { kind: "skipped", reason: application.reason }, now);
-          return;
+          return { kind: "terminal", state: { kind: "skipped", reason: application.reason } };
         }
         nextDocument = application.document;
         warnings = application.warnings;
       }
-      this.database.prepare(`
-        UPDATE develop_batch_items SET state_json = ?, before_revision_id = ?, updated_at = ?
-        WHERE catalog_id = ? AND batch_id = ? AND position = ?
-      `).run(stateJson({ kind: "active", phase: "commit" }), item.expectedRevisionId, now, receipt.catalogId, receipt.batchId, item.position);
+    return { kind: "ready", document: nextDocument, warnings };
+  }
+
+  private commitPrepared(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem, prepared: Extract<PreparedBatchItem, { readonly kind: "ready" }>): void {
+    const now = Date.now();
+    const current = this.history.load({ catalogId: receipt.catalogId, entryId: item.entryId, revisionId: null });
+    if (current.kind !== "loaded" || current.value.headRevisionId !== item.expectedRevisionId) {
+      throw new Error("Target Develop revision changed before the batch commit.");
+    }
       const commit = this.history.commit({
         catalogId: receipt.catalogId, entryId: item.entryId, revisionId: item.plannedRevisionId,
         expectedParentRevisionId: item.expectedRevisionId, operationId: parseOperationId(item.operationId),
         label: receipt.operation.kind === "undo" ? "Undo Develop batch" : "Develop batch",
-        document: nextDocument, createdAt: receipt.createdAt + item.position / 100_000,
+        document: prepared.document, createdAt: receipt.createdAt + item.position / 100_000,
       }, true);
       this.database.prepare(`
         UPDATE develop_batch_items
         SET state_json = ?, before_revision_id = ?, after_revision_id = ?, updated_at = ?
         WHERE catalog_id = ? AND batch_id = ? AND position = ?
-      `).run(stateJson({ kind: "completed", entryId: item.entryId, revisionId: commit.revision.revisionId, warnings }), item.expectedRevisionId, commit.revision.revisionId, now, receipt.catalogId, receipt.batchId, item.position);
+      `).run(stateJson({ kind: "completed", entryId: item.entryId, revisionId: commit.revision.revisionId, warnings: prepared.warnings }), item.expectedRevisionId, commit.revision.revisionId, now, receipt.catalogId, receipt.batchId, item.position);
       this.database.prepare("UPDATE develop_batch_jobs SET updated_at = ? WHERE catalog_id = ? AND batch_id = ?").run(now, receipt.catalogId, receipt.batchId);
     if (receipt.kind === "auto-sync") this.advanceAutoSyncTarget(receipt.catalogId, item.entryId, commit.revision.revisionId, now);
   }
 
-  private executeAndPersist(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem): void {
+  private persistPreparedTerminal(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem, state: DevelopBatchItemState): void {
+    const now = Date.now();
+    if (state.kind === "completed") {
+      this.database.prepare(`
+        UPDATE develop_batch_items SET state_json = ?, before_revision_id = expected_revision_id,
+          after_revision_id = planned_revision_id, updated_at = ?
+        WHERE catalog_id = ? AND batch_id = ? AND position = ?
+      `).run(stateJson(state), now, receipt.catalogId, receipt.batchId, item.position);
+      this.database.prepare("UPDATE develop_batch_jobs SET updated_at = ? WHERE catalog_id = ? AND batch_id = ?").run(now, receipt.catalogId, receipt.batchId);
+      return;
+    }
+    this.updateItemState(receipt.catalogId, receipt.batchId, item.position, state, now);
+  }
+
+  private async executeAndPersist(receipt: DevelopBatchReceipt, item: DevelopBatchReceiptItem): Promise<void> {
     try {
-      this.transaction(() => this.terminalInTransaction(receipt, item));
+      this.markPhase(receipt.catalogId, receipt.batchId, item.position, "apply");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const prepared = this.prepareItem(receipt, item);
+      if (prepared.kind === "terminal") {
+        this.transaction(() => this.persistPreparedTerminal(receipt, item, prepared.state));
+        return;
+      }
+      this.markPhase(receipt.catalogId, receipt.batchId, item.position, "commit");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      this.transaction(() => this.commitPrepared(receipt, item, prepared));
     } catch (error) {
       this.transaction(() => this.updateItemState(
         receipt.catalogId,
@@ -424,6 +479,7 @@ export class DevelopBatchRepository {
       markActive: async (requested, position) => this.markActive(catalogId, requested, position),
       executeAndPersist: async (receipt, item) => this.executeAndPersist(receipt, item),
       cancelQueued: async (requested) => this.cancelQueued(catalogId, requested),
+      yieldControl: () => new Promise<void>((resolve) => setImmediate(resolve)),
     });
   }
 
@@ -537,41 +593,60 @@ export class DevelopBatchRepository {
     readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
     readonly sourceRevisionId: DevelopRevisionId; readonly createdAt: number;
   }): DevelopBatchReceipt {
-    const existing = this.existingReceipt(input.catalogId, input.operationId);
-    if (existing !== null) {
-      const receipt = existing;
-      if (receipt.batchId !== input.batchId || receipt.kind !== "auto-sync" || receipt.sourceRevisionId !== input.sourceRevisionId || receipt.createdAt !== input.createdAt) {
-        throw new Error("Auto Sync operation ID conflicts with a different request.");
+    return this.transaction(() => {
+      const value = this.database.prepare(`
+        SELECT source_entry_id AS sourceEntryId, source_revision_id AS previousSourceRevisionId,
+               targets_json AS targetsJson, fields_json AS fieldsJson
+        FROM develop_auto_sync WHERE catalog_id = ? AND enabled = 1
+      `).get(input.catalogId);
+      if (value === undefined) throw new Error("Auto Sync is not enabled.");
+      const config = row(value, "Auto Sync state");
+      const sourceEntryId = parseEntryId(string(config, "sourceEntryId"));
+      const existing = this.existingReceipt(input.catalogId, input.operationId);
+      if (existing !== null) {
+        if (existing.batchId !== input.batchId || existing.kind !== "auto-sync" || existing.sourceRevisionId !== input.sourceRevisionId || existing.createdAt !== input.createdAt) {
+          throw new Error("Auto Sync operation ID conflicts with a different request.");
+        }
+        const latestValue = this.database.prepare(`
+          SELECT source_revision_id AS sourceRevisionId
+          FROM develop_batch_jobs WHERE catalog_id = ? AND kind = 'auto-sync'
+          ORDER BY created_at DESC, batch_id DESC LIMIT 1
+        `).get(input.catalogId);
+        if (latestValue === undefined) throw new Error("Auto Sync replay has no durable Receipt.");
+        const latestRevisionId = parseDevelopRevisionId(string(row(latestValue, "Auto Sync latest Receipt"), "sourceRevisionId"));
+        if (string(config, "previousSourceRevisionId") !== latestRevisionId) {
+          this.database.prepare("UPDATE develop_auto_sync SET source_revision_id = ?, updated_at = ? WHERE catalog_id = ?")
+            .run(latestRevisionId, input.createdAt, input.catalogId);
+        }
+        return existing;
       }
+      const duplicate = this.database.prepare(`
+        SELECT operation_id AS operationId FROM develop_batch_jobs
+        WHERE catalog_id = ? AND kind = 'auto-sync' AND source_revision_id = ?
+      `).get(input.catalogId, input.sourceRevisionId);
+      if (duplicate !== undefined) throw new Error("Auto Sync source revision was already emitted by another operation.");
+      if (this.activeHead(input.catalogId, sourceEntryId) !== input.sourceRevisionId) throw new Error("Auto Sync source revision is stale.");
+      if (string(config, "previousSourceRevisionId") === input.sourceRevisionId) throw new Error("Auto Sync already emitted this source revision.");
+      const targetsValue = JSON.parse(string(config, "targetsJson")) as unknown;
+      if (!Array.isArray(targetsValue)) throw new Error("Auto Sync targets are invalid.");
+      const targets = targetsValue.map((target) => {
+        const item = row(target, "Auto Sync target");
+        return { entryId: parseEntryId(item.entryId), expectedRevisionId: parseDevelopRevisionId(item.expectedRevisionId) };
+      });
+      const operation = parseDevelopBatchOperation({ kind: "copy-fields", fields: JSON.parse(string(config, "fieldsJson")) as unknown });
+      if (operation.kind !== "copy-fields") throw new Error("Auto Sync fields are invalid.");
+      const receipt = this.create({
+        schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
+        operationId: input.operationId, kind: "auto-sync", sourceEntryId, sourceRevisionId: input.sourceRevisionId,
+        targets, operation, createdAt: input.createdAt,
+      });
+      const updated = this.database.prepare(`
+        UPDATE develop_auto_sync SET source_revision_id = ?, updated_at = ?
+        WHERE catalog_id = ? AND source_revision_id = ? AND enabled = 1
+      `).run(input.sourceRevisionId, input.createdAt, input.catalogId, string(config, "previousSourceRevisionId"));
+      if (updated.changes !== 1) throw new Error("Auto Sync cursor changed while emitting a Receipt.");
       return receipt;
-    }
-    const value = this.database.prepare(`
-      SELECT source_entry_id AS sourceEntryId, source_revision_id AS previousSourceRevisionId,
-             targets_json AS targetsJson, fields_json AS fieldsJson
-      FROM develop_auto_sync WHERE catalog_id = ? AND enabled = 1
-    `).get(input.catalogId);
-    if (value === undefined) throw new Error("Auto Sync is not enabled.");
-    const config = row(value, "Auto Sync state");
-    const sourceEntryId = parseEntryId(string(config, "sourceEntryId"));
-    if (this.activeHead(input.catalogId, sourceEntryId) !== input.sourceRevisionId) throw new Error("Auto Sync source revision is stale.");
-    if (string(config, "previousSourceRevisionId") === input.sourceRevisionId) throw new Error("Auto Sync already emitted this source revision.");
-    const targetsValue = JSON.parse(string(config, "targetsJson")) as unknown;
-    if (!Array.isArray(targetsValue)) throw new Error("Auto Sync targets are invalid.");
-    const targets = targetsValue.map((target) => {
-      const item = row(target, "Auto Sync target");
-      return { entryId: parseEntryId(item.entryId), expectedRevisionId: parseDevelopRevisionId(item.expectedRevisionId) };
     });
-    const fieldsValue = JSON.parse(string(config, "fieldsJson")) as unknown;
-    const operation = parseDevelopBatchOperation({ kind: "copy-fields", fields: fieldsValue });
-    if (operation.kind !== "copy-fields") throw new Error("Auto Sync fields are invalid.");
-    const receipt = this.create({
-      schemaVersion: DEVELOP_BATCH_SCHEMA_VERSION, catalogId: input.catalogId, batchId: input.batchId,
-      operationId: input.operationId, kind: "auto-sync", sourceEntryId, sourceRevisionId: input.sourceRevisionId,
-      targets, operation, createdAt: input.createdAt,
-    });
-    this.database.prepare("UPDATE develop_auto_sync SET source_revision_id = ?, updated_at = ? WHERE catalog_id = ?")
-      .run(input.sourceRevisionId, input.createdAt, input.catalogId);
-    return receipt;
   }
 
   private advanceAutoSyncTarget(catalogId: CatalogId, entryId: EntryId, revisionId: DevelopRevisionId, updatedAt: number): void {
