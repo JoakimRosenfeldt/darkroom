@@ -1544,6 +1544,15 @@ export class CatalogLiveRepository {
     if (input.assetId !== undefined) { conditions.push("a.asset_id = ?"); parameters.push(input.assetId); }
     if (input.rootId !== undefined) { conditions.push("a.root_id = ?"); parameters.push(input.rootId); }
     const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id, e.is_original DESC, e.created_at, e.entry_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
+    const tombstonedEntryIds = this.database.prepare(`
+      SELECT entry_id AS entryId
+      FROM edit_entries
+      WHERE catalog_id = ? AND tombstoned_at IS NOT NULL
+      ORDER BY entry_id
+    `).all(input.catalogId).map((value) => {
+      if (!isRow(value)) throw new Error("Catalog live tombstoned edit entry row is invalid.");
+      return parseEntryId(requiredString(value, "entryId"));
+    });
     const fingerprintMatches = input.fingerprintSha256 === undefined
       ? []
       : this.database.prepare("SELECT fingerprint_id AS fingerprintId, asset_id AS assetId, sha256 FROM fingerprints WHERE catalog_id = ? AND status = 'valid' AND sha256 = ? ORDER BY asset_id").all(input.catalogId, input.fingerprintSha256).map((value) => {
@@ -1564,6 +1573,7 @@ export class CatalogLiveRepository {
       catalog,
       roots: this.roots(input.catalogId),
       assets,
+      tombstonedEntryIds,
       albums: this.albums(input.catalogId),
       operations: this.operationRows(input.catalogId),
       presets: this.presetRows(input.catalogId),

@@ -667,3 +667,75 @@ export function parseLibraryWorkspaceJson(
   }
   return parseLibraryWorkspaceState(parsed, albums, validEntryIds);
 }
+
+function mergeEntryRecords<T>(
+  retained: Readonly<Record<string, T>>,
+  active: Readonly<Record<string, T>>,
+  activeEntryIds: ReadonlySet<string>,
+): Record<string, T> {
+  const merged: Record<string, T> = {};
+  for (const [entryId, value] of Object.entries(retained)) {
+    if (!activeEntryIds.has(entryId)) merged[entryId] = value;
+  }
+  for (const [entryId, value] of Object.entries(active)) merged[entryId] = value;
+  return merged;
+}
+
+export function mergeRetainedLibraryWorkspace(
+  retained: LibraryWorkspaceState,
+  active: LibraryWorkspaceState,
+  activeEntryIds: ReadonlySet<string>,
+): LibraryWorkspaceState {
+  const activeStackById = new Map(active.stacks.map((stack) => [stack.id, stack]));
+  const retainedStacks = retained.stacks.flatMap((stack) => {
+    const hiddenEntryIds = stack.entryIds.filter((entryId) => !activeEntryIds.has(entryId));
+    if (hiddenEntryIds.length === 0) return [];
+    const activeStack = activeStackById.get(stack.id);
+    if (activeStack) {
+      activeStackById.delete(stack.id);
+      return [{
+        ...activeStack,
+        entryIds: [...activeStack.entryIds, ...hiddenEntryIds],
+        coverEntryId: activeEntryIds.has(stack.coverEntryId)
+          ? activeStack.coverEntryId
+          : stack.coverEntryId,
+      }];
+    }
+    const retainedActiveCount = stack.entryIds.filter((entryId) => activeEntryIds.has(entryId)).length;
+    return retainedActiveCount < 2 ? [stack] : [];
+  });
+  const hiddenQuickEntryIds = retained.quickEntryIds.filter((entryId) => !activeEntryIds.has(entryId));
+  const hiddenArchiveMemberships = retained.archiveMemberships.filter(
+    (snapshot) => !activeEntryIds.has(snapshot.entryId),
+  );
+  const hiddenExcludedEntryIds = retained.excludedEntryIds.filter(
+    (entryId) => !activeEntryIds.has(entryId),
+  );
+  return {
+    ...active,
+    quickEntryIds: [...hiddenQuickEntryIds, ...active.quickEntryIds],
+    entryKeywordIds: mergeEntryRecords(
+      retained.entryKeywordIds,
+      active.entryKeywordIds,
+      activeEntryIds,
+    ),
+    stacks: [...retainedStacks, ...activeStackById.values()],
+    archiveMemberships: [...hiddenArchiveMemberships, ...active.archiveMemberships],
+    excludedEntryIds: [...hiddenExcludedEntryIds, ...active.excludedEntryIds],
+    analysisByEntryId: mergeEntryRecords(
+      retained.analysisByEntryId,
+      active.analysisByEntryId,
+      activeEntryIds,
+    ),
+    metadataOverridesByEntryId: mergeEntryRecords(
+      retained.metadataOverridesByEntryId,
+      active.metadataOverridesByEntryId,
+      activeEntryIds,
+    ),
+    metadataSyncByEntryId: mergeEntryRecords(
+      retained.metadataSyncByEntryId,
+      active.metadataSyncByEntryId,
+      activeEntryIds,
+    ),
+  };
+}

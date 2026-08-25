@@ -468,6 +468,34 @@ export function installCatalogV3Schema(opened: DatabaseSync): CatalogV3SchemaMan
   return verifyCatalogV3Schema(opened);
 }
 
+function normalizeVirtualCopyParents(opened: DatabaseSync): void {
+  opened.exec(`
+    UPDATE edit_entries
+    SET parent_entry_id = (
+      SELECT original.entry_id
+      FROM edit_entries AS original
+      WHERE original.catalog_id = edit_entries.catalog_id
+        AND original.source_id = edit_entries.source_id
+        AND original.is_original = 1
+    )
+    WHERE is_original = 0
+      AND EXISTS (
+        SELECT 1
+        FROM edit_entries AS original
+        WHERE original.catalog_id = edit_entries.catalog_id
+          AND original.source_id = edit_entries.source_id
+          AND original.is_original = 1
+      )
+      AND parent_entry_id IS NOT (
+        SELECT original.entry_id
+        FROM edit_entries AS original
+        WHERE original.catalog_id = edit_entries.catalog_id
+          AND original.source_id = edit_entries.source_id
+          AND original.is_original = 1
+      );
+  `);
+}
+
 export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
   const applicationId = pragmaInteger(opened, "application_id");
   const userVersion = pragmaInteger(opened, "user_version");
@@ -490,7 +518,10 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
   const hasTombstonedAt = hasIdentityTables && opened.prepare(
     "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'tombstoned_at'",
   ).get() !== undefined;
-  if (hasIdentityTables && hasDisplayName && hasParentEntryId && hasTombstonedAt) return;
+  if (hasIdentityTables && hasDisplayName && hasParentEntryId && hasTombstonedAt) {
+    normalizeVirtualCopyParents(opened);
+    return;
+  }
 
   if (hasIdentityTables) {
     try {
@@ -509,6 +540,7 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
       }
       throw error;
     }
+    normalizeVirtualCopyParents(opened);
     return;
   }
 
@@ -616,6 +648,7 @@ export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
     }
     throw error;
   }
+  normalizeVirtualCopyParents(opened);
 }
 
 export function isCatalogV3DatabaseEmpty(opened: DatabaseSync): boolean {

@@ -36,6 +36,7 @@ import type {
 } from "../catalog/runtime";
 import type { Album, EntryMetadata } from "../catalog/types";
 import {
+  mergeRetainedLibraryWorkspace,
   parseLibraryWorkspaceJson,
   type LibraryWorkspaceState,
 } from "../library/model";
@@ -1150,8 +1151,25 @@ async function syncCatalogStateForBinding(
       });
     }
   }
+  const activeEntryIds = new Set(
+    view.assets.map((asset) => asset.entryId ?? parseEntryId(asset.assetId)),
+  );
+  const retainedEntryIds = new Set([
+    ...activeEntryIds,
+    ...view.tombstonedEntryIds,
+  ]);
+  const retainedWorkspace = parseLibraryWorkspaceJson(
+    view.libraryStateJson,
+    albums,
+    retainedEntryIds,
+  );
+  const workspaceToPersist = mergeRetainedLibraryWorkspace(
+    retainedWorkspace,
+    libraryWorkspace,
+    activeEntryIds,
+  );
   const libraryStateJson = JSON.stringify({
-    ...libraryWorkspace,
+    ...workspaceToPersist,
     analysisByEntryId: {},
   });
   if (view.libraryStateJson !== libraryStateJson) {

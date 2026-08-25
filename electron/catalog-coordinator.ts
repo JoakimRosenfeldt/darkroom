@@ -715,18 +715,20 @@ export class CatalogCoordinator {
         .filter((root) => root.health === "online" && root.canonicalPath !== null)
         .map((root) => [root.rootId, root.canonicalPath!] as const),
     );
-    return state.assets.flatMap((asset) => {
-      if (asset.health !== "present") return [];
+    const locations = new Map<AssetId, NativeAssetLocation>();
+    for (const asset of state.assets) {
+      if (asset.health !== "present") continue;
       const canonicalRootPath = roots.get(asset.rootId);
-      if (canonicalRootPath === undefined) return [];
-      return [{
+      if (canonicalRootPath === undefined || locations.has(asset.assetId)) continue;
+      locations.set(asset.assetId, {
         catalogId: input.catalogId,
         assetId: asset.assetId,
         rootId: asset.rootId,
         canonicalRootPath,
         relativePath: asset.relativePath,
-      }];
-    });
+      });
+    }
+    return [...locations.values()];
   }
 
   runCatalogAdmin<T>(

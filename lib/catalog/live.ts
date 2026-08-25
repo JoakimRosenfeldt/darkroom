@@ -207,6 +207,7 @@ export interface CatalogLiveState {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRoot[];
   readonly assets: readonly CatalogLiveEntrySnapshot[];
+  readonly tombstonedEntryIds?: readonly EntryId[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogLiveOperation[];
   readonly presets: readonly CatalogLivePreset[];
@@ -757,6 +758,14 @@ function parseState(value: unknown): CatalogLiveState {
   const catalogValue = record(input.catalog, "live catalog");
   const roots = Array.isArray(input.roots) ? input.roots.map(parseRootOutput) : fail("live roots are invalid");
   const assets = Array.isArray(input.assets) ? input.assets.map(parseAssetSnapshot) : fail("live assets are invalid");
+  const tombstonedEntryIds = input.tombstonedEntryIds === undefined
+    ? []
+    : Array.isArray(input.tombstonedEntryIds)
+      ? input.tombstonedEntryIds.map(parseEntryId)
+      : fail("live tombstonedEntryIds are invalid");
+  if (new Set(tombstonedEntryIds).size !== tombstonedEntryIds.length) {
+    return fail("live tombstonedEntryIds contain duplicates");
+  }
   const albums = Array.isArray(input.albums) ? input.albums.map(parseAlbumOutput) : fail("live albums are invalid");
   const operations = Array.isArray(input.operations) ? input.operations.map(parseOperationOutput) : fail("live operations are invalid");
   const presets = Array.isArray(input.presets) ? input.presets.map(parsePresetOutput) : fail("live presets are invalid");
@@ -780,6 +789,7 @@ function parseState(value: unknown): CatalogLiveState {
     },
     roots,
     assets,
+    tombstonedEntryIds,
     albums,
     operations,
     presets,

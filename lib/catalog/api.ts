@@ -299,6 +299,7 @@ export interface CatalogLiveStateView {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRootView[];
   readonly assets: readonly CatalogLiveEntrySnapshot[];
+  readonly tombstonedEntryIds: readonly EntryId[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogOperationView[];
   readonly presets: readonly CatalogPresetView[];
@@ -852,6 +853,7 @@ export function toCatalogLiveStateView(value: CatalogLiveState): CatalogLiveStat
       ...asset,
       metadata: { ...asset.metadata, rawXmp: null },
     })),
+    tombstonedEntryIds: value.tombstonedEntryIds ?? [],
     albums: value.albums,
     operations: value.operations.map((operation) => ({
       operationId: operation.operationId,
