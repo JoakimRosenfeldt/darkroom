@@ -20,6 +20,12 @@ export const DEVELOP_BATCH_MAX_CATALOG_BYTES = 1024 * 1024 * 1024;
 export const DEVELOP_BATCH_MAX_DEPTH = 16;
 export const DEVELOP_BATCH_MAX_NODES = 100_000;
 
+export const DEVELOP_BATCH_CONTROLS = [
+  "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
+  "vibrance", "saturation", "texture", "clarity", "dehaze",
+] as const;
+export type DevelopBatchControl = (typeof DEVELOP_BATCH_CONTROLS)[number];
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type DevelopBatchAction =
@@ -27,7 +33,7 @@ export type DevelopBatchAction =
   | { readonly kind: "preset"; readonly preset: DevelopBatchJson; readonly fields: readonly DevelopPresetField[] | null; readonly amount: number }
   | { readonly kind: "paste-settings"; readonly payload: DevelopBatchJson; readonly fields: readonly DevelopPresetField[] }
   | { readonly kind: "section-reset"; readonly fields: readonly DevelopPresetField[] }
-  | { readonly kind: "selected-control"; readonly field: DevelopPresetField; readonly payloadEntry: DevelopBatchJson };
+  | { readonly kind: "selected-control"; readonly control: DevelopBatchControl; readonly value: number };
 
 export interface DevelopBatchFrozenProfileContext {
   readonly entryId: EntryId;
@@ -212,6 +218,14 @@ function fields(value: unknown, allowEmpty = false): readonly DevelopPresetField
   return parsed;
 }
 
+export function parseDevelopBatchControl(value: unknown): DevelopBatchControl {
+  switch (value) {
+    case "exposure": case "contrast": case "highlights": case "shadows": case "whites": case "blacks":
+    case "vibrance": case "saturation": case "texture": case "clarity": case "dehaze": return value;
+    default: return fail("Develop batch control is invalid.");
+  }
+}
+
 function cameraProfileContext(value: unknown): DevelopPresetCameraProfileContext {
   const input = record(value, "Develop batch camera profile context");
   if (input.kind === "unavailable") {
@@ -265,8 +279,8 @@ export function parseDevelopBatchOperation(value: unknown): DevelopBatchOperatio
     exact(input, ["kind", "fields"], "Develop batch reset operation");
     operation = { kind, fields: fields(input.fields) };
   } else if (kind === "selected-control") {
-    exact(input, ["kind", "field", "payloadEntry"], "Develop batch control operation");
-    operation = { kind, field: parseDevelopPresetField(input.field), payloadEntry: parseDevelopBatchJson(input.payloadEntry) };
+    exact(input, ["kind", "control", "value"], "Develop batch control operation");
+    operation = { kind, control: parseDevelopBatchControl(input.control), value: finite(input.value, "Develop batch control value") };
   } else if (kind === "frozen") {
     exact(input, ["kind", "action", "profileContexts"], "Frozen Develop batch operation");
     if (!Array.isArray(input.profileContexts) || input.profileContexts.length > DEVELOP_BATCH_MAX_TARGETS) {

@@ -198,6 +198,7 @@ import {
   parseDevelopBatchTargetRequest,
 } from "../lib/develop/batch/api.ts";
 import { DevelopBatchService } from "./develop-batch-service.ts";
+import type { PersistedInputProfile } from "../lib/develop/v3/document.ts";
 
 registerAiModelScheme();
 
@@ -1094,6 +1095,25 @@ function registerIpcHandlers(): void {
           reason: error instanceof Error ? error.message.slice(0, 512) : "Clipboard does not contain valid Darkroom Develop settings.",
         };
       }
+    },
+    resolveDecoderDefault: async (entry): Promise<PersistedInputProfile | null> => {
+      const observation = entry.observation;
+      if (entry.formatId !== "nef" || !entry.cameraMake || !entry.cameraModel || observation === null || observation.byteLength === null || observation.modifiedAt === null || observation.byteLength > LIBRAW_PROFILE_MAX_INPUT_BYTES) return null;
+      const root = coordinatorRuntime.getNativeSessionRoots().filter(isRuntimeNativeRoot)
+        .find((candidate) => candidate.catalogId === entry.catalogId && candidate.rootId === entry.rootId);
+      if (!root) return null;
+      const location = { catalogId: entry.catalogId, assetId: entry.assetId, rootId: entry.rootId, canonicalRootPath: root.nativePath, relativePath: entry.relativePath };
+      const before = await nativeAssetAccess.stat(location);
+      if (before.size !== observation.byteLength || before.lastModified !== observation.modifiedAt) throw new Error("Batch profile source changed before verification.");
+      const profile = await verifyLibRawInputProfile(await nativeAssetAccess.read(location));
+      const after = await nativeAssetAccess.stat(location);
+      if (after.size !== before.size || after.lastModified !== before.lastModified) throw new Error("Batch profile source changed during verification.");
+      if (profile.compatibility.make.trim().toLocaleLowerCase() !== entry.cameraMake.trim().toLocaleLowerCase() || profile.compatibility.model.trim().toLocaleLowerCase() !== entry.cameraModel.trim().toLocaleLowerCase()) return null;
+      return {
+        registryRevision: cameraProfiles.list().revision,
+        selection: { kind: "decoder-default" },
+        calibration: { matrixToLinearSrgb: profile.matrixToLinearSrgb, channelScale: profile.channelScale, exposureOffsetEv: profile.exposureOffsetEv },
+      };
     },
     onUpdate: (catalogId, receipts) => {
       if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;

@@ -8,6 +8,7 @@ import {
   parseOperationId,
   parseAssetId,
   type AssetId,
+  type CatalogId,
   type OperationId,
 } from "../lib/catalog/ids.ts";
 import {
@@ -44,7 +45,7 @@ import { DevelopHistoryRepository } from "./develop-history-repository.ts";
 import { installDevelopHistoryDocumentDecoder } from "../lib/develop/history.ts";
 import { DEVELOP_BATCH_TABLES, upgradeDevelopBatchSchema } from "./develop-batch-schema.ts";
 import { DevelopBatchRepository, type DevelopBatchOperationExecutor } from "./develop-batch-repository.ts";
-import type { DevelopBatchCommand, DevelopBatchCommandResult } from "../lib/develop/batch/domain.ts";
+import type { DevelopBatchCommand, DevelopBatchCommandResult, DevelopBatchId } from "../lib/develop/batch/domain.ts";
 
 let developBatchOperationExecutor: DevelopBatchOperationExecutor | null = null;
 const developRuntimeReady = process.execArgv.includes("--experimental-strip-types")
@@ -762,16 +763,7 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
     case "list": return repository.list(command.catalogId, command.limit);
     case "auto-get": return repository.autoSyncState(command.catalogId);
     case "run": {
-      const key = JSON.stringify([command.catalogId, command.batchId]);
-      const existing = activeBatchRuns.get(key);
-      if (existing) return existing;
-      const running = repository.run(command.catalogId, command.batchId);
-      activeBatchRuns.set(key, running);
-      try {
-        return await running;
-      } finally {
-        activeBatchRuns.delete(key);
-      }
+      return runDevelopBatchAndReconcile(repository, command.catalogId, command.batchId);
     }
     case "cancel": return repository.cancel(command.catalogId, command.batchId);
     case "retry": return repository.retry(command.catalogId, command.batchId);
@@ -805,6 +797,46 @@ async function handleDevelopBatch(command: DevelopBatchCommand): Promise<Develop
   }
 }
 
+async function runDevelopBatchAndReconcile(
+  repository: DevelopBatchRepository,
+  catalogId: CatalogId,
+  batchId: DevelopBatchId,
+): Promise<DevelopBatchCommandResult> {
+  const runTracked = async (requestedBatchId: typeof batchId): Promise<DevelopBatchCommandResult> => {
+    const key = JSON.stringify([catalogId, requestedBatchId]);
+    const existing = activeBatchRuns.get(key);
+    if (existing) return existing;
+    const running = repository.run(catalogId, requestedBatchId);
+    activeBatchRuns.set(key, running);
+    try { return await running; }
+    finally { activeBatchRuns.delete(key); }
+  };
+  const result = await runTracked(batchId);
+  let emitted = repository.reconcileAutoSync(catalogId);
+  while (emitted !== null) {
+    await runTracked(emitted.batchId);
+    emitted = repository.reconcileAutoSync(catalogId);
+  }
+  return result;
+}
+
+async function recoverDevelopBatches(): Promise<void> {
+  const repository = developBatchRepository();
+  const reconciled = new Set<string>();
+  for (const pending of repository.resumableBatchIds()) {
+    await runDevelopBatchAndReconcile(repository, pending.catalogId, pending.batchId);
+    reconciled.add(pending.catalogId);
+  }
+  for (const catalogId of repository.enabledAutoSyncCatalogIds()) {
+    if (reconciled.has(catalogId)) continue;
+    let emitted = repository.reconcileAutoSync(catalogId);
+    while (emitted !== null) {
+      await runDevelopBatchAndReconcile(repository, catalogId, emitted.batchId);
+      emitted = repository.reconcileAutoSync(catalogId);
+    }
+  }
+}
+
 async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
   switch (request.kind) {
     case "runtime-info":
@@ -823,6 +855,9 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
         requestId: request.requestId,
         databasePath: request.databasePath,
         created,
+      });
+      setImmediate(() => {
+        queue = queue.then(recoverDevelopBatches).catch(() => undefined);
       });
       return;
     }

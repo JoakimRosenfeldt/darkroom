@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { SelectEntryModifiers } from "@/stores/library-store";
@@ -56,10 +56,11 @@ export const PhotoTile = memo(function PhotoTile({
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
-  const prototypeJobs = useDevelopJobStore((state) => state.jobs.filter((job) =>
+  const jobs = useDevelopJobStore((state) => state.jobs);
+  const prototypeJobs = useMemo(() => jobs.filter((job) =>
     job.request.source.entryId === entry.id && job.request.source.catalogId === entry.catalogId &&
     job.status !== "discarded"
-  ));
+  ), [entry.catalogId, entry.id, jobs]);
   const prototypeBadge = prototypeJobs.some((job) => job.status === "queued" || job.status === "preparing" || job.status === "running" || job.status === "postprocess" || job.status === "accepting")
     ? "Prototype working"
     : prototypeJobs.some((job) => job.status === "awaiting-review")

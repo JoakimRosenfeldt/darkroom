@@ -2,13 +2,13 @@ import { parseCatalogId, parseEntryId, type CatalogId, type EntryId } from "../.
 import { parseSessionId, type SessionId } from "../../catalog/runtime.ts";
 import { parseDevelopPresetField, type DevelopPresetField } from "../presets/policy.ts";
 import { parseDevelopPresetId, type DevelopPresetId } from "../presets/schema.ts";
-import { parseDevelopBatchId, parseDevelopBatchReceipt, type DevelopBatchId, type DevelopBatchReceipt } from "./domain.ts";
+import { parseDevelopBatchControl, parseDevelopBatchId, parseDevelopBatchReceipt, type DevelopBatchControl, type DevelopBatchId, type DevelopBatchReceipt } from "./domain.ts";
 
 export type DevelopBatchSelectedOperation =
   | { readonly kind: "preset"; readonly presetId: DevelopPresetId; readonly revision: number; readonly fields: readonly DevelopPresetField[] | null; readonly amount: number }
   | { readonly kind: "clipboard"; readonly fields: readonly DevelopPresetField[] }
   | { readonly kind: "section-reset"; readonly fields: readonly DevelopPresetField[] }
-  | { readonly kind: "selected-control"; readonly field: DevelopPresetField };
+  | { readonly kind: "selected-control"; readonly control: DevelopBatchControl };
 
 interface BatchSessionRequest {
   readonly catalogId: CatalogId;
@@ -80,8 +80,8 @@ function selectedOperation(value: unknown): DevelopBatchSelectedOperation {
     return { kind: "section-reset", fields: fields(input.fields) };
   }
   if (input.kind === "selected-control") {
-    exact(input, ["kind", "field"], "Develop batch control operation");
-    return { kind: "selected-control", field: parseDevelopPresetField(input.field) };
+    exact(input, ["kind", "control"], "Develop batch control operation");
+    return { kind: "selected-control", control: parseDevelopBatchControl(input.control) };
   }
   return fail("Develop batch selected operation kind is invalid.");
 }

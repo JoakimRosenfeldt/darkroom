@@ -6,11 +6,14 @@ import { parseDevelopBatchAutoSyncState, parseDevelopBatchJson, parseDevelopBatc
 import { parseDevelopBatchReceiptList, type DevelopBatchAutoSyncRequest, type DevelopBatchListRequest, type DevelopBatchStartRequest, type DevelopBatchTargetRequest } from "../lib/develop/batch/api.ts";
 import type { DevelopHistoryCommitInput, DevelopHistoryCommitResult } from "../lib/develop/history.ts";
 import { parseV3DevelopDocument } from "../lib/develop/v3/codec.ts";
-import { captureDevelopPresetPayload, type DevelopPresetCameraProfileContext } from "../lib/develop/presets/apply.ts";
+import type { DevelopPresetCameraProfileContext } from "../lib/develop/presets/apply.ts";
 import { cameraProfileIsCompatible } from "../lib/camera-profiles/matrix.ts";
 import { persistedInputProfileFromMatrix } from "../lib/develop/v3/profiles.ts";
+import type { PersistedInputProfile } from "../lib/develop/v3/document.ts";
+import { parseDevelopPresetPayload, parseDevelopPresetRecord } from "../lib/develop/presets/schema.ts";
 import type { DevelopClipboardReadResult } from "../lib/develop/clipboard/schema.ts";
 import type { EntryId } from "../lib/catalog/ids.ts";
+import { captureDevelopBatchControl } from "./develop-batch-executor.ts";
 
 interface DevelopBatchServiceOptions {
   readonly worker: CatalogWorkerClient;
@@ -19,6 +22,7 @@ interface DevelopBatchServiceOptions {
   readonly verifyBinding: (catalogId: DevelopBatchListRequest["catalogId"], sessionId: DevelopBatchListRequest["sessionId"]) => void;
   readonly verifySession: (catalogId: DevelopBatchListRequest["catalogId"], sessionId: DevelopBatchListRequest["sessionId"]) => Promise<{ readonly assets: readonly CatalogLiveEntrySnapshot[] }>;
   readonly readClipboard: () => DevelopClipboardReadResult;
+  readonly resolveDecoderDefault: (entry: CatalogLiveEntrySnapshot) => Promise<PersistedInputProfile | null>;
   readonly onUpdate: (catalogId: DevelopBatchListRequest["catalogId"], receipts: readonly DevelopBatchReceipt[]) => void;
 }
 
@@ -27,7 +31,7 @@ function message(error: unknown): string {
 }
 
 function usesCameraProfile(action: Exclude<DevelopBatchOperation, { readonly kind: "undo" | "frozen" }>): boolean {
-  if (action.kind === "selected-control") return action.field === "camera-profile";
+  if (action.kind === "selected-control") return false;
   if (action.kind === "preset") return action.fields === null || action.fields.includes("camera-profile");
   return action.fields.includes("camera-profile");
 }
@@ -64,16 +68,15 @@ export class DevelopBatchService {
     } else if (request.kind === "sync") {
       requireEntries([request.sourceEntryId, ...request.targetEntryIds]);
       if (request.targetEntryIds.includes(request.sourceEntryId)) throw new Error("Sync source cannot also be a target.");
-      const operation = await this.#freezeOperation(active, request.targetEntryIds, { kind: "copy-fields", fields: request.fields });
+      const sourceProfile = request.fields.includes("camera-profile") ? await this.#entryProfile(request.catalogId, request.sourceEntryId) : null;
+      const operation = await this.#freezeOperation(active, request.targetEntryIds, { kind: "copy-fields", fields: request.fields }, sourceProfile);
       await this.#verifyStillActive(request, active, [request.sourceEntryId, ...request.targetEntryIds]);
       receipt = this.#receipt(await this.#options.worker.developBatch({ kind: "freeze", catalogId: request.catalogId, batchId, operationId, batchKind: "sync", sourceEntryId: request.sourceEntryId, targetEntryIds: request.targetEntryIds, operation, createdAt }));
     } else {
       requireEntries([request.sourceEntryId]);
       requireEntries(request.targetEntryIds);
-      const sourceId = active.get(request.sourceEntryId)?.sourceId;
-      if (!sourceId) throw new Error("Batch Develop source is inactive.");
-      const action = await this.#selectedAction(request, sourceId);
-      const operation = await this.#freezeOperation(active, request.targetEntryIds, action);
+      const action = await this.#selectedAction(request);
+      const operation = await this.#freezeOperation(active, request.targetEntryIds, action, this.#operationProfile(action));
       await this.#verifyStillActive(request, active, [request.sourceEntryId, ...request.targetEntryIds]);
       receipt = this.#receipt(await this.#options.worker.developBatch({ kind: "freeze", catalogId: request.catalogId, batchId, operationId, batchKind: "batch", sourceEntryId: null, targetEntryIds: request.targetEntryIds, operation, createdAt }));
     }
@@ -108,7 +111,8 @@ export class DevelopBatchService {
     const active = new Map(state.assets.flatMap((entry) => entry.entryId && entry.sourceId ? [[entry.entryId, entry] as const] : []));
     if (request.targetEntryIds.includes(request.sourceEntryId)) throw new Error("Auto Sync source cannot also be a target.");
     if (!active.has(request.sourceEntryId) || request.targetEntryIds.some((entryId) => !active.has(entryId))) throw new Error("Auto Sync contains an inactive entry.");
-    const operation = await this.#freezeOperation(active, request.targetEntryIds, { kind: "copy-fields", fields: request.fields });
+    const sourceProfile = request.fields.includes("camera-profile") ? await this.#entryProfile(request.catalogId, request.sourceEntryId) : null;
+    const operation = await this.#freezeOperation(active, request.targetEntryIds, { kind: "copy-fields", fields: request.fields }, sourceProfile);
     await this.#verifyStillActive(request, active, [request.sourceEntryId, ...request.targetEntryIds]);
     await this.#options.worker.developBatch({ kind: "auto-enable-frozen", catalogId: request.catalogId, sourceEntryId: request.sourceEntryId, targetEntryIds: request.targetEntryIds, operation, updatedAt: Date.now() });
   }
@@ -124,27 +128,32 @@ export class DevelopBatchService {
   }
 
   async historyCommitted(input: DevelopHistoryCommitInput, result: DevelopHistoryCommitResult): Promise<void> {
-    try {
-      const state = parseDevelopBatchAutoSyncState(await this.#options.worker.developBatch({
-        kind: "auto-get",
-        catalogId: input.catalogId,
-      }));
-      if (!state.enabled || state.sourceEntryId !== input.entryId) return;
-      const receipt = this.#receipt(await this.#options.worker.developBatch({
-        kind: "auto-emit",
-        catalogId: input.catalogId,
-        batchId: parseDevelopBatchId(result.revision.revisionId),
-        operationId: parseDevelopBatchOperationId(input.operationId),
-        sourceRevisionId: result.revision.revisionId,
-        createdAt: result.revision.createdAt,
-      }));
-      this.#run(receipt);
-    } catch (error) {
-      if (!message(error).includes("Auto Sync is not enabled") && !message(error).includes("already emitted")) throw error;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const state = parseDevelopBatchAutoSyncState(await this.#options.worker.developBatch({
+          kind: "auto-get",
+          catalogId: input.catalogId,
+        }));
+        if (!state.enabled || state.sourceEntryId !== input.entryId) return;
+        const receipt = this.#receipt(await this.#options.worker.developBatch({
+          kind: "auto-emit",
+          catalogId: input.catalogId,
+          batchId: parseDevelopBatchId(result.revision.revisionId),
+          operationId: parseDevelopBatchOperationId(input.operationId),
+          sourceRevisionId: result.revision.revisionId,
+          createdAt: result.revision.createdAt,
+        }));
+        this.#run(receipt);
+        return;
+      } catch (error) {
+        if (message(error).includes("Auto Sync is not enabled") || message(error).includes("already emitted")) return;
+        if (attempt === 2) throw error;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
     }
   }
 
-  async #selectedAction(request: Extract<DevelopBatchStartRequest, { readonly kind: "batch" }>, sourceId: NonNullable<CatalogLiveEntrySnapshot["sourceId"]>): Promise<Exclude<DevelopBatchOperation, { readonly kind: "undo" | "frozen" }>> {
+  async #selectedAction(request: Extract<DevelopBatchStartRequest, { readonly kind: "batch" }>): Promise<Exclude<DevelopBatchOperation, { readonly kind: "undo" | "frozen" }>> {
     const selected = request.operation;
     if (selected.kind === "preset") {
       const preset = await this.#options.presets.getRevision(selected.presetId, selected.revision);
@@ -164,15 +173,14 @@ export class DevelopBatchService {
     const loaded = await this.#options.worker.loadDevelopHistory({ catalogId: request.catalogId, entryId: request.sourceEntryId, revisionId: null });
     if (loaded.kind !== "loaded") throw new Error("The selected-control source needs Develop history recovery.");
     const document = parseV3DevelopDocument(loaded.value.document);
-    const payloadEntry = captureDevelopPresetPayload(document, [selected.field], sourceId)[0];
-    if (!payloadEntry) throw new Error("The selected control is unavailable.");
-    return { kind: "selected-control", field: selected.field, payloadEntry: parseDevelopBatchJson(payloadEntry) };
+    return { kind: "selected-control", control: selected.control, value: captureDevelopBatchControl(document, selected.control) };
   }
 
   async #freezeOperation(
     active: ReadonlyMap<EntryId, CatalogLiveEntrySnapshot>,
     targetEntryIds: readonly EntryId[],
     action: Exclude<DevelopBatchOperation, { readonly kind: "undo" | "frozen" }>,
+    referencedProfile: PersistedInputProfile | null = null,
   ): Promise<Extract<DevelopBatchOperation, { readonly kind: "frozen" }>> {
     if (!usesCameraProfile(action)) {
       return {
@@ -184,7 +192,12 @@ export class DevelopBatchService {
         })),
       };
     }
+    if (targetEntryIds.length > 32) throw new Error("Camera-profile batches are limited to 32 targets.");
     const registry = this.#options.cameraProfiles.list();
+    const referencedSelection = referencedProfile?.selection;
+    const selectedRecord = referencedSelection?.kind === "selected"
+      ? registry.profiles.find((record) => record.kind === "ready" && record.profile.id === referencedSelection.profileId && record.profile.revision === referencedSelection.profileRevision)
+      : undefined;
     const profileContexts = await Promise.all(targetEntryIds.map(async (entryId) => {
       const entry = active.get(entryId);
       if (!entry?.sourceId) throw new Error("Develop batch target is inactive.");
@@ -192,24 +205,32 @@ export class DevelopBatchService {
       if (loaded.kind !== "loaded") throw new Error("Develop batch target needs history recovery.");
       const document = parseV3DevelopDocument(loaded.value.document);
       let context: DevelopPresetCameraProfileContext;
-      if (entry.formatId !== "nef" || !entry.cameraMake || !entry.cameraModel || document.color.inputProfile.registryRevision !== registry.revision) {
+      if (entry.formatId !== "nef" || !entry.cameraMake || !entry.cameraModel) {
         context = { kind: "unavailable", reason: "The target has no verified before-tone camera-profile stage." };
       } else {
         const camera = { make: entry.cameraMake, model: entry.cameraModel };
         const current = document.color.inputProfile;
-        context = {
-          kind: "available-before-tone",
-          decoderDefault: current.selection.kind === "decoder-default"
-            ? current
-            : { ...current, selection: { kind: "unavailable", reason: "Decoder-default calibration is not frozen for this target." } },
-          compatibleProfiles: registry.profiles.flatMap((record) => record.kind === "ready" && cameraProfileIsCompatible(record.profile, camera)
-            ? [persistedInputProfileFromMatrix(record.profile, registry.revision)]
-            : []),
+        const decoderDefault = current.selection.kind === "decoder-default" ? current : await this.#options.resolveDecoderDefault(entry);
+        context = decoderDefault === null ? { kind: "unavailable", reason: "Decoder-default calibration could not be verified for this target." } : {
+          kind: "available-before-tone", decoderDefault,
+          compatibleProfiles: selectedRecord?.kind === "ready" && cameraProfileIsCompatible(selectedRecord.profile, camera) ? [persistedInputProfileFromMatrix(selectedRecord.profile, registry.revision)] : [],
         };
       }
       return { entryId, context };
     }));
     return { kind: "frozen", action, profileContexts };
+  }
+
+  async #entryProfile(catalogId: DevelopBatchListRequest["catalogId"], entryId: EntryId): Promise<PersistedInputProfile> {
+    const loaded = await this.#options.worker.loadDevelopHistory({ catalogId, entryId, revisionId: null });
+    if (loaded.kind !== "loaded") throw new Error("Develop batch source needs history recovery.");
+    return parseV3DevelopDocument(loaded.value.document).color.inputProfile;
+  }
+
+  #operationProfile(action: Exclude<DevelopBatchOperation, { readonly kind: "undo" | "frozen" }>): PersistedInputProfile | null {
+    if (action.kind === "preset") return parseDevelopPresetRecord(action.preset).payload.find((entry) => entry.field === "camera-profile")?.value ?? null;
+    if (action.kind === "paste-settings") return parseDevelopPresetPayload(action.payload, action.fields).find((entry) => entry.field === "camera-profile")?.value ?? null;
+    return null;
   }
 
   async #verifyStillActive(

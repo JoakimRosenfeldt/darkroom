@@ -12,6 +12,7 @@ import {
   parseDevelopBatchId,
   parseDevelopBatchItemState,
   parseDevelopBatchOperation,
+  parseDevelopBatchOperationId,
   parseDevelopBatchReceipt,
   type DevelopBatchCreateInput,
   type DevelopBatchId,
@@ -213,6 +214,24 @@ export class DevelopBatchRepository {
       .all(catalogId, limit).map((value) => this.get(catalogId, parseDevelopBatchId(string(row(value, "Develop batch list row"), "batchId"))));
   }
 
+  resumableBatchIds(): readonly { readonly catalogId: CatalogId; readonly batchId: DevelopBatchId }[] {
+    return this.database.prepare(`
+      SELECT DISTINCT job.catalog_id AS catalogId, job.batch_id AS batchId
+      FROM develop_batch_jobs AS job
+      JOIN develop_batch_items AS item ON item.catalog_id = job.catalog_id AND item.batch_id = job.batch_id
+      WHERE job.cancellation_requested = 0 AND json_extract(item.state_json, '$.kind') = 'queued'
+      ORDER BY job.created_at, job.batch_id
+    `).all().map((value) => {
+      const item = row(value, "Develop batch resumable job");
+      return { catalogId: parseCatalogId(string(item, "catalogId")), batchId: parseDevelopBatchId(string(item, "batchId")) };
+    });
+  }
+
+  enabledAutoSyncCatalogIds(): readonly CatalogId[] {
+    return this.database.prepare("SELECT catalog_id AS catalogId FROM develop_auto_sync WHERE enabled = 1 ORDER BY catalog_id")
+      .all().map((value) => parseCatalogId(string(row(value, "Auto Sync catalog"), "catalogId")));
+  }
+
   create(inputValue: DevelopBatchCreateInput): DevelopBatchReceipt {
     const input = parseDevelopBatchCreateInput(inputValue);
     const requestHash = digest(input);
@@ -230,7 +249,10 @@ export class DevelopBatchRepository {
       if (count >= DEVELOP_BATCH_MAX_JOBS_PER_CATALOG) throw new Error("Develop batch catalog job limit reached.");
       if (input.sourceEntryId !== null) {
         this.sourceId(input.catalogId, input.sourceEntryId);
-        if (this.activeHead(input.catalogId, input.sourceEntryId) !== input.sourceRevisionId) throw new Error("Develop batch source revision is stale.");
+        const sourceRevisionId = input.sourceRevisionId;
+        if (sourceRevisionId === null) throw new Error("Develop batch source revision is missing.");
+        if (input.kind === "auto-sync") this.history.loadRetainedRevision(input.catalogId, input.sourceEntryId, sourceRevisionId);
+        else if (this.activeHead(input.catalogId, input.sourceEntryId) !== input.sourceRevisionId) throw new Error("Develop batch source revision is stale.");
       }
       for (const target of input.targets) {
         this.sourceId(input.catalogId, target.entryId);
@@ -696,7 +718,7 @@ export class DevelopBatchRepository {
   emitAutoSync(input: {
     readonly catalogId: CatalogId; readonly batchId: DevelopBatchId; readonly operationId: DevelopBatchOperationId;
     readonly sourceRevisionId: DevelopRevisionId; readonly createdAt: number;
-  }): DevelopBatchReceipt {
+  }, requireCurrentHead = true): DevelopBatchReceipt {
     return this.transaction(() => {
       const value = this.database.prepare(`
         SELECT source_entry_id AS sourceEntryId, source_revision_id AS previousSourceRevisionId,
@@ -739,7 +761,7 @@ export class DevelopBatchRepository {
         WHERE catalog_id = ? AND kind = 'auto-sync' AND source_entry_id = ? AND source_revision_id = ?
       `).get(input.catalogId, sourceEntryId, input.sourceRevisionId);
       if (duplicate !== undefined) throw new Error("Auto Sync source revision was already emitted by another operation.");
-      if (this.activeHead(input.catalogId, sourceEntryId) !== input.sourceRevisionId) throw new Error("Auto Sync source revision is stale.");
+      if (requireCurrentHead && this.activeHead(input.catalogId, sourceEntryId) !== input.sourceRevisionId) throw new Error("Auto Sync source revision is stale.");
       if (string(config, "previousSourceRevisionId") === input.sourceRevisionId) throw new Error("Auto Sync already emitted this source revision.");
       const targetsValue = JSON.parse(string(config, "targetsJson")) as unknown;
       if (!Array.isArray(targetsValue)) throw new Error("Auto Sync targets are invalid.");
@@ -783,6 +805,48 @@ export class DevelopBatchRepository {
       if (updated.changes !== 1) throw new Error("Auto Sync cursor changed while emitting a Receipt.");
       return receipt;
     });
+  }
+
+  reconcileAutoSync(catalogIdValue: CatalogId): DevelopBatchReceipt | null {
+    const catalogId = parseCatalogId(catalogIdValue);
+    const value = this.database.prepare(`
+      SELECT source_entry_id AS sourceEntryId, source_revision_id AS cursorRevisionId
+      FROM develop_auto_sync WHERE catalog_id = ? AND enabled = 1
+    `).get(catalogId);
+    if (value === undefined) return null;
+    const config = row(value, "Auto Sync reconciliation");
+    const entryId = parseEntryId(string(config, "sourceEntryId"));
+    const cursor = parseDevelopRevisionId(string(config, "cursorRevisionId"));
+    let revisionId = this.activeHead(catalogId, entryId);
+    if (revisionId === cursor) return null;
+    const path: { readonly revisionId: DevelopRevisionId; readonly parentRevisionId: DevelopRevisionId | null; readonly operationId: DevelopBatchOperationId; readonly createdAt: number }[] = [];
+    for (let depth = 0; depth <= 500 && revisionId !== cursor; depth += 1) {
+      const found = this.database.prepare(`
+        SELECT parent_revision_id AS parentRevisionId, operation_id AS operationId, created_at AS createdAt
+        FROM develop_history_revisions WHERE catalog_id = ? AND entry_id = ? AND revision_id = ?
+      `).get(catalogId, entryId, revisionId);
+      if (found === undefined) throw new Error("Auto Sync source history is incomplete.");
+      const revision = row(found, "Auto Sync source revision");
+      const parentValue = nullableString(revision, "parentRevisionId");
+      path.push({
+        revisionId,
+        parentRevisionId: parentValue === null ? null : parseDevelopRevisionId(parentValue),
+        operationId: parseDevelopBatchOperationId(string(revision, "operationId")),
+        createdAt: number(revision, "createdAt"),
+      });
+      if (parentValue === null) break;
+      revisionId = parseDevelopRevisionId(parentValue);
+    }
+    if (revisionId !== cursor) throw new Error("Auto Sync cursor is not retained in the source history.");
+    const next = path.at(-1);
+    if (!next || next.parentRevisionId !== cursor) throw new Error("Auto Sync source history cannot advance.");
+    return this.emitAutoSync({
+      catalogId,
+      batchId: parseDevelopBatchId(next.revisionId),
+      operationId: next.operationId,
+      sourceRevisionId: next.revisionId,
+      createdAt: next.createdAt,
+    }, false);
   }
 
   private advanceAutoSyncTarget(catalogId: CatalogId, entryId: EntryId, revisionId: DevelopRevisionId, updatedAt: number): void {
