@@ -21,6 +21,7 @@ import type {
   DevelopHistoryRevision,
 } from "../lib/develop/history.ts";
 import type { EntryId } from "../lib/catalog/ids.ts";
+import type { DevelopBatchCommand, DevelopBatchCommandResult } from "../lib/develop/batch/domain.ts";
 import type {
   CatalogV3ActivationResult,
   CatalogV3AlbumAssetPage,
@@ -404,6 +405,10 @@ export class CatalogWorkerClient {
 
   async mutateDevelopHistoryRef(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]> {
     return requireKind(await this.send({ kind: "develop-history-ref-mutate", requestId: requestId(), input }), "develop-history-ref-mutate").result;
+  }
+
+  async developBatch(command: DevelopBatchCommand): Promise<DevelopBatchCommandResult> {
+    return requireKind(await this.send({ kind: "develop-batch", requestId: requestId(), command }), "develop-batch").result;
   }
 
   async close(): Promise<CatalogWorkerCloseResponse> {

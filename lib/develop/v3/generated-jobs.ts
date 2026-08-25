@@ -2,18 +2,18 @@ import {
   COORDINATE_FRAME_REVISION,
   type SemanticStageId,
   type V3SourceSignature,
-} from "../process";
+} from "../process.ts";
 import {
   parseSha256Digest,
   type Sha256Digest,
-} from "../render-contract";
+} from "../render-contract.ts";
 import {
   MAX_DEVELOP_ASSET_REFS,
   parseDevelopAssetDescriptor,
   type DevelopAssetCandidate,
   type DevelopAssetDescriptor,
   type DevelopAssetRef,
-} from "./assets";
+} from "./assets.ts";
 
 export type GeneratedJobKind = "people" | "reflection" | "dust" | "depth";
 

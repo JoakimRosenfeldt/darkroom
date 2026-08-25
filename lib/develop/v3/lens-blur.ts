@@ -2,18 +2,18 @@ import {
   COORDINATE_FRAME_REVISION,
   type SemanticStageId,
   type V3SourceSignature,
-} from "../process";
-import type { GeometryPoint } from "./geometry";
+} from "../process.ts";
+import type { GeometryPoint } from "./geometry.ts";
 import {
   parseDevelopAssetDescriptor,
   parseDevelopAssetRef,
   type DevelopAssetDescriptor,
   type DevelopAssetRef,
-} from "./assets";
+} from "./assets.ts";
 import {
   currentGeneratedJobCapability,
   type GeneratedJob,
-} from "./generated-jobs";
+} from "./generated-jobs.ts";
 
 export type DepthAssetRef = DevelopAssetRef & {
   readonly kind: "depth-map";

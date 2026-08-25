@@ -1,6 +1,6 @@
-import type { LibraryEntry } from "@/lib/fs/types";
-import type { CropSettings, SourceSignature } from "@/lib/develop/types";
-import { assetCacheKey } from "@/lib/cache/asset-cache-key";
+import type { LibraryEntry } from "../fs/types.ts";
+import type { CropSettings, SourceSignature } from "./types.ts";
+import { assetCacheKey } from "../cache/asset-cache-key.ts";
 
 export type SourceRenderMode = "source" | "crop-preview" | "export";
 

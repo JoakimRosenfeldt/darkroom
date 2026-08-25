@@ -1,5 +1,5 @@
-import type { BasicSettings } from "../types";
-import type { Rgb } from "./profiles";
+import type { BasicSettings } from "../types.ts";
+import type { Rgb } from "./profiles.ts";
 
 export interface LocalAdjustmentValues {
   readonly basic: BasicSettings;

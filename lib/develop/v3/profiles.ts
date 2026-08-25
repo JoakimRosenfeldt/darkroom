@@ -1,9 +1,9 @@
 import type {
   ColorProfileReference,
   SourceRecord,
-} from "../process";
-import type { PersistedInputProfile } from "./document";
-import type { MatrixCameraProfile } from "../../camera-profiles/matrix";
+} from "../process.ts";
+import type { PersistedInputProfile } from "./document.ts";
+import type { MatrixCameraProfile } from "../../camera-profiles/matrix.ts";
 
 export type Rgb = readonly [number, number, number];
 export type Matrix3 = readonly [

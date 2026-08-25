@@ -42,12 +42,21 @@ import { CatalogLiveRepository } from "./catalog-live-repository.ts";
 import { DEVELOP_HISTORY_TABLES, upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
 import { DevelopHistoryRepository } from "./develop-history-repository.ts";
 import { installDevelopHistoryDocumentDecoder } from "../lib/develop/history.ts";
+import { DEVELOP_BATCH_TABLES, upgradeDevelopBatchSchema } from "./develop-batch-schema.ts";
+import { DevelopBatchRepository, type DevelopBatchOperationExecutor } from "./develop-batch-repository.ts";
+import type { DevelopBatchCommand, DevelopBatchCommandResult } from "../lib/develop/batch/domain.ts";
 
-const developDocumentDecoderReady = process.execArgv.includes("--experimental-strip-types")
+let developBatchOperationExecutor: DevelopBatchOperationExecutor | null = null;
+const developRuntimeReady = process.execArgv.includes("--experimental-strip-types")
   ? Promise.resolve()
-  : import("../lib/develop/v3/codec.ts").then(({ decodePersistedDevelopDocument }) => {
-      installDevelopHistoryDocumentDecoder(decodePersistedDevelopDocument);
-    });
+  : Promise.all([
+      import("../lib/develop/v3/codec.ts").then(({ decodePersistedDevelopDocument }) => {
+        installDevelopHistoryDocumentDecoder(decodePersistedDevelopDocument);
+      }),
+      import("./develop-batch-executor.ts").then(({ executeDevelopBatchOperation }) => {
+        developBatchOperationExecutor = executeDevelopBatchOperation;
+      }),
+    ]).then(() => undefined);
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -116,6 +125,11 @@ function catalogV3Repository(): CatalogV3Repository {
 
 function catalogLiveRepository(): CatalogLiveRepository {
   return new CatalogLiveRepository(requireDatabase());
+}
+
+function developBatchRepository(): DevelopBatchRepository {
+  if (!developBatchOperationExecutor) throw new Error("Develop batch runtime is unavailable.");
+  return new DevelopBatchRepository(requireDatabase(), developBatchOperationExecutor);
 }
 
 function rowValue(row: Record<string, unknown>, key: string): unknown {
@@ -210,6 +224,7 @@ function openDatabase(targetPath: string): boolean {
     opened.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     upgradeCatalogV3IdentitySchema(opened);
     upgradeDevelopHistorySchema(opened);
+    upgradeDevelopBatchSchema(opened);
   } catch (error) {
     opened.close();
     throw error;
@@ -344,6 +359,7 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
     });
     upgradeCatalogV3IdentitySchema(cloned);
     upgradeDevelopHistorySchema(cloned);
+    upgradeDevelopBatchSchema(cloned);
     verifyCatalogV3Schema(cloned);
     cloned.exec("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; BEGIN IMMEDIATE;");
     cloned.prepare(`
@@ -365,6 +381,12 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       );
     }
     for (const table of DEVELOP_HISTORY_TABLES) {
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of DEVELOP_BATCH_TABLES) {
       cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
         request.catalogId,
         sourceCatalogId,
@@ -726,6 +748,41 @@ function inspectTestTracer(
   return testTracerResult(opened, row);
 }
 
+async function handleDevelopBatch(command: DevelopBatchCommand): Promise<DevelopBatchCommandResult> {
+  const repository = developBatchRepository();
+  switch (command.kind) {
+    case "create": return repository.create(command.input);
+    case "get": return repository.get(command.catalogId, command.batchId);
+    case "list": return repository.list(command.catalogId, command.limit);
+    case "run": return repository.run(command.catalogId, command.batchId);
+    case "cancel": return repository.cancel(command.catalogId, command.batchId);
+    case "retry": return repository.retry(command.catalogId, command.batchId);
+    case "freeze": return repository.freeze({
+      catalogId: command.catalogId,
+      batchId: command.batchId,
+      operationId: command.operationId,
+      kind: command.batchKind,
+      sourceEntryId: command.sourceEntryId,
+      targetEntryIds: command.targetEntryIds,
+      operation: command.operation,
+      createdAt: command.createdAt,
+    });
+    case "previous": return repository.previous(command);
+    case "undo": return repository.undo(command);
+    case "auto-enable":
+      repository.enableAutoSync(command);
+      return null;
+    case "auto-disable":
+      repository.disableAutoSync(command.catalogId, command.updatedAt);
+      return null;
+    case "auto-emit": return repository.emitAutoSync(command);
+    default: {
+      const _exhaustive: never = command;
+      throw new Error(`Unknown Develop batch command: ${_exhaustive}.`);
+    }
+  }
+}
+
 async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
   switch (request.kind) {
     case "runtime-info":
@@ -904,6 +961,9 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
     case "develop-history-ref-mutate":
       post({ kind: "develop-history-ref-mutate", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).mutateRef(request.input) });
       return;
+    case "develop-batch":
+      post({ kind: "develop-batch", requestId: request.requestId, result: await handleDevelopBatch(request.command) });
+      return;
     case "test-tracer-run": {
       const result = await runTestTracer(request);
       post({ kind: "test-tracer-run", requestId: request.requestId, ...result });
@@ -930,7 +990,7 @@ let queue = Promise.resolve();
 
 workerPort.on("message", (value: unknown) => {
   queue = queue.then(async () => {
-    await developDocumentDecoderReady;
+    await developRuntimeReady;
     let request: CatalogWorkerRequest;
     try {
       request = parseCatalogWorkerRequest(value);

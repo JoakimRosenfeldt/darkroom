@@ -297,6 +297,13 @@ export class DevelopHistoryRepository {
     return { ...this.revisionFromRow(this.revisionRow(catalogId, entryId, revisionId)), document: result.document };
   }
 
+  loadRetainedRevision(catalogId: CatalogId, entryId: EntryId, revisionId: DevelopRevisionId): DevelopHistoryRecoveryRevision {
+    this.assertActiveEntry(catalogId, entryId);
+    const revision = this.recoveryRevision(catalogId, entryId, revisionId);
+    if (revision === null) throw new Error("Develop history Receipt revision needs recovery.");
+    return revision;
+  }
+
   private latestValidRecoveryRevision(catalogId: CatalogId, entryId: EntryId): DevelopHistoryRecoveryRevision | null {
     const candidates = this.database.prepare(`${REVISION_SELECT} WHERE catalog_id = ? AND entry_id = ? ORDER BY ordinal DESC`)
       .all(catalogId, entryId);

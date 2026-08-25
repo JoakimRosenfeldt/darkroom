@@ -61,6 +61,12 @@ import {
   type CatalogLiveState,
 } from "../lib/catalog/live.ts";
 import {
+  parseDevelopBatchCommand,
+  parseDevelopBatchCommandResult,
+  type DevelopBatchCommand,
+  type DevelopBatchCommandResult,
+} from "../lib/develop/batch/domain.ts";
+import {
   parseDevelopHistoryCommitInput,
   parseDevelopHistoryCommitResult,
   parseDevelopHistoryListInput,
@@ -396,6 +402,8 @@ export interface CatalogWorkerDevelopHistoryRefsRequest { readonly kind: "develo
 export interface CatalogWorkerDevelopHistoryRefsResponse { readonly kind: "develop-history-refs"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
 export interface CatalogWorkerDevelopHistoryRefMutateRequest { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly input: DevelopHistoryRefMutationInput }
 export interface CatalogWorkerDevelopHistoryRefMutateResponse { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+export interface CatalogWorkerDevelopBatchRequest { readonly kind: "develop-batch"; readonly requestId: string; readonly command: DevelopBatchCommand }
+export interface CatalogWorkerDevelopBatchResponse { readonly kind: "develop-batch"; readonly requestId: string; readonly result: DevelopBatchCommandResult }
 
 export interface CatalogWorkerTestTracerRunRequest {
   readonly kind: "test-tracer-run";
@@ -470,6 +478,7 @@ export type CatalogWorkerRequest =
   | CatalogWorkerDevelopHistoryCommitRequest
   | CatalogWorkerDevelopHistoryRefsRequest
   | CatalogWorkerDevelopHistoryRefMutateRequest
+  | CatalogWorkerDevelopBatchRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
   | CatalogWorkerTestTracerInspectRequest;
@@ -532,6 +541,7 @@ export type CatalogWorkerResponse =
   | CatalogWorkerDevelopHistoryCommitResponse
   | CatalogWorkerDevelopHistoryRefsResponse
   | CatalogWorkerDevelopHistoryRefMutateResponse
+  | CatalogWorkerDevelopBatchResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
   | CatalogWorkerTestTracerInspectResponse
@@ -1335,6 +1345,8 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
     case "develop-history-ref-mutate":
       return { kind, requestId, input: parseDevelopHistoryRefMutationInput(record.input) };
+    case "develop-batch":
+      return { kind, requestId, command: parseDevelopBatchCommand(record.command) };
     case "test-tracer-run":
       return {
         kind,
@@ -1516,6 +1528,9 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "develop-history-ref-mutate":
       if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history refs response is invalid.");
       return { kind, requestId, result: record.result.map(parseDevelopHistoryRef) };
+    case "develop-batch":
+      if (requestId === null) throw new Error("Develop batch response needs a requestId.");
+      return { kind, requestId, result: parseDevelopBatchCommandResult(record.result) };
     case "test-tracer-run":
     case "test-tracer-recover":
     case "test-tracer-inspect":
