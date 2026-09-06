@@ -2,6 +2,7 @@ import type { LibRawSettings } from "libraw-wasm";
 import type { DecodeOptions, DecodedImage } from "./types";
 import { matrixCameraProfileFromLibRawMetadata } from "../camera-profiles/matrix";
 import { orientedImageSize, rgbDataToBlob } from "./utils";
+import { runWithRawLimit } from "@/lib/cache/concurrency";
 
 type LibRawInstance = InstanceType<
   Awaited<typeof import("libraw-wasm")>["default"]
@@ -9,7 +10,6 @@ type LibRawInstance = InstanceType<
 
 let librawModule: typeof import("libraw-wasm") | null = null;
 let librawInstance: LibRawInstance | null = null;
-let librawQueue: Promise<unknown> = Promise.resolve();
 
 async function acquireLibRaw(): Promise<LibRawInstance> {
   if (!librawModule) {
@@ -25,17 +25,17 @@ async function acquireLibRaw(): Promise<LibRawInstance> {
 
 function runLibRaw<T>(
   operation: (raw: LibRawInstance) => Promise<T>,
+  options: DecodeOptions = {},
 ): Promise<T> {
-  const task = librawQueue
-    .then(() => acquireLibRaw())
-    .then((raw) => operation(raw));
-
-  librawQueue = task.then(
-    () => undefined,
-    () => undefined,
-  );
-
-  return task;
+  return runWithRawLimit(async () => {
+    const raw = await acquireLibRaw();
+    options.signal?.throwIfAborted();
+    const result = await operation(raw);
+    if (options.signal?.aborted && typeof result === "object" && result !== null &&
+        "objectUrl" in result && typeof result.objectUrl === "string") URL.revokeObjectURL(result.objectUrl);
+    options.signal?.throwIfAborted();
+    return result;
+  }, options);
 }
 
 function buildSettings(
@@ -125,8 +125,12 @@ async function buildFromImageData(
   const rgb = scale === 1
     ? image.data
     : resizeRgbData(image.data, image.width, image.height, image.colors, width, height);
-  const blob = await rgbDataToBlob(rgb, width, height, image.bits);
-  const objectUrl = URL.createObjectURL(blob);
+  options.signal?.throwIfAborted();
+  const blob = options.sourcePixels
+    ? undefined
+    : await rgbDataToBlob(rgb, width, height, image.bits);
+  options.signal?.throwIfAborted();
+  const objectUrl = blob ? URL.createObjectURL(blob) : undefined;
 
   return {
     width,
@@ -207,6 +211,7 @@ async function decodeOpenedRaw(
       metadata as Record<string, unknown>,
     );
     const image = await raw.imageData();
+    options.signal?.throwIfAborted();
     if (!image?.data?.length || image.width <= 0 || image.height <= 0) {
       return null;
     }
@@ -217,11 +222,12 @@ async function decodeOpenedRaw(
       options,
       halfSize ? options.maxEdge : undefined,
     );
-  });
+  }, options);
 }
 
 export async function decodeEmbeddedThumbnail(
   input: Uint8Array,
+  options: DecodeOptions = {},
 ): Promise<DecodedImage | null> {
   return runLibRaw(async (raw) => {
     await raw.open(
@@ -247,7 +253,7 @@ export async function decodeEmbeddedThumbnail(
       thumbnail,
       structuredClone(metadata as Record<string, unknown>),
     );
-  });
+  }, options);
 }
 
 export async function readRawDimensions(
@@ -285,7 +291,7 @@ export async function decodeWithLibRaw(
 
   if (options.thumbnail) {
     if (options.rawSource !== "developed") {
-      const embedded = await decodeEmbeddedThumbnail(input);
+      const embedded = await decodeEmbeddedThumbnail(input, options);
       if (embedded) {
         return embedded;
       }
@@ -311,7 +317,7 @@ export async function decodeWithLibRaw(
     return preview;
   }
 
-  const embeddedPreview = await decodeEmbeddedThumbnail(input);
+  const embeddedPreview = await decodeEmbeddedThumbnail(input, options);
   if (embeddedPreview) {
     return embeddedPreview;
   }

@@ -46,13 +46,14 @@ export type PixelProvenance =
 export interface DecodeOptions {
   relativePath?: string;
   assetRequest?: CatalogAssetRequest;
+  assetRevision?: number;
   thumbnail?: boolean;
   rawSource?: "embedded" | "developed";
   fullResolution?: boolean;
   /** Decode the original image into pixels without changing thumbnail output. */
   sourcePixels?: boolean;
   maxEdge?: number;
-  priority?: number;
+  priority?: number | (() => number);
   signal?: AbortSignal;
   cameraProfile?: CameraProfileDecode;
 }

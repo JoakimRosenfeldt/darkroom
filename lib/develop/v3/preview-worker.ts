@@ -7,7 +7,6 @@ import {
 } from "@/lib/develop/v3/gpu-backend";
 import {
   prepareV3RuntimeRender,
-  renderV3Runtime,
 } from "@/lib/develop/v3/runtime";
 import type {
   V3PreviewBackend,
@@ -81,12 +80,25 @@ async function renderLatest(): Promise<void> {
   try {
     const assets = assetsFor(message);
     if (message.kind === "export") {
-      const request = { kind: "v3-export", entry, image, size: message.size, format: "jpeg", assets } as const;
+      const request = { kind: "v3-export", entry, image, size: message.size, format: "jpeg", assets, includeAnalysis: false } as const;
       const prepared = await prepareV3RuntimeRender(message.document, request);
-      const result = message.region && prepared.kind === "prepared"
-        ? await renderV3CpuRegion(prepared.input, message.region)
-        : prepared.kind !== "prepared" ? prepared : await renderV3Cpu(prepared.input);
-      post({ kind: "result", requestId: message.requestId, backend: "cpu", result }, transferList(result));
+      let result: V3PreviewRenderOutput = prepared.kind === "prepared" ? { kind: "cancelled" } : prepared;
+      let backend: V3PreviewBackend = "cpu";
+      if (prepared.kind === "prepared") {
+        const renderer = gpuRenderer ??= new V3GpuPreviewRenderer();
+        const accelerated = message.region
+          ? await renderer.renderRegion(prepared.input, message.region)
+          : await renderer.renderExport(prepared.input);
+        if (accelerated) {
+          result = accelerated;
+          backend = "gpu";
+        } else {
+          result = message.region
+            ? await renderV3CpuRegion(prepared.input, message.region)
+            : await renderV3Cpu(prepared.input);
+        }
+      }
+      post({ kind: "result", requestId: message.requestId, backend, result }, transferList(result));
       return;
     }
     const runtimeRequest = {
@@ -96,6 +108,8 @@ async function renderLatest(): Promise<void> {
       viewportDimensions: message.viewportDimensions,
       devicePixelRatio: message.devicePixelRatio,
       previewMode: message.previewMode,
+      includeAnalysis: message.includeAnalysis,
+      includePointColor: message.includePointColor,
       assets,
     } as const;
     const gpuPreparation = await prepareV3RuntimeRender(
@@ -116,11 +130,13 @@ async function renderLatest(): Promise<void> {
         result = gpuResult;
       } else {
         backend = "cpu";
-        result = await renderV3Runtime(message.document, runtimeRequest);
+        result = await renderV3Cpu(gpuPreparation.input);
       }
     } else {
       backend = "cpu";
-      result = await renderV3Runtime(message.document, runtimeRequest);
+      result = gpuPreparation.kind === "prepared"
+        ? await renderV3Cpu(gpuPreparation.input)
+        : gpuPreparation;
     }
     post(
       { kind: "result", requestId: message.requestId, backend, result },

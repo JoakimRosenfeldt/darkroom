@@ -6,8 +6,8 @@ import type {
 } from "../process";
 import type { DevelopDocumentV3 } from "./document";
 import {
+  createOutputToStoredMapper,
   mapCanonicalToStored,
-  mapOutputToStored,
   mapStoredToOutput,
   resolveConstrainedCrop,
   invertHomography,
@@ -82,31 +82,38 @@ function createV3CanvasUserGeometry(
   };
 }
 
+export function createV3CanvasOutputMapper(
+  document: DevelopDocumentV3,
+  source: SourceRecord,
+): (output: GeometryPoint) => GeometryMapResult {
+  const user = createV3CanvasUserGeometry(document, source);
+  const crop = resolveConstrainedCrop(user);
+  const calibration = manualLensCalibration(document);
+  const mapOutputToStored = createOutputToStoredMapper(user, crop);
+  return (output) => {
+    const postOptics = mapOutputToStored(output);
+    if (postOptics.kind !== "mapped") return postOptics;
+    if (document.local.geometryFrame === "legacy-oriented-v2") return postOptics;
+    const point = mapDistortedUv(
+      postOptics.point,
+      calibration.distortion,
+      document.optics.manualDistortion === 0 ? 0 : 1,
+    );
+    return {
+      kind: "mapped",
+      point,
+      insideDestination: postOptics.insideDestination
+        && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1,
+    };
+  };
+}
+
 export function mapV3CanvasOutputToCanonical(
   output: GeometryPoint,
   document: DevelopDocumentV3,
   source: SourceRecord,
 ): GeometryMapResult {
-  const user = createV3CanvasUserGeometry(document, source);
-  const postOptics = mapOutputToStored(output, user, resolveConstrainedCrop(user));
-  if (postOptics.kind !== "mapped") return postOptics;
-  if (document.local.geometryFrame === "legacy-oriented-v2") return postOptics;
-  const calibration = manualLensCalibration(document);
-  const point = mapDistortedUv(
-    postOptics.point,
-    calibration.distortion,
-    document.optics.manualDistortion === 0 ? 0 : 1,
-  );
-  return {
-    kind: "mapped",
-    point,
-    insideDestination:
-      postOptics.insideDestination
-      && point.x >= 0
-      && point.x <= 1
-      && point.y >= 0
-      && point.y <= 1,
-  };
+  return createV3CanvasOutputMapper(document, source)(output);
 }
 
 export function mapV3CanonicalToCanvasOutput(

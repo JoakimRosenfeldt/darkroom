@@ -1,5 +1,5 @@
 interface QueueItem {
-  priority: number;
+  priority: () => number;
   sequence: number;
   start: () => void;
   reject: (error: Error) => void;
@@ -7,7 +7,7 @@ interface QueueItem {
 }
 
 interface RunWithLimitOptions {
-  priority?: number;
+  priority?: number | (() => number);
   signal?: AbortSignal;
 }
 
@@ -41,8 +41,8 @@ function createLimitRunner(maxConcurrent: number) {
 
       if (
         bestIndex === -1 ||
-        candidate.priority > waitQueue[bestIndex].priority ||
-        (candidate.priority === waitQueue[bestIndex].priority &&
+        candidate.priority() > waitQueue[bestIndex].priority() ||
+        (candidate.priority() === waitQueue[bestIndex].priority() &&
           candidate.sequence < waitQueue[bestIndex].sequence)
       ) {
         bestIndex = index;
@@ -69,7 +69,7 @@ function createLimitRunner(maxConcurrent: number) {
 
     return new Promise<void>((resolve, reject) => {
       const item: QueueItem = {
-        priority: options.priority ?? 0,
+        priority: () => typeof options.priority === "function" ? options.priority() : options.priority ?? 0,
         sequence,
         signal: options.signal,
         reject,
@@ -105,6 +105,7 @@ function createLimitRunner(maxConcurrent: number) {
   ): Promise<T> {
     await acquireSlot(options);
     try {
+      options?.signal?.throwIfAborted();
       return await operation();
     } finally {
       releaseSlot();
@@ -115,3 +116,4 @@ function createLimitRunner(maxConcurrent: number) {
 export const runWithThumbnailLimit = createLimitRunner(2);
 export const runWithPreviewLimit = createLimitRunner(2);
 export const runWithAspectLimit = createLimitRunner(8);
+export const runWithRawLimit = createLimitRunner(1);

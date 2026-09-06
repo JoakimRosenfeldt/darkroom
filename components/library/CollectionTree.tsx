@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import type { CollectionNode, SmartRuleGroup } from "@/lib/library/model";
-import { buildQueryIndex, evaluateSmartRule } from "@/lib/library/query";
+import { getQueryIndex, evaluateSmartRule } from "@/lib/library/query";
 import { useLibraryStore } from "@/stores/library-store";
 import {
   IconAlbum,
@@ -47,7 +47,7 @@ export function CollectionTree({ disabled }: { disabled: boolean }) {
   const smartCounts = useMemo(() => {
     const counts = new Map<string, number>();
     const archived = new Set(archivedEntryIds);
-    const index = buildQueryIndex(entries, metadata, albums, workspace);
+    const index = getQueryIndex(entries, metadata, albums, workspace);
     for (const node of workspace.collections) {
       if (node.kind !== "smart") continue;
       counts.set(node.id, entries.filter((entry) => {

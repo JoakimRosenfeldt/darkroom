@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, type KeyboardEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { MixerColor } from "@/lib/develop/types";
@@ -142,10 +143,24 @@ export function EditPanel({
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
-  const session = useDevelopStore((state) => {
+  const session = useDevelopStore(useShallow((state) => {
     const entryId = state.activeEntryId;
-    return entryId ? state.sessions[entryId] : undefined;
-  });
+    const current = entryId ? state.sessions[entryId] : undefined;
+    if (!current) return null;
+    return {
+      entryId,
+      document: current.previewDocument ?? current.persistedDocument,
+      processKind: current.processKind,
+      sidecarStatus: current.ui.sidecarStatus,
+      sidecarError: current.ui.sidecarError,
+      documentRevision: current.documentRevision,
+      persistedDocumentRevision: current.persistedDocumentRevision,
+      metadataRevision: current.metadataRevision,
+      persistedMetadataRevision: current.persistedMetadataRevision,
+      previewing: current.transientEdit !== null,
+      presetTransient: isPresetTransientEdit(current.transientEdit),
+    };
+  }));
   const [experimental, setExperimental] = useExperimentalTools();
   const resetAll = useDevelopStore((state) => state.resetV3All);
   const [activeTab, setActiveTab] = useState<V3Tab>(
@@ -154,21 +169,21 @@ export function EditPanel({
   const [batchOpen, setBatchOpen] = useState(false);
   const tabRefs = useRef(new Map<V3Tab, HTMLButtonElement>());
 
-  const document = session?.previewDocument ?? session?.persistedDocument;
-  if (!session || session.processKind !== "v3" || document?.version !== 3) {
+  if (!session || session.processKind !== "v3" || session.document?.version !== 3) {
     return null;
   }
+  const document = session.document;
 
   const status = saveLabel({
-    sidecarStatus: session.ui.sidecarStatus,
-    previewing: session.transientEdit !== null,
+    sidecarStatus: session.sidecarStatus,
+    previewing: session.previewing,
     documentRevision: session.documentRevision,
     persistedDocumentRevision: session.persistedDocumentRevision,
     metadataRevision: session.metadataRevision,
     persistedMetadataRevision: session.persistedMetadataRevision,
   });
   const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
-  const presetTransient = isPresetTransientEdit(session.transientEdit);
+  const presetTransient = session.presetTransient;
   const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, tabId: V3Tab) => {
     const currentIndex = TABS.findIndex((tab) => tab.id === tabId);
     let nextIndex: number | null = null;
@@ -195,9 +210,9 @@ export function EditPanel({
           <p className="mt-0.5 text-xs text-lr-text-faint">
             {status}
           </p>
-          {session.ui.sidecarError ? (
+          {session.sidecarError ? (
             <p className="mt-0.5 break-words text-xs leading-4 text-lr-danger">
-              XMP: {session.ui.sidecarError}
+              XMP: {session.sidecarError}
             </p>
           ) : null}
         </div>

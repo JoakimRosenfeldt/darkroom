@@ -107,6 +107,12 @@ const SYNC_MUTATIONS_PER_BATCH = 200;
 
 let activeSession: ActiveCatalogSession | null = null;
 let activeView: CatalogLiveStateView | null = null;
+let hydratedState: HydratedCatalogState | null = null;
+let hydratedAssets = new Map<string, {
+  readonly asset: CatalogLiveStateView["assets"][number];
+  readonly entry: LibraryEntry;
+  readonly metadata: EntryMetadata;
+}>();
 let activeScan: {
   readonly operationId: OperationId;
   readonly catalogId: CatalogId;
@@ -335,18 +341,32 @@ function hydrate(
   view: CatalogLiveStateView,
   session: ActiveCatalogSession,
 ): HydratedCatalogState {
-  const allEntries = view.assets.map((asset) => entryFromAsset(asset, session));
-  const entries = allEntries.filter((entry) => entry.health === "present");
-  const unresolvedEntries = allEntries.filter((entry) => entry.health !== "present");
+  const previousState = hydratedState?.sessionId === session.sessionId ? hydratedState : null;
+  if (!previousState) hydratedAssets.clear();
+  const nextAssets: typeof hydratedAssets = new Map();
+  const allEntries: LibraryEntry[] = [];
   const entryMetadata: Record<string, EntryMetadata> = {};
   const archivedEntryIds: string[] = [];
   for (const asset of view.assets) {
     const entryId = asset.entryId ?? parseEntryId(asset.assetId);
-    entryMetadata[entryId] = metadataFromAsset(asset);
-    if (asset.metadata.archive) {
-      archivedEntryIds.push(entryId);
+    const previous = hydratedAssets.get(entryId);
+    let entry = previous?.entry;
+    let metadata = previous?.metadata;
+    if (previous?.asset !== asset) {
+      const nextEntry = entryFromAsset(asset, session);
+      entry = entry && JSON.stringify(entry) === JSON.stringify(nextEntry) ? entry : nextEntry;
+      if (!previous || !Object.entries(asset.metadata).every(([key, value]) =>
+        Reflect.get(previous.asset.metadata, key) === value)) metadata = metadataFromAsset(asset);
     }
+    if (!entry || !metadata) throw new Error("Catalog entry hydration is incomplete.");
+    nextAssets.set(entryId, { asset, entry, metadata });
+    allEntries.push(entry);
+    entryMetadata[entryId] = metadata;
+    if (asset.metadata.archive) archivedEntryIds.push(entryId);
   }
+  hydratedAssets = nextAssets;
+  const entries = allEntries.filter((entry) => entry.health === "present");
+  const unresolvedEntries = allEntries.filter((entry) => entry.health !== "present");
   const albums = view.albums.map((album) => ({
     id: album.albumId,
     name: album.name,
@@ -360,21 +380,29 @@ function hydrate(
     albums,
     validEntryIds,
   );
-  return {
+  const next: HydratedCatalogState = {
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     displayName: session.displayName,
     revision: view.catalog.revision,
-    entries,
-    unresolvedEntries,
+    entries: previousState && entries.length === previousState.entries.length &&
+      entries.every((entry, index) => entry === previousState.entries[index]) ? previousState.entries : entries,
+    unresolvedEntries: previousState && unresolvedEntries.length === previousState.unresolvedEntries.length &&
+      unresolvedEntries.every((entry, index) => entry === previousState.unresolvedEntries[index]) ? previousState.unresolvedEntries : unresolvedEntries,
     fingerprintCoverage: view.fingerprintCoverage,
     importPresets: view.presets,
-    entryMetadata,
-    albums,
-    archivedEntryIds,
-    libraryWorkspace,
+    entryMetadata: previousState && Object.keys(entryMetadata).length === Object.keys(previousState.entryMetadata).length &&
+      Object.entries(entryMetadata).every(([id, metadata]) => previousState.entryMetadata[id] === metadata)
+      ? previousState.entryMetadata : entryMetadata,
+    albums: previousState && JSON.stringify(albums) === JSON.stringify(previousState.albums) ? previousState.albums : albums,
+    archivedEntryIds: previousState && archivedEntryIds.length === previousState.archivedEntryIds.length &&
+      archivedEntryIds.every((id, index) => previousState.archivedEntryIds[index] === id) ? previousState.archivedEntryIds : archivedEntryIds,
+    libraryWorkspace: previousState && JSON.stringify(libraryWorkspace) === JSON.stringify(previousState.libraryWorkspace)
+      ? previousState.libraryWorkspace : libraryWorkspace,
     roots: view.roots,
   };
+  hydratedState = next;
+  return next;
 }
 
 function requireSession(): ActiveCatalogSession {
@@ -425,6 +453,8 @@ function setActivation(activation: CatalogActivationResult): ActiveCatalogSessio
     revision: 0,
   };
   activeView = null;
+  hydratedState = null;
+  hydratedAssets.clear();
   activeScan = null;
   return activeSession;
 }
@@ -460,6 +490,8 @@ export function clearSessionCatalog(): void {
   generation += 1;
   activeSession = null;
   activeView = null;
+  hydratedState = null;
+  hydratedAssets.clear();
   activeScan = null;
   mutationQueue = Promise.resolve();
 }
@@ -831,6 +863,7 @@ export async function activateCatalog(
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     expectedRevision: null,
+    knownRevision: 0,
   });
   if (activeSession?.sessionId !== session.sessionId) {
     throw new Error("Catalog session changed while loading.");
@@ -845,17 +878,34 @@ export async function activateCatalog(
 export async function queryActiveCatalog(): Promise<HydratedCatalogState> {
   const session = requireSession();
   const requestedGeneration = generation;
-  const view = await getDarkroomAPI().catalogQuery({
+  const previous = activeView;
+  const response = await getDarkroomAPI().catalogQuery({
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     expectedRevision: null,
+    knownRevision: previous?.catalog.revision ?? 0,
   });
-  if (
-    requestedGeneration !== generation ||
-    activeSession?.sessionId !== session.sessionId
-  ) {
+  if (requestedGeneration !== generation || activeSession?.sessionId !== session.sessionId) {
     throw new Error("Stale catalog session result.");
   }
+  let view = response;
+  if (response.assetDelta) {
+    if (!previous || response.assetDelta.baseRevision !== previous.catalog.revision) {
+      throw new Error("Catalog changes do not match the loaded snapshot.");
+    }
+    const assets = new Map(previous.assets.map((asset) => [asset.entryId ?? parseEntryId(asset.assetId), asset]));
+    for (const asset of response.assets) assets.set(asset.entryId ?? parseEntryId(asset.assetId), asset);
+    view = {
+      ...response,
+      assetDelta: undefined,
+      assets: response.assetDelta.entryIds.map((id) => {
+        const asset = assets.get(id);
+        if (!asset) throw new Error("A changed catalog entry is unavailable.");
+        return asset;
+      }),
+    };
+  }
+  if (activeView && activeView.catalog.revision > view.catalog.revision) return hydrate(activeView, session);
   activeView = view;
   activeSession.displayName = view.catalog.displayName;
   updateSessionRevision(view.catalog.revision);

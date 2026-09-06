@@ -1,7 +1,7 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { PhotoTile } from "@/components/library/PhotoTile";
@@ -23,7 +23,7 @@ interface FilmstripProps {
 const THUMB_SIZE = 76;
 const THUMB_GAP = 8;
 
-export function Filmstrip({
+export const Filmstrip = memo(function Filmstrip({
   entries,
   orderedEntryIds,
   missingEntryIds,
@@ -223,4 +223,4 @@ export function Filmstrip({
       </div>
     </div>
   );
-}
+});

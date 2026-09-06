@@ -904,6 +904,7 @@ export class CatalogCoordinator {
     return {
       catalogId: input.catalogId,
       expectedRevision: input.expectedRevision,
+      ...(input.knownRevision === undefined ? {} : { knownRevision: input.knownRevision }),
       ...(input.entryId === undefined ? {} : { entryId: input.entryId }),
       ...(input.assetId === undefined ? {} : { assetId: input.assetId }),
       ...(input.rootId === undefined ? {} : { rootId: input.rootId }),

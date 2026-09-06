@@ -3,6 +3,19 @@ import { getFormatExtensionsForProfile, getFormatCapabilityForFileName } from "@
 import { decodeEmbeddedThumbnail, decodeWithLibRaw } from "../libraw-client";
 
 const PREVIEW_MAX_EDGE = 2_560;
+const unsupportedSources = new Set<string>();
+
+function sourceKey(options: DecodeOptions): string | null {
+  const request = options.assetRequest;
+  return request && options.assetRevision !== undefined
+    ? JSON.stringify([request.catalogId, request.assetId, options.assetRevision])
+    : null;
+}
+
+function unsupportedByLibRaw(error: unknown): boolean {
+  return error instanceof Error &&
+    /unsupported.*(?:file|format|raw)|(?:file|format|raw).*not supported|not implemented/i.test(error.message);
+}
 
 async function decodeEmbeddedSourcePixels(
   embedded: DecodedImage,
@@ -41,13 +54,25 @@ async function decodeEmbeddedSourcePixels(
 async function decodeDevelopedNef(
   input: Uint8Array,
   options: DecodeOptions,
+  skipLibRaw = false,
 ): Promise<DecodedImage> {
-  try {
-    return await decodeWithLibRaw(input, options);
-  } catch {
-    // Unsupported Nikon compression reaches the native fallback only after LibRaw fails.
+  options.signal?.throwIfAborted();
+  const key = sourceKey(options);
+  let unsupported = skipLibRaw || (key !== null && unsupportedSources.has(key));
+  if (!unsupported) {
+    try {
+      return await decodeWithLibRaw(input, options);
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      unsupported = unsupportedByLibRaw(error);
+    }
   }
 
+  if (unsupported && key !== null) {
+    unsupportedSources.add(key);
+    const oldest = unsupportedSources.values().next().value;
+    if (unsupportedSources.size > 256 && oldest !== undefined) unsupportedSources.delete(oldest);
+  }
   let fallbackCode = "SDK_UNAVAILABLE";
   let fallbackMessage = "Nikon decoder is unavailable.";
   const api = typeof window === "undefined" ? undefined : window.darkroom;
@@ -59,6 +84,7 @@ async function decodeDevelopedNef(
         mode: options.fullResolution ? "full" : "preview",
         maxEdge: Math.min(options.maxEdge ?? PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE),
       });
+      options.signal?.throwIfAborted();
       if (result.available) {
         return {
           width: result.width,
@@ -98,6 +124,7 @@ async function decodeDevelopedNef(
       fallbackCode = result.code;
       fallbackMessage = result.message;
     } catch (error) {
+      options.signal?.throwIfAborted();
       fallbackCode = "NATIVE_DECODE_FAILED";
       fallbackMessage = error instanceof Error
         ? error.message
@@ -105,7 +132,7 @@ async function decodeDevelopedNef(
     }
   }
 
-  const embedded = await decodeEmbeddedThumbnail(input);
+  const embedded = await decodeEmbeddedThumbnail(input, options);
   if (!embedded) {
     throw new Error(fallbackMessage);
   }
@@ -128,13 +155,18 @@ async function decodeWithCameraProfileFallback(
   input: Uint8Array,
   options: DecodeOptions,
 ): Promise<DecodedImage> {
+  const key = sourceKey(options);
+  if (key !== null && unsupportedSources.has(key)) {
+    return decodeDevelopedNef(input, { ...options, cameraProfile: { kind: "none" } }, true);
+  }
   try {
     return await decodeWithLibRaw(input, options);
   } catch (error) {
+    options.signal?.throwIfAborted();
     const fallback = await decodeDevelopedNef(input, {
       ...options,
       cameraProfile: { kind: "none" },
-    });
+    }, unsupportedByLibRaw(error));
     return {
       ...fallback,
       pixelProvenance: {

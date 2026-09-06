@@ -10,74 +10,37 @@ const STANDARD_EXTENSIONS = getFormatExtensionsForProfile("standard");
 async function blobToDecodedImage(
   blob: Blob,
   metadata: Record<string, unknown>,
-  mode: "metadata" | "thumbnail" | "source",
+  options: DecodeOptions,
 ): Promise<DecodedImage> {
+  options.signal?.throwIfAborted();
   const bitmap = await createImageBitmap(blob);
-
-  if (mode === "metadata") {
-    const width = bitmap.width;
-    const height = bitmap.height;
-    bitmap.close();
-
-    return {
-      width,
-      height,
-      rgb: new Uint8Array(0),
-      bits: 8,
-      colors: 4,
-      pixelProvenance: standardPixelProvenance(),
-      metadata,
-      blob,
-      objectUrl: URL.createObjectURL(blob),
+  try {
+    options.signal?.throwIfAborted();
+    const scale = options.thumbnail && options.maxEdge
+      ? Math.min(1, options.maxEdge / Math.max(bitmap.width, bitmap.height))
+      : 1;
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const decoded = {
+      width, height, bits: 8, colors: 4,
+      pixelProvenance: standardPixelProvenance(), metadata,
     };
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const context = canvas.getContext("2d");
-  if (!context) {
+    if (!options.thumbnail && !options.sourcePixels) {
+      return { ...decoded, rgb: new Uint8Array(0), blob, objectUrl: URL.createObjectURL(blob) };
+    }
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create canvas context");
+    context.drawImage(bitmap, 0, 0, width, height);
+    if (options.sourcePixels) {
+      return { ...decoded, rgb: context.getImageData(0, 0, width, height).data };
+    }
+    const outputBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    options.signal?.throwIfAborted();
+    return { ...decoded, rgb: new Uint8Array(0), blob: outputBlob, objectUrl: URL.createObjectURL(outputBlob) };
+  } finally {
     bitmap.close();
-    throw new Error("Could not create canvas context");
   }
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-
-  if (mode === "source") {
-    return {
-      width: canvas.width,
-      height: canvas.height,
-      rgb: imageData.data,
-      bits: 8,
-      colors: 4,
-      pixelProvenance: standardPixelProvenance(),
-      metadata,
-    };
-  }
-
-  const outputBlob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((result) => {
-      if (!result) {
-        reject(new Error("Failed to encode standard image"));
-        return;
-      }
-      resolve(result);
-    }, "image/jpeg", 0.92);
-  });
-
-  return {
-    width: canvas.width,
-    height: canvas.height,
-    rgb: imageData.data,
-    bits: 8,
-    colors: 4,
-    pixelProvenance: standardPixelProvenance(),
-    metadata,
-    blob: outputBlob,
-    objectUrl: URL.createObjectURL(outputBlob),
-  };
 }
 
 function standardPixelProvenance(): DecodedImage["pixelProvenance"] {
@@ -94,58 +57,19 @@ function standardPixelProvenance(): DecodedImage["pixelProvenance"] {
   };
 }
 
-async function resizeBlob(blob: Blob, maxEdge: number): Promise<Blob> {
-  const bitmap = await createImageBitmap(blob);
-  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    bitmap.close();
-    throw new Error("Could not create canvas context");
-  }
-
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((result) => {
-      if (!result) {
-        reject(new Error("Failed to resize image"));
-        return;
-      }
-      resolve(result);
-    }, "image/jpeg", 0.9);
-  });
-}
-
 export const standardImageProfile: ImageProfile = {
   id: "standard",
   extensions: STANDARD_EXTENSIONS,
   detect: (file) =>
     getFormatCapabilityForFileName(file.name)?.profileId === "standard",
-  decode: async (input, options?: DecodeOptions): Promise<DecodedImage> => {
+  decode: async (input, options: DecodeOptions = {}): Promise<DecodedImage> => {
     const mimeType = detectMimeType(input);
-    let blob = new Blob([input as BlobPart], { type: mimeType });
-
-    if (options?.thumbnail && options.maxEdge) {
-      blob = await resizeBlob(blob, options.maxEdge);
-    }
-
-    const mode = options?.sourcePixels
-      ? "source"
-      : options?.thumbnail
-        ? "thumbnail"
-        : "metadata";
+    const blob = new Blob([input as BlobPart], { type: mimeType });
     return blobToDecodedImage(blob, {
       format: mimeType,
       source: "standard",
       decoderProvenance: "standard",
-    }, mode);
+    }, options);
   },
 };
 

@@ -29,7 +29,7 @@ export function resolveProfile(
 
 export function decodeEntry(
   entry: LibraryEntry,
-  options: DecodeOptions & { thumbnail: true; rawSource?: "embedded" },
+  options: DecodeOptions & { thumbnail: true; rawSource?: "embedded"; sourcePixels?: false },
 ): Promise<DecodedImage & { blob: Blob; objectUrl: string }>;
 export function decodeEntry(
   entry: LibraryEntry,
@@ -53,13 +53,20 @@ export async function decodeEntry(
   }
 
   const decode = async () => {
+    options?.signal?.throwIfAborted();
     const file = await getFileFromEntry(entry);
+    options?.signal?.throwIfAborted();
     const buffer = new Uint8Array(await file.arrayBuffer());
-    return profile.decode(buffer, {
+    options?.signal?.throwIfAborted();
+    const decoded = await profile.decode(buffer, {
       ...options,
       relativePath: entry.relativePath,
       assetRequest: getAssetRequest(entry),
+      assetRevision: entry.assetRevision,
     });
+    if (options?.signal?.aborted && decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
+    options?.signal?.throwIfAborted();
+    return decoded;
   };
 
   if (options?.thumbnail) {

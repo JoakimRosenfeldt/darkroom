@@ -6,7 +6,7 @@ import { CatalogFingerprintBackfill } from "@/components/catalog/CatalogFingerpr
 import { loadThumbnailBlob } from "@/lib/cache/thumbnail-cache";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { buildExactDuplicateGroups } from "@/lib/library/duplicates";
+import { getExactDuplicateGroups } from "@/lib/library/duplicates";
 import { useLibraryStore } from "@/stores/library-store";
 import { useLibraryDialog } from "./useLibraryDialog";
 
@@ -29,7 +29,7 @@ export function DuplicateWorkspace() {
   const excludeEntries = useLibraryStore((state) => state.excludeEntries);
   const trashExactDuplicates = useLibraryStore((state) => state.trashExactDuplicates);
   const groups = useMemo(
-    () => buildExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace),
+    () => getExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace),
     [albums, archivedEntryIds, entries, metadata, workspace],
   );
   const [chosenKeepers, setChosenKeepers] = useState<Record<string, string>>({});

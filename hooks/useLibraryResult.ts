@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo } from "react";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
-import { buildQueryIndex } from "@/lib/library/query";
-import { buildExactDuplicateGroups } from "@/lib/library/duplicates";
+import { getQueryIndex } from "@/lib/library/query";
+import { getExactDuplicateGroups } from "@/lib/library/duplicates";
 import { resolveLibraryResult, type LibraryPrimaryScope } from "@/lib/library/result";
 import type { LibraryResultQuery } from "@/lib/library/result-contract";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
@@ -25,11 +25,11 @@ export function useLibraryResult(
   const catalogRevision = useLibraryStore((state) => state.catalogRevision);
   const [settings] = useLibraryViewSettings();
   const queryIndex = useMemo(
-    () => buildQueryIndex(entries, metadata, albums, workspace),
+    () => getQueryIndex(entries, metadata, albums, workspace),
     [entries, metadata, albums, workspace],
   );
   const duplicateEntryIds = useMemo(() => new Set(
-    buildExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace)
+    getExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace)
       .flatMap((group) => group.members.map((member) => member.entry.id)),
   ), [albums, archivedEntryIds, entries, metadata, workspace]);
   const result = useMemo(

@@ -19,8 +19,8 @@ import {
   filterArchivedEntries,
   filterOnlyArchivedEntries,
 } from "@/lib/library/archive";
-import { buildExactDuplicateGroups } from "@/lib/library/duplicates";
-import { isEntryInFolderSubtree, type LibraryPrimaryScope } from "@/lib/library/result";
+import { getExactDuplicateGroups } from "@/lib/library/duplicates";
+import { type LibraryPrimaryScope } from "@/lib/library/result";
 import { useLibraryResult } from "@/hooks/useLibraryResult";
 import { useLibraryStore } from "@/stores/library-store";
 import { CatalogManager } from "@/components/catalog/CatalogManager";
@@ -60,24 +60,23 @@ export function SidePanel() {
     [libraryEntries],
   );
   const duplicateGroups = useMemo(
-    () => buildExactDuplicateGroups(entries, entryMetadata, albums, archivedEntryIds, workspace),
+    () => getExactDuplicateGroups(entries, entryMetadata, albums, archivedEntryIds, workspace),
     [albums, archivedEntryIds, entries, entryMetadata, workspace],
   );
   const filteredFolderCounts = useMemo(() => {
     const matchingIds = new Set(filteredLibrary.matchingEntryIds);
     const matchingEntries = libraryEntries.filter((entry) => matchingIds.has(entry.id));
     const counts = new Map<string, number>();
-    function count(nodes: readonly FolderNode[]) {
-      for (const node of nodes) {
-        counts.set(node.path, matchingEntries.filter((entry) =>
-          isEntryInFolderSubtree(entry, node.path)
-        ).length);
-        count(node.children);
+    for (const entry of matchingEntries) {
+      let slash = entry.relativePath.lastIndexOf("/");
+      while (slash >= 0) {
+        const path = entry.relativePath.slice(0, slash);
+        counts.set(path, (counts.get(path) ?? 0) + 1);
+        slash = path.lastIndexOf("/");
       }
     }
-    count(folderTree.folders);
     return counts;
-  }, [filteredLibrary.matchingEntryIds, folderTree.folders, libraryEntries]);
+  }, [filteredLibrary.matchingEntryIds, libraryEntries]);
   const hasImportedFolder = catalogId !== null && !needsFolderAccess;
 
   return (

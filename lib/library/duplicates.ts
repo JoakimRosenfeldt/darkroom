@@ -21,6 +21,19 @@ export interface ExactDuplicateGroup {
   readonly reclaimableBytes: number;
 }
 
+let cachedInputs: Parameters<typeof buildExactDuplicateGroups> | null = null;
+let cachedResult: ReturnType<typeof buildExactDuplicateGroups> | null = null;
+
+export function getExactDuplicateGroups(...inputs: Parameters<typeof buildExactDuplicateGroups>): ReturnType<typeof buildExactDuplicateGroups> {
+  const previous = cachedInputs;
+  if (previous && cachedResult && inputs.every((value, index) => value === previous[index])) {
+    return cachedResult;
+  }
+  cachedInputs = inputs;
+  cachedResult = buildExactDuplicateGroups(...inputs);
+  return cachedResult;
+}
+
 export function buildExactDuplicateGroups(
   entries: readonly LibraryEntry[],
   metadata: Readonly<Record<string, EntryMetadata>>,

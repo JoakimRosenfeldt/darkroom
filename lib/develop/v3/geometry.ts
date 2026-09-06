@@ -315,19 +315,35 @@ function mapped(point: GeometryPoint): GeometryMapResult {
   };
 }
 
-function mapOutputToStoredWithCrop(
-  output: GeometryPoint,
+interface PreparedOutputToStoredMapper {
+  readonly crop: GeometryCrop;
+  readonly uprightInverse: Homography | null;
+  readonly manualInverse: Homography | null;
+}
+
+function prepareOutputToStoredMapper(
   geometry: CanonicalGeometry,
   crop: GeometryCrop,
+): PreparedOutputToStoredMapper {
+  return {
+    crop,
+    uprightInverse: invertHomography(
+      geometry.upright.enabled ? geometry.upright.matrix : IDENTITY_HOMOGRAPHY,
+    ),
+    manualInverse: invertHomography(geometry.manualPerspective),
+  };
+}
+
+function mapPreparedOutputToStored(
+  output: GeometryPoint,
+  geometry: CanonicalGeometry,
+  prepared: PreparedOutputToStoredMapper,
 ): GeometryMapResult {
+  const { crop, uprightInverse, manualInverse } = prepared;
   let point: GeometryPoint = {
     x: crop.x + output.x * crop.width,
     y: crop.y + output.y * crop.height,
   };
-  const uprightInverse = invertHomography(
-    geometry.upright.enabled ? geometry.upright.matrix : IDENTITY_HOMOGRAPHY,
-  );
-  const manualInverse = invertHomography(geometry.manualPerspective);
   if (!uprightInverse || !manualInverse) {
     return { kind: "unmappable", reason: "A perspective transform is singular." };
   }
@@ -378,6 +394,9 @@ function boundaryIsInside(
   geometry: CanonicalGeometry,
   crop: GeometryCrop,
 ): boolean {
+  const prepared = prepareOutputToStoredMapper(geometry, crop);
+  const mapOutput = (point: GeometryPoint): GeometryMapResult =>
+    mapPreparedOutputToStored(point, geometry, prepared);
   for (let index = 0; index <= CONSTRAIN_SAMPLES_PER_EDGE; index += 1) {
     const position = index / CONSTRAIN_SAMPLES_PER_EDGE;
     const points: readonly GeometryPoint[] = [
@@ -387,7 +406,7 @@ function boundaryIsInside(
       { x: 1, y: position },
     ];
     for (const point of points) {
-      const result = mapOutputToStoredWithCrop(point, geometry, crop);
+      const result = mapOutput(point);
       if (result.kind !== "mapped" || !result.insideDestination) return false;
     }
   }
@@ -420,12 +439,22 @@ export function resolveConstrainedCrop(geometry: CanonicalGeometry): GeometryCro
   });
 }
 
+export function createOutputToStoredMapper(
+  geometry: CanonicalGeometry,
+  effectiveCrop = resolveConstrainedCrop(geometry),
+): (output: GeometryPoint) => GeometryMapResult {
+  const prepared = prepareOutputToStoredMapper(geometry, cropRect(effectiveCrop));
+  return (output) => mapPreparedOutputToStored(output, geometry, prepared);
+}
+
 export function mapOutputToStored(
   output: GeometryPoint,
   geometry: CanonicalGeometry,
   effectiveCrop = resolveConstrainedCrop(geometry),
 ): GeometryMapResult {
-  return mapOutputToStoredWithCrop(output, geometry, cropRect(effectiveCrop));
+  return mapPreparedOutputToStored(
+    output, geometry, prepareOutputToStoredMapper(geometry, cropRect(effectiveCrop)),
+  );
 }
 
 export function mapStoredToCanonical(

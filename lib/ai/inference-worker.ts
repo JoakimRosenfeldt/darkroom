@@ -18,6 +18,7 @@ const IMAGE_STD = [0.229, 0.224, 0.225] as const;
 const SUBJECT_INPUT_SIZE = 512;
 const SKY_INPUT_SIZE = 384;
 const PNG_CHUNK_LIMIT = 65_535;
+const SESSION_IDLE_MS = 60_000;
 
 class CancelledInferenceError extends Error {}
 
@@ -34,6 +35,26 @@ class SafeWorkerError extends Error {
 }
 
 const cancelledRequests = new Set<string>();
+const queuedRequests: AiInferenceWorkerRunRequest[] = [];
+let activeRequestId: string | null = null;
+let drainingRequests = false;
+
+interface CachedInferenceSession {
+  readonly modelId: AiInferenceWorkerRunRequest["modelId"];
+  readonly model: string;
+  readonly backend: "webgpu" | "wasm";
+  readonly session: ort.InferenceSession;
+}
+
+interface WebGpuFailure {
+  readonly modelId: AiInferenceWorkerRunRequest["modelId"];
+  readonly model: string;
+}
+
+let cachedSession: CachedInferenceSession | null = null;
+let sessionIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let sessionRelease: Promise<void> | null = null;
+let webGpuFailure: WebGpuFailure | null = null;
 
 function post(message: AiInferenceWorkerResponse): void {
   self.postMessage(message);
@@ -56,6 +77,112 @@ function report(
     stage,
     progress: Math.max(0, Math.min(1, progress)),
   });
+}
+
+function clearSessionIdleTimer(): void {
+  if (sessionIdleTimer === null) {
+    return;
+  }
+  clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = null;
+}
+
+function scheduleSessionEviction(): void {
+  clearSessionIdleTimer();
+  if (cachedSession === null) {
+    return;
+  }
+  sessionIdleTimer = setTimeout(() => {
+    sessionIdleTimer = null;
+    if (activeRequestId !== null || queuedRequests.length > 0) {
+      scheduleSessionEviction();
+      return;
+    }
+    void releaseCachedSession()
+      .then(() => {
+        webGpuFailure = null;
+      })
+      .catch(() => {
+        webGpuFailure = null;
+      });
+  }, SESSION_IDLE_MS);
+}
+
+async function releaseCachedSession(): Promise<void> {
+  clearSessionIdleTimer();
+  const cached = cachedSession;
+  cachedSession = null;
+  if (sessionRelease !== null) {
+    await sessionRelease;
+  }
+  if (cached === null) {
+    return;
+  }
+  const release = Promise.resolve()
+    .then(() => cached.session.release())
+    .catch(() => undefined);
+  sessionRelease = release;
+  try {
+    await release;
+  } finally {
+    if (sessionRelease === release) {
+      sessionRelease = null;
+    }
+  }
+}
+
+async function getInferenceSession(
+  request: AiInferenceWorkerRunRequest,
+  backend: "webgpu" | "wasm",
+): Promise<ort.InferenceSession> {
+  const model = modelUri(request.modelId);
+  if (
+    webGpuFailure !== null &&
+    (webGpuFailure.modelId !== request.modelId || webGpuFailure.model !== model)
+  ) {
+    webGpuFailure = null;
+  }
+  if (
+    cachedSession !== null &&
+    cachedSession.modelId === request.modelId &&
+    cachedSession.model === model &&
+    cachedSession.backend === backend
+  ) {
+    scheduleSessionEviction();
+    return cachedSession.session;
+  }
+
+  await releaseCachedSession();
+  checkCancelled(request.requestId);
+  let session: ort.InferenceSession;
+  try {
+    session = await ort.InferenceSession.create(model, {
+      executionProviders: [backend],
+      graphOptimizationLevel: "all",
+    });
+  } catch {
+    throw new SafeWorkerError(
+      "model-unavailable",
+      safeMessage("model-unavailable"),
+    );
+  }
+  cachedSession = { modelId: request.modelId, model, backend, session };
+  scheduleSessionEviction();
+  return session;
+}
+
+function hasWebGpuFailure(request: AiInferenceWorkerRunRequest): boolean {
+  const model = modelUri(request.modelId);
+  return webGpuFailure !== null &&
+    webGpuFailure.modelId === request.modelId &&
+    webGpuFailure.model === model;
+}
+
+function rememberWebGpuFailure(request: AiInferenceWorkerRunRequest): void {
+  webGpuFailure = {
+    modelId: request.modelId,
+    model: modelUri(request.modelId),
+  };
 }
 
 function modelUri(modelId: AiInferenceWorkerRunRequest["modelId"]): string {
@@ -375,32 +502,21 @@ async function runBackend(
   backend: "webgpu" | "wasm",
 ): Promise<Uint8Array> {
   const spec = inputSpec(request.modelId);
-  const model = modelUri(request.modelId);
-  let session: ort.InferenceSession;
+  let input: ort.Tensor | undefined;
   try {
-    session = await ort.InferenceSession.create(model, {
-      executionProviders: [backend],
-      graphOptimizationLevel: "all",
-    });
-  } catch {
-    throw new SafeWorkerError(
-      "model-unavailable",
-      safeMessage("model-unavailable"),
-    );
-  }
-  try {
+    const session = await getInferenceSession(request, backend);
     checkCancelled(request.requestId);
-    const input = buildInputTensor(image, request.modelId);
+    input = buildInputTensor(image, request.modelId);
     try {
       const outputs = await session.run(
         { [spec.inputName]: input },
         [spec.outputName],
       );
-      checkCancelled(request.requestId);
       const output = outputs[spec.outputName];
       try {
+        checkCancelled(request.requestId);
         const parsed = await outputData(output, spec.classes);
-        return resizedAlpha(
+        const alpha = resizedAlpha(
           parsed.data,
           parsed.width,
           parsed.height,
@@ -409,14 +525,20 @@ async function runBackend(
           spec.classes,
           request.modelId === "subject",
         );
+        scheduleSessionEviction();
+        return alpha;
       } finally {
         output?.dispose();
       }
     } finally {
       input.dispose();
+      input = undefined;
     }
+  } catch (error) {
+    await releaseCachedSession();
+    throw error;
   } finally {
-    await session.release();
+    input?.dispose();
   }
 }
 
@@ -447,6 +569,7 @@ function toSafeError(error: unknown, fallbackReason?: string): SafeWorkerError {
 
 async function runRequest(request: AiInferenceWorkerRunRequest): Promise<void> {
   assertSourceImage(request.image);
+  const useWarmWasmFallback = hasWebGpuFailure(request);
   report(request.requestId, "preparing", 0.05);
   const image = prepareAiInferenceImage(
     request.image,
@@ -462,6 +585,12 @@ async function runRequest(request: AiInferenceWorkerRunRequest): Promise<void> {
     report(request.requestId, "inference", 0.45);
     alpha = await runBackend(request, image, "wasm");
     backend = "wasm";
+  } else if (useWarmWasmFallback) {
+    fallbackReason = "WebGPU inference was unavailable; used the CPU fallback.";
+    report(request.requestId, "loading-model", 0.3);
+    report(request.requestId, "inference", 0.5);
+    alpha = await runBackend(request, image, "wasm");
+    backend = "wasm";
   } else {
     try {
       report(request.requestId, "loading-model", 0.2);
@@ -470,6 +599,7 @@ async function runRequest(request: AiInferenceWorkerRunRequest): Promise<void> {
       backend = "webgpu";
     } catch (error) {
       checkCancelled(request.requestId);
+      rememberWebGpuFailure(request);
       fallbackReason = "WebGPU inference was unavailable; used the CPU fallback.";
       report(request.requestId, "loading-model", 0.3);
       report(request.requestId, "inference", 0.5);
@@ -521,6 +651,71 @@ async function runRequest(request: AiInferenceWorkerRunRequest): Promise<void> {
   });
 }
 
+async function processRequest(request: AiInferenceWorkerRunRequest): Promise<void> {
+  activeRequestId = request.requestId;
+  try {
+    await runRequest(request);
+  } catch (error: unknown) {
+    await releaseCachedSession();
+    const safe = toSafeError(error);
+    post({
+      kind: "error",
+      requestId: request.requestId,
+      code: safe.code,
+      message: safe.message,
+      ...(safe.fallbackReason ? { fallbackReason: safe.fallbackReason } : {}),
+    });
+  } finally {
+    cancelledRequests.delete(request.requestId);
+    activeRequestId = null;
+  }
+}
+
+async function drainRequests(): Promise<void> {
+  if (drainingRequests) {
+    return;
+  }
+  drainingRequests = true;
+  try {
+    while (queuedRequests.length > 0) {
+      const request = queuedRequests.shift();
+      if (request === undefined) {
+        continue;
+      }
+      if (cancelledRequests.has(request.requestId)) {
+        cancelledRequests.delete(request.requestId);
+        post({
+          kind: "error",
+          requestId: request.requestId,
+          code: "cancelled",
+          message: safeMessage("cancelled"),
+        });
+        continue;
+      }
+      await processRequest(request);
+    }
+  } finally {
+    drainingRequests = false;
+  }
+}
+
+function cancelRequest(requestId: string): void {
+  const queuedIndex = queuedRequests.findIndex((request) => request.requestId === requestId);
+  if (queuedIndex >= 0) {
+    queuedRequests.splice(queuedIndex, 1);
+    post({
+      kind: "error",
+      requestId,
+      code: "cancelled",
+      message: safeMessage("cancelled"),
+    });
+    return;
+  }
+  if (activeRequestId === requestId) {
+    cancelledRequests.add(requestId);
+  }
+}
+
 function isRunRequest(value: unknown): value is AiInferenceWorkerRunRequest {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -561,7 +756,7 @@ self.onmessage = (event: MessageEvent<AiInferenceWorkerRequest>): void => {
     request.kind === "cancel" &&
     typeof request.requestId === "string"
   ) {
-    cancelledRequests.add(request.requestId);
+    cancelRequest(request.requestId);
     return;
   }
   if (!isRunRequest(request)) {
@@ -575,20 +770,8 @@ self.onmessage = (event: MessageEvent<AiInferenceWorkerRequest>): void => {
     });
     return;
   }
-  void runRequest(request)
-    .catch((error: unknown) => {
-      const safe = toSafeError(error);
-      post({
-        kind: "error",
-        requestId: request.requestId,
-        code: safe.code,
-        message: safe.message,
-        ...(safe.fallbackReason ? { fallbackReason: safe.fallbackReason } : {}),
-      });
-    })
-    .finally(() => {
-      cancelledRequests.delete(request.requestId);
-    });
+  queuedRequests.push(request);
+  void drainRequests();
 };
 
 ort.env.wasm.numThreads = 1;

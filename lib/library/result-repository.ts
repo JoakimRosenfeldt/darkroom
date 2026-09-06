@@ -38,6 +38,30 @@ export type LibraryResultResolution =
     };
 
 let memoryState: RepositoryState | null = null;
+let pendingSave: ReturnType<typeof setTimeout> | null = null;
+let listeningForPageHide = false;
+let listeningForStorage = false;
+
+function flushPosition(): void {
+  if (pendingSave === null) return;
+  clearTimeout(pendingSave);
+  pendingSave = null;
+  if (memoryState) {
+    try { saveState(memoryState); }
+    catch (error) { console.warn("Could not remember the current Library position.", error); }
+  }
+}
+
+function deferState(next: RepositoryState): void {
+  memoryState = pruneState(next);
+  if (typeof window === "undefined") return;
+  if (!listeningForPageHide) {
+    window.addEventListener("pagehide", flushPosition);
+    listeningForPageHide = true;
+  }
+  if (pendingSave !== null) clearTimeout(pendingSave);
+  pendingSave = setTimeout(flushPosition, 200);
+}
 
 function emptyState(): RepositoryState {
   return {
@@ -99,6 +123,12 @@ function pruneState(state: RepositoryState, now = Date.now()): RepositoryState {
 }
 
 function loadState(): RepositoryState {
+  if (typeof window !== "undefined" && !listeningForStorage) {
+    window.addEventListener("storage", (event) => {
+      if ((event.key === STORAGE_KEY || event.key === null) && pendingSave === null) memoryState = null;
+    });
+    listeningForStorage = true;
+  }
   if (memoryState !== null) {
     memoryState = pruneState(memoryState);
     return memoryState;
@@ -119,6 +149,7 @@ function loadState(): RepositoryState {
 }
 
 function saveState(next: RepositoryState): void {
+  if (pendingSave !== null) { clearTimeout(pendingSave); pendingSave = null; }
   const pruned = pruneState(next);
   const serialized = JSON.stringify(pruned);
   if (serialized.length > MAX_STORED_BYTES) {
@@ -234,19 +265,7 @@ export function getLibraryResultQuery(resultId: string): LibraryResultQueryRecor
 }
 
 export function getLibraryResultSnapshot(resultId: string): LibraryResultSnapshot | null {
-  let state = loadState();
-  if (typeof window !== "undefined") {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      const persisted = raw !== null && raw.length <= MAX_STORED_BYTES
-        ? parseState(JSON.parse(raw))
-        : null;
-      state = pruneState(persisted ?? emptyState());
-      memoryState = state;
-    } catch {
-      return null;
-    }
-  }
+  const state = loadState();
   const snapshot = state.snapshots.find((item) => item.id === resultId);
   return snapshot ? structuredClone(snapshot) : null;
 }
@@ -254,10 +273,11 @@ export function getLibraryResultSnapshot(resultId: string): LibraryResultSnapsho
 function pinAndSave(
   state: RepositoryState,
   snapshot: LibraryResultSnapshot,
+  deferred = false,
 ): LibraryResultSnapshot {
   const now = Date.now();
   const pinned = { ...snapshot, pinned: true, updatedAt: now };
-  saveState({
+  (deferred ? deferState : saveState)({
     ...state,
     activeResultId: pinned.id,
     snapshots: state.snapshots.map((item) => item.id === pinned.id
@@ -341,7 +361,7 @@ export function resolveLibraryResultSnapshot(input: {
       input.availableEntryIds,
     );
     if (activeEntryId === null) {
-      pinAndSave(state, { ...existing, missingEntryIds: nextMissing });
+      pinAndSave(state, { ...existing, missingEntryIds: nextMissing }, true);
       return {
         status: "empty",
         snapshot: null,
@@ -353,7 +373,7 @@ export function resolveLibraryResultSnapshot(input: {
       ...existing,
       missingEntryIds: nextMissing,
       activeEntryId,
-    });
+    }, true);
     const prefix = activeEntryId === input.requestedEntryId
       ? null
       : "The requested photo is missing. Showing the nearest available photo.";
@@ -483,7 +503,7 @@ export function updateLibraryResultActive(resultId: string, activeEntryId: strin
   if (!current || current.activeEntryId === activeEntryId || !current.orderedEntryIds.includes(activeEntryId)) {
     return;
   }
-  pinAndSave(state, { ...current, activeEntryId });
+  pinAndSave(state, { ...current, activeEntryId }, true);
 }
 
 export const LIBRARY_RESULT_RETENTION = {

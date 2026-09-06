@@ -24,6 +24,9 @@ export function renderEditedPreview(
     const image = await loadDevelopImage(entry, {
       rawColorMode: document.version === 3 ? "libraw-camera-matrix" : "decoder-rendered",
       maxEdge: Math.max(360, maxEdge),
+      cache: "thumbnail",
+      includeBlob: document.version === 2,
+      signal: options.signal,
       priority: options.priority,
     });
     options.signal?.throwIfAborted();
