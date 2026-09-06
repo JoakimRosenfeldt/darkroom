@@ -9,6 +9,8 @@ import type {
   V3PreviewWorkerResponse,
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
+import type { ExportSizeOptions } from "@/lib/export/types";
+import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
 
 interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
@@ -124,5 +126,19 @@ export class V3PreviewWorkerClient {
       pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     }
     this.#pending.clear();
+  }
+
+  renderExport(
+    document: DevelopDocumentV3,
+    size: ExportSizeOptions,
+    maskMattes: readonly V3PreviewWorkerMaskMatte[] = [],
+    region?: RenderRegion,
+  ): Promise<V3PreviewWorkerRenderResult> {
+    if (this.#disposed) return Promise.resolve({ backend: "cpu", result: { kind: "cancelled" } });
+    const requestId = ++this.#nextRequestId;
+    return new Promise((resolve, reject) => {
+      this.#pending.set(requestId, { resolve, reject });
+      this.#worker.postMessage({ kind: "export", requestId, document, size, maskMattes, region });
+    });
   }
 }

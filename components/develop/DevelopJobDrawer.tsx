@@ -1,5 +1,7 @@
 "use client";
 
+import { useExperimentalTools } from "@/hooks/useExperimentalTools";
+
 import { useEffect, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
@@ -22,6 +24,7 @@ function subscribeRuntime(): () => void {
 }
 
 export function DevelopJobDrawer() {
+  const [experimental] = useExperimentalTools();
   const router = useRouter();
   const jobs = useDevelopJobStore((state) => state.jobs);
   const initialize = useDevelopJobStore((state) => state.initialize);
@@ -33,6 +36,7 @@ export function DevelopJobDrawer() {
   }, [available, initialize]);
   if (!available) return null;
   const visible = jobs.filter((job) => job.status !== "discarded");
+  if (!experimental && !visible.some((job) => job.status === "running" || job.status === "queued" || job.status === "preparing" || job.status === "postprocess" || job.status === "accepting" || job.status === "awaiting-review" || job.status === "interrupted")) return null;
   const openDevelop = (entryId: string): void => {
     const result = getVisibleLibraryResult();
     if (!result.query || !result.entryIds.includes(entryId)) return;

@@ -16,7 +16,7 @@ export function PanelSection({
   return (
     <section className="border-b border-lr-border-subtle px-4 pb-[18px] pt-3.5">
       <div className="mb-2.5 flex items-center gap-2">
-        <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
           {title}
         </h3>
         <div className="flex-1" />
@@ -25,7 +25,7 @@ export function PanelSection({
           <button
             type="button"
             onClick={onReset}
-            className="text-[10px] text-lr-text-faint hover:text-lr-text"
+            className="text-xs text-lr-text-faint hover:text-lr-text"
           >
             Reset
           </button>
@@ -38,7 +38,7 @@ export function PanelSection({
 
 export function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <h4 className="mb-1.5 mt-3 text-[10px] font-medium text-lr-text-muted first:mt-0">
+    <h4 className="mb-1.5 mt-3 text-xs font-medium text-lr-text-muted first:mt-0">
       {children}
     </h4>
   );
@@ -70,7 +70,7 @@ export function ToggleRow({
       />
       <span className="text-lr-text-muted">{label}</span>
       {detail ? (
-        <span className="ml-auto max-w-[168px] text-right text-[10px] leading-4 text-lr-text-faint">
+        <span className="ml-auto max-w-[168px] text-right text-xs leading-4 text-lr-text-faint">
           {detail}
         </span>
       ) : null}
@@ -98,7 +98,7 @@ export function SelectRow({
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-[11px] text-lr-text outline-none focus:border-lr-text-dim"
+        className="min-w-0 rounded-md border border-lr-border-subtle bg-lr-panel-raised px-2 py-1.5 text-xs text-lr-text outline-none focus:border-lr-text-dim"
       >
         {children}
       </select>
@@ -122,8 +122,8 @@ export function StatusCard({
       : "text-lr-text-muted";
   return (
     <div className="rounded-[7px] border border-lr-border-subtle bg-lr-panel-raised/55 p-2.5">
-      <p className={`text-[10px] font-semibold ${color}`}>{title}</p>
-      <div className="mt-1 text-[10px] leading-4 text-lr-text-faint">
+      <p className={`text-xs font-semibold ${color}`}>{title}</p>
+      <div className="mt-1 text-xs leading-4 text-lr-text-faint">
         {children}
       </div>
     </div>
@@ -150,7 +150,7 @@ export function ActionButton({
       aria-pressed={pressed}
       disabled={disabled}
       onClick={onClick}
-      className={`rounded-[7px] border px-2.5 py-1.5 text-[11px] transition disabled:pointer-events-none disabled:opacity-40 ${
+      className={`rounded-[7px] border px-2.5 py-1.5 text-xs transition disabled:pointer-events-none disabled:opacity-40 ${
         pressed
           ? "border-lr-text-dim bg-lr-panel-raised text-lr-text"
           : "border-lr-border-subtle text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"

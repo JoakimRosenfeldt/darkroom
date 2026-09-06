@@ -918,7 +918,7 @@ export class CatalogLiveRepository {
       ...(patch.patch.rating === undefined ? {} : { rating: patch.patch.rating }),
       ...(patch.patch.colorLabel === undefined ? {} : { colorLabel: patch.patch.colorLabel }),
       ...(patch.patch.developJson === undefined ? {} : { developJson: patch.patch.developJson }),
-      ...(patch.patch.developUpdatedAt === undefined ? {} : { developUpdatedAt: patch.patch.developUpdatedAt }),
+      ...(patch.patch.developUpdatedAt === undefined ? {} : { developUpdatedAt: Math.max(current.developUpdatedAt, patch.patch.developUpdatedAt) }),
       updatedAt: patch.patch.updatedAt ?? now,
       ...(patch.patch.title === undefined ? {} : { title: patch.patch.title }),
       ...(patch.patch.caption === undefined ? {} : { caption: patch.patch.caption }),
@@ -1660,16 +1660,18 @@ export class CatalogLiveRepository {
           const document = parseDevelopHistoryDocument(
             parsed.patch.developJson === null ? null : JSON.parse(parsed.patch.developJson) as unknown,
           );
+          const staleDevelop = parsed.patch.developUpdatedAt !== undefined &&
+            parsed.patch.developUpdatedAt <= current.developUpdatedAt;
           const metadataMutation = {
             ...parsed,
-            patch: { ...parsed.patch, developJson: undefined },
+            patch: { ...parsed.patch, developJson: undefined, ...(staleDevelop ? { developUpdatedAt: undefined } : {}) },
           };
           changed = this.applyMutation(validated.catalogId, metadataMutation, now) || changed;
           const currentJson = current.developJson === null
             ? "null"
             : canonicalDevelopHistoryDocument(JSON.parse(current.developJson) as unknown);
           const nextJson = canonicalDevelopHistoryDocument(document);
-          if (currentJson !== nextJson) {
+          if (!staleDevelop && currentJson !== nextJson) {
             const head = history.load({ catalogId: validated.catalogId, entryId, revisionId: null });
             if (head.kind !== "loaded") throw new Error("Develop history needs recovery before this edit can be saved.");
             const createdAt = parsed.patch.developUpdatedAt ?? parsed.patch.updatedAt ?? now;

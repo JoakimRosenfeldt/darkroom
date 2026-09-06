@@ -1,5 +1,6 @@
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
+import { renderV3Cpu, renderV3CpuRegion } from "@/lib/develop/v3/cpu-backend";
 import {
   V3GpuPreviewRenderer,
   v3GpuPreviewSupport,
@@ -16,12 +17,13 @@ import type {
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
 
-type RenderMessage = Extract<V3PreviewWorkerRequest, { readonly kind: "render" }>;
+type RenderMessage = Exclude<V3PreviewWorkerRequest, { readonly kind: "initialize" }>;
 
 let entry: LibraryEntry | null = null;
 let image: DevelopImage | null = null;
 let pendingRender: RenderMessage | null = null;
 let renderScheduled = false;
+let rendering = false;
 let gpuRenderer: V3GpuPreviewRenderer | null = null;
 
 function post(response: V3PreviewWorkerResponse, transfer: Transferable[] = []): void {
@@ -54,7 +56,7 @@ function assetsFor(message: RenderMessage): CpuAssetAvailability | undefined {
 }
 
 function scheduleRender(): void {
-  if (renderScheduled) return;
+  if (renderScheduled || rendering) return;
   renderScheduled = true;
   setTimeout(() => {
     void renderLatest();
@@ -75,8 +77,18 @@ async function renderLatest(): Promise<void> {
     return;
   }
 
+  rendering = true;
   try {
     const assets = assetsFor(message);
+    if (message.kind === "export") {
+      const request = { kind: "v3-export", entry, image, size: message.size, format: "jpeg", assets } as const;
+      const prepared = await prepareV3RuntimeRender(message.document, request);
+      const result = message.region && prepared.kind === "prepared"
+        ? await renderV3CpuRegion(prepared.input, message.region)
+        : prepared.kind !== "prepared" ? prepared : await renderV3Cpu(prepared.input);
+      post({ kind: "result", requestId: message.requestId, backend: "cpu", result }, transferList(result));
+      return;
+    }
     const runtimeRequest = {
       kind: "v3-preview",
       entry,
@@ -120,9 +132,10 @@ async function renderLatest(): Promise<void> {
       requestId: message.requestId,
       message: error instanceof Error ? error.message : "Could not render the preview.",
     });
+  } finally {
+    rendering = false;
+    if (pendingRender) scheduleRender();
   }
-
-  if (pendingRender) scheduleRender();
 }
 
 self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest>): void => {

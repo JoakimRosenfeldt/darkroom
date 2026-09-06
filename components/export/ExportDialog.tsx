@@ -76,7 +76,7 @@ function stateLabel(result: ExportFileResult): string {
     case "active": return phaseLabel(result.state.phase);
     case "completed": return result.state.warnings.length > 0 ? "Completed with warning" : "Completed";
     case "skipped": return "Skipped";
-    case "cancelled": return "Not started";
+    case "cancelled": return "Cancelled";
     case "failed": return result.state.retryable ? "Failed, retryable" : "Failed";
     default: {
       const exhaustive: never = result.state;
@@ -199,6 +199,8 @@ function normalizePreferences(
   if (typeof persisted.lossless === "boolean") {
     next.lossless = persisted.lossless && Boolean(selected?.supportsLossless);
   }
+  next.metadata = persisted.metadata === "none" || persisted.metadata === "copyright" ? persisted.metadata : "all";
+  next.includeLocation = persisted.includeLocation === true;
   next.size = normalizeSize(persisted.size);
   if (typeof persisted.suffix === "string" && !validateSuffix(persisted.suffix)) {
     next.suffix = persisted.suffix;
@@ -244,6 +246,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   const [quality, setQuality] = useState(DEFAULT_PREFERENCES.quality);
   const [lossless, setLossless] = useState(DEFAULT_PREFERENCES.lossless);
   const [size, setSize] = useState<ExportSizeOptions>(defaultSize);
+  const [metadataMode, setMetadataMode] = useState<"all" | "copyright" | "none">("all");
+  const [includeLocation, setIncludeLocation] = useState(false);
   const [suffix, setSuffix] = useState(DEFAULT_PREFERENCES.suffix);
   const [conflict, setConflict] = useState<ExportConflictBehavior>(DEFAULT_PREFERENCES.conflict);
   const [dialogState, setDialogState] = useState<DialogState>("idle");
@@ -297,6 +301,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         setQuality(next.quality);
         setLossless(next.lossless);
         setSize(next.size);
+        setMetadataMode(next.metadata ?? "all");
+        setIncludeLocation(next.includeLocation === true);
         setSuffix(next.suffix);
         setConflict(next.conflict);
       })
@@ -390,6 +396,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         size,
         suffix,
         conflict,
+        metadata: metadataMode,
+        includeLocation,
       };
       await api.setExportOptions(persisted).catch(() => undefined);
 
@@ -405,12 +413,15 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
           lossless: selectedFormat.supportsLossless ? lossless : undefined,
           suffix,
           conflict,
+          metadata: metadataMode,
+          includeLocation,
         },
         onProgress: ({ phase: nextPhase, entry, results }) => {
           setPhase(nextPhase);
           setCurrentEntry(entry);
           setLiveResults(previous ? mergeProgressRows(previous.results, results) : results);
         },
+        sourceMetadata: Object.fromEntries(Object.entries(useLibraryStore.getState().libraryWorkspace.analysisByEntryId).map(([id, analysis]) => [id, analysis.source])),
         isCancelled: () => cancelledRef.current,
       });
       const nextSummary = previous
@@ -457,6 +468,8 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
       inFlightRef.current = false;
     }
   }, [
+    metadataMode,
+    includeLocation,
     conflict,
     format,
     lossless,
@@ -679,6 +692,13 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                   WebP lossless
                 </label>
               ) : null}
+              <p className="col-span-2 text-xs text-lr-text-muted">8-bit sRGB with an embedded color profile. JPEG quality 90 is a good everyday starting point.</p>
+              <Field label="Metadata">
+                <select className="control" value={metadataMode} onChange={(event) => setMetadataMode(event.target.value as "all" | "copyright" | "none")}>
+                  <option value="all">Camera and description</option><option value="copyright">Copyright only</option><option value="none">None</option>
+                </select>
+              </Field>
+              <label className="flex items-center gap-2 text-xs text-lr-text-muted"><input type="checkbox" disabled={metadataMode !== "all"} checked={includeLocation} onChange={(event) => setIncludeLocation(event.target.checked)} />Include GPS location</label>
               <Field label="Filename suffix">
                 <input
                   type="text"
@@ -748,7 +768,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
             </div>
             <div className="flex items-center gap-2">
               <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-lr-text-muted">{currentEntry?.name ?? "Preparing export…"}</p>
-              <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Stop after this file</button>
+              <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Stop export</button>
             </div>
             <div className="max-h-44 space-y-1 overflow-auto rounded border border-lr-border-subtle bg-lr-panel p-1.5">
               {liveResults.map((result) => <ExportResultRow key={result.entryId} result={result} />)}
@@ -762,11 +782,11 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
               <SummaryStat label="Exported" value={summary.exported} tone="good" />
               <SummaryStat label="Skipped" value={summary.skipped} tone="muted" />
               <SummaryStat label="Failed" value={summary.failed} tone="bad" />
-              <SummaryStat label="Not started" value={summary.cancelled} tone="muted" />
+              <SummaryStat label="Cancelled" value={summary.cancelled} tone="muted" />
             </div>
             {summary.cancelled > 0 ? (
               <p className="text-xs text-amber-300">
-                Export stopped. {summary.cancelled} queued file{summary.cancelled === 1 ? " was" : "s were"} not started.
+                Export stopped. {summary.cancelled} file{summary.cancelled === 1 ? " was" : "s were"} not written.
               </p>
             ) : null}
             {summary.warnings.length > 0 ? (
@@ -787,7 +807,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
             <div className="flex items-center justify-end gap-2">
               {summary.results.some((result) => result.state.kind === "cancelled" && result.state.reason === "not-started") ? (
                 <button type="button" onClick={() => void resumeCancelled()} className="button-secondary">
-                  Resume not started
+                  Resume remaining
                 </button>
               ) : null}
               {summary.results.some((result) =>

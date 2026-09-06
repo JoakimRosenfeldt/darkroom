@@ -10,6 +10,7 @@ import {
   mapOutputToStored,
   mapStoredToOutput,
   resolveConstrainedCrop,
+  invertHomography,
   type CanonicalGeometry,
   type GeometryMapResult,
   type GeometryPoint,
@@ -20,7 +21,7 @@ import {
   NEUTRAL_LENS_CALIBRATION,
   type LensCalibration,
 } from "./optics";
-import type { Rgb } from "./profiles";
+import { effectiveInputCalibration, type Rgb } from "./profiles";
 
 export type CanvasSourceSampleResult =
   | { readonly kind: "sampled"; readonly samples: readonly Rgb[] }
@@ -197,6 +198,38 @@ export function sampleV3SourceLinear(
         return { kind: "unavailable", reason: `The ${transfer.kind} transfer cannot be sampled as linear RGB.` };
       }
       samples.push(sample);
+    }
+  }
+  return { kind: "sampled", samples };
+}
+
+export function sampleWhiteBalanceSource(
+  image: DevelopImage,
+  source: SourceRecord,
+  document: DevelopDocumentV3,
+  point?: GeometryPoint,
+): CanvasSourceSampleResult {
+  const calibration = effectiveInputCalibration(source, document.color.inputProfile);
+  const inverse = invertHomography(calibration.matrixToLinearSrgb);
+  if (!inverse) return { kind: "unavailable", reason: "This camera profile cannot be sampled." };
+  const neutral: Rgb = [
+    (inverse[0] + inverse[1] + inverse[2]) / calibration.channelScale[0],
+    (inverse[3] + inverse[4] + inverse[5]) / calibration.channelScale[1],
+    (inverse[6] + inverse[7] + inverse[8]) / calibration.channelScale[2],
+  ];
+  if (!neutral.every((value) => Number.isFinite(value) && value > 0)) {
+    return { kind: "unavailable", reason: "This camera profile has no usable neutral reference." };
+  }
+  const samples: Rgb[] = [];
+  const grid = point ? 1 : 20;
+  for (let y = 0; y < grid; y += 1) {
+    for (let x = 0; x < grid; x += 1) {
+      const sampled = sampleV3SourceLinear(image, source, point ?? { x: (x + 0.5) / grid, y: (y + 0.5) / grid });
+      if (sampled.kind === "unavailable") return sampled;
+      for (const rgb of sampled.samples) {
+        if (rgb.some((channel) => channel >= 0.99) || Math.max(...rgb) < 0.01) continue;
+        samples.push([rgb[0] / neutral[0], rgb[1] / neutral[1], rgb[2] / neutral[2]]);
+      }
     }
   }
   return { kind: "sampled", samples };

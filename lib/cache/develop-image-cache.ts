@@ -23,6 +23,9 @@ export interface DevelopImage {
 
 export interface DevelopImageLoadOptions {
   readonly rawColorMode?: "decoder-rendered" | "libraw-camera-matrix";
+  readonly maxEdge?: number;
+  readonly signal?: AbortSignal;
+  readonly priority?: number;
 }
 
 const MAX_DEVELOP_IMAGES = 3;
@@ -59,14 +62,15 @@ function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): Devel
 function cacheKey(
   entry: LibraryEntry,
   rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]>,
+  maxEdge: number,
 ): string {
   return assetCacheKey({
     catalogId: entry.catalogId,
     assetId: entry.assetId,
     revision: entry.assetRevision,
   }, entry.formatId === "nef" && rawColorMode === "libraw-camera-matrix"
-    ? "develop-libraw-camera-matrix-v1"
-    : "develop");
+    ? `develop-libraw-camera-matrix-v1-${maxEdge}`
+    : `develop-${maxEdge}`);
 }
 
 function cameraProfileDecode(
@@ -104,7 +108,8 @@ export async function loadDevelopImage(
   options: DevelopImageLoadOptions = {},
 ): Promise<DevelopImage> {
   const rawColorMode = options.rawColorMode ?? "decoder-rendered";
-  const key = cacheKey(entry, rawColorMode);
+  const maxEdge = options.maxEdge ?? PREVIEW_MAX_EDGE;
+  const key = cacheKey(entry, rawColorMode, maxEdge);
   const cached = imageCache.get(key);
   if (cached) {
     imageCache.delete(key);
@@ -120,9 +125,14 @@ export async function loadDevelopImage(
   const load = decodeEntry(entry, {
     thumbnail: true,
     rawSource: "developed",
-    maxEdge: PREVIEW_MAX_EDGE,
+    maxEdge,
+    priority: options.priority,
     cameraProfile: cameraProfileDecode(entry, rawColorMode),
   }).then((decoded) => {
+    if (decoded.pixelProvenance.decoderPath === "embedded-preview") {
+      if (decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
+      throw new Error("Full RAW decoding failed. Only an embedded JPEG preview is available. Check the Nikon decoder in Support / Formats before editing.");
+    }
     const image = toDevelopImage(decoded);
     rememberImage(key, image);
     return image;
@@ -144,6 +154,8 @@ export async function loadDevelopExportImage(
   const rawColorMode = options.rawColorMode ?? "decoder-rendered";
   const decoded = await decodeEntry(entry, {
     fullResolution: true,
+    sourcePixels: true,
+    signal: options.signal,
     cameraProfile: cameraProfileDecode(entry, rawColorMode),
   });
   return toDevelopImage(decoded);
@@ -180,6 +192,7 @@ export function disposeDevelopImage(image: DevelopImage): void {
 export function preloadDevelopImages(
   entries: LibraryEntry[],
   activeIndex: number,
+  options: DevelopImageLoadOptions = {},
 ): void {
   if (activeIndex < 0) {
     return;
@@ -188,7 +201,7 @@ export function preloadDevelopImages(
   for (const index of [activeIndex + 1, activeIndex - 1]) {
     const entry = entries[index];
     if (entry) {
-      void loadDevelopImage(entry).catch(() => {
+      void loadDevelopImage(entry, options).catch(() => {
         // Preloading is best-effort and should not surface UI errors.
       });
     }

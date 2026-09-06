@@ -383,3 +383,39 @@ test("worker create, apply, query, close and reopen preserve live state", async 
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
+
+test("a delayed catalog snapshot cannot replace a newer Develop head", async () => {
+  const { DevelopHistoryRepository } = await import("../electron/develop-history-repository.ts");
+  const { createDevelopRevisionId } = await import("../lib/develop/history.ts");
+  const { parseEntryId } = await import("../lib/catalog/ids.ts");
+  const database = new DatabaseSync(":memory:", { enableForeignKeyConstraints: true });
+  const repository = new CatalogLiveRepository(database);
+  const created = createInput("/tmp/darkroom-stale-develop");
+  const assetId = createAssetId();
+  try {
+    repository.create(created);
+    const indexed = repository.apply({ catalogId: created.catalogId, expectedRevision: 1, now: 20, mutations: [{
+      kind: "reconcile-complete", rootId: created.root.rootId,
+      observations: [{ assetId, relativePath: "photo.jpg", observation: observation(20), health: "present", formatId: "jpeg", cameraMake: null, cameraModel: null, lensModel: null }],
+    }] });
+    const history = new DevelopHistoryRepository(database);
+    const entryId = parseEntryId(assetId);
+    const root = history.load({ catalogId: created.catalogId, entryId, revisionId: null });
+    assert.equal(root.kind, "loaded");
+    if (root.kind !== "loaded") throw new Error("Missing test head");
+    const revisionId = createDevelopRevisionId();
+    history.commit({ catalogId: created.catalogId, entryId, revisionId, expectedParentRevisionId: root.value.revisionId, operationId: createOperationId(), label: "Latest edit", document: { exposure: 1.25 }, createdAt: 200 });
+    const applied = repository.apply({ catalogId: created.catalogId, expectedRevision: indexed.revision, now: 300, mutations: [
+      { kind: "metadata-patch", assetId, patch: { version: 1, developUpdatedAt: 100 } },
+      { kind: "metadata-patch", assetId, patch: { version: 1, title: "Still save metadata", developJson: JSON.stringify({ exposure: 0.75 }), developUpdatedAt: 150 } },
+    ] });
+    const head = history.load({ catalogId: created.catalogId, entryId, revisionId: null });
+    assert.equal(head.kind, "loaded");
+    if (head.kind !== "loaded") throw new Error("Missing test head");
+    assert.equal(head.value.revisionId, revisionId);
+    assert.equal(JSON.stringify(head.value.document), JSON.stringify({ exposure: 1.25 }));
+    const state = repository.query({ catalogId: created.catalogId, expectedRevision: applied.revision });
+    assert.equal(state.assets[0]?.metadata.title, "Still save metadata");
+    assert.equal(state.assets[0]?.metadata.developUpdatedAt, 200);
+  } finally { database.close(); }
+});

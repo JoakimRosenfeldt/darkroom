@@ -194,7 +194,7 @@ export function PhotoViewer({
       : null;
   });
   const developProcessKind = useDevelopStore(
-    (state) => state.sessions[entry.id]?.processKind ?? "v2",
+    (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
   );
   const undo = useDevelopStore((state) => state.undo);
   const redo = useDevelopStore((state) => state.redo);
@@ -332,7 +332,9 @@ export function PhotoViewer({
           return;
         }
         setDecoded(result);
-        preloadDevelopImages(entries, availableActiveIndex);
+        preloadDevelopImages(entries, availableActiveIndex, {
+          rawColorMode: developProcessKind === "v3" ? "libraw-camera-matrix" : "decoder-rendered",
+        });
       } catch (loadError) {
         if (active) {
           setError(

@@ -1,8 +1,8 @@
+import { parseOperationId } from "@/lib/catalog/ids";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   disposeDevelopImage,
   loadDevelopExportImage,
-  loadDevelopInferenceImage,
   type DevelopImage,
 } from "@/lib/cache/develop-image-cache";
 import { FrozenV2Renderer } from "@/lib/develop/frozen-v2-backend";
@@ -10,7 +10,10 @@ import { resolveDevelopDocumentFromRepository } from "@/lib/develop/repository";
 import { DevelopSessionCore, getActiveDevelopSession } from "@/lib/develop/session";
 import type { CpuRenderResult } from "@/lib/develop/v3/cpu-backend";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
-import { serializeDevelopXmp, serializeMetadataXmp } from "@/lib/develop/xmp";
+import { exportMetadata } from "./metadata";
+import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
+import { loadV3PreviewMaskMattes } from "@/lib/develop/v3/runtime";
+import type { SourceMetadataSnapshot } from "@/lib/metadata/types";
 import type { MetadataOverrides } from "@/lib/metadata/types";
 import { getDarkroomAPI } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -54,6 +57,7 @@ export interface ExportRunnerOptions {
   readonly entries: readonly LibraryEntry[];
   readonly metadata: Readonly<Record<string, EntryMetadata>>;
   readonly metadataOverrides: Readonly<Record<string, MetadataOverrides>>;
+  readonly sourceMetadata?: Readonly<Record<string, SourceMetadataSnapshot | null>>;
   readonly destinationToken: string;
   readonly options: Omit<ExportJobOptions, "destinationToken">;
   readonly onProgress?: (progress: ExportProgress) => void;
@@ -73,9 +77,11 @@ export interface ExportEntryExecutionInput {
   readonly entry: LibraryEntry;
   readonly metadata: Readonly<Record<string, EntryMetadata>>;
   readonly metadataOverrides: Readonly<Record<string, MetadataOverrides>>;
+  readonly sourceMetadata?: Readonly<Record<string, SourceMetadataSnapshot | null>>;
   readonly destinationToken: string;
   readonly options: Omit<ExportJobOptions, "destinationToken">;
   readonly setPhase: (phase: ExportPhase) => void;
+  readonly isCancelled?: () => boolean;
 }
 
 export interface ExportRunnerAdapter {
@@ -243,6 +249,13 @@ function createDefaultAdapter(): ExportRunnerAdapter {
     async executeEntry(input) {
       const { entry, metadata, metadataOverrides, destinationToken, options, setPhase } = input;
       let exportImage: DevelopImage | null = null;
+      let worker: V3PreviewWorkerClient | null = null;
+      const controller = new AbortController();
+      const checkCancellation = () => {
+        if (input.isCancelled?.()) controller.abort();
+        controller.signal.throwIfAborted();
+      };
+      const timer = window.setInterval(() => { if (input.isCancelled?.()) { controller.abort(); worker?.dispose(); } }, 50);
       try {
         const entryMetadata = getMetadata(metadata, entry);
         const developSession = await resolveSession(entry, entryMetadata);
@@ -251,22 +264,17 @@ function createDefaultAdapter(): ExportRunnerAdapter {
           throw new Error(developSnapshot.readOnly.message);
         }
         exportImage = await loadDevelopExportImage(entry, {
+          signal: controller.signal,
           rawColorMode: developSnapshot.processKind === "v3"
             ? "libraw-camera-matrix"
             : "decoder-rendered",
         });
 
         setPhase("render");
-        let renderSnapshot = developSession.snapshot();
-        if (renderSnapshot.processKind === "v3" && !hasCompleteSourcePixels(exportImage)) {
-          const pixelImage = await loadDevelopInferenceImage(entry);
-          exportImage = {
-            ...pixelImage,
-            blob: exportImage.blob,
-            objectUrl: exportImage.objectUrl,
-          };
-          renderSnapshot = developSession.snapshot();
-        }
+        checkCancellation();
+        if (exportImage.pixelProvenance.decoderPath === "embedded-preview") throw new Error("Full RAW decoding failed. Exporting its embedded preview is disabled.");
+        const renderSnapshot = developSession.snapshot();
+        if (renderSnapshot.processKind === "v3" && !hasCompleteSourcePixels(exportImage)) throw new Error("Full-resolution source pixels are unavailable.");
         if (renderSnapshot.processKind === "read-only-newer") {
           throw new Error(renderSnapshot.readOnly.message);
         }
@@ -282,16 +290,13 @@ function createDefaultAdapter(): ExportRunnerAdapter {
             renderer,
           });
         } else {
-          const rendered = await developSession.render({
-            kind: "v3-export",
-            entry,
-            image: exportImage,
-            size: options.size,
-            format: options.format,
-            quality: options.quality,
-            lossless: options.lossless,
-          });
+          worker = new V3PreviewWorkerClient(entry, exportImage);
+          const mattes = await loadV3PreviewMaskMattes(renderSnapshot.document, entry, exportImage);
+          checkCancellation();
+          const { result: rendered } = await worker.renderExport(renderSnapshot.document, options.size, mattes);
+          checkCancellation();
           if (rendered.kind !== "rendered") throw new Error(v3RenderError(rendered));
+          if ("bitmap" in rendered) throw new Error("Export returned preview pixels.");
           const embeddedPreview = exportImage.metadata.decoderProvenance === "embedded";
           pixels = {
             pixels: rendered.pixels.pixels,
@@ -306,23 +311,15 @@ function createDefaultAdapter(): ExportRunnerAdapter {
         }
 
         setPhase("encode");
-        const descriptive: MetadataOverrides = {
-          ...(entryMetadata.title === null
-            ? {}
-            : { title: { kind: "set" as const, value: entryMetadata.title } }),
-          ...(entryMetadata.caption === null
-            ? {}
-            : { caption: { kind: "set" as const, value: entryMetadata.caption } }),
-          ...(entryMetadata.copyright === null
-            ? {}
-            : { copyright: { kind: "set" as const, value: entryMetadata.copyright } }),
-          ...(entryMetadata.keywords.length === 0
-            ? {}
-            : { keywords: { kind: "set" as const, value: entryMetadata.keywords } }),
-          ...metadataOverrides[entry.id],
-        };
-        const developXmp = serializeDevelopXmp(renderSnapshot.document, entryMetadata, null);
-        const outputXmp = serializeMetadataXmp(developXmp, descriptive);
+        checkCancellation();
+        let sourceMetadata = input.sourceMetadata?.[entry.id] ?? null;
+        if (options.metadata !== "none" && sourceMetadata === null) {
+          const analysis = await api.catalogAnalyzeMetadata({ catalogId: entry.catalogId, sessionId: entry.sessionId, operationId: parseOperationId(crypto.randomUUID()), entryIds: [entry.assetId], force: false });
+          sourceMetadata = analysis.items.find((item) => item.entryId === entry.assetId)?.analysis.source ?? null;
+          checkCancellation();
+          if (sourceMetadata === null) throw new Error("Source metadata could not be read. Retry or choose Metadata: None.");
+        }
+        const outputMetadata = exportMetadata(entryMetadata, metadataOverrides[entry.id] ?? {}, sourceMetadata, options.metadata ?? "all", options.includeLocation === true);
         const encodeOptions = toEncodeOptions(options);
         const copySuffix = virtualCopyFilenameSuffix(entry, encodeOptions.suffix);
 
@@ -335,7 +332,7 @@ function createDefaultAdapter(): ExportRunnerAdapter {
             ...encodeOptions,
             ...(copySuffix === null ? {} : { filenameSuffix: copySuffix }),
             size: { mode: "original" },
-            xmp: outputXmp,
+            ...outputMetadata,
           },
         );
         if (encoded.status === "skipped") {
@@ -350,6 +347,8 @@ function createDefaultAdapter(): ExportRunnerAdapter {
         );
         return { kind: "completed", outputPath: encoded.path, warnings };
       } finally {
+        window.clearInterval(timer);
+        worker?.dispose();
         if (exportImage) disposeDevelopImage(exportImage);
       }
     },
@@ -459,6 +458,8 @@ export async function runExportBatch(
           entry,
           metadata: runnerOptions.metadata,
           metadataOverrides: runnerOptions.metadataOverrides,
+          sourceMetadata: runnerOptions.sourceMetadata,
+          isCancelled,
           destinationToken: runnerOptions.destinationToken,
           options: runnerOptions.options,
           setPhase(nextPhase) {
@@ -478,6 +479,10 @@ export async function runExportBatch(
           : { kind: "skipped", reason: execution.reason });
       } catch (error) {
         const phase = activePhase ?? "decode";
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setState(index, { kind: "cancelled", reason: "not-started" });
+          break;
+        }
         setState(index, {
           kind: "failed",
           error: asErrorMessage(error),

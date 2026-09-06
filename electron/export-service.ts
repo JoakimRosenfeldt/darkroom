@@ -646,7 +646,14 @@ async function encodePixels(
   const normalized = normalizeFormatOptions(format, options, raw.width, raw.height);
   let image = sharp(raw.buffer, {
     raw: { width: raw.width, height: raw.height, channels: 4 },
-  }).removeAlpha();
+  }).removeAlpha().withIccProfile("srgb");
+  if (options.exif !== undefined) {
+    if (options.exif === null || typeof options.exif !== "object" || Object.entries(options.exif).some(([group, tags]) =>
+      !["IFD0", "IFD2"].includes(group) || tags === null || typeof tags !== "object" ||
+      Object.entries(tags).some(([tag, value]) => !/^[A-Za-z][A-Za-z0-9]*$/.test(tag) || typeof value !== "string" || value.length > 4096)
+    )) throw new Error("Export EXIF is invalid.");
+    image = image.withExif(options.exif);
+  }
   if (options.xmp !== undefined) {
     if (typeof options.xmp !== "string" || Buffer.byteLength(options.xmp, "utf8") > 16 * 1024 * 1024) {
       throw new Error("Export XMP is invalid or too large.");

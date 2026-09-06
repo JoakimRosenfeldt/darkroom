@@ -89,7 +89,11 @@ export interface ExportDestination {
 export type ExportRevealCapability = string;
 
 /** Options remembered between export sessions. */
+export type ExportMetadataMode = "all" | "copyright" | "none";
+
 export interface ExportPreferences {
+  metadata?: ExportMetadataMode;
+  includeLocation?: boolean;
   format: ExportFormatId;
   quality: number;
   lossless: boolean;
@@ -128,6 +132,8 @@ export const DEFAULT_EXPORT_SUFFIX = "-darkroom";
 
 export const DEFAULT_EXPORT_PREFERENCES: ExportPreferences = {
   format: "jpeg",
+  metadata: "all",
+  includeLocation: false,
   quality: 90,
   lossless: false,
   size: { mode: "original" },
@@ -136,6 +142,8 @@ export const DEFAULT_EXPORT_PREFERENCES: ExportPreferences = {
 };
 
 export interface ExportJobOptions {
+  metadata?: ExportMetadataMode;
+  includeLocation?: boolean;
   format: ExportFormatId;
   size: ExportSizeOptions;
   quality?: number;
@@ -147,6 +155,7 @@ export interface ExportJobOptions {
 }
 
 export interface ExportEncodeOptions {
+  exif?: { IFD0?: Record<string, string>; IFD2?: Record<string, string> };
   format: ExportFormatId;
   size?: ExportSizeOptions;
   quality?: number;

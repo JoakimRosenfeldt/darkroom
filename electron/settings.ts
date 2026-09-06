@@ -15,6 +15,8 @@ import {
 } from "../lib/develop/clipboard/schema.ts";
 
 export interface ExportOptionsSettings {
+  metadata?: "all" | "copyright" | "none";
+  includeLocation?: boolean;
   format: ExportFormatId;
   quality: number;
   lossless: boolean;
@@ -128,6 +130,8 @@ function normalizeExportOptions(value: unknown): ExportOptionsSettings {
   return {
     format,
     quality,
+    metadata: input.metadata === "none" || input.metadata === "copyright" ? input.metadata : "all",
+    includeLocation: input.includeLocation === true,
     lossless: typeof input.lossless === "boolean"
       ? input.lossless
       : DEFAULT_EXPORT_OPTIONS.lossless,

@@ -14,6 +14,7 @@ import {
   type DevelopSidecar,
 } from "@/lib/develop/sidecar";
 import {
+  canonicalDevelopHistoryDocument,
   createDevelopRevisionId,
   type DevelopHistoryCommitInput,
   type DevelopHistoryCommitResult,
@@ -36,6 +37,11 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
 import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
 import type { DevelopDefaultsProductionResult } from "@/lib/develop/defaults/api";
+
+function documentsEqual(left: unknown, right: unknown): boolean {
+  return canonicalDevelopHistoryDocument(left ?? createDefaultV3DevelopDocument()) ===
+    canonicalDevelopHistoryDocument(right ?? createDefaultV3DevelopDocument());
+}
 
 const PERSIST_DEBOUNCE_MS = 500;
 const MAX_WRITE_ATTEMPTS_PER_REVISION = 3;
@@ -493,7 +499,7 @@ export class DevelopRepository {
     }
     this.#requireAdapters().onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(head.document)));
     const externalDigest = await digestDevelopSidecarContents(sidecar.contents);
-    if (JSON.stringify(process.document) === JSON.stringify(head.document)) {
+    if (documentsEqual(process.document, head.document)) {
       await this.#applyExternalSidecar(sidecar, process.document);
       await this.#recordProjection(head.revisionId, externalDigest);
       return;
@@ -584,7 +590,7 @@ export class DevelopRepository {
       if (this.#projectionState.kind === "divergent" && acceptedImport === null) {
         throw new DevelopRepositoryError("recovery-conflict", "Resolve the Darkroom and XMP conflict before editing.");
       }
-      if (JSON.stringify(head.document) !== JSON.stringify(command.before)) {
+      if (!documentsEqual(head.document, command.before)) {
         throw new DevelopRepositoryError("recovery-conflict", "Develop Head changed before this command could be committed. Reopen the photo.");
       }
       this.#adapters?.setStatus("saving");
@@ -741,7 +747,7 @@ export class DevelopRepository {
       this.#setProjectionState({ kind: "clean", revisionId });
       return;
     }
-    const decoded = decodePersistedDevelopDocument(documentValue);
+    const decoded = decodePersistedDevelopDocument(documentValue === null ? createDefaultV3DevelopDocument() : documentValue);
     if (decoded.kind !== "editable") throw new DevelopRepositoryError("unsupported-process", "This Develop Head cannot be projected to XMP.");
     const metadata = this.#metadata;
     if (!metadata) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop metadata is unavailable.");
@@ -851,7 +857,7 @@ export class DevelopRepository {
       return;
     }
     const digest = await digestDevelopSidecarContents(sidecar.contents);
-    if (JSON.stringify(sidecar.document) === JSON.stringify(head.document)) {
+    if (documentsEqual(sidecar.document, head.document)) {
       if (this.#projection === null) {
         await this.#adapters?.applyExternalMetadata?.(sidecar);
         await this.#recordProjection(head.revisionId, digest);
@@ -1041,7 +1047,7 @@ export class DevelopRepository {
         "Develop recovery needs the original catalog. Reopen it before editing or exporting.",
       );
     }
-    if (journal.documentDirty && JSON.stringify(head.document) !== JSON.stringify(journal.document)) {
+    if (journal.documentDirty && !documentsEqual(head.document, journal.document)) {
       if (head.createdAt > journal.createdAt) {
         throw new DevelopRepositoryError(
           "recovery-conflict",
@@ -1053,7 +1059,7 @@ export class DevelopRepository {
         ? journal.existingContents === null
         : currentSidecar.contents === journal.existingContents;
       const sidecarIsRecovered = currentSidecar !== null &&
-        JSON.stringify(currentSidecar.document) === JSON.stringify(journal.document);
+        documentsEqual(currentSidecar.document, journal.document);
       if (!sidecarIsPrior && !sidecarIsRecovered) {
         throw new DevelopRepositoryError(
           "recovery-conflict",

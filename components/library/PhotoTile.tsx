@@ -56,6 +56,7 @@ export const PhotoTile = memo(function PhotoTile({
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+  const developDocument = metadata?.develop ?? null;
   const jobs = useDevelopJobStore((state) => state.jobs);
   const prototypeJobs = useMemo(() => jobs.filter((job) =>
     job.request.source.entryId === entry.id && job.request.source.catalogId === entry.catalogId &&
@@ -103,7 +104,7 @@ export const PhotoTile = memo(function PhotoTile({
     }
     setThumbnailUrl(null);
     setStatus(entry.formatAvailability.status === "supported" ? "loading" : "error");
-  }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge]);
+  }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge, developDocument]);
 
   useEffect(() => {
     const element = tileRef.current;
@@ -150,6 +151,7 @@ export const PhotoTile = memo(function PhotoTile({
     async function loadThumbnail() {
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
+          document: developDocument,
           priority: 20,
           signal: controller.signal,
         });
@@ -179,7 +181,7 @@ export const PhotoTile = memo(function PhotoTile({
       active = false;
       controller.abort();
     };
-  }, [entry, decodeEdge, isNearViewport, thumbnailUrl]);
+  }, [entry, decodeEdge, isNearViewport, thumbnailUrl, developDocument]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";

@@ -15,6 +15,7 @@ import {
   V3CanvasOverlay,
   type V3CanvasTool,
 } from "@/components/develop/V3CanvasOverlay";
+import { PhotoLoupe } from "@/components/viewer/PhotoLoupe";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { GeometryPoint } from "@/lib/develop/v3/geometry";
@@ -291,6 +292,7 @@ export function DevelopCanvas({
   const [panning, setPanning] = useState(false);
 
   const activeDisplayDimensions = displayDimensions;
+  const [actualSize, setActualSize] = useState(false);
   const canvasInteractionActive = cropActive || canvasTool.kind !== "none" ||
     (maskingActive && maskTool !== "none");
 
@@ -839,15 +841,7 @@ export function DevelopCanvas({
     const interactive = event.target instanceof HTMLElement &&
       Boolean(event.target.closest("button"));
     if (interactive || canvasInteractionActive || preview.kind !== "rendered") return;
-    if (viewTransform.scale > 1) {
-      setViewTransform(FIT_TRANSFORM);
-      return;
-    }
-    const bounds = event.currentTarget.getBoundingClientRect();
-    applyZoom(200, {
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
-    });
+    setActualSize((value) => !value);
   }
 
   useEffect(() => {
@@ -934,18 +928,18 @@ export function DevelopCanvas({
             aria-label="Zoom out"
             aria-keyshortcuts="-"
             disabled={viewTransform.scale <= 1}
-            onClick={() => stepZoom(-1)}
+            onClick={() => { setActualSize(false); stepZoom(-1); }}
             className="rounded px-2 py-1 text-xs text-white/65 hover:text-white disabled:opacity-35"
           >
             −
           </button>
           <button
             type="button"
-            aria-pressed={viewTransform.scale === 1}
-            onClick={() => setViewTransform(FIT_TRANSFORM)}
+            aria-pressed={!actualSize && viewTransform.scale === 1}
+            onClick={() => { setActualSize(false); setViewTransform(FIT_TRANSFORM); }}
             className={[
               "rounded-md px-2 py-1 text-[10px] uppercase tracking-wide",
-              viewTransform.scale === 1
+              !actualSize && viewTransform.scale === 1
                 ? "bg-lr-selection text-lr-accent"
                 : "text-white/65 hover:text-white",
             ].join(" ")}
@@ -954,21 +948,22 @@ export function DevelopCanvas({
           </button>
           <span
             role="status"
-            aria-label={`Zoom ${Math.round(viewTransform.scale * 100)} percent`}
+            aria-label={`Preview enlargement ${viewTransform.scale} times Fit`}
             className="w-10 text-center font-mono text-[10px] text-white/75"
           >
-            {Math.round(viewTransform.scale * 100)}%
+            {viewTransform.scale === 1 ? "" : `${viewTransform.scale}× Fit`}
           </span>
           <button
             type="button"
             aria-label="Zoom in"
             aria-keyshortcuts="+"
             disabled={viewTransform.scale >= MAX_ZOOM_PERCENT / 100}
-            onClick={() => stepZoom(1)}
+            onClick={() => { setActualSize(false); stepZoom(1); }}
             className="rounded px-2 py-1 text-xs text-white/65 hover:text-white disabled:opacity-35"
           >
             +
           </button>
+          <button type="button" aria-pressed={actualSize} onClick={() => setActualSize(true)} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
           <span className="mx-0.5 h-4 w-px bg-white/10" />
           <button
             type="button"
@@ -1005,6 +1000,7 @@ export function DevelopCanvas({
           </button>
         </div>
       ) : null}
+      {actualSize && !canvasInteractionActive && document ? <PhotoLoupe key={entry.id} entry={entry} document={showBefore ? createDefaultV3DevelopDocument() : document} /> : null}
       <div
         className={[
           "absolute inset-0",

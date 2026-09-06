@@ -281,7 +281,7 @@ interface GeometryRenderResult {
   readonly context: GeometryContext;
 }
 
-interface RenderRegion {
+export interface RenderRegion {
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -2658,5 +2658,44 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
     pointColorInput: rendered.pointColorInput,
     diagnostics: preparation.diagnostics,
     analysis: rendered.analysis,
+  };
+}
+
+export async function renderV3CpuRegion(
+  input: CpuRenderInput,
+  core: RenderRegion,
+): Promise<CpuRenderResult> {
+  const preparation = await prepareV3CpuRender(input);
+  if (preparation.kind !== "ready") return preparation;
+  const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
+  if (![core.x, core.y, core.width, core.height].every(Number.isSafeInteger) ||
+      core.x < 0 || core.y < 0 || core.width < 1 || core.height < 1 ||
+      core.x + core.width > dimensions.width || core.y + core.height > dimensions.height) {
+    throw new Error("The detail region is outside the rendered image.");
+  }
+  const pixels = new Uint8Array(core.width * core.height * 4);
+  const halo = activeStageHalo(input);
+  for (let y = core.y; y < core.y + core.height; y += MAX_CPU_TILE_CORE_EDGE) {
+    for (let x = core.x; x < core.x + core.width; x += MAX_CPU_TILE_CORE_EDGE) {
+      const tile = { x, y, width: Math.min(MAX_CPU_TILE_CORE_EDGE, core.x + core.width - x), height: Math.min(MAX_CPU_TILE_CORE_EDGE, core.y + core.height - y) };
+      const region = expandedRegion(tile, dimensions, halo);
+      const executed = executeRegion(input, preparation.transfer, region);
+      if (!executed || cancelled(input.cancellation)) return { kind: "cancelled" };
+      for (let row = 0; row < tile.height; row += 1) {
+        const offset = ((tile.y - region.y + row) * region.width + tile.x - region.x) * 4;
+        const target = ((tile.y - core.y + row) * core.width + tile.x - core.x) * 4;
+        pixels.set(executed.pixels.subarray(offset, offset + tile.width * 4), target);
+      }
+    }
+  }
+  return {
+    kind: "rendered",
+    planFingerprint: preparation.planFingerprint,
+    frameIdentity: preparation.frameIdentity,
+    dimensions: { width: core.width, height: core.height },
+    pixels: { kind: "rgba8", pixels },
+    pointColorInput: null,
+    diagnostics: preparation.diagnostics,
+    analysis: [],
   };
 }

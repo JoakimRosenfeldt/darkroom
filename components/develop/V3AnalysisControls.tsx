@@ -303,14 +303,14 @@ export function V3HistogramPanel({ analysis }: V3HistogramPanelProps) {
       {display ? (
         <>
           <HistogramGraphic tap={display} />
-          <ClippingSummary tap={display} />
+
         </>
       ) : (
         <StatusCard title="Histogram unavailable">
           Display-output analysis has not been requested.
         </StatusCard>
       )}
-      <HeadroomSummary tap={headroom} />
+      <details className="text-xs text-lr-text-muted"><summary className="cursor-pointer">Clipping details</summary><div className="mt-2 space-y-2">{display ? <ClippingSummary tap={display} /> : null}<HeadroomSummary tap={headroom} /></div></details>
     </div>
   );
 }

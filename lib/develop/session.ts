@@ -25,6 +25,7 @@ import {
   applyV3EditCommand,
   type V3EditCommand,
 } from "@/lib/develop/v3/commands";
+import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
 import type {
   DevelopDocumentV3,
   NewerDevelopDocument,
@@ -72,7 +73,7 @@ export type DevelopSessionOpenDocument =
 export function openDevelopSessionDocument(
   value: unknown,
 ): DevelopSessionOpenDocument {
-  const decoded = decodePersistedDevelopDocument(value);
+  const decoded = decodePersistedDevelopDocument(value === null ? createDefaultV3DevelopDocument() : value);
   if (decoded.kind === "invalid") {
     throw new DevelopSessionCommandError("invalid-document", decoded.message);
   }

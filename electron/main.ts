@@ -9,6 +9,7 @@ import {
 } from "electron";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   getFolderName,
@@ -555,6 +556,11 @@ function getNefDecoderCommand(): NefDecoderCommand | null {
     };
   }
   if (process.platform !== "darwin") return null;
+  if (!app.isPackaged) {
+    const sdkRoot = process.env.DARKROOM_NEF_SDK_ROOT ?? path.join(app.getPath("home"), ".darkroom-sdk", "nikon-nef");
+    const helper = path.join(sdkRoot, "spike", "DarkroomNefSpike.app", "Contents", "MacOS", "nikon-nef-decoder");
+    if (existsSync(helper)) return { executable: helper, kind: "native" };
+  }
   return {
     executable: path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder"),
     kind: "native",

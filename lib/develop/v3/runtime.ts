@@ -239,6 +239,15 @@ function sourceColor(image: DevelopImage): RuntimeSourceColorEncoding {
   };
 }
 
+function decodedAsShotWhiteBalance(image: DevelopImage): SourceRecord["asShotWhiteBalance"] {
+  const color = image.metadata.color_data;
+  const multipliers = color && typeof color === "object" ? Reflect.get(color, "cam_mul") : null;
+  if (Array.isArray(multipliers) && multipliers.length >= 3 && multipliers.slice(0, 3).every((value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0)) {
+    return { kind: "available", source: "metadata", multipliers: [multipliers[0], multipliers[1], multipliers[2]] };
+  }
+  return { kind: "unavailable", reason: "The decoder did not supply as-shot multipliers. Reset uses its camera-balanced starting image." };
+}
+
 export function buildV3SourceRecord(
   entry: LibraryEntry,
   image: DevelopImage,
@@ -307,10 +316,7 @@ export function buildV3SourceRecord(
                   ? color.reason
                   : "Profile provenance is incomplete.",
               },
-        asShotWhiteBalance: {
-          kind: "unavailable",
-          reason: "The active decoder did not provide validated white-balance multipliers.",
-        },
+        asShotWhiteBalance: decodedAsShotWhiteBalance(image),
         camera: profileStage.kind === "available"
           ? {
               kind: "available",
@@ -318,7 +324,10 @@ export function buildV3SourceRecord(
               model: profileStage.camera.model,
             }
           : { kind: "unavailable" },
-        lens: { kind: "unavailable" },
+        lens: image.metadata.lens && typeof image.metadata.lens === "object" &&
+          typeof Reflect.get(image.metadata.lens, "Lens") === "string" && Reflect.get(image.metadata.lens, "Lens").trim()
+          ? { kind: "available", model: Reflect.get(image.metadata.lens, "Lens").trim() }
+          : { kind: "unavailable" },
       }),
     };
   } catch (error) {

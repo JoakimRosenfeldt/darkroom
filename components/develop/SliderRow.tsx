@@ -127,7 +127,7 @@ export function SliderRow({
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}
         className="develop-slider"
       />
-      <span className="text-right font-mono text-[11px] text-lr-text-muted">
+      <span className="text-right font-mono text-xs text-lr-text-muted">
         {value > 0 ? "+" : ""}
         {displayValue}
         {suffix}

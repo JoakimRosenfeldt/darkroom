@@ -1,6 +1,6 @@
 "use client";
 
-import { IconArchive, IconCopy, IconCrop, IconInfo, IconMask, IconRotate, IconSliders } from "@/components/shell/icons";
+import { IconCopy, IconCrop, IconInfo, IconMask, IconRotate, IconSliders } from "@/components/shell/icons";
 
 export type DevelopPanelId = "crop" | "edit" | "masking" | "cleanup" | "defaults" | "history" | "info";
 
@@ -10,14 +10,13 @@ interface DevelopPanelRailProps {
   editingDisabled?: boolean;
 }
 
-const PANELS: Array<{ id: DevelopPanelId; label: string; short: string; icon: typeof IconSliders }> = [
-  { id: "crop", label: "Crop", short: "CRP", icon: IconCrop },
-  { id: "edit", label: "Edit", short: "EDT", icon: IconSliders },
-  { id: "masking", label: "Masking", short: "MSK", icon: IconMask },
-  { id: "cleanup", label: "Cleanup", short: "CLN", icon: IconCopy },
-  { id: "defaults", label: "Defaults", short: "DEF", icon: IconArchive },
-  { id: "history", label: "History", short: "HST", icon: IconRotate },
-  { id: "info", label: "Info", short: "NFO", icon: IconInfo },
+const PANELS: Array<{ id: DevelopPanelId; label: string; icon: typeof IconSliders }> = [
+  { id: "crop", label: "Crop", icon: IconCrop },
+  { id: "edit", label: "Edit", icon: IconSliders },
+  { id: "masking", label: "Masking", icon: IconMask },
+  { id: "cleanup", label: "Cleanup", icon: IconCopy },
+  { id: "history", label: "History", icon: IconRotate },
+  { id: "info", label: "Info", icon: IconInfo },
 ];
 
 export function DevelopPanelRail({
@@ -27,10 +26,10 @@ export function DevelopPanelRail({
 }: DevelopPanelRailProps) {
   return (
     <nav
-      className="flex w-14 shrink-0 flex-col items-center gap-1.5 border-l border-lr-border-subtle bg-lr-panel py-3"
+      className="flex w-16 shrink-0 flex-col items-center gap-1.5 border-l border-lr-border-subtle bg-lr-panel py-3"
       aria-label="Develop panels"
     >
-      {PANELS.map(({ id, label, short, icon: Icon }) => {
+      {PANELS.map(({ id, label, icon: Icon }) => {
         const isActive = activePanel === id;
         const disabled = editingDisabled && id !== "info" && id !== "history" && id !== "defaults";
         return (
@@ -43,7 +42,7 @@ export function DevelopPanelRail({
             disabled={disabled}
             onClick={() => onSelect(id)}
             className={[
-              "flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-[9px] text-[8px] tracking-[0.06em] transition",
+              "flex h-12 w-14 flex-col items-center justify-center gap-0.5 rounded-[9px] text-[11px] tracking-[0.06em] transition",
               disabled
                 ? "cursor-not-allowed text-lr-text-faint opacity-40"
                 : isActive
@@ -52,10 +51,11 @@ export function DevelopPanelRail({
             ].join(" ")}
           >
             <Icon className="h-[15px] w-[15px]" />
-            <span aria-hidden="true">{short}</span>
+            <span aria-hidden="true">{label === "Masking" ? "Mask" : label}</span>
           </button>
         );
       })}
+      <details className="mt-auto text-xs text-lr-text-muted"><summary className="cursor-pointer py-3">More</summary><button type="button" className="py-2" onClick={() => onSelect("defaults")}>Defaults</button></details>
     </nav>
   );
 }
