@@ -66,6 +66,7 @@
     "files": [
       "electron-dist/**/*",
       "out/**/*",
+      "resources/icon/darkroom.png",
       "package.json",
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
@@ -81,6 +82,7 @@
       "output": "release"
     },
     "mac": {
+      "icon": "resources/icon/darkroom.icns",
       "category": "public.app-category.photography",
       "extraResources": [
         {
@@ -117,11 +119,13 @@
       ]
     },
     "win": {
+      "icon": "resources/icon/darkroom.ico",
       "target": [
         "nsis"
       ]
     },
     "linux": {
+      "icon": "resources/icon/darkroom.png",
       "target": [
         "AppImage"
       ]

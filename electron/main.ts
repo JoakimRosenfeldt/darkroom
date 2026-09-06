@@ -687,12 +687,16 @@ async function loadWindow(window: BrowserWindow): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
+  const icon = path.join(getAppRoot(), "resources/icon/darkroom.png");
+  if (process.platform === "darwin") app.dock?.setIcon(icon);
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 960,
     minHeight: 640,
     title: "Darkroom",
+    icon,
     backgroundColor: "#1a1a1a",
     webPreferences: {
       preload: getPreloadPath(),
