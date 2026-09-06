@@ -1,4 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#if defined(__linux__)
+#define _GNU_SOURCE 1
+#endif
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -12,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -43,6 +49,7 @@
 enum {
   OUTPUT_BUFFER_SIZE = 1024 * 1024,
   PAUSE_TIMEOUT_SECONDS = 300,
+  ATOMIC_WRITE_LIMIT = 16 * 1024 * 1024,
 };
 
 typedef struct {
@@ -297,6 +304,12 @@ static int same_stable_file(const struct stat *left, const struct stat *right) {
     stat_ctime_ns(left) == stat_ctime_ns(right);
 }
 
+static int same_published_file(const struct stat *left, const struct stat *right) {
+  return same_identity(left, right) &&
+    left->st_size == right->st_size &&
+    stat_mtime_ns(left) == stat_mtime_ns(right);
+}
+
 static void print_observation(const char *prefix, const struct stat *stat_buffer) {
   (void)dprintf(
     STDERR_FILENO,
@@ -319,6 +332,79 @@ static int write_all(int fd, const void *buffer, size_t length) {
     offset += (size_t)written;
   }
   return 0;
+}
+
+static int parse_identity(const char *value, uintmax_t *result) {
+  char *end = NULL;
+  uintmax_t parsed;
+  if (value == NULL || value[0] == '\0') return 0;
+  errno = 0;
+  parsed = strtoumax(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0') return 0;
+  *result = parsed;
+  return 1;
+}
+
+static int read_stdin_to_file(int file_fd) {
+  unsigned char buffer[64 * 1024];
+  size_t total = 0;
+  for (;;) {
+    ssize_t count;
+    do {
+      count = read(STDIN_FILENO, buffer, sizeof(buffer));
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) return -1;
+    if (count == 0) return 0;
+    if ((size_t)count > ATOMIC_WRITE_LIMIT - total) {
+      errno = EFBIG;
+      return -1;
+    }
+    if (write_all(file_fd, buffer, (size_t)count) < 0) return -1;
+    total += (size_t)count;
+  }
+}
+
+static int temporary_name(char *buffer, size_t length, const char *suffix, unsigned int attempt) {
+  int written = snprintf(
+    buffer,
+    length,
+    ".darkroom-atomic-%jd-%u.%s",
+    (intmax_t)getpid(),
+    attempt,
+    suffix
+  );
+  return written > 0 && (size_t)written < length;
+}
+
+static int rename_no_replace_at(int directory_fd, const char *source, const char *destination) {
+#if defined(__APPLE__)
+  return renameatx_np(directory_fd, source, directory_fd, destination, RENAME_EXCL);
+#elif defined(__linux__) && defined(SYS_renameat2)
+  return (int)syscall(SYS_renameat2, directory_fd, source, directory_fd, destination, RENAME_NOREPLACE);
+#else
+  if (linkat(directory_fd, source, directory_fd, destination, 0) < 0) return -1;
+  if (unlinkat(directory_fd, source, 0) == 0) return 0;
+  {
+    int unlink_error = errno;
+    (void)unlinkat(directory_fd, destination, 0);
+    errno = unlink_error;
+    return -1;
+  }
+#endif
+}
+
+static int rename_exchange_at(int directory_fd, const char *left, const char *right) {
+#if defined(__APPLE__)
+  return renameatx_np(directory_fd, left, directory_fd, right, RENAME_SWAP);
+#elif defined(__linux__) && defined(SYS_renameat2)
+  return (int)syscall(SYS_renameat2, directory_fd, left, directory_fd, right, RENAME_EXCHANGE);
+#else
+  (void)directory_fd;
+  (void)left;
+  (void)right;
+  errno = ENOTSUP;
+  return -1;
+#endif
 }
 
 static int copy_fd(int source_fd, int destination_fd, off_t size) {
@@ -667,6 +753,160 @@ static int command_remove(const char *file_path) {
   return 0;
 }
 
+static int command_atomic_write(
+  const char *file_path,
+  const char *expected_device,
+  const char *expected_inode,
+  const char *mode
+) {
+  parent_ref parent;
+  struct stat parent_stat;
+  struct stat existing_stat;
+  struct stat displaced_stat;
+  uintmax_t device;
+  uintmax_t inode;
+  char temporary[NAME_MAX + 1];
+  int replace;
+  int existing;
+  int file_fd = -1;
+  int temporary_created = 0;
+  int published = 0;
+  int exchanged = 0;
+  int failure_reported = 0;
+  unsigned int attempt;
+
+  if (!parse_identity(expected_device, &device) || !parse_identity(expected_inode, &inode)) return fail_invalid();
+  if (strcmp(mode, "exclusive") == 0) replace = 0;
+  else if (strcmp(mode, "replace") == 0) replace = 1;
+  else return fail_invalid();
+  if (open_parent(file_path, &parent) != 0) return 1;
+  if (fstat(parent.fd, &parent_stat) < 0) goto cleanup;
+  if ((uintmax_t)parent_stat.st_dev != device || (uintmax_t)parent_stat.st_ino != inode) {
+    (void)fail_name("CHANGED");
+    failure_reported = 1;
+    goto cleanup;
+  }
+  if (maybe_pause_after_parents() != 0) goto cleanup;
+  existing = stat_regular_at(parent.fd, parent.name, &existing_stat, 1);
+  if (existing < 0) {
+    if (existing == -2) (void)fail_unsafe();
+    else (void)fail_errno();
+    failure_reported = 1;
+    goto cleanup;
+  }
+  if (!replace && existing == 0) {
+    (void)fail_name("EEXIST");
+    failure_reported = 1;
+    goto cleanup;
+  }
+
+  for (attempt = 0; attempt < 100; attempt += 1) {
+    if (!temporary_name(temporary, sizeof(temporary), "tmp", attempt)) {
+      (void)fail_invalid();
+      failure_reported = 1;
+      goto cleanup;
+    }
+    do {
+      file_fd = openat(parent.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    } while (file_fd < 0 && errno == EINTR);
+    if (file_fd >= 0) break;
+    if (errno != EEXIST) goto cleanup;
+  }
+  if (file_fd < 0) {
+    errno = EEXIST;
+    goto cleanup;
+  }
+  temporary_created = 1;
+  if (read_stdin_to_file(file_fd) < 0 || fsync(file_fd) < 0) goto cleanup;
+  if (close(file_fd) < 0) {
+    file_fd = -1;
+    goto cleanup;
+  }
+  file_fd = -1;
+
+  if (replace && existing == 0) {
+    do {
+      published = rename_exchange_at(parent.fd, temporary, parent.name);
+    } while (published < 0 && errno == EINTR);
+    if (published < 0) goto cleanup;
+    published = 1;
+    exchanged = 1;
+    if (stat_regular_at(parent.fd, temporary, &displaced_stat, 0) != 0 ||
+        !same_published_file(&existing_stat, &displaced_stat)) {
+      int changed_error = errno;
+      int rollback;
+      do {
+        rollback = rename_exchange_at(parent.fd, temporary, parent.name);
+      } while (rollback < 0 && errno == EINTR);
+      if (rollback < 0 || fsync(parent.fd) < 0) {
+        (void)fail_name("ROLLBACK");
+      } else {
+        (void)fail_name("CHANGED");
+      }
+      failure_reported = 1;
+      published = 0;
+      exchanged = 0;
+      errno = changed_error;
+      goto cleanup;
+    }
+  } else {
+    int publish_result;
+    do {
+      publish_result = rename_no_replace_at(parent.fd, temporary, parent.name);
+    } while (publish_result < 0 && errno == EINTR);
+    if (publish_result < 0) goto cleanup;
+    published = 1;
+    temporary_created = 0;
+  }
+
+  if (fsync(parent.fd) < 0) {
+    int publish_error = errno;
+    int rollback_result;
+    if (exchanged) {
+      do {
+        rollback_result = rename_exchange_at(parent.fd, temporary, parent.name);
+      } while (rollback_result < 0 && errno == EINTR);
+      if (rollback_result == 0) exchanged = 0;
+    } else {
+      do {
+        rollback_result = renameat(parent.fd, parent.name, parent.fd, temporary);
+      } while (rollback_result < 0 && errno == EINTR);
+      if (rollback_result == 0) temporary_created = 1;
+    }
+    if (rollback_result < 0 || fsync(parent.fd) < 0) {
+      (void)fail_name("ROLLBACK");
+      failure_reported = 1;
+      goto cleanup;
+    }
+    published = 0;
+    errno = publish_error;
+    goto cleanup;
+  }
+  if (exchanged) {
+    int cleanup_result;
+    do {
+      cleanup_result = unlinkat(parent.fd, temporary, 0);
+    } while (cleanup_result < 0 && errno == EINTR);
+    if (cleanup_result < 0 || fsync(parent.fd) < 0) {
+      (void)fail_name("CLEANUP");
+      failure_reported = 1;
+      goto cleanup;
+    }
+    temporary_created = 0;
+    exchanged = 0;
+  }
+  close(parent.fd);
+  (void)dprintf(STDOUT_FILENO, "OK\n");
+  return 0;
+
+cleanup:
+  if (file_fd >= 0) close(file_fd);
+  if (temporary_created && !exchanged) (void)unlinkat(parent.fd, temporary, 0);
+  close(parent.fd);
+  if (failure_reported) return 1;
+  return fail_errno();
+}
+
 static int dispatch(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "exists") == 0 && argc == 3) return command_exists(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "mkdir") == 0 && argc == 3) return mkdir_recursive(argv[2]);
@@ -675,10 +915,13 @@ static int dispatch(int argc, char **argv) {
   if (argc >= 2 && strcmp(argv[1], "remove") == 0 && argc == 3) return command_remove(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "observe") == 0 && argc == 3) return command_observe(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "digest") == 0 && argc == 3) return command_digest(argv[2]);
+  if (argc >= 2 && strcmp(argv[1], "atomic-write") == 0 && argc == 6) {
+    return command_atomic_write(argv[2], argv[3], argv[4], argv[5]);
+  }
   return fail_invalid();
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2 || argc > 4) return fail_invalid();
+  if (argc < 2 || argc > 6) return fail_invalid();
   return dispatch(argc, argv);
 }

@@ -1,5 +1,5 @@
 import { getEntryMetadata } from "@/lib/catalog/defaults";
-import type { AssetId, CatalogId } from "@/lib/catalog/ids";
+import type { CatalogId, EntryId } from "@/lib/catalog/ids";
 import { loadDevelopImage } from "@/lib/cache/develop-image-cache";
 import { BASELINE_CAPABILITY_REPORT, type V3SourceSignature } from "@/lib/develop/process";
 import { getDevelopRepository, type DevelopRepository } from "@/lib/develop/repository";
@@ -31,7 +31,7 @@ export interface AppExactLibraryResult {
   readonly resultId: string;
   readonly catalogId: CatalogId;
   readonly catalogRevision: number;
-  readonly orderedEntryIds: readonly AssetId[];
+  readonly orderedEntryIds: readonly EntryId[];
 }
 
 export interface AppBatchAdapterOptions {
@@ -42,7 +42,7 @@ export interface AppBatchAdapterOptions {
 
 export interface AppV3BatchAdapter {
   readonly adapter: BatchRunnerAdapter;
-  readonly prepareSource: (sourceEntryId: AssetId) => Promise<BatchSourceSnapshot>;
+  readonly prepareSource: (sourceEntryId: EntryId) => Promise<BatchSourceSnapshot>;
 }
 
 interface OpenContext {
@@ -77,7 +77,7 @@ function sameSignature(left: V3SourceSignature, right: V3SourceSignature): boole
     left.lastModified === right.lastModified;
 }
 
-function currentEntry(entryId: AssetId, catalogId: CatalogId): LibraryEntry | null {
+function currentEntry(entryId: EntryId, catalogId: CatalogId): LibraryEntry | null {
   return useLibraryStore.getState().entries.find(
     (entry) => entry.id === entryId && entry.catalogId === catalogId,
   ) ?? null;
@@ -107,7 +107,9 @@ function currentV3Snapshot(
 
 async function v3Reconciled(context: OpenContext): Promise<Extract<BatchReconciledPhoto, { readonly kind: "v3" }>> {
   const snapshot = currentV3Snapshot(context);
-  const image = await loadDevelopImage(context.entry);
+  const image = await loadDevelopImage(context.entry, {
+    rawColorMode: "libraw-camera-matrix",
+  });
   const source = buildV3SourceRecord(context.entry, image, "preview");
   if (source.kind === "blocked") {
     throw adapterError(
@@ -225,9 +227,9 @@ export function createAppV3BatchAdapter(
   options: AppBatchAdapterOptions,
 ): AppV3BatchAdapter {
   const contextsByToken = new Map<string, OpenContext>();
-  const contextsByEntry = new Map<AssetId, OpenContext>();
+  const contextsByEntry = new Map<EntryId, OpenContext>();
 
-  const requireContext = (entryId: AssetId): OpenContext => {
+  const requireContext = (entryId: EntryId): OpenContext => {
     const context = contextsByEntry.get(entryId);
     if (!context) throw adapterError("not-open", "The batch target is not open.");
     return context;
@@ -268,8 +270,18 @@ export function createAppV3BatchAdapter(
         entry.id,
         input,
       ),
-      hydrateKeywords: (flat, hierarchical) => {
-        useLibraryStore.getState().hydrateEntryKeywords(entry.id, flat, hierarchical);
+      applyExternalMetadata: (sidecar) => {
+        const library = useLibraryStore.getState();
+        library.hydrateEntryKeywords(
+          entry.id,
+          sidecar.keywords.flat,
+          sidecar.keywords.hierarchical,
+          {
+            ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
+            ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
+          },
+          sidecar.lastModified,
+        );
       },
       setStatus: (status, error = null) => {
         const develop = useDevelopStore.getState();

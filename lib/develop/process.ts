@@ -1,4 +1,5 @@
 import type { SourceSignature } from "./types";
+import type { MatrixCameraProfile } from "../camera-profiles/matrix";
 
 export const FROZEN_DEVELOP_PROCESS_VERSION = 2;
 export const DEVELOP_PROCESS_VERSION = 3;
@@ -112,6 +113,8 @@ export type InputProfileState =
   | {
       readonly kind: "available";
       readonly profile: ColorProfileReference;
+      readonly stage: "before-develop-tone";
+      readonly transform: MatrixCameraProfile;
     }
   | {
       readonly kind: "decoder-default";
@@ -599,9 +602,11 @@ export const BASELINE_CAPABILITY_REPORT = {
       ],
     },
     "libraw-high-bit-decode": {
-      kind: "unavailable",
-      reason: "The active LibRaw settings request 8-bit output.",
-      fallback: { kind: "sdr-rgba8", reason: "Use the current 8-bit LibRaw result." },
+      kind: "available",
+      evidence: [
+        "The named LibRaw camera-profile path requests 16-bit linear camera RGB.",
+        "Default thumbnails and non-Develop decodes keep their existing rendered output.",
+      ],
     },
     "standard-image-high-bit-decode": {
       kind: "unavailable",
@@ -624,20 +629,19 @@ export const BASELINE_CAPABILITY_REPORT = {
       fallback: { kind: "block", reason: "Block high-bit output requests." },
     },
     "input-profile-transform": {
-      kind: "unverified",
-      missingEvidence: "No end-to-end ICC or input-profile fixture has passed.",
-      fallback: {
-        kind: "decoder-provided-color",
-        reason: "Use only decoder-provided color with proven provenance.",
-      },
+      kind: "available",
+      evidence: [
+        "The CPU pointwise stage applies the validated matrix before basic tone.",
+        "The RGB16 LibRaw path uses the CPU renderer because high-bit GPU source upload is unavailable.",
+        "Only provenance that names the before-develop-tone stage can supply the matrix.",
+      ],
     },
     "camera-profile-dataset": {
-      kind: "unavailable",
-      reason: "No licensed camera profile dataset is present.",
-      fallback: {
-        kind: "decoder-provided-color",
-        reason: "Use only decoder-provided color with proven provenance.",
-      },
+      kind: "available",
+      evidence: [
+        "The app-owned camera profile registry accepts only bounded matrix DCP and Darkroom profile-XMP files.",
+        "Imported transforms are validated before their calibration is stored in a Develop document.",
+      ],
     },
     "lens-profile-dataset": {
       kind: "unavailable",

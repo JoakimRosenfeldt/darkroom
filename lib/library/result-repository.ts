@@ -1,4 +1,4 @@
-import { isAssetId, type CatalogId } from "../catalog/ids";
+import { isEntryId, type CatalogId } from "../catalog/ids";
 import {
   LIBRARY_RESULT_VERSION,
   MAX_LIBRARY_RESULT_ENTRIES,
@@ -143,7 +143,7 @@ function validateEntryIds(entryIds: readonly string[], label: string): string[] 
     throw new Error(`${label} exceeds the ${MAX_LIBRARY_RESULT_ENTRIES.toLocaleString()} photo limit.`);
   }
   const unique = [...new Set(entryIds)];
-  if (unique.length !== entryIds.length || unique.some((entryId) => !isAssetId(entryId))) {
+  if (unique.length !== entryIds.length || unique.some((entryId) => !isEntryId(entryId))) {
     throw new Error(`${label} is invalid.`);
   }
   return unique;

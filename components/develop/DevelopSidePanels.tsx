@@ -19,6 +19,11 @@ import type {
   V3CanvasTool,
 } from "@/components/develop/DevelopCanvas";
 import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
+import { DevelopHistoryPanel } from "@/components/develop/DevelopHistoryPanel";
+import { DevelopDefaultsPanel } from "@/components/develop/DevelopDefaultsPanel";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import type { DevelopDefaultsResolution } from "@/components/develop/useDevelopSettingsSync";
+import { StatusCard } from "@/components/develop/V3PanelControls";
 
 interface DevelopSidePanelsProps {
   decoded: DevelopImage;
@@ -34,6 +39,8 @@ interface DevelopSidePanelsProps {
   v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
   v3CanvasTool: V3CanvasTool;
   onV3CanvasToolChange: (tool: V3CanvasTool) => void;
+  defaultFacts: DevelopDefaultFacts | null | undefined;
+  defaultsResolution: DevelopDefaultsResolution;
 }
 
 export function DevelopSidePanels({
@@ -50,23 +57,34 @@ export function DevelopSidePanels({
   v3RenderDiagnostics,
   v3CanvasTool,
   onV3CanvasToolChange,
+  defaultFacts,
+  defaultsResolution,
 }: DevelopSidePanelsProps) {
   const session = useDevelopStore((state) => {
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] : undefined;
   });
 
-  const panel = activePanel === "info" ? (
+  const projectionConflict = session?.ui.projection.kind === "divergent";
+  const effectivePanel = projectionConflict ? "history" : activePanel;
+  const defaultsPending = defaultsResolution.kind === "pending";
+  const panel = effectivePanel === "history" ? (
+    <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} editingDisabled={defaultsPending} />
+  ) : effectivePanel === "defaults" && defaultFacts ? (
+    <DevelopDefaultsPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} facts={defaultFacts} editingDisabled={defaultsPending} />
+  ) : effectivePanel === "defaults" ? (
+    <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="Source facts unavailable">Defaults need verified decoder, camera-profile, and source facts.</StatusCard></aside>
+  ) : effectivePanel === "info" ? (
     <MetadataPanel
       entry={entry}
       decodedMetadata={decoded.metadata}
     />
-  ) : session?.processKind === "v3" ? (
+  ) : session?.processKind === "v3" && defaultsResolution.kind !== "pending" ? (
     <EditPanel
-      key={activePanel ?? "edit"}
+      key={effectivePanel ?? "edit"}
       decoded={decoded}
       entry={entry}
-      activePanel={activePanel}
+      activePanel={effectivePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
       canvasTool={v3CanvasTool}
@@ -93,9 +111,9 @@ export function DevelopSidePanels({
     <>
       {panel}
       <DevelopPanelRail
-        activePanel={activePanel}
+        activePanel={effectivePanel}
         onSelect={onSelect}
-        editingDisabled={session?.processKind !== "v3"}
+    editingDisabled={session?.processKind !== "v3" || projectionConflict || defaultsPending}
       />
       <DevelopJobDrawer />
     </>

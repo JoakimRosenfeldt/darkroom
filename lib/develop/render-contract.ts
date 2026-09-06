@@ -1,5 +1,5 @@
-import type { ExportFormatId } from "@/lib/export/types";
-import type { SourceSignature } from "./types";
+import type { ExportFormatId } from "../export/types.ts";
+import type { SourceSignature } from "./types.ts";
 import {
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_VERSION,
@@ -12,7 +12,7 @@ import {
   type PixelDimensions,
   type SemanticStageId,
   type V3SourceSignature,
-} from "./process";
+} from "./process.ts";
 
 export type Sha256Digest = string & {
   readonly __brand: "Sha256Digest";

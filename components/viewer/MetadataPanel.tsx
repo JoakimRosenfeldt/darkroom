@@ -262,7 +262,7 @@ export function MetadataPanel({ entry, decodedMetadata }: MetadataPanelProps) {
         <button type="button" onClick={beginEdit} className="flex-1 rounded-md bg-lr-accent px-3 py-2 text-xs font-medium text-[#14202a]">Edit metadata</button>
         <button type="button" disabled={metadataAnalysis !== null} onClick={() => reread(entry.id)} className="rounded-md border border-lr-border-subtle px-3 py-2 text-xs text-lr-text-muted hover:text-lr-text disabled:opacity-40">{metadataAnalysis ? "Reading…" : "Re-read"}</button>
       </div>
-      {sync?.status === "catalog-only" || sync?.status === "conflict" ? (
+      {entry.entryKind === "original" && (sync?.status === "catalog-only" || sync?.status === "conflict") ? (
         <div className="space-y-2 border-t border-lr-border-subtle p-3">
           {error ? <p role="alert" className="text-[11px] text-red-300">{error}</p> : null}
           {sync.status === "conflict" ? (

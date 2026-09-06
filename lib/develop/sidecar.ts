@@ -17,9 +17,15 @@ export interface DevelopSidecar {
   keywords: ReturnType<typeof parseKeywordXmp>;
 }
 
+export async function digestDevelopSidecarContents(contents: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(contents));
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export async function readDevelopSidecar(
   entry: LibraryEntry,
 ): Promise<DevelopSidecar | null> {
+  if (entry.entryKind === "virtual") return null;
   const sidecar = await getDarkroomAPI().catalogReadSidecar(getAssetRequest(entry));
   if (!sidecar) {
     return null;
@@ -40,6 +46,7 @@ export async function writeDevelopSidecar(
   existingContents: string | null,
   expectedLastModified: number | null,
 ): Promise<{ readonly contents: string; readonly lastModified: number } | null> {
+  if (entry.entryKind === "virtual") return null;
   const contents = serializeDevelopXmp(document, metadata, existingContents);
   if (contents === null) {
     return null;

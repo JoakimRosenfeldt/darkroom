@@ -1,5 +1,5 @@
 import type { BasicSettings, DevelopPlugin } from "@/lib/develop/types";
-import { numberProp } from "@/lib/develop/xmp-value";
+import { numberProp } from "../xmp-value.ts";
 
 export const DEFAULT_BASIC_SETTINGS: BasicSettings = {
   exposure: 0,

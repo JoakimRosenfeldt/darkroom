@@ -1,4 +1,4 @@
-import type { AssetId, CatalogId } from "@/lib/catalog/ids";
+import type { CatalogId, EntryId } from "@/lib/catalog/ids";
 import type {
   DevelopCapabilityReport,
   SourceRecord,
@@ -39,7 +39,7 @@ const MAX_BATCH_RESULT_MESSAGE = 1_024;
 
 export interface BatchSourceSnapshot {
   readonly catalogId: CatalogId;
-  readonly entryId: AssetId;
+  readonly entryId: EntryId;
   readonly document: DevelopDocumentV3;
   readonly documentRevision: string;
   readonly source: SourceRecord;
@@ -47,7 +47,7 @@ export interface BatchSourceSnapshot {
 }
 
 export interface BatchOpenHandle {
-  readonly entryId: AssetId;
+  readonly entryId: EntryId;
   readonly token: string;
 }
 
@@ -55,7 +55,7 @@ export type BatchReconciledPhoto =
   | {
       readonly kind: "v3";
       readonly catalogId: CatalogId;
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly document: DevelopDocumentV3;
       readonly documentRevision: string;
       readonly source: SourceRecord;
@@ -64,13 +64,13 @@ export type BatchReconciledPhoto =
   | {
       readonly kind: "v2";
       readonly catalogId: CatalogId;
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly documentRevision: string;
     }
   | {
       readonly kind: "read-only-newer";
       readonly catalogId: CatalogId;
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly documentRevision: string;
       readonly foundVersion: number;
     };
@@ -114,7 +114,7 @@ export type BatchRevisionResult =
   | { readonly kind: "conflict"; readonly message: string };
 
 export interface BatchExpectedSourceRevision {
-  readonly entryId: AssetId;
+  readonly entryId: EntryId;
   readonly documentRevision: string;
   readonly signature: V3SourceSignature;
 }
@@ -139,7 +139,7 @@ export interface BatchRunnerAdapter {
   ) => Promise<{ readonly kind: "current" } | { readonly kind: "stale"; readonly message: string }>;
   readonly open: (input: {
     readonly selection: ExactBatchSelection;
-    readonly entryId: AssetId;
+    readonly entryId: EntryId;
   }) => Promise<BatchOpenHandle>;
   readonly reconcile: (input: {
     readonly selection: ExactBatchSelection;
@@ -149,25 +149,25 @@ export interface BatchRunnerAdapter {
   readonly revalidate: (input: {
     readonly source: BatchExpectedSourceRevision;
     readonly target: {
-      readonly entryId: AssetId;
+      readonly entryId: EntryId;
       readonly documentRevision: string;
       readonly signature: V3SourceSignature;
     };
   }) => Promise<BatchRevisionResult>;
   readonly dispatch: (input: {
-    readonly entryId: AssetId;
+    readonly entryId: EntryId;
     readonly expectedDocumentRevision: string;
     readonly source: BatchExpectedSourceRevision;
     readonly commands: readonly [V3EditCommand, ...V3EditCommand[]];
     readonly label: string;
   }) => Promise<BatchDispatchReceipt>;
   readonly save: (input: {
-    readonly entryId: AssetId;
+    readonly entryId: EntryId;
     readonly expectedDocumentRevision: string;
     readonly source: BatchExpectedSourceRevision;
   }) => Promise<BatchSaveReceipt>;
   readonly export?: (input: {
-    readonly entryId: AssetId;
+    readonly entryId: EntryId;
     readonly expectedDocumentRevision: string;
     readonly source: BatchExpectedSourceRevision;
     readonly outputIntent: ExportOutputIntent;
@@ -213,7 +213,7 @@ function boundedText(value: string, maximum: number, fallback: string): string {
 }
 
 function failure(
-  entryId: AssetId,
+  entryId: EntryId,
   phase: BatchFailurePhase,
   error: unknown,
 ): BatchPhotoResult {
@@ -783,7 +783,7 @@ function skipPrecedence(reason: BatchGroupSkipReason): number {
 }
 
 function skippedTarget(
-  entryId: AssetId,
+  entryId: EntryId,
   skippedGroups: readonly BatchGroupSkip[],
 ): BatchPhotoResult {
   const best = [...skippedGroups].sort(
@@ -844,7 +844,7 @@ function sourceSkip(
       };
 }
 
-function cancelledResult(entryId: AssetId): BatchPhotoResult {
+function cancelledResult(entryId: EntryId): BatchPhotoResult {
   return {
     kind: "skipped",
     entryId,
@@ -918,7 +918,7 @@ async function processTarget(input: {
   readonly selection: ExactBatchSelection;
   readonly source: BatchSourceSnapshot;
   readonly groups: readonly BatchSemanticGroup[];
-  readonly entryId: AssetId;
+  readonly entryId: EntryId;
 }): Promise<BatchPhotoResult> {
   let handle: BatchOpenHandle;
   try {

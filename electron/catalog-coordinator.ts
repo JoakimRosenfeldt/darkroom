@@ -481,6 +481,11 @@ export class CatalogCoordinator {
     });
   }
 
+  assertCurrentSession(value: unknown): void {
+    const input = parseCatalogSessionRequest(value);
+    this.requireCurrent(input.catalogId, input.sessionId);
+  }
+
   async addRoot(value: unknown): Promise<CatalogRootResult> {
     const input = parseCatalogSessionRequest(value);
     const active = this.requireCurrent(input.catalogId, input.sessionId);
@@ -715,18 +720,20 @@ export class CatalogCoordinator {
         .filter((root) => root.health === "online" && root.canonicalPath !== null)
         .map((root) => [root.rootId, root.canonicalPath!] as const),
     );
-    return state.assets.flatMap((asset) => {
-      if (asset.health !== "present") return [];
+    const locations = new Map<AssetId, NativeAssetLocation>();
+    for (const asset of state.assets) {
+      if (asset.health !== "present") continue;
       const canonicalRootPath = roots.get(asset.rootId);
-      if (canonicalRootPath === undefined) return [];
-      return [{
+      if (canonicalRootPath === undefined || locations.has(asset.assetId)) continue;
+      locations.set(asset.assetId, {
         catalogId: input.catalogId,
         assetId: asset.assetId,
         rootId: asset.rootId,
         canonicalRootPath,
         relativePath: asset.relativePath,
-      }];
-    });
+      });
+    }
+    return [...locations.values()];
   }
 
   runCatalogAdmin<T>(
@@ -897,6 +904,7 @@ export class CatalogCoordinator {
     return {
       catalogId: input.catalogId,
       expectedRevision: input.expectedRevision,
+      ...(input.entryId === undefined ? {} : { entryId: input.entryId }),
       ...(input.assetId === undefined ? {} : { assetId: input.assetId }),
       ...(input.rootId === undefined ? {} : { rootId: input.rootId }),
       ...(input.fingerprintSha256 === undefined ? {} : { fingerprintSha256: input.fingerprintSha256 }),

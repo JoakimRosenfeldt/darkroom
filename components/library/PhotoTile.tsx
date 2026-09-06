@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import type { SelectEntryModifiers } from "@/stores/library-store";
@@ -56,10 +56,12 @@ export const PhotoTile = memo(function PhotoTile({
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
-  const prototypeJobs = useDevelopJobStore((state) => state.jobs.filter((job) =>
+  const developDocument = metadata?.develop ?? null;
+  const jobs = useDevelopJobStore((state) => state.jobs);
+  const prototypeJobs = useMemo(() => jobs.filter((job) =>
     job.request.source.entryId === entry.id && job.request.source.catalogId === entry.catalogId &&
     job.status !== "discarded"
-  ));
+  ), [entry.catalogId, entry.id, jobs]);
   const prototypeBadge = prototypeJobs.some((job) => job.status === "queued" || job.status === "preparing" || job.status === "running" || job.status === "postprocess" || job.status === "accepting")
     ? "Prototype working"
     : prototypeJobs.some((job) => job.status === "awaiting-review")
@@ -102,7 +104,7 @@ export const PhotoTile = memo(function PhotoTile({
     }
     setThumbnailUrl(null);
     setStatus(entry.formatAvailability.status === "supported" ? "loading" : "error");
-  }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge]);
+  }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge, developDocument]);
 
   useEffect(() => {
     const element = tileRef.current;
@@ -149,6 +151,7 @@ export const PhotoTile = memo(function PhotoTile({
     async function loadThumbnail() {
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
+          document: developDocument,
           priority: 20,
           signal: controller.signal,
         });
@@ -178,7 +181,7 @@ export const PhotoTile = memo(function PhotoTile({
       active = false;
       controller.abort();
     };
-  }, [entry, decodeEdge, isNearViewport, thumbnailUrl]);
+  }, [entry, decodeEdge, isNearViewport, thumbnailUrl, developDocument]);
 
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
@@ -237,7 +240,7 @@ export const PhotoTile = memo(function PhotoTile({
       {!compact ? (
         <div className="absolute inset-x-0 bottom-0 flex items-end gap-2 bg-gradient-to-t from-[#0f0d0c]/95 via-[#0f0d0c]/65 to-transparent px-2 pb-2 pt-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-lr-text">
-            {entry.name}
+            {entry.entryKind === "virtual" ? `${entry.name} · ${entry.displayName}` : entry.name}
           </p>
           {showFormatLabel ? (
             <p className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-lr-accent">
@@ -271,7 +274,13 @@ export const PhotoTile = memo(function PhotoTile({
         </span>
       ) : null}
 
-      {prototypeBadge ? <span aria-label={prototypeBadge} className="pointer-events-none absolute left-2 top-2 z-30 rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white">{prototypeBadge}</span> : null}
+      {entry.entryKind === "virtual" ? (
+        <span className="pointer-events-none absolute left-2 top-2 z-30 max-w-[70%] truncate rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white">
+          {entry.displayName}
+        </span>
+      ) : null}
+
+      {prototypeBadge ? <span aria-label={prototypeBadge} className={`pointer-events-none absolute left-2 z-30 rounded border border-white/15 bg-black/75 px-1.5 py-1 font-mono text-[9px] text-white ${entry.entryKind === "virtual" ? "top-9" : "top-2"}`}>{prototypeBadge}</span> : null}
 
       {selected ? (
         <div
@@ -312,7 +321,7 @@ export const PhotoTile = memo(function PhotoTile({
                 selected ? "text-lr-text" : "text-lr-text-faint",
               ].join(" ")}
             >
-              {entry.name}
+              {entry.entryKind === "virtual" ? `${entry.name} · ${entry.displayName}` : entry.name}
             </span>
             {metadata && metadata.rating > 0 ? (
               <span className="shrink-0 text-[9px] text-lr-accent">

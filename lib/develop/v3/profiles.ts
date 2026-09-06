@@ -1,7 +1,9 @@
 import type {
   ColorProfileReference,
   SourceRecord,
-} from "../process";
+} from "../process.ts";
+import type { PersistedInputProfile } from "./document.ts";
+import type { MatrixCameraProfile } from "../../camera-profiles/matrix.ts";
 
 export type Rgb = readonly [number, number, number];
 export type Matrix3 = readonly [
@@ -61,6 +63,25 @@ export const STANDARD_SRGB_INPUT_PROFILE = {
     exposureOffsetEv: 0,
   },
 } as const satisfies InputProfileDescriptor;
+
+export function persistedInputProfileFromMatrix(
+  profile: MatrixCameraProfile,
+  registryRevision: string,
+): PersistedInputProfile {
+  return {
+    registryRevision,
+    selection: {
+      kind: "selected",
+      profileId: profile.id,
+      profileRevision: profile.revision,
+    },
+    calibration: {
+      matrixToLinearSrgb: profile.matrixToLinearSrgb,
+      channelScale: profile.channelScale,
+      exposureOffsetEv: profile.exposureOffsetEv,
+    },
+  };
+}
 
 export type InputProfileResolution =
   | {
@@ -265,4 +286,36 @@ export function applyInputCalibration(
     bounded((matrix[3] * red + matrix[4] * green + matrix[5] * blue) * exposure, -16, 16),
     bounded((matrix[6] * red + matrix[7] * green + matrix[8] * blue) * exposure, -16, 16),
   ];
+}
+
+export function effectiveInputCalibration(
+  source: SourceRecord,
+  stored: PersistedInputProfile,
+): InputCalibration {
+  if (
+    stored.selection.kind !== "decoder-default" ||
+    source.inputProfile.kind !== "available" ||
+    source.inputProfile.stage !== "before-develop-tone" ||
+    source.inputProfile.profile.id !== source.inputProfile.transform.id ||
+    source.inputProfile.profile.revision !== source.inputProfile.transform.revision ||
+    source.camera.kind !== "available" ||
+    !inputProfileIsCompatible({
+      reference: source.inputProfile.profile,
+      label: source.inputProfile.transform.label,
+      provenance: "camera-calibration",
+      compatibility: {
+        kind: "camera-specific",
+        make: source.inputProfile.transform.compatibility.make,
+        models: [source.inputProfile.transform.compatibility.model],
+      },
+      calibration: source.inputProfile.transform,
+    }, source)
+  ) {
+    return stored.calibration;
+  }
+  return {
+    matrixToLinearSrgb: source.inputProfile.transform.matrixToLinearSrgb,
+    channelScale: source.inputProfile.transform.channelScale,
+    exposureOffsetEv: source.inputProfile.transform.exposureOffsetEv,
+  };
 }

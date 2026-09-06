@@ -5,6 +5,8 @@ type Brand<Value, Name extends string> = Value & {
 export type CatalogId = Brand<string, "CatalogId">;
 export type RootId = Brand<string, "RootId">;
 export type AssetId = Brand<string, "AssetId">;
+export type SourceId = Brand<string, "SourceId">;
+export type EntryId = Brand<string, "EntryId">;
 export type OperationId = Brand<string, "OperationId">;
 export type PresetId = Brand<string, "PresetId">;
 
@@ -70,6 +72,40 @@ export function parseAssetId(value: unknown): AssetId {
 
 export function createAssetId(value?: string): AssetId {
   return createId(value, "AssetId");
+}
+
+export function isSourceId(value: unknown): value is SourceId {
+  try {
+    parseSourceId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parseSourceId(value: unknown): SourceId {
+  return parseId(value, "SourceId");
+}
+
+export function createSourceId(value?: string): SourceId {
+  return createId(value, "SourceId");
+}
+
+export function isEntryId(value: unknown): value is EntryId {
+  try {
+    parseEntryId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parseEntryId(value: unknown): EntryId {
+  return parseId(value, "EntryId");
+}
+
+export function createEntryId(value?: string): EntryId {
+  return createId(value, "EntryId");
 }
 
 export function isOperationId(value: unknown): value is OperationId {

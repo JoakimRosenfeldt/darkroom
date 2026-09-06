@@ -113,4 +113,5 @@ function createLimitRunner(maxConcurrent: number) {
 }
 
 export const runWithThumbnailLimit = createLimitRunner(2);
+export const runWithPreviewLimit = createLimitRunner(2);
 export const runWithAspectLimit = createLimitRunner(8);

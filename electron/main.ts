@@ -1,13 +1,15 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   shell,
   type IpcMainInvokeEvent,
 } from "electron";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   getFolderName,
@@ -110,6 +112,14 @@ import { createRuntimeFormatCapabilityReport } from "./format-capability-service
 import type { FormatCapabilityReport, NikonRuntimePackageState } from "../lib/formats/types.ts";
 import { isRuntimeNativeRoot, type AssetScopedOperations, type RuntimeRootProjection } from "./library-runtime.ts";
 import { createOperationId, type AssetId, type CatalogId, type OperationId } from "../lib/catalog/ids.ts";
+import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryProjectionWriteInput,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryTargetInput,
+} from "../lib/develop/history.ts";
 import { parseCatalogLiveQueryResult } from "../lib/catalog/live.ts";
 import {
   parseCatalogDecodeRequest,
@@ -151,12 +161,45 @@ import {
   analyzeMetadataTargets,
   type MetadataAnalysisTarget,
 } from "./metadata-analysis-service.ts";
+import { CameraProfileService } from "./camera-profile-service.ts";
+import {
+  parseCameraProfileConflictRequest,
+  parseCameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry.ts";
 import { MetadataCache } from "./metadata-cache.ts";
 import { fingerprintNoFollowFile } from "./catalog-fingerprint-service.ts";
 import {
   parseExactDuplicateTrashRequest,
   type ExactDuplicateTrashItemResult,
 } from "../lib/library/duplicate-actions.ts";
+import { DevelopPresetStore } from "./develop-preset-store.ts";
+import { DevelopDefaultsStore } from "./develop-defaults-store.ts";
+import { DevelopDefaultsService } from "./develop-defaults-service.ts";
+import { verifyLibRawInputProfile } from "./libraw-profile-verifier.ts";
+import { LIBRAW_PROFILE_MAX_INPUT_BYTES } from "./libraw-profile-protocol.ts";
+import type { DevelopDefaultFacts } from "../lib/develop/defaults/matcher.ts";
+import { BUILT_IN_DEVELOP_PRESETS } from "../lib/develop/presets/built-ins.ts";
+import {
+  parseDevelopPresetConflictRequest,
+  parseDevelopPresetDeleteRequest,
+  parseDevelopPresetFavoriteRequest,
+  parseDevelopPresetSearchRequest,
+} from "../lib/develop/presets/api.ts";
+import { parseDevelopPresetRecord } from "../lib/develop/presets/schema.ts";
+import {
+  parseDevelopClipboardGroups,
+  parseDevelopClipboardPayload,
+  parseDevelopClipboardText,
+  serializeDevelopClipboardPayload,
+} from "../lib/develop/clipboard/schema.ts";
+import {
+  parseDevelopBatchAutoSyncRequest,
+  parseDevelopBatchListRequest,
+  parseDevelopBatchStartRequest,
+  parseDevelopBatchTargetRequest,
+} from "../lib/develop/batch/api.ts";
+import { DevelopBatchService } from "./develop-batch-service.ts";
+import type { PersistedInputProfile } from "../lib/develop/v3/document.ts";
 
 registerAiModelScheme();
 
@@ -513,6 +556,11 @@ function getNefDecoderCommand(): NefDecoderCommand | null {
     };
   }
   if (process.platform !== "darwin") return null;
+  if (!app.isPackaged) {
+    const sdkRoot = process.env.DARKROOM_NEF_SDK_ROOT ?? path.join(app.getPath("home"), ".darkroom-sdk", "nikon-nef");
+    const helper = path.join(sdkRoot, "spike", "DarkroomNefSpike.app", "Contents", "MacOS", "nikon-nef-decoder");
+    if (existsSync(helper)) return { executable: helper, kind: "native" };
+  }
   return {
     executable: path.join(process.resourcesPath, "nikon-nef-decoder", "MacOS", "nikon-nef-decoder"),
     kind: "native",
@@ -720,6 +768,17 @@ function registerIpcHandlers(): void {
   const developAssetStore = new DevelopAssetStore(
     path.join(app.getPath("userData"), "develop-assets-v3"),
   );
+  const cameraProfiles = new CameraProfileService(app.getPath("userData"));
+  const cameraProfilesReady = cameraProfiles.initialize();
+  const developPresets = new DevelopPresetStore(
+    path.join(app.getPath("userData"), "develop-presets"),
+    BUILT_IN_DEVELOP_PRESETS,
+  );
+  const developPresetsReady = developPresets.initialize();
+  const developDefaults = new DevelopDefaultsStore(
+    path.join(app.getPath("userData"), "develop-defaults"),
+  );
+  const developDefaultsReady = developDefaults.initialize();
   const developJobRuntime = new DevelopJobRuntime({
     journalPath: path.join(
       app.getPath("userData"),
@@ -893,6 +952,180 @@ function registerIpcHandlers(): void {
       items: [...resolutionFailures, ...analyzed.items],
     };
   };
+  const developDefaultsService = new DevelopDefaultsService({
+    store: developDefaults,
+    presets: developPresets,
+    worker,
+    cameraProfiles,
+    assertEntry: async (request) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const entry = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      if (!entry) throw new Error("Develop default entry is not active in this catalog session.");
+    },
+    verifyEntry: async (request) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const entry = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      if (!entry || !entry.sourceId || entry.health !== "present" || entry.observation === null) {
+        throw new Error("Develop default source is not available in the active catalog session.");
+      }
+      const analysis = await runMetadataAnalysis({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        operationId: createOperationId(),
+        entryIds: [entry.assetId],
+        force: false,
+      }, new AbortController().signal);
+      const verified = analysis.items.find((item) => item.entryId === entry.assetId)?.analysis;
+      if (
+        !verified || verified.error !== null || verified.sourceSha256 === null ||
+        verified.size !== entry.observation.byteLength ||
+        verified.modifiedAt !== entry.observation.modifiedAt
+      ) {
+        throw new Error("Develop default source analysis is missing, stale, or failed.");
+      }
+      const camera = verified.cameraMake !== null && verified.cameraModel !== null
+        ? { kind: "known" as const, make: verified.cameraMake, model: verified.cameraModel }
+        : { kind: "unknown" as const, reason: "Camera identity is unavailable in verified metadata." };
+      const iso = verified.iso !== null && Number.isSafeInteger(verified.iso) && verified.iso >= 1
+        ? { kind: "known" as const, value: verified.iso }
+        : { kind: "unknown" as const, reason: "ISO is unavailable in verified metadata." };
+      const unavailableFacts: DevelopDefaultFacts = {
+        camera,
+        decoder: { kind: "unknown", reason: "A verified raw decoder is unavailable." },
+        inputProfile: { kind: "unknown", reason: "A verified before-tone input profile is unavailable." },
+        iso,
+      };
+      if (entry.formatId !== "nef" || entry.observation.byteLength > LIBRAW_PROFILE_MAX_INPUT_BYTES) {
+        return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
+      }
+      const root = coordinatorRuntime.getNativeSessionRoots()
+        .filter(isRuntimeNativeRoot)
+        .find((candidate) => candidate.catalogId === request.catalogId && candidate.rootId === entry.rootId);
+      if (!root) throw new Error("Develop default source root is unavailable.");
+      const location = {
+        catalogId: request.catalogId,
+        assetId: entry.assetId,
+        rootId: entry.rootId,
+        canonicalRootPath: root.nativePath,
+        relativePath: entry.relativePath,
+      };
+      const before = await nativeAssetAccess.stat(location);
+      if (before.size !== entry.observation.byteLength || before.lastModified !== entry.observation.modifiedAt) {
+        throw new Error("Develop default source changed after analysis.");
+      }
+      const sourceBytes = await nativeAssetAccess.read(location);
+      const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+      if (sourceSha256 !== verified.sourceSha256) {
+        throw new Error("Develop default source bytes do not match verified metadata.");
+      }
+      let decoderProfile;
+      try {
+        decoderProfile = await verifyLibRawInputProfile(sourceBytes);
+      } catch {
+        return { entry, facts: unavailableFacts, decoderProfile: null, installAvailable: false };
+      }
+      const after = await nativeAssetAccess.stat(location);
+      if (after.size !== before.size || after.lastModified !== before.lastModified) {
+        throw new Error("Develop default source changed during profile verification.");
+      }
+      if (
+        camera.kind !== "known" ||
+        decoderProfile.compatibility.make.trim().toLocaleLowerCase() !== camera.make.trim().toLocaleLowerCase() ||
+        decoderProfile.compatibility.model.trim().toLocaleLowerCase() !== camera.model.trim().toLocaleLowerCase()
+      ) {
+        throw new Error("Verified decoder profile does not match source camera metadata.");
+      }
+      const facts: DevelopDefaultFacts = {
+        camera,
+        decoder: { kind: "known", value: "libraw-wasm" },
+        inputProfile: {
+          kind: "known",
+          profileId: decoderProfile.id,
+          profileRevision: decoderProfile.revision,
+          stage: "before-develop-tone",
+        },
+        iso,
+      };
+      return {
+        entry: { ...entry, cameraMake: camera.make, cameraModel: camera.model },
+        facts,
+        decoderProfile,
+        installAvailable: true,
+      };
+    },
+    recheckEntry: async (request, verified) => {
+      const state = await coordinator.queryLive({
+        catalogId: request.catalogId,
+        sessionId: request.sessionId,
+        expectedRevision: null,
+      });
+      const current = state.assets.find((candidate) => candidate.entryId === request.entryId);
+      const expected = verified.entry;
+      if (
+        !current || current.sourceId !== expected.sourceId || current.revision !== expected.revision ||
+        current.health !== "present" || current.observation === null || expected.observation === null ||
+        current.rootId !== expected.rootId || current.relativePath !== expected.relativePath ||
+        current.observation.byteLength !== expected.observation.byteLength ||
+        current.observation.modifiedAt !== expected.observation.modifiedAt
+      ) {
+        throw new Error("Develop default source changed before installation.");
+      }
+    },
+  });
+  const developBatchService = new DevelopBatchService({
+    worker,
+    cameraProfiles,
+    presets: developPresets,
+    verifyBinding: (catalogId, sessionId) => coordinator.assertCurrentSession({ catalogId, sessionId }),
+    verifySession: (catalogId, sessionId) => coordinator.queryLive({
+      catalogId,
+      sessionId,
+      expectedRevision: null,
+    }),
+    readClipboard: () => {
+      const text = clipboard.readText();
+      if (text.length === 0) return { kind: "empty" };
+      try {
+        return { kind: "ready", payload: parseDevelopClipboardText(text) };
+      } catch (error) {
+        return {
+          kind: "invalid",
+          reason: error instanceof Error ? error.message.slice(0, 512) : "Clipboard does not contain valid Darkroom Develop settings.",
+        };
+      }
+    },
+    resolveDecoderDefault: async (entry): Promise<PersistedInputProfile | null> => {
+      const observation = entry.observation;
+      if (entry.formatId !== "nef" || !entry.cameraMake || !entry.cameraModel || observation === null || observation.byteLength === null || observation.modifiedAt === null || observation.byteLength > LIBRAW_PROFILE_MAX_INPUT_BYTES) return null;
+      const root = coordinatorRuntime.getNativeSessionRoots().filter(isRuntimeNativeRoot)
+        .find((candidate) => candidate.catalogId === entry.catalogId && candidate.rootId === entry.rootId);
+      if (!root) return null;
+      const location = { catalogId: entry.catalogId, assetId: entry.assetId, rootId: entry.rootId, canonicalRootPath: root.nativePath, relativePath: entry.relativePath };
+      const before = await nativeAssetAccess.stat(location);
+      if (before.size !== observation.byteLength || before.lastModified !== observation.modifiedAt) throw new Error("Batch profile source changed before verification.");
+      const profile = await verifyLibRawInputProfile(await nativeAssetAccess.read(location));
+      const after = await nativeAssetAccess.stat(location);
+      if (after.size !== before.size || after.lastModified !== before.lastModified) throw new Error("Batch profile source changed during verification.");
+      if (profile.compatibility.make.trim().toLocaleLowerCase() !== entry.cameraMake.trim().toLocaleLowerCase() || profile.compatibility.model.trim().toLocaleLowerCase() !== entry.cameraModel.trim().toLocaleLowerCase()) return null;
+      return {
+        registryRevision: cameraProfiles.list().revision,
+        selection: { kind: "decoder-default" },
+        calibration: { matrixToLinearSrgb: profile.matrixToLinearSrgb, channelScale: profile.channelScale, exposureOffsetEv: profile.exposureOffsetEv },
+      };
+    },
+    onUpdate: (catalogId, receipts) => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+      mainWindow.webContents.send("darkroom:develop-batch-updated", { catalogId, receipts });
+    },
+  });
   let manualImportBinding: {
     readonly catalogId: CatalogId;
     readonly sessionId: SessionId;
@@ -1623,6 +1856,166 @@ function registerIpcHandlers(): void {
     assertTrustedRenderer(event);
     return developAssetStore.read(parseDevelopAssetReadRequest(value));
   });
+  ipcMain.handle("darkroom:camera-profiles-list", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.list();
+  });
+  ipcMain.handle("darkroom:camera-profiles-import", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    const result = await dialog.showOpenDialog({
+      title: "Import camera profile",
+      properties: ["openFile"],
+      filters: [{ name: "Matrix camera profiles", extensions: ["dcp", "xmp"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { kind: "cancelled" };
+    return cameraProfiles.importFile(result.filePaths[0]!);
+  });
+  ipcMain.handle("darkroom:camera-profiles-resolve-conflict", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.resolveConflict(parseCameraProfileConflictRequest(value));
+  });
+  ipcMain.handle("darkroom:camera-profiles-rescan", async (event) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.rescan();
+  });
+  ipcMain.handle("darkroom:camera-profiles-remove", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    return cameraProfiles.remove(parseCameraProfileRemoveRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.list(parseDevelopPresetSearchRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-create", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.create(parseDevelopPresetRecord(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-update", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    return developPresets.update(parseDevelopPresetRecord(value));
+  });
+  ipcMain.handle("darkroom:develop-presets-favorite", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetFavoriteRequest(value);
+    return developPresets.setFavorite(request.presetId, request.favorite);
+  });
+  ipcMain.handle("darkroom:develop-presets-delete", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetDeleteRequest(value);
+    await developPresets.delete(request.presetId);
+  });
+  ipcMain.handle("darkroom:develop-presets-import", async (event) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const result = await dialog.showOpenDialog({
+      title: "Import Develop preset",
+      properties: ["openFile"],
+      filters: [{ name: "Darkroom Develop preset", extensions: ["json", "drpreset"] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { kind: "cancelled" };
+    return developPresets.importFile(result.filePaths[0]!);
+  });
+  ipcMain.handle("darkroom:develop-presets-resolve-conflict", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developPresetsReady;
+    const request = parseDevelopPresetConflictRequest(value);
+    if (request.action === "cancel") {
+      await developPresets.cancelImport(request.token);
+      return { kind: "cancelled" };
+    }
+    return {
+      kind: "imported",
+      preset: await developPresets.resolveImport(request.token, request.action),
+    };
+  });
+  ipcMain.handle("darkroom:develop-defaults-list", async (event) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
+    return developDefaultsService.list();
+  });
+  ipcMain.handle("darkroom:develop-defaults-referenced-presets", async (event) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.referencedPresets();
+  });
+  ipcMain.handle("darkroom:develop-defaults-create", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.create(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-update", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.update(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-enabled", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    return developDefaultsService.setEnabled(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-delete", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    await developDefaultsService.delete(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-preview", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady]);
+    return developDefaultsService.preview(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-installed", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developDefaultsReady;
+    return developDefaultsService.installed(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-install", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developDefaultsReady, developPresetsReady, cameraProfilesReady]);
+    return developDefaultsService.install(value);
+  });
+  ipcMain.handle("darkroom:develop-defaults-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    developDefaultsService.cancel(value);
+  });
+  ipcMain.handle("darkroom:develop-clipboard-write", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const payload = parseDevelopClipboardPayload(value);
+    clipboard.writeText(serializeDevelopClipboardPayload(payload));
+    await settingsStore.setDevelopClipboardGroups(payload.selectedGroups);
+  });
+  ipcMain.handle("darkroom:develop-clipboard-read", async (event) => {
+    assertTrustedRenderer(event);
+    const text = clipboard.readText();
+    if (text.length === 0) return { kind: "empty" };
+    try {
+      return { kind: "ready", payload: parseDevelopClipboardText(text) };
+    } catch (error) {
+      return {
+        kind: "invalid",
+        reason: error instanceof Error
+          ? error.message.slice(0, 512)
+          : "Clipboard does not contain valid Darkroom Develop settings.",
+      };
+    }
+  });
+  ipcMain.handle("darkroom:develop-clipboard-groups-get", async (event) => {
+    assertTrustedRenderer(event);
+    return settingsStore.getDevelopClipboardGroups();
+  });
+  ipcMain.handle("darkroom:develop-clipboard-groups-set", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await settingsStore.setDevelopClipboardGroups(parseDevelopClipboardGroups(value));
+  });
   ipcMain.handle("darkroom:develop-asset-gc", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return developAssetStore.collectGarbage(parseDevelopAssetGcRequest(value));
@@ -1674,6 +2067,73 @@ function registerIpcHandlers(): void {
   ipcMain.handle("darkroom:catalog-read-asset-head", async (event, value: unknown) => {
     assertTrustedRenderer(event);
     return coordinator.readAssetHead(value);
+  });
+  ipcMain.handle("darkroom:develop-history-load", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.loadDevelopHistory(parseDevelopHistoryLoadInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.listDevelopHistory(parseDevelopHistoryListInput(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-list", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.list(parseDevelopBatchListRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-start", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await Promise.all([developPresetsReady, cameraProfilesReady]);
+    return developBatchService.start(parseDevelopBatchStartRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-cancel", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.cancel(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-retry", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.retry(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-undo", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.undo(parseDevelopBatchTargetRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-enable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await cameraProfilesReady;
+    await developBatchService.enableAutoSync(parseDevelopBatchAutoSyncRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-disable", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    await developBatchService.disableAutoSync(parseCatalogSessionRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-batch-auto-state", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return developBatchService.autoSyncState(parseCatalogSessionRequest(value));
+  });
+  ipcMain.handle("darkroom:develop-history-commit", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const input = parseDevelopHistoryCommitInput(value);
+    const result = await worker.commitDevelopHistory(input);
+    await developBatchService.historyCommitted(input, result).catch(() => undefined);
+    return result;
+  });
+  ipcMain.handle("darkroom:develop-history-refs", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const target = parseDevelopHistoryTargetInput(value);
+    return worker.listDevelopHistoryRefs(target.catalogId, target.entryId);
+  });
+  ipcMain.handle("darkroom:develop-history-ref-mutate", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.mutateDevelopHistoryRef(parseDevelopHistoryRefMutationInput(value));
+  });
+  ipcMain.handle("darkroom:develop-history-projection-get", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    const target = parseDevelopHistoryTargetInput(value);
+    return worker.getDevelopHistoryProjection(target.catalogId, target.entryId);
+  });
+  ipcMain.handle("darkroom:develop-history-projection-set", async (event, value: unknown) => {
+    assertTrustedRenderer(event);
+    return worker.recordDevelopHistoryProjection(parseDevelopHistoryProjectionWriteInput(value));
   });
   ipcMain.handle("darkroom:catalog-stat-asset", async (event, value: unknown) => {
     assertTrustedRenderer(event);

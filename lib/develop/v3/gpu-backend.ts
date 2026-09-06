@@ -20,6 +20,7 @@ import {
   NEUTRAL_LENS_CALIBRATION,
   type LensCalibration,
 } from "@/lib/develop/v3/optics";
+import { effectiveInputCalibration } from "@/lib/develop/v3/profiles";
 
 const CURVE_LUT_SIZE = 1_024;
 const MAX_CACHED_GEOMETRY_MAPS = 3;
@@ -754,7 +755,10 @@ function renderPointwise(
   );
   const whiteBalance = input.document.color.whiteBalance.resolved.gains;
   gl.uniform3f(gl.getUniformLocation(programValue, "uWhiteBalance"), ...whiteBalance);
-  const calibration = input.document.color.inputProfile.calibration;
+  const calibration = effectiveInputCalibration(
+    input.source,
+    input.document.color.inputProfile,
+  );
   gl.uniform3f(gl.getUniformLocation(programValue, "uChannelScale"), ...calibration.channelScale);
   gl.uniformMatrix3fv(
     gl.getUniformLocation(programValue, "uCalibration"),

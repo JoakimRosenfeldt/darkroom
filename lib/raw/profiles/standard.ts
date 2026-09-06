@@ -25,6 +25,7 @@ async function blobToDecodedImage(
       rgb: new Uint8Array(0),
       bits: 8,
       colors: 4,
+      pixelProvenance: standardPixelProvenance(),
       metadata,
       blob,
       objectUrl: URL.createObjectURL(blob),
@@ -51,6 +52,7 @@ async function blobToDecodedImage(
       rgb: imageData.data,
       bits: 8,
       colors: 4,
+      pixelProvenance: standardPixelProvenance(),
       metadata,
     };
   }
@@ -71,9 +73,24 @@ async function blobToDecodedImage(
     rgb: imageData.data,
     bits: 8,
     colors: 4,
+    pixelProvenance: standardPixelProvenance(),
     metadata,
     blob: outputBlob,
     objectUrl: URL.createObjectURL(outputBlob),
+  };
+}
+
+function standardPixelProvenance(): DecodedImage["pixelProvenance"] {
+  return {
+    decoderPath: "processed-standard",
+    decoderRevision: "browser-canvas-rgba8-v1",
+    colorSpace: "srgb",
+    transfer: "encoded",
+    bitDepth: 8,
+    cameraProfileStage: {
+      kind: "unavailable",
+      reason: "Standard images contain rendered pixels.",
+    },
   };
 }
 

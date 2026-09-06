@@ -4,13 +4,13 @@ import {
   type PixelDimensions,
   type SemanticStageId,
   type V3SourceSignature,
-} from "../process";
+} from "../process.ts";
 import {
   parseSha256Digest,
   type AcceptedAssetKind,
   type AcceptedAssetRevision,
   type Sha256Digest,
-} from "../render-contract";
+} from "../render-contract.ts";
 
 export const MAX_DEVELOP_ASSET_REFS = 256;
 export const MAX_DEVELOP_ASSET_EDGE = 65_535;

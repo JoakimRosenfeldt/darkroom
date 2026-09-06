@@ -12,8 +12,10 @@ Built as an **Electron** app with a Next.js UI, native folder access, and automa
 - **RAW support (NEF)** — Nikon NEF files decode via [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm), with the native Nikon SDK as a macOS fallback
 - **Standard images** — JPEG, PNG, and WebP via native browser decoding
 - **Virtualized grid** — handles large libraries without rendering every tile at once
-- **Thumbnail cache** — decoded previews cached in IndexedDB by path and modification time
-- **Photo detail view** — full decode preview with metadata sidebar
+- **Edited previews** — Library, filmstrip, and Compare render saved edits, with separate cache entries for each virtual copy and preview size
+- **Photo editing** — crop, white balance, tone, masks, detail, presets, and persistent undo history
+- **Actual-size viewing** — full-resolution 100% detail in Develop and linked Compare, including Retina displays
+- **JPEG export** — quality and size controls, embedded sRGB profile, metadata and GPS choices, collision handling, and cancellation
 
 ## Getting started
 
@@ -22,7 +24,7 @@ npm install
 npm run electron:dev
 ```
 
-This starts the Next.js dev server and opens the Electron window. Click **Import** in the toolbar and select a photo folder.
+This starts the Next.js dev server and opens the Electron window. Click **Import folder**, create a catalog, and select a photo folder.
 
 ### Production build
 
@@ -108,14 +110,30 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 - [Zustand](https://github.com/pmndrs/zustand) — library state
 - [@tanstack/react-virtual](https://tanstack.com/virtual) — virtualized grid
 - [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm) — in-browser RAW decoding
-- [idb-keyval](https://github.com/jakearchibald/idb-keyval) — IndexedDB helpers
 
 ## Limitations (v1)
 
-- Read-only — no export or non-destructive editing yet
-- Single folder library
-- RAW decode is CPU-intensive; large NEF files may take a few seconds per thumbnail
+- Output is 8-bit sRGB. Full-resolution output is limited to 50 megapixels.
+- RAW qualification currently covers the bundled Nikon Z6 III files with the native Nikon decoder. Other cameras, lighting conditions, and automatic lens profiles need separate qualification.
+- Full-resolution masked views can take several seconds. Export rendering runs in a worker so the interface remains responsive.
+- The Nikon helper is required for the bundled high-efficiency NEFs. Embedded JPEG previews support culling, but editing and export require decoded RAW pixels.
 
 ## License
 
 Private project.
+
+## Check the local RAW workflow
+
+Start the development server with `npm run dev`. In another terminal, run:
+
+```bash
+npm run test:develop:electron
+```
+
+The check uses a temporary catalog and copies of the bundled photos. It checks edits, undo, redo, virtual copies, preset batches, edited previews, 100% detail, JPEG metadata, cancellation, and recovery after process interruption. It prints the location of screenshots, exported files, and timing results.
+
+Set `DARKROOM_SMOKE_URL` if the server uses a different port. Set `DARKROOM_SMOKE_RAW` to test another Nikon file. The check expects a working RAW decoder; embedded previews do not qualify.
+
+Development builds find the Nikon helper under `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` or `DARKROOM_NEF_HELPER_PATH` to use another installation.
+
+Experimental tools are available under **Develop > Edit > Advanced**. The normal editor keeps histogram, white balance, and tone in **Basic**.

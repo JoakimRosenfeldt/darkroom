@@ -1,5 +1,6 @@
 import { COLOR_LABELS, type EntryMetadata } from "@/lib/catalog/types";
 import type {
+  CommittedDevelopCommand,
   DevelopSaveResult,
   DevelopSessionOpenDocument,
   DevelopSessionSnapshot,
@@ -8,9 +9,21 @@ import type {
 import { openDevelopSessionDocument } from "@/lib/develop/session";
 import {
   readDevelopSidecar,
+  digestDevelopSidecarContents,
   writeDevelopSidecar,
   type DevelopSidecar,
 } from "@/lib/develop/sidecar";
+import {
+  canonicalDevelopHistoryDocument,
+  createDevelopRevisionId,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
+  type DevelopHistoryLoadedRevision,
+  type DevelopHistoryProjection,
+  type DevelopRevisionId,
+} from "@/lib/develop/history";
+import { parseOperationId, type OperationId } from "@/lib/catalog/ids";
+import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import {
   decodePersistedDevelopDocument,
   MAX_V3_PAYLOAD_BYTES,
@@ -19,19 +32,21 @@ import {
   createDefaultV3DevelopDocument,
   type PersistedDevelopDocument,
 } from "@/lib/develop/v3/document";
-import {
-  MAX_DEVELOP_XMP_PAYLOAD_BYTES,
-  serializeDevelopXmp,
-} from "@/lib/develop/xmp";
+import { MAX_DEVELOP_XMP_PAYLOAD_BYTES } from "@/lib/develop/xmp";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { resolveStoredDevelopDocument } from "@/lib/export/settings";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
+import type { DevelopDefaultsProductionResult } from "@/lib/develop/defaults/api";
+
+function documentsEqual(left: unknown, right: unknown): boolean {
+  return canonicalDevelopHistoryDocument(left ?? createDefaultV3DevelopDocument()) ===
+    canonicalDevelopHistoryDocument(right ?? createDefaultV3DevelopDocument());
+}
 
 const PERSIST_DEBOUNCE_MS = 500;
 const MAX_WRITE_ATTEMPTS_PER_REVISION = 3;
 const JOURNAL_VERSION = 1;
 const MAX_JOURNAL_BYTES = MAX_V3_PAYLOAD_BYTES + MAX_DEVELOP_XMP_PAYLOAD_BYTES + 256 * 1024;
-const MAX_JOURNAL_ENTRIES = 32;
-const MAX_TOTAL_JOURNAL_BYTES = MAX_JOURNAL_BYTES * 2;
 const JOURNAL_PREFIX = "darkroom:develop-recovery:v1:";
 
 export type DevelopSidecarStatus =
@@ -40,6 +55,24 @@ export type DevelopSidecarStatus =
   | "saving"
   | "saved"
   | "error";
+
+export type DevelopProjectionState =
+  | { readonly kind: "clean"; readonly revisionId: string | null }
+  | { readonly kind: "pending"; readonly revisionId: string; readonly reason: string }
+  | {
+      readonly kind: "divergent";
+      readonly headRevisionId: string;
+      readonly projectedRevisionId: string | null;
+      readonly externalDigest: string | null;
+      readonly differences: readonly string[];
+    }
+  | { readonly kind: "recovery"; readonly message: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+export type DevelopProjectionFaultStage =
+  | "after-head-commit"
+  | "after-xmp-write"
+  | "after-projection-record";
 
 export type SidecarMetadataPatch = Partial<
   Pick<EntryMetadata, "rating" | "colorLabel">
@@ -76,15 +109,15 @@ export interface DevelopRepositoryAdapters {
     readonly sourceUpdatedAt: number;
     readonly metadataPatch: SidecarMetadataPatch;
   }) => Promise<void>;
-  readonly hydrateKeywords?: (
-    flat: readonly string[],
-    hierarchical: readonly string[],
-  ) => void;
+  readonly applyExternalMetadata?: (sidecar: DevelopSidecar) => void | Promise<void>;
+  readonly projectCatalogKeywords?: () => Promise<void>;
   readonly setStatus: (
     status: DevelopSidecarStatus,
     error?: string | null,
   ) => void;
   readonly onSessionChanged: (snapshot: DevelopSessionSnapshot) => void;
+  readonly setProjectionState?: (state: DevelopProjectionState) => void;
+  readonly faultInjector?: (stage: DevelopProjectionFaultStage) => void | Promise<void>;
 }
 
 interface PendingWrite {
@@ -97,6 +130,11 @@ interface FailedWrite {
   readonly documentRevision: number;
   readonly metadataRevision: number;
   readonly attempts: number;
+}
+
+interface AcceptedExternalImport {
+  readonly digest: string;
+  readonly operationId: string | null;
 }
 
 interface RecoveryJournal {
@@ -223,49 +261,6 @@ function readJournal(entry: LibraryEntry): RecoveryJournal | null {
   return value === null ? null : parseJournal(value, entry);
 }
 
-function writeJournal(entry: LibraryEntry, journal: RecoveryJournal): void {
-  const value = JSON.stringify(journal);
-  const encoder = new TextEncoder();
-  const valueBytes = encoder.encode(value).byteLength;
-  if (valueBytes > MAX_JOURNAL_BYTES) {
-    throw new DevelopRepositoryError(
-      "journal-too-large",
-      "Develop recovery data is larger than the supported limit.",
-    );
-  }
-  try {
-    const localStorage = storage();
-    const targetKey = journalKey(entry);
-    let entryCount = 0;
-    let totalBytes = valueBytes;
-    let targetExists = false;
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (!key?.startsWith(JOURNAL_PREFIX)) continue;
-      entryCount += 1;
-      if (key === targetKey) {
-        targetExists = true;
-        continue;
-      }
-      const existing = localStorage.getItem(key);
-      if (existing !== null) totalBytes += encoder.encode(existing).byteLength;
-    }
-    if ((!targetExists && entryCount >= MAX_JOURNAL_ENTRIES) || totalBytes > MAX_TOTAL_JOURNAL_BYTES) {
-      throw new DevelopRepositoryError(
-        "journal-too-large",
-        "Develop recovery storage is full. Reopen photos with pending recovery before saving more edits.",
-      );
-    }
-    localStorage.setItem(targetKey, value);
-  } catch (error) {
-    if (error instanceof DevelopRepositoryError) throw error;
-    throw new DevelopRepositoryError(
-      "journal-unavailable",
-      errorMessage(error, "Develop recovery data could not be saved."),
-    );
-  }
-}
-
 function clearJournal(entry: LibraryEntry): void {
   try {
     storage().removeItem(journalKey(entry));
@@ -278,11 +273,20 @@ function clearJournal(entry: LibraryEntry): void {
   }
 }
 
-function sameSidecarContents(
-  sidecar: DevelopSidecar | null,
-  expected: string | null,
-): boolean {
-  return expected === null ? sidecar === null : sidecar?.contents === expected;
+async function journalUuid(journal: RecoveryJournal, purpose: string): Promise<string> {
+  const input = JSON.stringify([
+    purpose,
+    journal.catalogId,
+    journal.entryId,
+    journal.createdAt,
+    journal.sourceUpdatedAt,
+    journal.document,
+  ]);
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes.slice(0, 16), (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export class DevelopRepository {
@@ -295,10 +299,17 @@ export class DevelopRepository {
   #queue: Promise<void> = Promise.resolve();
   #hydration: Promise<void> = Promise.resolve();
   #opening: Promise<void> | null = null;
-  #sidecarContents: string | null = null;
-  #sidecarLastModified: number | null = null;
   #sidecarContentsKnown = false;
   #failedWrite: FailedWrite | null = null;
+  #head: DevelopHistoryLoadedRevision | null = null;
+  #projection: DevelopHistoryProjection | null = null;
+  #projectionState: DevelopProjectionState = { kind: "clean", revisionId: null };
+  #divergentSidecar: DevelopSidecar | null = null;
+  #acceptedExternalImport: AcceptedExternalImport | null = null;
+  #detachCommittedCommands: (() => void) | null = null;
+  #lastCommandWrite: Promise<void> = Promise.resolve();
+  #configurationRevision = 0;
+  #installedDefault: InstalledDevelopDefault | null = null;
 
   constructor(entry: LibraryEntry) {
     this.#entry = entry;
@@ -308,7 +319,7 @@ export class DevelopRepository {
     session: DevelopSessionCore,
     metadata: EntryMetadata,
     adapters: DevelopRepositoryAdapters,
-  ): void {
+  ): () => void {
     if (session.catalogId !== this.#entry.catalogId || session.entryId !== this.#entry.id) {
       throw new DevelopRepositoryError(
         "recovery-adapter-unavailable",
@@ -319,6 +330,21 @@ export class DevelopRepository {
     this.#metadata = metadata;
     this.#adapters = adapters;
     session.attachRepository(this);
+    this.#detachCommittedCommands?.();
+    this.#detachCommittedCommands = session.subscribeCommittedCommands((command) => {
+      const documentRevision = session.snapshot().documentRevision;
+      const write = this.#enqueueCommittedCommand(command, documentRevision);
+      void write.catch(() => undefined);
+      this.#lastCommandWrite = write;
+    });
+    const revision = ++this.#configurationRevision;
+    return () => {
+      if (this.#configurationRevision !== revision || this.#session !== session) return;
+      this.#detachCommittedCommands?.();
+      this.#detachCommittedCommands = null;
+      this.#session = null;
+      this.#adapters = null;
+    };
   }
 
   updateMetadata(metadata: EntryMetadata): void {
@@ -338,13 +364,48 @@ export class DevelopRepository {
     const hydrate = async (): Promise<void> => {
       await this.#queue;
       try {
+        const adapters = this.#requireAdapters();
+        const session = this.#requireSession();
+        if (!isElectronApp()) {
+          this.#setProjectionState({ kind: "unavailable", reason: "Persistent Develop history needs the desktop app." });
+          this.#adapters?.setStatus("saved");
+          return;
+        }
+        let loaded = await getDarkroomAPI().developHistoryLoad({
+          catalogId: this.#entry.catalogId,
+          entryId: this.#entry.id,
+          revisionId: null,
+        });
+        if (loaded.kind === "recovery") {
+          this.#setProjectionState({ kind: "recovery", message: loaded.corruption.message });
+          if (loaded.lastValidRevision) {
+            const process = openDevelopSessionDocument(loaded.lastValidRevision.document);
+            adapters.onSessionChanged(session.hydrateAuthoritative(process));
+          }
+          this.#adapters?.setStatus("error", loaded.corruption.message);
+          return;
+        }
+        this.#head = loaded.value;
         await this.#recoverJournal();
+        loaded = await getDarkroomAPI().developHistoryLoad({
+          catalogId: this.#entry.catalogId,
+          entryId: this.#entry.id,
+          revisionId: null,
+        });
+        if (loaded.kind !== "loaded") {
+          throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
+        }
+        this.#head = loaded.value;
+        this.#installedDefault = await getDarkroomAPI().developDefaultsInstalled({
+          catalogId: this.#entry.catalogId,
+          sessionId: this.#entry.sessionId,
+          entryId: this.#entry.id,
+        });
+        adapters.onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(loaded.value.document)));
         const sidecar = await readDevelopSidecar(this.#entry);
-        this.#sidecarContents = sidecar?.contents ?? null;
-        this.#sidecarLastModified = sidecar?.lastModified ?? null;
         this.#sidecarContentsKnown = true;
         this.#failedWrite = null;
-        await this.#reconcile(sidecar, this.#metadata ?? metadata);
+        await this.#reconcileProjection(sidecar);
         this.#adapters?.setStatus("saved");
       } catch (error) {
         this.#adapters?.setStatus(
@@ -364,132 +425,473 @@ export class DevelopRepository {
     return opening;
   }
 
-  async #reconcile(
-    sidecar: DevelopSidecar | null,
-    metadata: EntryMetadata,
-  ): Promise<void> {
-    const adapters = this.#requireAdapters();
-    const session = this.#requireSession();
-    if (sidecar) {
-      adapters.hydrateKeywords?.(
-        sidecar.keywords.flat,
-        sidecar.keywords.hierarchical,
-      );
-    }
-    const sidecarLastModified = sidecar?.lastModified ?? 0;
-    const sidecarDocumentIsNewer = sidecar !== null &&
-      sidecarLastModified > metadata.developUpdatedAt;
-    const sidecarMetadataIsNewer = sidecar !== null &&
-      sidecarLastModified > metadata.updatedAt;
-    const metadataPatch: SidecarMetadataPatch = sidecarMetadataIsNewer && sidecar
-      ? {
-          ...(sidecar.rating === undefined ? {} : { rating: sidecar.rating }),
-          ...(sidecar.colorLabel === undefined ? {} : { colorLabel: sidecar.colorLabel }),
-        }
-      : {};
-    const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
-    const snapshot = session.snapshot();
-    const canHydrateDocument =
-      sidecarDocumentIsNewer &&
-      snapshot.documentRevision === snapshot.persistedDocumentRevision;
-    const sidecarProcess = sidecar
-      ? openDevelopSessionDocument(sidecar.document)
-      : null;
-    if (canHydrateDocument && sidecar) {
-      const hydrated = session.hydrate(sidecarProcess!);
-      adapters.onSessionChanged(hydrated);
-    }
-    const mirroredDocument = canHydrateDocument && sidecarProcess?.kind === "editable"
-      ? sidecarProcess.document
-      : null;
-    if (mirroredDocument || hasMetadataPatch) {
-      await adapters.mirrorCatalog({
-        ...(mirroredDocument ? { document: mirroredDocument } : {}),
-        sourceUpdatedAt: sidecarLastModified,
-        metadataPatch,
-      });
-    }
-    if (hasMetadataPatch) {
-      adapters.onSessionChanged(session.markMetadataHydrated());
-    }
-
-    const localStateWasClean =
-      snapshot.documentRevision === snapshot.persistedDocumentRevision &&
-      snapshot.metadataRevision === snapshot.persistedMetadataRevision;
-    const catalogDocumentIsNewer = metadata.developUpdatedAt > sidecarLastModified;
-    const catalogMetadataIsNewer = metadata.updatedAt > sidecarLastModified;
-    if (
-      !localStateWasClean ||
-      (!catalogDocumentIsNewer && !catalogMetadataIsNewer)
-    ) {
-      return;
-    }
-    const catalogProcess = this.catalogDocument(metadata);
-    if (
-      catalogProcess.kind === "read-only-newer" ||
-      sidecarProcess?.kind === "read-only-newer"
-    ) {
-      return;
-    }
-    const resolvedDocument = sidecarDocumentIsNewer && sidecarProcess
-      ? sidecarProcess.document
-      : catalogProcess.document;
-    const resolvedMetadata = sidecarMetadataIsNewer && sidecar
-      ? {
-          rating: sidecar.rating ?? metadata.rating,
-          colorLabel: sidecar.colorLabel === undefined
-            ? metadata.colorLabel
-            : sidecar.colorLabel,
-        }
-      : {
-          rating: metadata.rating,
-          colorLabel: metadata.colorLabel,
-        };
-    await this.#writeReconciledSidecar(
-      resolvedDocument,
-      resolvedMetadata,
-      sidecar,
-      Math.max(metadata.developUpdatedAt, metadata.updatedAt),
-    );
+  projectionState(): DevelopProjectionState {
+    return structuredClone(this.#projectionState);
   }
 
-  async #writeReconciledSidecar(
-    document: PersistedDevelopDocument,
-    metadata: Pick<EntryMetadata, "rating" | "colorLabel">,
-    sidecar: DevelopSidecar | null,
-    sourceUpdatedAt: number,
-  ): Promise<void> {
-    const expectedContents = serializeDevelopXmp(
-      document,
-      metadata,
-      sidecar?.contents ?? null,
-    );
-    if (sameSidecarContents(sidecar, expectedContents)) return;
-    const journal: RecoveryJournal = {
-      version: JOURNAL_VERSION,
+  installedDefault(): InstalledDevelopDefault | null {
+    return this.#installedDefault ? structuredClone(this.#installedDefault) : null;
+  }
+
+  installDefault(facts: DevelopDefaultFacts, requestId: OperationId): Promise<DevelopDefaultsProductionResult> {
+    const execute = async (): Promise<DevelopDefaultsProductionResult> => {
+      await this.#hydration;
+      if (!isElectronApp() || this.#projectionState.kind === "divergent") {
+        throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
+      }
+      const result = await getDarkroomAPI().developDefaultsInstall({
+        catalogId: this.#entry.catalogId,
+        sessionId: this.#entry.sessionId,
+        entryId: this.#entry.id,
+        requestId,
+        facts,
+      });
+      this.#head = result.head;
+      if (result.kind === "installed" || result.kind === "already-installed") {
+        this.#installedDefault = result.installed;
+        const session = this.#requireSession();
+        this.#requireAdapters().onSessionChanged(
+          session.hydrateAuthoritative(openDevelopSessionDocument(result.head.document)),
+        );
+        if (this.#entry.entryKind === "original") {
+          await this.#projectHead(result.head.revisionId, result.head.document);
+        }
+        this.#adapters?.setStatus("saved");
+      }
+      return result;
+    };
+    const operation = this.#queue.then(execute);
+    this.#queue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  async cancelDefault(requestId: OperationId): Promise<void> {
+    if (!isElectronApp()) return;
+    await getDarkroomAPI().developDefaultsCancel({
+      catalogId: this.#entry.catalogId,
+      sessionId: this.#entry.sessionId,
+      entryId: this.#entry.id,
+      requestId,
+    });
+  }
+
+  async resolveProjection(choice: "keep-darkroom" | "import-xmp"): Promise<void> {
+    await this.#queue;
+    const head = this.#head;
+    if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
+    if (choice === "keep-darkroom") {
+      const execute = async (): Promise<void> => {
+        this.#requireAdapters().onSessionChanged(this.#requireSession().hydrateAuthoritative(openDevelopSessionDocument(head.document)));
+        await this.#projectHead(head.revisionId, head.document);
+      };
+      const write = this.#queue.then(execute);
+      this.#queue = write.catch((error: unknown) => {
+        this.#adapters?.setStatus("error", errorMessage(error, "XMP resolution failed."));
+      });
+      return write;
+    }
+    const sidecar = this.#divergentSidecar;
+    const session = this.#requireSession();
+    if (!sidecar) throw new DevelopRepositoryError("recovery-conflict", "The divergent XMP bytes are no longer available.");
+    const process = openDevelopSessionDocument(sidecar.document);
+    if (process.kind !== "editable" || process.document.version !== 3) {
+      throw new DevelopRepositoryError("unsupported-process", "The external XMP document cannot be imported into this editor.");
+    }
+    this.#requireAdapters().onSessionChanged(session.hydrateAuthoritative(openDevelopSessionDocument(head.document)));
+    const externalDigest = await digestDevelopSidecarContents(sidecar.contents);
+    if (documentsEqual(process.document, head.document)) {
+      await this.#applyExternalSidecar(sidecar, process.document);
+      await this.#recordProjection(head.revisionId, externalDigest);
+      return;
+    }
+    this.#acceptedExternalImport = { digest: externalDigest, operationId: null };
+    try {
+      session.dispatch({ kind: "replace-v3-complete-state", document: process.document }, "Import external XMP");
+      await this.#lastCommandWrite;
+    } catch (error) {
+      this.#acceptedExternalImport = null;
+      throw error;
+    }
+  }
+
+  async preserveBoth(createVirtualCopy: () => Promise<unknown>): Promise<void> {
+    await this.#queue;
+    const sidecar = this.#divergentSidecar;
+    if (!this.#head || !sidecar) {
+      throw new DevelopRepositoryError("recovery-conflict", "Both states are not available to preserve.");
+    }
+    const execute = async (): Promise<void> => {
+      const digest = await digestDevelopSidecarContents(sidecar.contents);
+      await createVirtualCopy();
+      await this.#importExternalOnly(sidecar, digest);
+    };
+    const write = this.#queue.then(execute);
+    this.#queue = write.catch((error: unknown) => {
+      this.#adapters?.setStatus("error", errorMessage(error, "XMP preservation failed."));
+    });
+    return write;
+  }
+
+  commitProcessUpgrade(snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v3" }>): Promise<void> {
+    const execute = async (): Promise<void> => {
+      await this.#hydration;
+      const head = this.#head;
+      if (!head || !isElectronApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
+      if (this.#projectionState.kind === "divergent") {
+        throw new DevelopRepositoryError("recovery-conflict", "Resolve the Darkroom and XMP conflict before upgrading this photo.");
+      }
+      const result = await getDarkroomAPI().developHistoryCommit({
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: createDevelopRevisionId(),
+        expectedParentRevisionId: head.revisionId,
+        operationId: parseOperationId(crypto.randomUUID()),
+        label: "Upgrade to Develop V3",
+        document: snapshot.document,
+        createdAt: Date.now(),
+      });
+      const loaded = await getDarkroomAPI().developHistoryLoad({ catalogId: this.#entry.catalogId, entryId: this.#entry.id, revisionId: null });
+      if (loaded.kind !== "loaded" || loaded.value.revisionId !== result.revision.revisionId) throw new Error("Upgraded Develop Head could not be verified.");
+      this.#head = loaded.value;
+      await this.#adapters?.faultInjector?.("after-head-commit");
+      if (
+        this.#entry.entryKind === "original" &&
+        !(await this.#detectConcurrentSidecar(loaded.value))
+      ) {
+        await this.#projectHead(result.revision.revisionId, snapshot.document);
+      }
+      const session = this.#requireSession();
+      this.#requireAdapters().onSessionChanged(session.markPersisted(snapshot.documentRevision, snapshot.persistedMetadataRevision));
+      this.#adapters?.setStatus("saved");
+    };
+    const write = this.#queue.then(execute, execute);
+    this.#queue = write.catch((error: unknown) => {
+      this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop upgrade could not be committed.") });
+      this.#adapters?.setStatus("error", errorMessage(error, "Develop upgrade could not be committed."));
+    });
+    return write;
+  }
+
+  async #enqueueCommittedCommand(command: CommittedDevelopCommand, documentRevision: number): Promise<void> {
+    if (this.#acceptedExternalImport?.operationId === null) {
+      this.#acceptedExternalImport = {
+        ...this.#acceptedExternalImport,
+        operationId: command.operationId,
+      };
+    }
+    const execute = async (): Promise<void> => {
+      await this.#hydration;
+      if (!isElectronApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Persistent Develop history needs the desktop app.");
+      const head = this.#head;
+      if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
+      const acceptedImport = this.#acceptedExternalImport?.operationId === command.operationId
+        ? this.#acceptedExternalImport
+        : null;
+      if (this.#projectionState.kind === "divergent" && acceptedImport === null) {
+        throw new DevelopRepositoryError("recovery-conflict", "Resolve the Darkroom and XMP conflict before editing.");
+      }
+      if (!documentsEqual(head.document, command.before)) {
+        throw new DevelopRepositoryError("recovery-conflict", "Develop Head changed before this command could be committed. Reopen the photo.");
+      }
+      this.#adapters?.setStatus("saving");
+      const request: DevelopHistoryCommitInput = {
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: createDevelopRevisionId(),
+        expectedParentRevisionId: head.revisionId,
+        operationId: parseOperationId(command.operationId),
+        label: command.label,
+        document: command.after,
+        createdAt: Date.now(),
+      };
+      const result = await this.#commitWithRecovery(request);
+      const reloaded = await getDarkroomAPI().developHistoryLoad({ catalogId: this.#entry.catalogId, entryId: this.#entry.id, revisionId: null });
+      if (reloaded.kind !== "loaded" || reloaded.value.revisionId !== result.revision.revisionId) {
+        throw new DevelopRepositoryError("recovery-conflict", "Committed Develop Head could not be verified.");
+      }
+      this.#head = reloaded.value;
+      await this.#adapters?.faultInjector?.("after-head-commit");
+      if (this.#entry.entryKind === "original") {
+        const currentSidecar = await readDevelopSidecar(this.#entry);
+        const currentDigest = currentSidecar ? await digestDevelopSidecarContents(currentSidecar.contents) : null;
+        if (acceptedImport !== null && currentDigest === acceptedImport.digest) {
+          if (!currentSidecar) throw new Error("Accepted XMP disappeared before projection was recorded.");
+          await this.#applyExternalSidecar(currentSidecar, command.after);
+          await this.#recordProjection(result.revision.revisionId, currentDigest);
+          this.#acceptedExternalImport = null;
+        } else if (await this.#detectConcurrentSidecar(reloaded.value)) {
+          if (acceptedImport !== null) this.#acceptedExternalImport = null;
+        } else {
+          if (acceptedImport !== null) this.#acceptedExternalImport = null;
+          await this.#projectHead(result.revision.revisionId, command.after);
+        }
+      }
+      const session = this.#requireSession();
+      const snapshot = session.snapshot();
+      this.#requireAdapters().onSessionChanged(session.markPersisted(documentRevision, snapshot.persistedMetadataRevision));
+      this.#failedWrite = null;
+      this.#adapters?.setStatus("saved");
+    };
+    const write = this.#queue.then(execute);
+    this.#queue = write.then(() => undefined, async (error: unknown) => {
+      if (this.#acceptedExternalImport?.operationId === command.operationId) {
+        this.#acceptedExternalImport = null;
+      }
+      await this.#restoreSessionFromHead();
+      const head = this.#head;
+      const sidecar = this.#divergentSidecar;
+      if (head && sidecar) {
+        this.#setProjectionState({
+          kind: "divergent",
+          headRevisionId: head.revisionId,
+          projectedRevisionId: this.#projection?.revisionId ?? null,
+          externalDigest: await digestDevelopSidecarContents(sidecar.contents),
+          differences: this.#differenceSummary(sidecar),
+        });
+      } else {
+        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+      }
+      this.#adapters?.setStatus("error", errorMessage(error, "Develop command could not be committed."));
+    });
+    return write;
+  }
+
+  async #commitWithRecovery(
+    request: DevelopHistoryCommitInput,
+  ): Promise<DevelopHistoryCommitResult> {
+    let lastError: unknown = new Error("Develop history commit failed.");
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS_PER_REVISION; attempt += 1) {
+      try {
+        return await getDarkroomAPI().developHistoryCommit(request);
+      } catch (error) {
+        lastError = error;
+        try {
+          const loaded = await getDarkroomAPI().developHistoryLoad({
+            catalogId: request.catalogId,
+            entryId: request.entryId,
+            revisionId: null,
+          });
+          if (loaded.kind === "loaded" && loaded.value.revisionId === request.revisionId) {
+            return { revision: loaded.value, idempotent: true };
+          }
+          if (
+            loaded.kind !== "loaded" ||
+            loaded.value.revisionId !== request.expectedParentRevisionId
+          ) {
+            throw new DevelopRepositoryError(
+              "recovery-conflict",
+              "Develop Head changed while commit status was unknown.",
+            );
+          }
+        } catch (loadError) {
+          if (loadError instanceof DevelopRepositoryError) throw loadError;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  async #restoreSessionFromHead(): Promise<void> {
+    try {
+      const loaded = await getDarkroomAPI().developHistoryLoad({
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: null,
+      });
+      if (loaded.kind !== "loaded") return;
+      this.#head = loaded.value;
+      if (this.#session && this.#adapters) {
+        this.#adapters.onSessionChanged(
+          this.#session.hydrateAuthoritative(openDevelopSessionDocument(loaded.value.document)),
+        );
+      }
+    } catch {
+      // The original commit error remains the actionable failure.
+    }
+  }
+
+  #setProjectionState(state: DevelopProjectionState): void {
+    this.#projectionState = state;
+    this.#adapters?.setProjectionState?.(structuredClone(state));
+  }
+
+  async #recordProjection(revisionId: DevelopRevisionId, contentSha256: string): Promise<void> {
+    this.#projection = await getDarkroomAPI().developHistoryRecordProjection({
       catalogId: this.#entry.catalogId,
       entryId: this.#entry.id,
-      createdAt: Date.now(),
-      sourceUpdatedAt,
-      phase: "catalog-written",
-      documentDirty: false,
-      metadataDirty: false,
-      document,
-      metadata,
-      existingContents: sidecar?.contents ?? null,
-      expectedLastModified: sidecar?.lastModified ?? null,
+      revisionId,
+      contentSha256,
+      projectedAt: Date.now(),
+    });
+    await this.#adapters?.faultInjector?.("after-projection-record");
+    this.#divergentSidecar = null;
+    this.#setProjectionState({ kind: "clean", revisionId });
+  }
+
+  async #applyExternalSidecar(sidecar: DevelopSidecar, document: PersistedDevelopDocument): Promise<void> {
+    const metadataPatch: SidecarMetadataPatch = {
+      rating: sidecar.rating ?? 0,
+      colorLabel: sidecar.colorLabel ?? null,
     };
-    writeJournal(this.#entry, journal);
+    await this.#requireAdapters().mirrorCatalog({
+      document,
+      sourceUpdatedAt: sidecar.lastModified,
+      metadataPatch,
+    });
+    await this.#requireAdapters().applyExternalMetadata?.(sidecar);
+    if (this.#metadata) this.#metadata = { ...this.#metadata, ...metadataPatch, develop: document };
+  }
+
+  async #projectHead(revisionId: DevelopRevisionId, documentValue: unknown): Promise<void> {
+    if (this.#entry.entryKind === "virtual") {
+      this.#setProjectionState({ kind: "clean", revisionId });
+      return;
+    }
+    const decoded = decodePersistedDevelopDocument(documentValue === null ? createDefaultV3DevelopDocument() : documentValue);
+    if (decoded.kind !== "editable") throw new DevelopRepositoryError("unsupported-process", "This Develop Head cannot be projected to XMP.");
+    const metadata = this.#metadata;
+    if (!metadata) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop metadata is unavailable.");
+    const current = await readDevelopSidecar(this.#entry);
     const written = await writeDevelopSidecar(
       this.#entry,
-      document,
-      metadata,
-      journal.existingContents,
-      journal.expectedLastModified,
+      decoded.document,
+      { rating: metadata.rating, colorLabel: metadata.colorLabel },
+      current?.contents ?? null,
+      current?.lastModified ?? null,
     );
-    this.#sidecarContents = written?.contents ?? null;
-    this.#sidecarLastModified = written?.lastModified ?? null;
-    clearJournal(this.#entry);
+    if (!written) throw new Error("The XMP projection was not written.");
+    await this.#adapters?.projectCatalogKeywords?.();
+    const projected = await readDevelopSidecar(this.#entry);
+    if (!projected) throw new Error("The projected XMP sidecar disappeared.");
+    this.#sidecarContentsKnown = true;
+    await this.#adapters?.faultInjector?.("after-xmp-write");
+    await this.#recordProjection(revisionId, await digestDevelopSidecarContents(projected.contents));
+  }
+
+  #differenceSummary(external: DevelopSidecar): readonly string[] {
+    const headDocument = this.#head?.document;
+    if (!headDocument || typeof headDocument !== "object" || headDocument === null) return ["Develop payload"];
+    const externalDocument = external.document;
+    if (typeof externalDocument !== "object" || externalDocument === null) return ["Develop payload"];
+    const keys = new Set([...Object.keys(headDocument), ...Object.keys(externalDocument)]);
+    const changed = [...keys]
+      .filter((key) => JSON.stringify(Reflect.get(headDocument, key)) !== JSON.stringify(Reflect.get(externalDocument, key)))
+      .filter((key) => key !== "version" && key !== "process" && key !== "schemaRevision")
+      .sort();
+    return changed.length > 0 ? changed : ["Develop payload"];
+  }
+
+  async #detectConcurrentSidecar(head: DevelopHistoryLoadedRevision): Promise<boolean> {
+    if (!this.#projection) return false;
+    const sidecar = await readDevelopSidecar(this.#entry);
+    const digest = sidecar ? await digestDevelopSidecarContents(sidecar.contents) : null;
+    if (digest === this.#projection.contentSha256) return false;
+    this.#divergentSidecar = sidecar;
+    this.#setProjectionState({
+      kind: "divergent",
+      headRevisionId: head.revisionId,
+      projectedRevisionId: this.#projection.revisionId,
+      externalDigest: digest,
+      differences: sidecar ? this.#differenceSummary(sidecar) : ["XMP file was removed"],
+    });
+    return true;
+  }
+
+  async #importExternalOnly(sidecar: DevelopSidecar, digest: string): Promise<void> {
+    const head = this.#head;
+    if (!head) throw new Error("Develop Head is unavailable.");
+    const process = openDevelopSessionDocument(sidecar.document);
+    if (process.kind !== "editable") {
+      this.#divergentSidecar = sidecar;
+      this.#setProjectionState({
+        kind: "divergent",
+        headRevisionId: head.revisionId,
+        projectedRevisionId: this.#projection?.revisionId ?? null,
+        externalDigest: digest,
+        differences: this.#differenceSummary(sidecar),
+      });
+      return;
+    }
+    const result = await getDarkroomAPI().developHistoryCommit({
+      catalogId: this.#entry.catalogId,
+      entryId: this.#entry.id,
+      revisionId: createDevelopRevisionId(),
+      expectedParentRevisionId: head.revisionId,
+      operationId: parseOperationId(crypto.randomUUID()),
+      label: "Import external XMP",
+      document: process.document,
+      createdAt: Date.now(),
+    });
+    const loaded = await getDarkroomAPI().developHistoryLoad({ catalogId: this.#entry.catalogId, entryId: this.#entry.id, revisionId: null });
+    if (loaded.kind !== "loaded" || loaded.value.revisionId !== result.revision.revisionId) throw new Error("Imported XMP Head could not be verified.");
+    this.#head = loaded.value;
+    await this.#adapters?.faultInjector?.("after-head-commit");
+    if (this.#adapters && this.#session) {
+      this.#adapters.onSessionChanged(this.#session.hydrateAuthoritative(process));
+    }
+    await this.#adapters?.applyExternalMetadata?.(sidecar);
+    await this.#recordProjection(result.revision.revisionId, digest);
+  }
+
+  async #reconcileProjection(sidecar: DevelopSidecar | null): Promise<void> {
+    const head = this.#head;
+    if (!head || this.#entry.entryKind === "virtual") {
+      this.#setProjectionState({ kind: "clean", revisionId: head?.revisionId ?? null });
+      return;
+    }
+    this.#projection = await getDarkroomAPI().developHistoryProjection({ catalogId: this.#entry.catalogId, entryId: this.#entry.id });
+    if (!sidecar) {
+      if (this.#projection?.revisionId === head.revisionId) {
+        this.#divergentSidecar = null;
+        this.#setProjectionState({
+          kind: "divergent",
+          headRevisionId: head.revisionId,
+          projectedRevisionId: this.#projection.revisionId,
+          externalDigest: null,
+          differences: ["XMP file was removed"],
+        });
+        return;
+      }
+      this.#setProjectionState({ kind: "pending", revisionId: head.revisionId, reason: "XMP projection is missing." });
+      await this.#projectHead(head.revisionId, head.document);
+      return;
+    }
+    const digest = await digestDevelopSidecarContents(sidecar.contents);
+    if (documentsEqual(sidecar.document, head.document)) {
+      if (this.#projection === null) {
+        await this.#adapters?.applyExternalMetadata?.(sidecar);
+        await this.#recordProjection(head.revisionId, digest);
+      } else if (digest === this.#projection.contentSha256) {
+        this.#setProjectionState({ kind: "clean", revisionId: head.revisionId });
+      } else {
+        this.#divergentSidecar = sidecar;
+        this.#setProjectionState({
+          kind: "divergent",
+          headRevisionId: head.revisionId,
+          projectedRevisionId: this.#projection.revisionId,
+          externalDigest: digest,
+          differences: ["XMP metadata"],
+        });
+      }
+      return;
+    }
+    if (this.#projection && digest === this.#projection.contentSha256 && this.#projection.revisionId !== head.revisionId) {
+      this.#setProjectionState({ kind: "pending", revisionId: head.revisionId, reason: "XMP is behind the durable Develop Head." });
+      await this.#projectHead(head.revisionId, head.document);
+      return;
+    }
+    if (this.#projection && this.#projection.revisionId === head.revisionId) {
+      await this.#importExternalOnly(sidecar, digest);
+      return;
+    }
+    this.#divergentSidecar = sidecar;
+    this.#setProjectionState({
+      kind: "divergent",
+      headRevisionId: head.revisionId,
+      projectedRevisionId: this.#projection?.revisionId ?? null,
+      externalDigest: digest,
+      differences: this.#differenceSummary(sidecar),
+    });
   }
 
   save(
@@ -561,7 +963,11 @@ export class DevelopRepository {
     }
     const pending = this.#pending;
     this.#pending = null;
-    if (!pending) return this.#queue;
+    if (!pending) {
+      const queue = this.#queue;
+      const command = this.#lastCommandWrite;
+      return Promise.all([queue, command]).then(() => undefined);
+    }
     const write = () => this.#writeCaptured(pending);
     this.#queue = this.#queue.then(write, write).catch((error: unknown) => {
       const previousFailure = this.#failedWrite;
@@ -580,7 +986,9 @@ export class DevelopRepository {
         errorMessage(error, "Could not save Develop settings."),
       );
     });
-    return this.#queue;
+    const queue = this.#queue;
+    const command = this.#lastCommandWrite;
+    return Promise.all([queue, command]).then(() => undefined);
   }
 
   async #writeCaptured(pending: PendingWrite): Promise<void> {
@@ -600,52 +1008,28 @@ export class DevelopRepository {
         "XMP state is unknown. Reopen the photo before saving again.",
       );
     }
-    const documentDirty =
-      pending.snapshot.documentRevision !== pending.snapshot.persistedDocumentRevision;
     const metadataDirty =
       pending.snapshot.metadataRevision !== pending.snapshot.persistedMetadataRevision;
-    if (!documentDirty && !metadataDirty) return;
+    if (!metadataDirty) return;
+    if (
+      this.#head &&
+      this.#entry.entryKind === "original" &&
+      await this.#detectConcurrentSidecar(this.#head)
+    ) {
+      return;
+    }
     const sourceUpdatedAt = Date.now();
-    serializeDevelopXmp(
-      pending.snapshot.document,
-      pending.metadata,
-      this.#sidecarContents,
-    );
-    const journal: RecoveryJournal = {
-      version: JOURNAL_VERSION,
-      catalogId: this.#entry.catalogId,
-      entryId: this.#entry.id,
-      createdAt: sourceUpdatedAt,
-      sourceUpdatedAt,
-      phase: "prepared",
-      documentDirty,
-      metadataDirty,
-      document: pending.snapshot.document,
-      metadata: pending.metadata,
-      existingContents: this.#sidecarContents,
-      expectedLastModified: this.#sidecarLastModified,
-    };
-    writeJournal(this.#entry, journal);
     await adapters.mirrorCatalog({
-      ...(documentDirty ? { document: pending.snapshot.document } : {}),
       sourceUpdatedAt,
-      metadataPatch: metadataDirty ? pending.metadata : {},
+      metadataPatch: pending.metadata,
     });
-    writeJournal(this.#entry, { ...journal, phase: "catalog-written" });
-    const written = await writeDevelopSidecar(
-      this.#entry,
-      pending.snapshot.document,
-      pending.metadata,
-      this.#sidecarContents,
-      this.#sidecarLastModified,
-    );
-    this.#sidecarContents = written?.contents ?? null;
-    this.#sidecarLastModified = written?.lastModified ?? null;
-    clearJournal(this.#entry);
+    if (this.#head && this.#entry.entryKind === "original") {
+      await this.#projectHead(this.#head.revisionId, this.#head.document);
+    }
     this.#failedWrite = null;
     adapters.onSessionChanged(
       session.markPersisted(
-        pending.snapshot.documentRevision,
+        session.snapshot().persistedDocumentRevision,
         pending.snapshot.metadataRevision,
       ),
     );
@@ -656,74 +1040,77 @@ export class DevelopRepository {
     const journal = readJournal(this.#entry);
     if (!journal) return;
     const adapters = this.#adapters;
-    if (!adapters) {
+    const head = this.#head;
+    if (!adapters || !head) {
       throw new DevelopRepositoryError(
         "recovery-adapter-unavailable",
         "Develop recovery needs the original catalog. Reopen it before editing or exporting.",
       );
     }
-    let recovered = journal;
-    if (recovered.phase === "prepared") {
-      await adapters.mirrorCatalog({
-        ...(recovered.documentDirty ? { document: recovered.document } : {}),
-        sourceUpdatedAt: recovered.sourceUpdatedAt,
-        metadataPatch: recovered.metadataDirty ? recovered.metadata : {},
-      });
-      recovered = { ...recovered, phase: "catalog-written" };
-      writeJournal(this.#entry, recovered);
-    }
-    const current = await readDevelopSidecar(this.#entry);
-    const expectedContents = serializeDevelopXmp(
-      recovered.document,
-      recovered.metadata,
-      recovered.existingContents,
-    );
-    if (!sameSidecarContents(current, expectedContents)) {
-      const unchanged = recovered.expectedLastModified === null
-        ? current === null
-        : current?.lastModified === recovered.expectedLastModified;
-      if (!unchanged) {
+    if (journal.documentDirty && !documentsEqual(head.document, journal.document)) {
+      if (head.createdAt > journal.createdAt) {
         throw new DevelopRepositoryError(
           "recovery-conflict",
-          "The XMP sidecar changed during recovery. Resolve it before editing this photo.",
+          "Develop Head changed after the recovery journal was created.",
         );
       }
-      const written = await writeDevelopSidecar(
-        this.#entry,
-        recovered.document,
-        recovered.metadata,
-        recovered.existingContents,
-        recovered.expectedLastModified,
-      );
-      this.#sidecarContents = written?.contents ?? null;
-      this.#sidecarLastModified = written?.lastModified ?? null;
-    } else {
-      this.#sidecarContents = current?.contents ?? null;
-      this.#sidecarLastModified = current?.lastModified ?? null;
+      const currentSidecar = await readDevelopSidecar(this.#entry);
+      const sidecarIsPrior = currentSidecar === null
+        ? journal.existingContents === null
+        : currentSidecar.contents === journal.existingContents;
+      const sidecarIsRecovered = currentSidecar !== null &&
+        documentsEqual(currentSidecar.document, journal.document);
+      if (!sidecarIsPrior && !sidecarIsRecovered) {
+        throw new DevelopRepositoryError(
+          "recovery-conflict",
+          "The XMP sidecar changed after the recovery journal was created.",
+        );
+      }
+      const request: DevelopHistoryCommitInput = {
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: createDevelopRevisionId(await journalUuid(journal, "revision")),
+        expectedParentRevisionId: head.revisionId,
+        operationId: parseOperationId(await journalUuid(journal, "operation")),
+        label: "Recover interrupted Develop save",
+        document: journal.document,
+        createdAt: journal.createdAt,
+      };
+      await this.#commitWithRecovery(request);
+      const recovered = await getDarkroomAPI().developHistoryLoad({
+        catalogId: this.#entry.catalogId,
+        entryId: this.#entry.id,
+        revisionId: null,
+      });
+      if (recovered.kind !== "loaded" || recovered.value.revisionId !== request.revisionId) {
+        throw new DevelopRepositoryError("recovery-conflict", "Recovered Develop Head could not be verified.");
+      }
+      this.#head = recovered.value;
     }
-    this.#sidecarContentsKnown = true;
+    if (journal.metadataDirty) {
+      await adapters.mirrorCatalog({
+        sourceUpdatedAt: journal.sourceUpdatedAt,
+        metadataPatch: journal.metadata,
+      });
+      if (this.#metadata) this.#metadata = { ...this.#metadata, ...journal.metadata };
+    }
+    if (journal.documentDirty && this.#head && this.#entry.entryKind === "original") {
+      await this.#projectHead(this.#head.revisionId, this.#head.document);
+    }
     clearJournal(this.#entry);
   }
 
   async resolveDocument(metadata: EntryMetadata): Promise<DevelopSessionOpenDocument> {
     await this.flush();
-    const journal = readJournal(this.#entry);
-    if (journal) {
-      if (!this.#adapters) {
-        throw new DevelopRepositoryError(
-          "recovery-adapter-unavailable",
-          "Develop recovery needs the original catalog. Reopen it before exporting this photo.",
-        );
-      }
-      await this.#recoverJournal();
-    }
-    const sidecar = await readDevelopSidecar(this.#entry);
-    this.#sidecarContents = sidecar?.contents ?? null;
-    this.#sidecarLastModified = sidecar?.lastModified ?? null;
-    this.#sidecarContentsKnown = true;
-    return openDevelopSessionDocument(
-      resolveStoredDevelopDocument(sidecar, metadata),
-    );
+    if (!isElectronApp()) return this.catalogDocument(metadata);
+    const loaded = await getDarkroomAPI().developHistoryLoad({
+      catalogId: this.#entry.catalogId,
+      entryId: this.#entry.id,
+      revisionId: null,
+    });
+    if (loaded.kind === "loaded") return openDevelopSessionDocument(loaded.value.document);
+    if (loaded.lastValidRevision) return openDevelopSessionDocument(loaded.lastValidRevision.document);
+    throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
   }
 
   #requireAdapters(): DevelopRepositoryAdapters {

@@ -48,6 +48,7 @@ export function useLibraryContextMenu(
     null,
   );
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
+  const entries = useLibraryStore((state) => state.entries);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
   const albums = useLibraryStore((state) => state.albums);
   const createAlbum = useLibraryStore((state) => state.createAlbum);
@@ -60,6 +61,9 @@ export function useLibraryContextMenu(
   const deleteEntriesFromDisk = useLibraryStore(
     (state) => state.deleteEntriesFromDisk,
   );
+  const createVirtualCopy = useLibraryStore((state) => state.createVirtualCopy);
+  const renameVirtualCopy = useLibraryStore((state) => state.renameVirtualCopy);
+  const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
@@ -91,6 +95,22 @@ export function useLibraryContextMenu(
       album.entryIds.some((id) => targetSet.has(id)),
     );
   }, [actionTargets, albums]);
+
+  const menuEntry = menu ? entries.find((entry) => entry.id === menu.entryId) : undefined;
+  const virtualTargets = actionTargets.flatMap((entryId) => {
+    const entry = entries.find((item) => item.id === entryId);
+    return entry?.entryKind === "virtual" ? [entry] : [];
+  });
+  const diskDeleteSummary = useMemo(() => {
+    if (diskDeleteTargets === null) return { sourceCount: 0, dependentEntryCount: 0 };
+    const targetSourceIds = new Set(
+      entries.filter((entry) => diskDeleteTargets.includes(entry.id)).map((entry) => entry.sourceId),
+    );
+    return {
+      sourceCount: targetSourceIds.size,
+      dependentEntryCount: entries.filter((entry) => targetSourceIds.has(entry.sourceId)).length,
+    };
+  }, [diskDeleteTargets, entries]);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -217,6 +237,49 @@ export function useLibraryContextMenu(
             >
               Open in Develop
             </ContextMenuItem>
+
+            <ContextMenuItem
+              onClick={() => {
+                const familyCount = menuEntry
+                  ? entries.filter((entry) => entry.sourceId === menuEntry.sourceId && entry.entryKind === "virtual").length
+                  : 0;
+                const name = window.prompt("Name this virtual copy", `Copy ${familyCount + 1}`);
+                if (name?.trim()) void createVirtualCopy(menu.entryId, name).catch(() => undefined);
+                closeMenu();
+              }}
+            >
+              Create virtual copy…
+            </ContextMenuItem>
+
+            {menuEntry?.entryKind === "virtual" ? (
+              <ContextMenuItem
+                onClick={() => {
+                  const name = window.prompt("Rename virtual copy", menuEntry.displayName);
+                  if (name?.trim()) void renameVirtualCopy(menuEntry.id, name).catch(() => undefined);
+                  closeMenu();
+                }}
+              >
+                Rename virtual copy…
+              </ContextMenuItem>
+            ) : null}
+
+            {virtualTargets.length === actionTargets.length && virtualTargets.length > 0 ? (
+              <ContextMenuItem
+                onClick={() => {
+                  const confirmed = window.confirm(
+                    `Delete ${virtualTargets.length === 1 ? `“${virtualTargets[0]!.displayName}”` : `${virtualTargets.length} virtual copies`}? The source files and other edits will stay in the catalog.`,
+                  );
+                  if (confirmed) {
+                    void (async () => {
+                      for (const entry of virtualTargets) await deleteVirtualCopy(entry.id);
+                    })().catch(() => undefined);
+                  }
+                  closeMenu();
+                }}
+              >
+                <span className="text-red-400">Delete virtual {virtualTargets.length === 1 ? "copy" : "copies"}</span>
+              </ContextMenuItem>
+            ) : null}
 
             <ContextMenuItem
               onClick={() => {
@@ -478,7 +541,8 @@ export function useLibraryContextMenu(
     diskDeleteTargets && typeof document !== "undefined"
       ? createPortal(
           <DeleteFromDiskConfirm
-            entryIds={diskDeleteTargets}
+            sourceCount={diskDeleteSummary.sourceCount}
+            dependentEntryCount={diskDeleteSummary.dependentEntryCount}
             onClose={() => setDiskDeleteTargets(null)}
             onConfirm={() => {
               void deleteEntriesFromDisk(diskDeleteTargets)

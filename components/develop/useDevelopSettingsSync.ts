@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   DevelopRepositoryError,
@@ -14,6 +14,21 @@ import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-
 import type { LibraryEntry } from "@/lib/fs/types";
 import { useDevelopStore } from "@/stores/develop-store";
 import { useLibraryStore } from "@/stores/library-store";
+import type { DevelopDefaultFacts } from "@/lib/develop/defaults/matcher";
+import { parseOperationId } from "@/lib/catalog/ids";
+import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
+
+export type DevelopDefaultsResolution =
+  | { readonly kind: "pending" }
+  | { readonly kind: "installed"; readonly installed: InstalledDevelopDefault }
+  | { readonly kind: "no-match" }
+  | { readonly kind: "existing"; readonly installed: InstalledDevelopDefault | null }
+  | { readonly kind: "failed"; readonly message: string };
+
+interface DefaultsResolutionState {
+  readonly key: string;
+  readonly value: DevelopDefaultsResolution;
+}
 
 interface UseDevelopSettingsSyncOptions {
   entry: LibraryEntry;
@@ -26,7 +41,10 @@ interface UseDevelopSettingsSyncOptions {
   hydrateKeywords?: (
     flat: readonly string[],
     hierarchical: readonly string[],
-  ) => void;
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
+  ) => Promise<void>;
+  defaultFacts?: DevelopDefaultFacts | null;
 }
 
 export function useDevelopSettingsSync({
@@ -34,7 +52,12 @@ export function useDevelopSettingsSync({
   metadata,
   persistCatalog,
   hydrateKeywords,
-}: UseDevelopSettingsSyncOptions): void {
+  defaultFacts,
+}: UseDevelopSettingsSyncOptions): DevelopDefaultsResolution {
+  const [defaultsResolution, setDefaultsResolution] = useState<DefaultsResolutionState | null>(null);
+  const defaultsKey = defaultFacts
+    ? `${entry.catalogId}:${entry.sessionId}:${entry.id}:${JSON.stringify(defaultFacts)}`
+    : null;
   const sessionState = useDevelopStore((state) => state.sessions[entry.id]);
   const documentRevision = sessionState?.documentRevision;
   const persistedDocumentRevision = sessionState?.persistedDocumentRevision;
@@ -42,8 +65,11 @@ export function useDevelopSettingsSync({
   const persistedMetadataRevision = sessionState?.persistedMetadataRevision;
   const sidecarStatus = sessionState?.ui.sidecarStatus;
   const activateEntry = useDevelopStore((state) => state.activateEntry);
+  const beginDefaultResolution = useDevelopStore((state) => state.beginDefaultResolution);
+  const finishDefaultResolution = useDevelopStore((state) => state.finishDefaultResolution);
   const synchronizeSession = useDevelopStore((state) => state.synchronizeSession);
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
+  const setProjectionState = useDevelopStore((state) => state.setProjectionState);
   const metadataRef = useRef(metadata);
   const scheduledRevisionRef = useRef<{
     readonly catalogId: string;
@@ -86,9 +112,21 @@ export function useDevelopSettingsSync({
         return snapshot.processKind === "v2" ? snapshot.document : null;
       },
     }));
-    repository.configure(session, metadataRef.current, {
+    const disconnectRepository = repository.configure(session, metadataRef.current, {
       mirrorCatalog: persistCatalog,
-      hydrateKeywords,
+      applyExternalMetadata: async (sidecar) => {
+        const patch: SidecarMetadataPatch = {
+          rating: sidecar.rating ?? 0,
+          colorLabel: sidecar.colorLabel ?? null,
+        };
+        await hydrateKeywords?.(
+          sidecar.keywords.flat,
+          sidecar.keywords.hierarchical,
+          patch,
+          sidecar.lastModified,
+        );
+      },
+      projectCatalogKeywords: () => useLibraryStore.getState().persistEntryKeywords(entry.id),
       setStatus: (status, error = null) => {
         const state = useDevelopStore.getState();
         if (
@@ -101,12 +139,21 @@ export function useDevelopSettingsSync({
       onSessionChanged: (snapshot) => {
         synchronizeSession(entry.id, snapshot);
       },
+      setProjectionState: (projection) => {
+        const state = useDevelopStore.getState();
+        if (state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id) {
+          setProjectionState(projection);
+        }
+      },
     });
     void repository.open(metadataRef.current).then(async () => {
       if (!active || session.snapshot().processKind !== "v2") return;
       try {
         const snapshot = await session.upgradeToCurrentProcess();
-        if (active) synchronizeSession(entry.id, snapshot);
+        if (active && snapshot.processKind === "v3") {
+          synchronizeSession(entry.id, snapshot);
+          await repository.commitProcessUpgrade(snapshot);
+        }
       } catch (error) {
         if (!active) return;
         setSidecarStatus(
@@ -118,7 +165,7 @@ export function useDevelopSettingsSync({
     return () => {
       active = false;
       detachSourceSignatureProvider();
-      void repository.flush();
+      void repository.flush().finally(disconnectRepository);
     };
   }, [
     activateEntry,
@@ -127,8 +174,51 @@ export function useDevelopSettingsSync({
     hydrateKeywords,
     persistCatalog,
     setSidecarStatus,
+    setProjectionState,
     synchronizeSession,
   ]);
+
+  useEffect(() => {
+    if (defaultFacts !== undefined) return;
+    const operationId = crypto.randomUUID();
+    beginDefaultResolution(entry.catalogId, entry.id, operationId);
+    return () => finishDefaultResolution(entry.catalogId, entry.id, operationId);
+  }, [beginDefaultResolution, defaultFacts, entry.catalogId, entry.id, finishDefaultResolution]);
+
+  useEffect(() => {
+    if (!defaultFacts || !defaultsKey) return;
+    let active = true;
+    let settled = false;
+    const repository = getDevelopRepository(entry);
+    const requestId = parseOperationId(crypto.randomUUID());
+    beginDefaultResolution(entry.catalogId, entry.id, requestId);
+    const operation = repository.installDefault(defaultFacts, requestId).then((result) => {
+      if (!active) return;
+      if (result.kind === "installed" || result.kind === "already-installed") {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "installed", installed: result.installed } });
+      } else if (result.kind === "no-match") {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "no-match" } });
+      } else {
+        setDefaultsResolution({ key: defaultsKey, value: { kind: "existing", installed: repository.installedDefault() } });
+      }
+    }).catch((error: unknown) => {
+      if (!active) return;
+      const message = error instanceof Error ? error.message : "Could not apply the Develop default.";
+      setDefaultsResolution({ key: defaultsKey, value: { kind: "failed", message } });
+      const state = useDevelopStore.getState();
+      if (state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id) {
+        setSidecarStatus("error", message);
+      }
+    });
+    void operation.finally(() => {
+      settled = true;
+      finishDefaultResolution(entry.catalogId, entry.id, requestId);
+    });
+    return () => {
+      active = false;
+      if (!settled) void repository.cancelDefault(requestId);
+    };
+  }, [beginDefaultResolution, defaultFacts, defaultsKey, entry, finishDefaultResolution, setSidecarStatus]);
 
   useEffect(() => {
     const alreadyScheduled =
@@ -199,4 +289,8 @@ export function useDevelopSettingsSync({
     setSidecarStatus,
     sidecarStatus,
   ]);
+
+  if (defaultFacts === undefined) return { kind: "pending" };
+  if (defaultFacts === null) return { kind: "no-match" };
+  return defaultsResolution?.key === defaultsKey ? defaultsResolution.value : { kind: "pending" };
 }

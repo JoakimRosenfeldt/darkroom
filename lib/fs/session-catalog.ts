@@ -28,7 +28,7 @@ import type {
   CatalogBackupPolicy,
   CatalogBackupPolicyState,
 } from "../catalog/admin";
-import { createPresetId, type AssetId, type CatalogId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
+import { createEntryId, createPresetId, parseEntryId, parseSourceId, type AssetId, type CatalogId, type EntryId, type OperationId, type PresetId, type RootId } from "../catalog/ids";
 import type {
   LibraryOperationStatus,
   ScanProgressPhase,
@@ -36,6 +36,7 @@ import type {
 } from "../catalog/runtime";
 import type { Album, EntryMetadata } from "../catalog/types";
 import {
+  mergeRetainedLibraryWorkspace,
   parseLibraryWorkspaceJson,
   type LibraryWorkspaceState,
 } from "../library/model";
@@ -300,8 +301,11 @@ function entryFromAsset(
   const capability = asset.formatId === null
     ? getFormatCapabilityForFileName(name)
     : getFormatCapability(asset.formatId);
-  return {
-    id: asset.assetId,
+  const entryId = asset.entryId ?? parseEntryId(asset.assetId);
+  const base = {
+    id: entryId,
+    sourceId: asset.sourceId ?? parseSourceId(asset.assetId),
+    assetId: asset.assetId,
     catalogId: session.catalogId,
     sessionId: session.sessionId,
     rootId: asset.rootId,
@@ -316,7 +320,15 @@ function entryFromAsset(
     formatAvailability: formatAvailability(asset.formatId, name),
     fingerprintStatus: asset.fingerprintStatus,
     fingerprintSha256: asset.fingerprintSha256,
+    entryCreatedAt: asset.entryCreatedAt ?? 0,
   };
+  const entryKind = asset.entryKind ?? (String(entryId) === String(asset.assetId) ? "original" : "virtual");
+  if (entryKind === "original") {
+    return { ...base, entryKind, parentEntryId: null, displayName: null };
+  }
+  if (!asset.displayName) throw new Error("Catalog virtual copy name is missing.");
+  if (!asset.parentEntryId) throw new Error("Catalog virtual copy parent is missing.");
+  return { ...base, entryKind, parentEntryId: asset.parentEntryId, displayName: asset.displayName };
 }
 
 function hydrate(
@@ -329,19 +341,20 @@ function hydrate(
   const entryMetadata: Record<string, EntryMetadata> = {};
   const archivedEntryIds: string[] = [];
   for (const asset of view.assets) {
-    entryMetadata[asset.assetId] = metadataFromAsset(asset);
+    const entryId = asset.entryId ?? parseEntryId(asset.assetId);
+    entryMetadata[entryId] = metadataFromAsset(asset);
     if (asset.metadata.archive) {
-      archivedEntryIds.push(asset.assetId);
+      archivedEntryIds.push(entryId);
     }
   }
   const albums = view.albums.map((album) => ({
     id: album.albumId,
     name: album.name,
-    entryIds: [...album.assetIds],
+    entryIds: [...album.entryIds],
     createdAt: album.createdAt,
     updatedAt: album.updatedAt,
   }));
-  const validEntryIds = new Set(view.assets.map((asset) => asset.assetId));
+  const validEntryIds = new Set(view.assets.map((asset) => asset.entryId ?? parseEntryId(asset.assetId)));
   const libraryWorkspace = parseLibraryWorkspaceJson(
     view.libraryStateJson,
     albums,
@@ -429,7 +442,7 @@ export function getActiveCatalogView(): CatalogLiveStateView | null {
 }
 
 export function getAssetRequest(
-  entry: Pick<LibraryEntry, "catalogId" | "sessionId" | "id">,
+  entry: Pick<LibraryEntry, "catalogId" | "sessionId" | "assetId">,
 ): {
   catalogId: CatalogId;
   sessionId: SessionId;
@@ -438,7 +451,7 @@ export function getAssetRequest(
   return {
     catalogId: entry.catalogId,
     sessionId: entry.sessionId,
-    assetId: entry.id,
+    assetId: entry.assetId,
   };
 }
 
@@ -1080,17 +1093,18 @@ async function syncCatalogStateForBinding(
   const mutations: CatalogApplyMutation[] = [];
   const archived = new Set(archivedEntryIds);
   for (const asset of view.assets) {
-    const desired = entryMetadata[asset.assetId];
+    const entryId = asset.entryId ?? parseEntryId(asset.assetId);
+    const desired = entryMetadata[entryId];
     if (desired) {
-      const patch = metadataPatchFor(asset, desired, archived.has(asset.assetId));
+      const patch = metadataPatchFor(asset, desired, archived.has(entryId));
       if (patch) {
-        mutations.push({ kind: "metadata-patch", assetId: asset.assetId, patch });
+        mutations.push({ kind: "metadata-patch", entryId, patch });
       }
-    } else if (asset.metadata.archive !== archived.has(asset.assetId)) {
+    } else if (asset.metadata.archive !== archived.has(entryId)) {
       mutations.push({
         kind: "metadata-patch",
-        assetId: asset.assetId,
-        patch: { version: 1, archive: archived.has(asset.assetId) },
+        entryId,
+        patch: { version: 1, archive: archived.has(entryId) },
       });
     }
   }
@@ -1111,11 +1125,11 @@ async function syncCatalogStateForBinding(
         updatedAt: desired.album.updatedAt,
       });
     }
-    if (current.assetIds.join("\u001f") !== desired.album.entryIds.join("\u001f")) {
+    if (current.entryIds.join("\u001f") !== desired.album.entryIds.join("\u001f")) {
       mutations.push({
         kind: "album-membership-replace",
         albumId: current.albumId,
-        assetIds: desired.album.entryIds as AssetId[],
+        entryIds: desired.album.entryIds.map(parseEntryId),
       });
     }
     desiredAlbums.delete(current.albumId);
@@ -1133,12 +1147,29 @@ async function syncCatalogStateForBinding(
       mutations.push({
         kind: "album-membership-replace",
         albumId: album.id,
-        assetIds: album.entryIds as AssetId[],
+        entryIds: album.entryIds.map(parseEntryId),
       });
     }
   }
+  const activeEntryIds = new Set(
+    view.assets.map((asset) => asset.entryId ?? parseEntryId(asset.assetId)),
+  );
+  const retainedEntryIds = new Set([
+    ...activeEntryIds,
+    ...view.tombstonedEntryIds,
+  ]);
+  const retainedWorkspace = parseLibraryWorkspaceJson(
+    view.libraryStateJson,
+    albums,
+    retainedEntryIds,
+  );
+  const workspaceToPersist = mergeRetainedLibraryWorkspace(
+    retainedWorkspace,
+    libraryWorkspace,
+    activeEntryIds,
+  );
   const libraryStateJson = JSON.stringify({
-    ...libraryWorkspace,
+    ...workspaceToPersist,
     analysisByEntryId: {},
   });
   if (view.libraryStateJson !== libraryStateJson) {
@@ -1207,4 +1238,92 @@ export function scheduleCatalogStateSync(
   );
   mutationQueue = task.then(() => undefined, () => undefined);
   return task;
+}
+
+async function applyEditEntryLifecycle(
+  mutation: Extract<
+    CatalogApplyMutation,
+    { readonly kind: "edit-entry-create" | "edit-entry-rename" | "edit-entry-delete" }
+  >,
+  expectedBinding?: Pick<CatalogSyncBinding, "catalogId" | "sessionId">,
+): Promise<HydratedCatalogState> {
+  const binding = captureCatalogSyncBinding();
+  if (
+    expectedBinding &&
+    (binding.catalogId !== expectedBinding.catalogId ||
+      binding.sessionId !== expectedBinding.sessionId)
+  ) {
+    throw new Error("Catalog session changed before the edit entry update.");
+  }
+  const task = mutationQueue.then(async () => {
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed before the edit entry update.");
+    const api = getDarkroomAPI();
+    const view = await api.catalogQuery({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: null,
+    });
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed during the edit entry update.");
+    const result = await api.catalogApply({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: view.catalog.revision,
+      mutations: [mutation],
+    });
+    const nextView = await api.catalogQuery({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      expectedRevision: result.revision,
+    });
+    if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed after the edit entry update.");
+    const session = requireSession();
+    activeView = nextView;
+    updateSessionRevision(nextView.catalog.revision);
+    return hydrate(nextView, session);
+  });
+  mutationQueue = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+export async function createVirtualCopy(
+  sourceEntryId: EntryId,
+  displayName: string,
+  input: {
+    readonly catalogId: CatalogId;
+    readonly sessionId: SessionId;
+    readonly developJson: string | null;
+    readonly expectedSourceMetadataUpdatedAt: number;
+  },
+): Promise<{ readonly state: HydratedCatalogState; readonly entryId: EntryId }> {
+  const entryId = createEntryId();
+  const state = await applyEditEntryLifecycle({
+    kind: "edit-entry-create",
+    sourceEntryId,
+    entryId,
+    displayName,
+    developJson: input.developJson,
+    expectedSourceMetadataUpdatedAt: input.expectedSourceMetadataUpdatedAt,
+    createdAt: Date.now(),
+  }, input);
+  return { state, entryId };
+}
+
+export function renameVirtualCopy(
+  entryId: EntryId,
+  displayName: string,
+): Promise<HydratedCatalogState> {
+  return applyEditEntryLifecycle({
+    kind: "edit-entry-rename",
+    entryId,
+    displayName,
+    updatedAt: Date.now(),
+  });
+}
+
+export function deleteVirtualCopy(entryId: EntryId): Promise<HydratedCatalogState> {
+  return applyEditEntryLifecycle({
+    kind: "edit-entry-delete",
+    entryId,
+    tombstonedAt: Date.now(),
+  });
 }

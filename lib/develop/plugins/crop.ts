@@ -1,5 +1,5 @@
 import type { CropSettings, DevelopPlugin } from "@/lib/develop/types";
-import { numberProp } from "@/lib/develop/xmp-value";
+import { numberProp } from "../xmp-value.ts";
 
 export const DEFAULT_CROP_SETTINGS: CropSettings = {
   enabled: false,

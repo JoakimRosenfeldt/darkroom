@@ -15,7 +15,6 @@ import {
 } from "../process";
 import {
   acceptedAssetRevision,
-  type DevelopAssetRef,
 } from "./assets";
 import type {
   BlockingDevelopDiagnostic,
@@ -27,7 +26,7 @@ import type {
 import type { DevelopDocumentV3 } from "./document";
 import { canonicalV3DocumentHashInput } from "./document";
 import { validateRenderQualityRequest } from "./source";
-import { referencedMaskArtifacts } from "./masking";
+import { collectActiveDevelopAssetRefs } from "../asset-refs";
 
 export const V3_COMPILER_VERSION = "darkroom-v3-compiler-1";
 
@@ -258,24 +257,6 @@ function assetKey(asset: ReturnType<typeof acceptedAssetRevision>): string {
   ].join("\u001f");
 }
 
-function documentAssets(document: DevelopDocumentV3): readonly DevelopAssetRef[] {
-  const assets: DevelopAssetRef[] = document.local.masks.flatMap((mask) =>
-    referencedMaskArtifacts(mask.expression)
-  );
-  for (const component of document.cleanup.components) {
-    if (
-      component.kind === "repair" &&
-      component.source.kind === "accepted-patch"
-    ) {
-      assets.push(component.source.asset);
-    }
-  }
-  if (document.lensBlur.kind === "enabled") assets.push(document.lensBlur.depthAsset);
-  const unique = new Map<string, DevelopAssetRef>();
-  for (const asset of assets) unique.set(asset.assetId, asset);
-  return [...unique.values()].sort((left, right) => left.assetId.localeCompare(right.assetId));
-}
-
 function requestIssues(
   document: DevelopDocumentV3,
   source: SourceRecord,
@@ -305,7 +286,7 @@ function requestIssues(
   if (qualityError) {
     issues.push({ kind: "request-mismatch", reason: qualityError });
   }
-  const expectedAssets = documentAssets(document).map(acceptedAssetRevision).map(assetKey);
+  const expectedAssets = collectActiveDevelopAssetRefs(document).map(acceptedAssetRevision).map(assetKey);
   const requestedAssets = request.plan.acceptedAssetRevisions.map(assetKey).sort();
   if (
     expectedAssets.length !== requestedAssets.length ||

@@ -1,20 +1,23 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   createAssetId,
+  createOperationId,
   parseAssetId,
   parseCatalogId,
+  parseEntryId,
   parseOperationId,
   parsePresetId,
   parseRootId,
+  parseSourceId,
   type AssetId,
   type CatalogId,
+  type EntryId,
   type PresetId,
   type RootId,
 } from "../lib/catalog/ids.ts";
 import type {
   CatalogV3AssetHealth,
   CatalogV3AssetMetadata,
-  CatalogV3AssetSnapshot,
   CatalogV3FingerprintStatus,
   CatalogV3Observation,
 } from "../lib/catalog/v3.ts";
@@ -36,6 +39,7 @@ import {
   type CatalogLiveApplyResult,
   type CatalogLiveAlbum,
   type CatalogLiveCatalogIdentity,
+  type CatalogLiveEntrySnapshot,
   type CatalogLiveCreateInput,
   type CatalogLiveFingerprintTransition,
   type CatalogLiveMutation,
@@ -54,11 +58,20 @@ import {
   type CatalogLiveState,
 } from "../lib/catalog/live.ts";
 import {
+  CATALOG_V3_IDENTITY_TABLES,
   CATALOG_V3_TABLES,
   installCatalogV3Schema,
   isCatalogV3DatabaseEmpty,
+  upgradeCatalogV3IdentitySchema,
   verifyCatalogV3Schema,
 } from "./catalog-v3-schema.ts";
+import { upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
+import { DevelopHistoryRepository } from "./develop-history-repository.ts";
+import {
+  canonicalDevelopHistoryDocument,
+  createDevelopRevisionId,
+  parseDevelopHistoryDocument,
+} from "../lib/develop/history.ts";
 
 type Row = Record<string, unknown>;
 
@@ -93,6 +106,12 @@ type RootRecord = CatalogLiveRoot;
 const ASSET_SNAPSHOT_SELECT = `
   SELECT
     a.catalog_id AS catalogId,
+    e.entry_id AS entryId,
+    e.source_id AS sourceId,
+    e.is_original AS isOriginal,
+    e.parent_entry_id AS parentEntryId,
+    e.display_name AS displayName,
+    e.created_at AS entryCreatedAt,
     a.asset_id AS assetId,
     a.root_id AS rootId,
     a.relative_path AS relativePath,
@@ -128,9 +147,11 @@ const ASSET_SNAPSHOT_SELECT = `
     m.xmp_state AS xmpState,
     m.xmp_mtime AS xmpMtime,
     m.xmp_sha256 AS xmpSha256
-  FROM assets AS a
-  JOIN asset_metadata AS m
-    ON m.catalog_id = a.catalog_id AND m.asset_id = a.asset_id
+  FROM edit_entries AS e
+  JOIN assets AS a
+    ON a.catalog_id = e.catalog_id AND a.asset_id = e.source_id
+  JOIN entry_metadata AS m
+    ON m.catalog_id = e.catalog_id AND m.entry_id = e.entry_id
   JOIN fingerprints AS f
     ON f.catalog_id = a.catalog_id AND f.asset_id = a.asset_id
 `;
@@ -305,6 +326,18 @@ function metadataValues(metadata: CatalogV3AssetMetadata): readonly SQLInputValu
   ];
 }
 
+function mutationEntryId(
+  mutation: Extract<CatalogLiveMutation, { kind: "metadata-patch" | "archive-set" }>,
+): EntryId {
+  return mutation.entryId ?? parseEntryId(mutation.assetId);
+}
+
+function mutationEntryIds(
+  mutation: Extract<CatalogLiveMutation, { kind: "album-membership-replace" }>,
+): readonly EntryId[] {
+  return mutation.entryIds ?? mutation.assetIds.map(parseEntryId);
+}
+
 function fingerprintEqual(left: FingerprintRecord, right: CatalogLiveFingerprintTransition): boolean {
   return left.status === right.status && left.sha256 === right.sha256 &&
     left.observedAt === right.observedAt && left.observedByteLength === right.observedByteLength &&
@@ -321,7 +354,8 @@ function hasCatalogV3TablesOnly(database: DatabaseSync): boolean {
     const name = requiredString(value, "name");
     names.add(name);
   }
-  return names.size === CATALOG_V3_TABLES.length && CATALOG_V3_TABLES.every((table) => names.has(table));
+  const expected = [...CATALOG_V3_TABLES, ...CATALOG_V3_IDENTITY_TABLES];
+  return names.size === expected.length && expected.every((table) => names.has(table));
 }
 
 function hasRows(database: DatabaseSync, table: string): boolean {
@@ -369,6 +403,8 @@ export class CatalogLiveRepository {
   }
 
   private schema(): void {
+    upgradeCatalogV3IdentitySchema(this.database);
+    upgradeDevelopHistorySchema(this.database);
     verifyCatalogV3Schema(this.database);
     ensureLibraryStateTable(this.database);
   }
@@ -446,9 +482,19 @@ export class CatalogLiveRepository {
     return albums.map((value) => {
       if (!isRow(value)) throw new Error("Catalog live album row is invalid.");
       const albumId = requiredString(value, "albumId");
-      const members = this.database.prepare("SELECT asset_id AS assetId FROM album_assets WHERE catalog_id = ? AND album_id = ? ORDER BY position").all(catalogId, albumId).map((member) => {
+      const members = this.database.prepare(`
+        SELECT ae.entry_id AS entryId, ee.source_id AS sourceId
+        FROM album_entries AS ae
+        JOIN edit_entries AS ee
+          ON ee.catalog_id = ae.catalog_id AND ee.entry_id = ae.entry_id
+        WHERE ae.catalog_id = ? AND ae.album_id = ? AND ee.tombstoned_at IS NULL
+        ORDER BY ae.position
+      `).all(catalogId, albumId).map((member) => {
         if (!isRow(member)) throw new Error("Catalog live album member row is invalid.");
-        return parseAssetId(requiredString(member, "assetId"));
+        return {
+          entryId: parseEntryId(requiredString(member, "entryId")),
+          assetId: parseAssetId(requiredString(member, "sourceId")),
+        };
       });
       return {
         albumId,
@@ -456,7 +502,8 @@ export class CatalogLiveRepository {
         createdAt: numberValue(value, "createdAt"),
         updatedAt: numberValue(value, "updatedAt"),
         position: integerValue(value, "position"),
-        assetIds: members,
+        entryIds: members.map((member) => member.entryId),
+        assetIds: members.map((member) => member.assetId),
       };
     });
   }
@@ -575,15 +622,15 @@ export class CatalogLiveRepository {
     };
   }
 
-  private metadata(catalogId: CatalogId, assetId: AssetId): CatalogV3AssetMetadata {
+  private metadata(catalogId: CatalogId, entryId: EntryId): CatalogV3AssetMetadata {
     const row = this.database.prepare(`
       SELECT archive, pick, rating, color_label AS colorLabel,
              develop_json AS developJson, develop_updated_at AS developUpdatedAt,
              updated_at AS updatedAt, title, caption, copyright,
              keywords_json AS keywordsJson, raw_xmp AS rawXmp, xmp_state AS xmpState,
              xmp_mtime AS xmpMtime, xmp_sha256 AS xmpSha256
-      FROM asset_metadata WHERE catalog_id = ? AND asset_id = ?
-    `).get(catalogId, assetId);
+      FROM entry_metadata WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, entryId);
     if (!isRow(row)) throw new Error("Catalog live metadata is missing.");
     const xmpState = enumString(requiredString(row, "xmpState"), "metadata XMP state", ["unknown", "absent", "preserved", "malformed"] as const);
     const rawXmp = nullableString(row, "rawXmp");
@@ -615,16 +662,25 @@ export class CatalogLiveRepository {
     };
   }
 
-  private upsertMetadata(catalogId: CatalogId, assetId: AssetId, metadata: CatalogV3AssetMetadata): boolean {
-    const current = this.metadata(catalogId, assetId);
+  private upsertMetadata(catalogId: CatalogId, entryId: EntryId, metadata: CatalogV3AssetMetadata): boolean {
+    const current = this.metadata(catalogId, entryId);
     if (metadataEqual(current, metadata)) return false;
     const result = this.database.prepare(`
+      UPDATE entry_metadata SET archive = ?, pick = ?, rating = ?, color_label = ?,
+        develop_json = ?, develop_updated_at = ?, updated_at = ?, title = ?, caption = ?,
+        copyright = ?, keywords_json = ?, raw_xmp = ?, xmp_state = ?, xmp_mtime = ?, xmp_sha256 = ?
+      WHERE catalog_id = ? AND entry_id = ?
+    `).run(...metadataValues(metadata), catalogId, entryId);
+    if (result.changes !== 1) throw new Error("Catalog live metadata update failed.");
+    this.database.prepare(`
       UPDATE asset_metadata SET archive = ?, pick = ?, rating = ?, color_label = ?,
         develop_json = ?, develop_updated_at = ?, updated_at = ?, title = ?, caption = ?,
         copyright = ?, keywords_json = ?, raw_xmp = ?, xmp_state = ?, xmp_mtime = ?, xmp_sha256 = ?
-      WHERE catalog_id = ? AND asset_id = ?
-    `).run(...metadataValues(metadata), catalogId, assetId);
-    if (result.changes !== 1) throw new Error("Catalog live metadata update failed.");
+      WHERE catalog_id = ? AND asset_id = (
+        SELECT source_id FROM edit_entries
+        WHERE catalog_id = ? AND entry_id = ? AND is_original = 1
+      )
+    `).run(...metadataValues(metadata), catalogId, catalogId, entryId);
     return true;
   }
 
@@ -853,8 +909,8 @@ export class CatalogLiveRepository {
     };
   }
 
-  private applyMetadataPatch(catalogId: CatalogId, assetId: AssetId, patch: CatalogLiveMutation & { kind: "metadata-patch" }, now: number): boolean {
-    const current = this.metadata(catalogId, assetId);
+  private applyMetadataPatch(catalogId: CatalogId, entryId: EntryId, patch: CatalogLiveMutation & { kind: "metadata-patch" }, now: number): boolean {
+    const current = this.metadata(catalogId, entryId);
     const next: CatalogV3AssetMetadata = {
       ...current,
       ...(patch.patch.archive === undefined ? {} : { archive: patch.patch.archive }),
@@ -862,7 +918,7 @@ export class CatalogLiveRepository {
       ...(patch.patch.rating === undefined ? {} : { rating: patch.patch.rating }),
       ...(patch.patch.colorLabel === undefined ? {} : { colorLabel: patch.patch.colorLabel }),
       ...(patch.patch.developJson === undefined ? {} : { developJson: patch.patch.developJson }),
-      ...(patch.patch.developUpdatedAt === undefined ? {} : { developUpdatedAt: patch.patch.developUpdatedAt }),
+      ...(patch.patch.developUpdatedAt === undefined ? {} : { developUpdatedAt: Math.max(current.developUpdatedAt, patch.patch.developUpdatedAt) }),
       updatedAt: patch.patch.updatedAt ?? now,
       ...(patch.patch.title === undefined ? {} : { title: patch.patch.title }),
       ...(patch.patch.caption === undefined ? {} : { caption: patch.patch.caption }),
@@ -882,7 +938,146 @@ export class CatalogLiveRepository {
     let keywords: unknown;
     try { keywords = JSON.parse(next.keywordsJson); } catch { throw new Error("Catalog live keywords JSON is invalid."); }
     if (!Array.isArray(keywords)) throw new Error("Catalog live keywords JSON is invalid.");
-    return this.upsertMetadata(catalogId, assetId, next);
+    return this.upsertMetadata(catalogId, entryId, next);
+  }
+
+  private applyEditEntryCreate(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-create" }>,
+  ): boolean {
+    const existing = this.database.prepare(
+      "SELECT 1 FROM edit_entries WHERE catalog_id = ? AND entry_id = ?",
+    ).get(catalogId, mutation.entryId);
+    if (existing !== undefined) throw new Error("Catalog live edit entry already exists.");
+    const source = this.database.prepare(`
+      SELECT source_id AS sourceId
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ? AND tombstoned_at IS NULL
+    `).get(catalogId, mutation.sourceEntryId);
+    if (!isRow(source)) throw new Error("Catalog live source edit entry is missing.");
+    const sourceId = parseSourceId(requiredString(source, "sourceId"));
+    const original = this.database.prepare(`
+      SELECT entry_id AS entryId
+      FROM edit_entries
+      WHERE catalog_id = ? AND source_id = ? AND is_original = 1 AND tombstoned_at IS NULL
+    `).get(catalogId, sourceId);
+    if (!isRow(original)) throw new Error("Catalog live original edit entry is missing.");
+    const parentEntryId = parseEntryId(requiredString(original, "entryId"));
+    const sourceMetadata = this.database.prepare(`
+      SELECT updated_at AS updatedAt
+      FROM entry_metadata
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, mutation.sourceEntryId);
+    if (!isRow(sourceMetadata)) throw new Error("Catalog live source edit metadata is missing.");
+    if (numberValue(sourceMetadata, "updatedAt") !== mutation.expectedSourceMetadataUpdatedAt) {
+      throw new Error("Catalog live source edit metadata changed before the copy was created.");
+    }
+    this.database.prepare(`
+      INSERT INTO edit_entries (
+        catalog_id, entry_id, source_id, is_original, parent_entry_id, display_name, created_at, updated_at
+      ) VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+    `).run(
+      catalogId,
+      mutation.entryId,
+      sourceId,
+      parentEntryId,
+      mutation.displayName,
+      mutation.createdAt,
+      mutation.createdAt,
+    );
+    const metadata = this.database.prepare(`
+      INSERT INTO entry_metadata (
+        catalog_id, entry_id, archive, pick, rating, color_label, develop_json,
+        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+        raw_xmp, xmp_state, xmp_mtime, xmp_sha256
+      )
+      SELECT catalog_id, ?, archive, pick, rating, color_label, ?,
+        ?, ?, title, caption, copyright, keywords_json,
+        NULL, 'absent', NULL, NULL
+      FROM entry_metadata
+      WHERE catalog_id = ? AND entry_id = ?
+    `).run(
+      mutation.entryId,
+      mutation.developJson,
+      mutation.createdAt,
+      mutation.createdAt,
+      catalogId,
+      mutation.sourceEntryId,
+    );
+    if (metadata.changes !== 1) throw new Error("Catalog live source edit metadata is missing.");
+
+    const albums = this.database.prepare(`
+      SELECT album_id AS albumId
+      FROM album_entries
+      WHERE catalog_id = ? AND entry_id = ?
+      ORDER BY album_id
+    `).all(catalogId, mutation.sourceEntryId);
+    for (const album of albums) {
+      if (!isRow(album)) throw new Error("Catalog live source album membership is invalid.");
+      const albumId = requiredString(album, "albumId");
+      const rows = this.database.prepare(`
+        SELECT entry_id AS entryId
+        FROM album_entries
+        WHERE catalog_id = ? AND album_id = ?
+        ORDER BY position
+      `).all(catalogId, albumId);
+      const entryIds = rows.map((row) => {
+        if (!isRow(row)) throw new Error("Catalog live album membership is invalid.");
+        return parseEntryId(requiredString(row, "entryId"));
+      });
+      const sourceIndex = entryIds.indexOf(mutation.sourceEntryId);
+      entryIds.splice(sourceIndex + 1, 0, mutation.entryId);
+      this.applyAlbumMembership(catalogId, {
+        kind: "album-membership-replace",
+        albumId,
+        entryIds,
+      });
+    }
+    return true;
+  }
+
+  private applyEditEntryRename(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-rename" }>,
+  ): boolean {
+    const current = this.database.prepare(`
+      SELECT is_original AS isOriginal, display_name AS displayName
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ? AND tombstoned_at IS NULL
+    `).get(catalogId, mutation.entryId);
+    if (!isRow(current)) throw new Error("Catalog live edit entry is missing.");
+    if (booleanValue(current, "isOriginal")) {
+      throw new Error("Catalog live original edit entry cannot be renamed.");
+    }
+    if (nullableString(current, "displayName") === mutation.displayName) return false;
+    const result = this.database.prepare(`
+      UPDATE edit_entries SET display_name = ?, updated_at = ?
+      WHERE catalog_id = ? AND entry_id = ? AND is_original = 0
+    `).run(mutation.displayName, mutation.updatedAt, catalogId, mutation.entryId);
+    if (result.changes !== 1) throw new Error("Catalog live edit entry rename failed.");
+    return true;
+  }
+
+  private applyEditEntryDelete(
+    catalogId: CatalogId,
+    mutation: Extract<CatalogLiveMutation, { kind: "edit-entry-delete" }>,
+  ): boolean {
+    const current = this.database.prepare(`
+      SELECT is_original AS isOriginal, tombstoned_at AS tombstonedAt
+      FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ?
+    `).get(catalogId, mutation.entryId);
+    if (current === undefined) return false;
+    if (!isRow(current)) throw new Error("Catalog live edit entry is invalid.");
+    if (booleanValue(current, "isOriginal")) {
+      throw new Error("Catalog live original edit entry cannot be deleted.");
+    }
+    if (nullableNumber(current, "tombstonedAt") !== null) return false;
+    const result = this.database.prepare(
+      "UPDATE edit_entries SET tombstoned_at = ?, updated_at = ? WHERE catalog_id = ? AND entry_id = ? AND is_original = 0 AND tombstoned_at IS NULL",
+    ).run(mutation.tombstonedAt, mutation.tombstonedAt, catalogId, mutation.entryId);
+    if (result.changes !== 1) throw new Error("Catalog live edit entry tombstone failed.");
+    return true;
   }
 
   private applyFingerprint(catalogId: CatalogId, transition: CatalogLiveFingerprintTransition, now: number): boolean {
@@ -935,6 +1130,7 @@ export class CatalogLiveRepository {
   private applyAlbumDelete(catalogId: CatalogId, albumId: string): boolean {
     const current = this.database.prepare("SELECT 1 FROM albums WHERE catalog_id = ? AND album_id = ?").get(catalogId, albumId);
     if (current === undefined) return false;
+    this.database.prepare("DELETE FROM album_entries WHERE catalog_id = ? AND album_id = ?").run(catalogId, albumId);
     this.database.prepare("DELETE FROM album_assets WHERE catalog_id = ? AND album_id = ?").run(catalogId, albumId);
     this.database.prepare("DELETE FROM albums WHERE catalog_id = ? AND album_id = ?").run(catalogId, albumId);
     return true;
@@ -944,17 +1140,29 @@ export class CatalogLiveRepository {
     const album = this.database.prepare("SELECT 1 FROM albums WHERE catalog_id = ? AND album_id = ?").get(catalogId, mutation.albumId);
     if (album === undefined) throw new Error("Catalog live album is missing.");
     const seen = new Set<string>();
-    for (const assetId of mutation.assetIds) {
-      if (seen.has(assetId)) throw new Error("Catalog live album membership contains duplicate assets.");
-      seen.add(assetId);
-      this.asset(catalogId, assetId);
+    const entryIds = mutationEntryIds(mutation);
+    for (const entryId of entryIds) {
+      if (seen.has(entryId)) throw new Error("Catalog live album membership contains duplicate entries.");
+      seen.add(entryId);
+      if (this.database.prepare("SELECT 1 FROM edit_entries WHERE catalog_id = ? AND entry_id = ?").get(catalogId, entryId) === undefined) {
+        throw new Error("Catalog live album entry is missing.");
+      }
     }
-    const currentRows = this.database.prepare("SELECT asset_id AS assetId FROM album_assets WHERE catalog_id = ? AND album_id = ? ORDER BY position").all(catalogId, mutation.albumId);
-    const current = currentRows.map((row) => isRow(row) ? parseAssetId(requiredString(row, "assetId")) : (() => { throw new Error("Catalog live album membership is invalid."); })());
-    if (current.length === mutation.assetIds.length && current.every((id, index) => id === mutation.assetIds[index])) return false;
+    const currentRows = this.database.prepare("SELECT entry_id AS entryId FROM album_entries WHERE catalog_id = ? AND album_id = ? ORDER BY position").all(catalogId, mutation.albumId);
+    const current = currentRows.map((row) => isRow(row) ? parseEntryId(requiredString(row, "entryId")) : (() => { throw new Error("Catalog live album membership is invalid."); })());
+    if (current.length === entryIds.length && current.every((id, index) => id === entryIds[index])) return false;
+    this.database.prepare("DELETE FROM album_entries WHERE catalog_id = ? AND album_id = ?").run(catalogId, mutation.albumId);
     this.database.prepare("DELETE FROM album_assets WHERE catalog_id = ? AND album_id = ?").run(catalogId, mutation.albumId);
-    const insert = this.database.prepare("INSERT INTO album_assets (catalog_id, album_id, asset_id, position) VALUES (?, ?, ?, ?)");
-    mutation.assetIds.forEach((assetId, position) => insert.run(catalogId, mutation.albumId, assetId, position));
+    const insertEntry = this.database.prepare("INSERT INTO album_entries (catalog_id, album_id, entry_id, position) VALUES (?, ?, ?, ?)");
+    const insertAsset = this.database.prepare(`
+      INSERT INTO album_assets (catalog_id, album_id, asset_id, position)
+      SELECT catalog_id, ?, source_id, ? FROM edit_entries
+      WHERE catalog_id = ? AND entry_id = ? AND is_original = 1
+    `);
+    entryIds.forEach((entryId, position) => {
+      insertEntry.run(catalogId, mutation.albumId, entryId, position);
+      insertAsset.run(mutation.albumId, position, catalogId, entryId);
+    });
     return true;
   }
 
@@ -1140,7 +1348,7 @@ export class CatalogLiveRepository {
     if (mutation.health === "present" && observation === null) throw new Error("Catalog live present copy needs an observation.");
     this.insertAsset(catalogId, mutation.newAssetId, mutation.rootId, mutation.relativePath, observation,
       mutation.health, source.formatId, source.cameraMake, source.cameraModel, source.lensModel,
-      this.metadata(catalogId, mutation.sourceAssetId), now);
+      this.metadata(catalogId, parseEntryId(mutation.sourceAssetId)), now);
     return true;
   }
 
@@ -1152,6 +1360,9 @@ export class CatalogLiveRepository {
         this.database.prepare("UPDATE catalog_meta SET display_name = ?, updated_at = ? WHERE catalog_id = ?").run(mutation.displayName, now, catalogId);
         return true;
       }
+      case "edit-entry-create": return this.applyEditEntryCreate(catalogId, mutation);
+      case "edit-entry-rename": return this.applyEditEntryRename(catalogId, mutation);
+      case "edit-entry-delete": return this.applyEditEntryDelete(catalogId, mutation);
       case "root-upsert": return this.applyRootUpsert(catalogId, mutation.root);
       case "root-health": {
         const current = this.requireRoot(catalogId, mutation.rootId);
@@ -1180,12 +1391,15 @@ export class CatalogLiveRepository {
       }
       case "reconcile-complete": return this.applyReconcile(catalogId, mutation.rootId, mutation.observations, true, now);
       case "reconcile": return this.applyReconcile(catalogId, mutation.rootId, mutation.observations, mutation.complete, now);
-      case "metadata-patch": return this.applyMetadataPatch(catalogId, mutation.assetId, mutation, now);
+      case "metadata-patch": return this.applyMetadataPatch(catalogId, mutationEntryId(mutation), mutation, now);
       case "album-create": return this.applyAlbumCreate(catalogId, mutation);
       case "album-rename": return this.applyAlbumRename(catalogId, mutation);
       case "album-delete": return this.applyAlbumDelete(catalogId, mutation.albumId);
       case "album-membership-replace": return this.applyAlbumMembership(catalogId, mutation);
-      case "archive-set": return this.applyMetadataPatch(catalogId, mutation.assetId, { kind: "metadata-patch", assetId: mutation.assetId, patch: { version: 1, archive: mutation.archived } }, now);
+      case "archive-set": {
+        const entryId = mutationEntryId(mutation);
+        return this.applyMetadataPatch(catalogId, entryId, { kind: "metadata-patch", entryId, patch: { version: 1, archive: mutation.archived } }, now);
+      }
       case "library-state-replace": return this.applyLibraryState(catalogId, mutation.stateJson, now);
       case "fingerprint-set": return this.applyFingerprint(catalogId, mutation.fingerprint, now);
       case "preset-upsert": return this.applyPresetUpsert(catalogId, mutation, now);
@@ -1210,7 +1424,7 @@ export class CatalogLiveRepository {
     }
   }
 
-  private assetSnapshotFromRow(value: unknown): CatalogV3AssetSnapshot {
+  private assetSnapshotFromRow(value: unknown): CatalogLiveEntrySnapshot {
     if (!isRow(value)) throw new Error("Catalog live asset snapshot row is invalid.");
     const observedAt = nullableNumber(value, "observedAt");
     const byteLength = nullableNumber(value, "observedByteLength");
@@ -1221,6 +1435,14 @@ export class CatalogLiveRepository {
       : observedAt === null ? (() => { throw new Error("Catalog live asset observation is incomplete."); })() : { byteLength, modifiedAt, observedAt, localFileId };
     return {
       catalogId: parseCatalogId(requiredString(value, "catalogId")),
+      entryId: parseEntryId(requiredString(value, "entryId")),
+      sourceId: parseSourceId(requiredString(value, "sourceId")),
+      entryKind: booleanValue(value, "isOriginal") ? "original" : "virtual",
+      parentEntryId: nullableString(value, "parentEntryId") === null
+        ? null
+        : parseEntryId(nullableString(value, "parentEntryId")),
+      displayName: nullableString(value, "displayName"),
+      entryCreatedAt: numberValue(value, "entryCreatedAt"),
       assetId: parseAssetId(requiredString(value, "assetId")),
       rootId: parseRootId(requiredString(value, "rootId")),
       relativePath: requiredString(value, "relativePath"),
@@ -1322,11 +1544,21 @@ export class CatalogLiveRepository {
     if (input.expectedRevision !== null && input.expectedRevision !== catalog.revision) {
       throw new Error(`Catalog live revision ${input.expectedRevision} is stale; current revision is ${catalog.revision}.`);
     }
-    const conditions = ["a.catalog_id = ?"];
+    const conditions = ["a.catalog_id = ?", "e.tombstoned_at IS NULL"];
     const parameters: SQLInputValue[] = [input.catalogId];
+    if (input.entryId !== undefined) { conditions.push("e.entry_id = ?"); parameters.push(input.entryId); }
     if (input.assetId !== undefined) { conditions.push("a.asset_id = ?"); parameters.push(input.assetId); }
     if (input.rootId !== undefined) { conditions.push("a.root_id = ?"); parameters.push(input.rootId); }
-    const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
+    const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id, e.is_original DESC, e.created_at, e.entry_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
+    const tombstonedEntryIds = this.database.prepare(`
+      SELECT entry_id AS entryId
+      FROM edit_entries
+      WHERE catalog_id = ? AND tombstoned_at IS NOT NULL
+      ORDER BY entry_id
+    `).all(input.catalogId).map((value) => {
+      if (!isRow(value)) throw new Error("Catalog live tombstoned edit entry row is invalid.");
+      return parseEntryId(requiredString(value, "entryId"));
+    });
     const fingerprintMatches = input.fingerprintSha256 === undefined
       ? []
       : this.database.prepare("SELECT fingerprint_id AS fingerprintId, asset_id AS assetId, sha256 FROM fingerprints WHERE catalog_id = ? AND status = 'valid' AND sha256 = ? ORDER BY asset_id").all(input.catalogId, input.fingerprintSha256).map((value) => {
@@ -1347,6 +1579,7 @@ export class CatalogLiveRepository {
       catalog,
       roots: this.roots(input.catalogId),
       assets,
+      tombstonedEntryIds,
       albums: this.albums(input.catalogId),
       operations: this.operationRows(input.catalogId),
       presets: this.presetRows(input.catalogId),
@@ -1367,6 +1600,8 @@ export class CatalogLiveRepository {
     const validated = parseCatalogLiveCreateInput(input);
     prepareFreshCatalogV3Database(this.database);
     ensureLibraryStateTable(this.database);
+    upgradeCatalogV3IdentitySchema(this.database);
+    upgradeDevelopHistorySchema(this.database);
     const now = validated.now ?? Date.now();
     return this.transaction(() => {
       this.database.prepare(`
@@ -1405,20 +1640,61 @@ export class CatalogLiveRepository {
 
   public apply(input: CatalogLiveApplyInput): CatalogLiveApplyResult {
     this.schema();
+    const history = new DevelopHistoryRepository(this.database);
     const validated = parseCatalogLiveApplyInput(input);
     return this.transaction(() => {
       const catalog = this.catalog(validated.catalogId);
       if (catalog.revision !== validated.expectedRevision) {
         throw new Error(`Catalog live revision ${validated.expectedRevision} is stale; current revision is ${catalog.revision}.`);
       }
+      history.assertHeadsComplete(validated.catalogId);
       const now = validated.now ?? Date.now();
       let changed = false;
       const kinds: string[] = [];
       for (const mutation of validated.mutations) {
         const parsed = parseCatalogLiveMutation(mutation);
         kinds.push(parsed.kind);
-        changed = this.applyMutation(validated.catalogId, parsed, now) || changed;
+        if (parsed.kind === "metadata-patch" && parsed.patch.developJson !== undefined) {
+          const entryId = mutationEntryId(parsed);
+          const current = this.metadata(validated.catalogId, entryId);
+          const document = parseDevelopHistoryDocument(
+            parsed.patch.developJson === null ? null : JSON.parse(parsed.patch.developJson) as unknown,
+          );
+          const staleDevelop = parsed.patch.developUpdatedAt !== undefined &&
+            parsed.patch.developUpdatedAt <= current.developUpdatedAt;
+          const metadataMutation = {
+            ...parsed,
+            patch: { ...parsed.patch, developJson: undefined, ...(staleDevelop ? { developUpdatedAt: undefined } : {}) },
+          };
+          changed = this.applyMutation(validated.catalogId, metadataMutation, now) || changed;
+          const currentJson = current.developJson === null
+            ? "null"
+            : canonicalDevelopHistoryDocument(JSON.parse(current.developJson) as unknown);
+          const nextJson = canonicalDevelopHistoryDocument(document);
+          if (!staleDevelop && currentJson !== nextJson) {
+            const head = history.load({ catalogId: validated.catalogId, entryId, revisionId: null });
+            if (head.kind !== "loaded") throw new Error("Develop history needs recovery before this edit can be saved.");
+            const createdAt = parsed.patch.developUpdatedAt ?? parsed.patch.updatedAt ?? now;
+            history.commit({
+              catalogId: validated.catalogId,
+              entryId,
+              revisionId: createDevelopRevisionId(),
+              expectedParentRevisionId: head.value.headRevisionId,
+              operationId: createOperationId(),
+              label: "Edit",
+              document,
+              createdAt,
+            }, true);
+            changed = true;
+          }
+        } else {
+          changed = this.applyMutation(validated.catalogId, parsed, now) || changed;
+        }
+        if (parsed.kind === "edit-entry-create" || parsed.kind === "reconcile" || parsed.kind === "reconcile-complete") {
+          history.ensureRoots(validated.catalogId, true);
+        }
       }
+      history.ensureRoots(validated.catalogId, true);
       if (!changed) {
         return parseCatalogLiveApplyResult({ catalogId: validated.catalogId, revision: catalog.revision, changed: false, appliedMutations: validated.mutations.length, auditId: null });
       }

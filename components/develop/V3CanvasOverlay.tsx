@@ -37,7 +37,7 @@ import {
 import {
   mapV3CanonicalToCanvasOutput,
   mapV3CanvasOutputToCanonical,
-  sampleV3SourceLinear,
+  sampleWhiteBalanceSource,
   v3OrientedDimensions,
 } from "@/lib/develop/v3/canvas-coordinates";
 import type {
@@ -456,7 +456,7 @@ export function V3CanvasOverlay({
         requestId !== maskOverlayRequestRef.current ||
         state.activeCatalogId !== source.signature.catalogId ||
         state.activeEntryId !== source.signature.entryId ||
-        session?.persistedDocument !== document ||
+        (session.previewDocument ?? session.persistedDocument) !== document ||
         maskOverlayCanvasRef.current !== canvas
       ) return;
       canvas.width = dimensions.width;
@@ -781,7 +781,7 @@ export function V3CanvasOverlay({
 
   function sampleCanvas(output: GeometryPoint, canonical: GeometryPoint): boolean {
     if (canvasTool.kind === "white-balance") {
-      const sampled = sampleV3SourceLinear(image, source, canonical);
+      const sampled = sampleWhiteBalanceSource(image, source, document, canonical);
       if (sampled.kind === "unavailable") {
         setStatus(sampled.reason);
         return true;

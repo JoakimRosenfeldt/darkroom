@@ -5,6 +5,8 @@ import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { V3GpuPreviewRenderResult } from "@/lib/develop/v3/gpu-backend";
 import type { V3PreviewRenderMode } from "@/lib/develop/v3/runtime";
 import type { LibraryEntry } from "@/lib/fs/types";
+import type { ExportSizeOptions } from "@/lib/export/types";
+import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
 
 export type V3PreviewWorkerImage = Omit<DevelopImage, "blob" | "objectUrl">;
 
@@ -24,6 +26,14 @@ export interface V3PreviewWorkerRenderResult {
 }
 
 export type V3PreviewWorkerRequest =
+  | {
+      readonly kind: "export";
+      readonly requestId: number;
+      readonly document: DevelopDocumentV3;
+      readonly size: ExportSizeOptions;
+      readonly region?: RenderRegion;
+      readonly maskMattes: readonly V3PreviewWorkerMaskMatte[];
+    }
   | {
       readonly kind: "initialize";
       readonly entry: LibraryEntry;

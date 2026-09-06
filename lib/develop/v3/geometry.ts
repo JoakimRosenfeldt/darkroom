@@ -1,13 +1,13 @@
 import {
   COORDINATE_FRAME_REVISION,
   type ExifOrientation,
-} from "../process";
+} from "../process.ts";
 import {
   invertDistortedUv,
   mapDistortedUv,
   type LensCalibration,
   type OpticsAmounts,
-} from "./optics";
+} from "./optics.ts";
 
 export const CANONICAL_GEOMETRY_REVISION =
   `${COORDINATE_FRAME_REVISION}:geometry-1`;

@@ -92,7 +92,7 @@ import {
   applyTexturePixel,
   type ReadonlyRgbImage,
 } from "./presence";
-import { applyInputCalibration, type Rgb } from "./profiles";
+import { applyInputCalibration, effectiveInputCalibration, type Rgb } from "./profiles";
 import { MAX_TILE_OVERLAP, type CancellationProbe } from "./source";
 import { applyWhiteBalance } from "./white-balance";
 
@@ -281,7 +281,7 @@ interface GeometryRenderResult {
   readonly context: GeometryContext;
 }
 
-interface RenderRegion {
+export interface RenderRegion {
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -412,7 +412,13 @@ function sourceColorIsSupported(input: CpuRenderInput): CpuBackendBlockingDiagno
   if (input.document.color.inputProfile.selection.kind === "selected") return null;
   switch (input.source.color.kind) {
     case "profiled":
-      return standardSrgbProfileId(input.source.color.profile.id)
+      return standardSrgbProfileId(input.source.color.profile.id) ||
+        (
+          input.source.inputProfile.kind === "available" &&
+          input.source.inputProfile.stage === "before-develop-tone" &&
+          input.source.inputProfile.profile.id === input.source.color.profile.id &&
+          input.source.inputProfile.profile.revision === input.source.color.profile.revision
+        )
         ? null
         : {
             kind: "profile-transform-unavailable",
@@ -928,7 +934,7 @@ function readSourcePixel(
   return applyHueBoundedDefringe(
     applyInputCalibration(
       applyWhiteBalance(decoded, input.document.color.whiteBalance.resolved),
-      input.document.color.inputProfile.calibration,
+      effectiveInputCalibration(input.source, input.document.color.inputProfile),
     ),
     input.document.optics.defringe,
   );
@@ -2652,5 +2658,44 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
     pointColorInput: rendered.pointColorInput,
     diagnostics: preparation.diagnostics,
     analysis: rendered.analysis,
+  };
+}
+
+export async function renderV3CpuRegion(
+  input: CpuRenderInput,
+  core: RenderRegion,
+): Promise<CpuRenderResult> {
+  const preparation = await prepareV3CpuRender(input);
+  if (preparation.kind !== "ready") return preparation;
+  const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
+  if (![core.x, core.y, core.width, core.height].every(Number.isSafeInteger) ||
+      core.x < 0 || core.y < 0 || core.width < 1 || core.height < 1 ||
+      core.x + core.width > dimensions.width || core.y + core.height > dimensions.height) {
+    throw new Error("The detail region is outside the rendered image.");
+  }
+  const pixels = new Uint8Array(core.width * core.height * 4);
+  const halo = activeStageHalo(input);
+  for (let y = core.y; y < core.y + core.height; y += MAX_CPU_TILE_CORE_EDGE) {
+    for (let x = core.x; x < core.x + core.width; x += MAX_CPU_TILE_CORE_EDGE) {
+      const tile = { x, y, width: Math.min(MAX_CPU_TILE_CORE_EDGE, core.x + core.width - x), height: Math.min(MAX_CPU_TILE_CORE_EDGE, core.y + core.height - y) };
+      const region = expandedRegion(tile, dimensions, halo);
+      const executed = executeRegion(input, preparation.transfer, region);
+      if (!executed || cancelled(input.cancellation)) return { kind: "cancelled" };
+      for (let row = 0; row < tile.height; row += 1) {
+        const offset = ((tile.y - region.y + row) * region.width + tile.x - region.x) * 4;
+        const target = ((tile.y - core.y + row) * core.width + tile.x - core.x) * 4;
+        pixels.set(executed.pixels.subarray(offset, offset + tile.width * 4), target);
+      }
+    }
+  }
+  return {
+    kind: "rendered",
+    planFingerprint: preparation.planFingerprint,
+    frameIdentity: preparation.frameIdentity,
+    dimensions: { width: core.width, height: core.height },
+    pixels: { kind: "rgba8", pixels },
+    pointColorInput: null,
+    diagnostics: preparation.diagnostics,
+    analysis: [],
   };
 }

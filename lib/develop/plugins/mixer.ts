@@ -4,7 +4,7 @@ import type {
   MixerColor,
   MixerSettings,
 } from "@/lib/develop/types";
-import { numberProp } from "@/lib/develop/xmp-value";
+import { numberProp } from "../xmp-value.ts";
 
 export const MIXER_COLORS: MixerColor[] = [
   "red",

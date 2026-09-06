@@ -37,6 +37,12 @@ export const CATALOG_V3_TABLES = [
 
 export type CatalogV3TableName = (typeof CATALOG_V3_TABLES)[number];
 
+export const CATALOG_V3_IDENTITY_TABLES = [
+  "edit_entries",
+  "entry_metadata",
+  "album_entries",
+] as const;
+
 export interface CatalogV3SchemaManifest {
   readonly applicationId: number;
   readonly schemaVersion: number;
@@ -49,6 +55,8 @@ export function catalogV3SchemaSql(): string {
   const catalogIdCheck = uuidCheck("catalog_id");
   const rootIdCheck = uuidCheck("root_id");
   const assetIdCheck = uuidCheck("asset_id");
+  const sourceIdCheck = uuidCheck("source_id");
+  const entryIdCheck = uuidCheck("entry_id");
   const fingerprintIdCheck = uuidCheck("fingerprint_id");
   const operationIdCheck = uuidCheck("operation_id");
   const presetIdCheck = uuidCheck("preset_id");
@@ -166,6 +174,48 @@ export function catalogV3SchemaSql(): string {
       FOREIGN KEY (catalog_id, asset_id) REFERENCES assets (catalog_id, asset_id)
     ) STRICT;
 
+    CREATE TABLE IF NOT EXISTS edit_entries (
+      catalog_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${entryIdCheck}),
+      source_id TEXT NOT NULL CHECK (${sourceIdCheck}),
+      is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
+      parent_entry_id TEXT CHECK (parent_entry_id IS NULL OR ${uuidCheck("parent_entry_id")}),
+      display_name TEXT CHECK (display_name IS NULL OR (length(trim(display_name)) > 0 AND instr(display_name, char(0)) = 0)),
+      tombstoned_at REAL,
+      created_at REAL NOT NULL,
+      updated_at REAL NOT NULL,
+      PRIMARY KEY (catalog_id, entry_id),
+      FOREIGN KEY (catalog_id, source_id) REFERENCES assets (catalog_id, asset_id) ON UPDATE CASCADE
+    ) STRICT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS edit_entries_one_original_per_source
+      ON edit_entries (catalog_id, source_id)
+      WHERE is_original = 1;
+
+    CREATE TABLE IF NOT EXISTS entry_metadata (
+      catalog_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${entryIdCheck}),
+      archive INTEGER NOT NULL DEFAULT 0 CHECK (archive IN (0, 1)),
+      pick TEXT NOT NULL CHECK (pick IN ('none', 'pick', 'reject')),
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
+      color_label TEXT CHECK (color_label IS NULL OR color_label IN ('red', 'yellow', 'green', 'blue', 'purple')),
+      develop_json TEXT CHECK (develop_json IS NULL OR json_valid(develop_json)),
+      develop_updated_at REAL NOT NULL,
+      updated_at REAL NOT NULL,
+      title TEXT,
+      caption TEXT,
+      copyright TEXT,
+      keywords_json TEXT NOT NULL CHECK (json_valid(keywords_json) AND json_type(keywords_json) = 'array'),
+      raw_xmp TEXT,
+      xmp_state TEXT NOT NULL CHECK (xmp_state IN ('unknown', 'absent', 'preserved', 'malformed')),
+      xmp_mtime REAL,
+      xmp_sha256 TEXT CHECK (${hashCheck("xmp_sha256")}),
+      PRIMARY KEY (catalog_id, entry_id),
+      CHECK ((xmp_state = 'preserved') = (raw_xmp IS NOT NULL)),
+      CHECK (xmp_state <> 'absent' OR raw_xmp IS NULL),
+      FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id) ON UPDATE CASCADE
+    ) STRICT;
+
     CREATE TABLE IF NOT EXISTS albums (
       catalog_id TEXT NOT NULL,
       album_id TEXT NOT NULL CHECK (length(album_id) > 0),
@@ -187,6 +237,17 @@ export function catalogV3SchemaSql(): string {
       UNIQUE (catalog_id, album_id, asset_id),
       FOREIGN KEY (catalog_id, album_id) REFERENCES albums (catalog_id, album_id),
       FOREIGN KEY (catalog_id, asset_id) REFERENCES assets (catalog_id, asset_id)
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS album_entries (
+      catalog_id TEXT NOT NULL,
+      album_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${entryIdCheck}),
+      position INTEGER NOT NULL CHECK (position >= 0),
+      PRIMARY KEY (catalog_id, album_id, position),
+      UNIQUE (catalog_id, album_id, entry_id),
+      FOREIGN KEY (catalog_id, album_id) REFERENCES albums (catalog_id, album_id) ON UPDATE CASCADE,
+      FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id) ON UPDATE CASCADE
     ) STRICT;
 
     CREATE TABLE IF NOT EXISTS fingerprints (
@@ -291,6 +352,57 @@ export function catalogV3SchemaSql(): string {
       ON assets (catalog_id, root_id, relative_path);
     CREATE INDEX IF NOT EXISTS album_assets_by_asset
       ON album_assets (catalog_id, asset_id);
+    CREATE INDEX IF NOT EXISTS edit_entries_by_source
+      ON edit_entries (catalog_id, source_id, entry_id);
+    CREATE INDEX IF NOT EXISTS album_entries_by_entry
+      ON album_entries (catalog_id, entry_id);
+
+    CREATE TRIGGER IF NOT EXISTS assets_create_original_entry
+    AFTER INSERT ON assets
+    BEGIN
+      INSERT OR IGNORE INTO edit_entries (
+        catalog_id, entry_id, source_id, is_original, created_at, updated_at
+      ) VALUES (
+        NEW.catalog_id, NEW.asset_id, NEW.asset_id, 1,
+        COALESCE(NEW.observed_at, 0), COALESCE(NEW.observed_at, 0)
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS asset_metadata_create_entry_metadata
+    AFTER INSERT ON asset_metadata
+    BEGIN
+      INSERT OR IGNORE INTO entry_metadata (
+        catalog_id, entry_id, archive, pick, rating, color_label, develop_json,
+        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+        raw_xmp, xmp_state, xmp_mtime, xmp_sha256
+      ) VALUES (
+        NEW.catalog_id, NEW.asset_id, NEW.archive, NEW.pick, NEW.rating,
+        NEW.color_label, NEW.develop_json, NEW.develop_updated_at, NEW.updated_at,
+        NEW.title, NEW.caption, NEW.copyright, NEW.keywords_json, NEW.raw_xmp,
+        NEW.xmp_state, NEW.xmp_mtime, NEW.xmp_sha256
+      );
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS asset_metadata_sync_entry_metadata
+    AFTER UPDATE ON asset_metadata
+    BEGIN
+      UPDATE entry_metadata SET
+        archive = NEW.archive, pick = NEW.pick, rating = NEW.rating,
+        color_label = NEW.color_label, develop_json = NEW.develop_json,
+        develop_updated_at = NEW.develop_updated_at, updated_at = NEW.updated_at,
+        title = NEW.title, caption = NEW.caption, copyright = NEW.copyright,
+        keywords_json = NEW.keywords_json, raw_xmp = NEW.raw_xmp,
+        xmp_state = NEW.xmp_state, xmp_mtime = NEW.xmp_mtime,
+        xmp_sha256 = NEW.xmp_sha256
+      WHERE catalog_id = NEW.catalog_id AND entry_id = NEW.asset_id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS album_assets_create_album_entry
+    AFTER INSERT ON album_assets
+    BEGIN
+      INSERT OR IGNORE INTO album_entries (catalog_id, album_id, entry_id, position)
+      VALUES (NEW.catalog_id, NEW.album_id, NEW.asset_id, NEW.position);
+    END;
     CREATE INDEX IF NOT EXISTS migration_aliases_by_asset
       ON migration_aliases (catalog_id, migration_id, asset_id, legacy_id);
     CREATE INDEX IF NOT EXISTS fingerprints_by_catalog_digest
@@ -354,6 +466,189 @@ export function installCatalogV3Schema(opened: DatabaseSync): CatalogV3SchemaMan
     throw error;
   }
   return verifyCatalogV3Schema(opened);
+}
+
+function normalizeVirtualCopyParents(opened: DatabaseSync): void {
+  opened.exec(`
+    UPDATE edit_entries
+    SET parent_entry_id = (
+      SELECT original.entry_id
+      FROM edit_entries AS original
+      WHERE original.catalog_id = edit_entries.catalog_id
+        AND original.source_id = edit_entries.source_id
+        AND original.is_original = 1
+    )
+    WHERE is_original = 0
+      AND EXISTS (
+        SELECT 1
+        FROM edit_entries AS original
+        WHERE original.catalog_id = edit_entries.catalog_id
+          AND original.source_id = edit_entries.source_id
+          AND original.is_original = 1
+      )
+      AND parent_entry_id IS NOT (
+        SELECT original.entry_id
+        FROM edit_entries AS original
+        WHERE original.catalog_id = edit_entries.catalog_id
+          AND original.source_id = edit_entries.source_id
+          AND original.is_original = 1
+      );
+  `);
+}
+
+export function upgradeCatalogV3IdentitySchema(opened: DatabaseSync): void {
+  const applicationId = pragmaInteger(opened, "application_id");
+  const userVersion = pragmaInteger(opened, "user_version");
+  if (applicationId !== CATALOG_V3_APPLICATION_ID || userVersion !== CATALOG_V3_SCHEMA_VERSION) return;
+  const coreTables = new Set(opened.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+  ).all().flatMap((row) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+    const name = Reflect.get(row, "name");
+    return typeof name === "string" ? [name] : [];
+  }));
+  if (!CATALOG_V3_TABLES.every((table) => coreTables.has(table))) return;
+  const hasIdentityTables = CATALOG_V3_IDENTITY_TABLES.every((table) => coreTables.has(table));
+  const hasDisplayName = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'display_name'",
+  ).get() !== undefined;
+  const hasParentEntryId = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'parent_entry_id'",
+  ).get() !== undefined;
+  const hasTombstonedAt = hasIdentityTables && opened.prepare(
+    "SELECT 1 FROM pragma_table_info('edit_entries') WHERE name = 'tombstoned_at'",
+  ).get() !== undefined;
+  if (hasIdentityTables && hasDisplayName && hasParentEntryId && hasTombstonedAt) {
+    normalizeVirtualCopyParents(opened);
+    return;
+  }
+
+  if (hasIdentityTables) {
+    try {
+      opened.exec(`
+        BEGIN IMMEDIATE;
+        ${hasDisplayName ? "" : "ALTER TABLE edit_entries ADD COLUMN display_name TEXT;"}
+        ${hasParentEntryId ? "" : "ALTER TABLE edit_entries ADD COLUMN parent_entry_id TEXT;"}
+        ${hasTombstonedAt ? "" : "ALTER TABLE edit_entries ADD COLUMN tombstoned_at REAL;"}
+        COMMIT;
+      `);
+    } catch (error) {
+      try {
+        opened.exec("ROLLBACK;");
+      } catch {
+        // SQLite may already have ended the failed upgrade transaction.
+      }
+      throw error;
+    }
+    normalizeVirtualCopyParents(opened);
+    return;
+  }
+
+  try {
+    opened.exec(`
+    BEGIN IMMEDIATE;
+    CREATE TABLE IF NOT EXISTS edit_entries (
+      catalog_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${uuidCheck("entry_id")}),
+      source_id TEXT NOT NULL CHECK (${uuidCheck("source_id")}),
+      is_original INTEGER NOT NULL CHECK (is_original IN (0, 1)),
+      parent_entry_id TEXT,
+      display_name TEXT,
+      tombstoned_at REAL,
+      created_at REAL NOT NULL,
+      updated_at REAL NOT NULL,
+      PRIMARY KEY (catalog_id, entry_id),
+      FOREIGN KEY (catalog_id, source_id) REFERENCES assets (catalog_id, asset_id) ON UPDATE CASCADE
+    ) STRICT;
+    CREATE UNIQUE INDEX IF NOT EXISTS edit_entries_one_original_per_source
+      ON edit_entries (catalog_id, source_id) WHERE is_original = 1;
+    CREATE INDEX IF NOT EXISTS edit_entries_by_source
+      ON edit_entries (catalog_id, source_id, entry_id);
+    CREATE TABLE IF NOT EXISTS entry_metadata (
+      catalog_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${uuidCheck("entry_id")}),
+      archive INTEGER NOT NULL DEFAULT 0 CHECK (archive IN (0, 1)),
+      pick TEXT NOT NULL CHECK (pick IN ('none', 'pick', 'reject')),
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 5),
+      color_label TEXT CHECK (color_label IS NULL OR color_label IN ('red', 'yellow', 'green', 'blue', 'purple')),
+      develop_json TEXT CHECK (develop_json IS NULL OR json_valid(develop_json)),
+      develop_updated_at REAL NOT NULL,
+      updated_at REAL NOT NULL,
+      title TEXT, caption TEXT, copyright TEXT,
+      keywords_json TEXT NOT NULL CHECK (json_valid(keywords_json) AND json_type(keywords_json) = 'array'),
+      raw_xmp TEXT,
+      xmp_state TEXT NOT NULL CHECK (xmp_state IN ('unknown', 'absent', 'preserved', 'malformed')),
+      xmp_mtime REAL,
+      xmp_sha256 TEXT CHECK (${hashCheck("xmp_sha256")}),
+      PRIMARY KEY (catalog_id, entry_id),
+      CHECK ((xmp_state = 'preserved') = (raw_xmp IS NOT NULL)),
+      CHECK (xmp_state <> 'absent' OR raw_xmp IS NULL),
+      FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id) ON UPDATE CASCADE
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS album_entries (
+      catalog_id TEXT NOT NULL,
+      album_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL CHECK (${uuidCheck("entry_id")}),
+      position INTEGER NOT NULL CHECK (position >= 0),
+      PRIMARY KEY (catalog_id, album_id, position),
+      UNIQUE (catalog_id, album_id, entry_id),
+      FOREIGN KEY (catalog_id, album_id) REFERENCES albums (catalog_id, album_id) ON UPDATE CASCADE,
+      FOREIGN KEY (catalog_id, entry_id) REFERENCES edit_entries (catalog_id, entry_id) ON UPDATE CASCADE
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS album_entries_by_entry
+      ON album_entries (catalog_id, entry_id);
+    CREATE TRIGGER IF NOT EXISTS assets_create_original_entry AFTER INSERT ON assets BEGIN
+      INSERT OR IGNORE INTO edit_entries (catalog_id, entry_id, source_id, is_original, created_at, updated_at)
+      VALUES (NEW.catalog_id, NEW.asset_id, NEW.asset_id, 1, COALESCE(NEW.observed_at, 0), COALESCE(NEW.observed_at, 0));
+    END;
+    CREATE TRIGGER IF NOT EXISTS asset_metadata_create_entry_metadata AFTER INSERT ON asset_metadata BEGIN
+      INSERT OR IGNORE INTO entry_metadata (
+        catalog_id, entry_id, archive, pick, rating, color_label, develop_json,
+        develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+        raw_xmp, xmp_state, xmp_mtime, xmp_sha256
+      ) VALUES (
+        NEW.catalog_id, NEW.asset_id, NEW.archive, NEW.pick, NEW.rating, NEW.color_label,
+        NEW.develop_json, NEW.develop_updated_at, NEW.updated_at, NEW.title, NEW.caption,
+        NEW.copyright, NEW.keywords_json, NEW.raw_xmp, NEW.xmp_state, NEW.xmp_mtime, NEW.xmp_sha256
+      );
+    END;
+    CREATE TRIGGER IF NOT EXISTS asset_metadata_sync_entry_metadata AFTER UPDATE ON asset_metadata BEGIN
+      UPDATE entry_metadata SET
+        archive = NEW.archive, pick = NEW.pick, rating = NEW.rating,
+        color_label = NEW.color_label, develop_json = NEW.develop_json,
+        develop_updated_at = NEW.develop_updated_at, updated_at = NEW.updated_at,
+        title = NEW.title, caption = NEW.caption, copyright = NEW.copyright,
+        keywords_json = NEW.keywords_json, raw_xmp = NEW.raw_xmp,
+        xmp_state = NEW.xmp_state, xmp_mtime = NEW.xmp_mtime,
+        xmp_sha256 = NEW.xmp_sha256
+      WHERE catalog_id = NEW.catalog_id AND entry_id = NEW.asset_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS album_assets_create_album_entry AFTER INSERT ON album_assets BEGIN
+      INSERT OR IGNORE INTO album_entries (catalog_id, album_id, entry_id, position)
+      VALUES (NEW.catalog_id, NEW.album_id, NEW.asset_id, NEW.position);
+    END;
+    INSERT OR IGNORE INTO edit_entries (catalog_id, entry_id, source_id, is_original, created_at, updated_at)
+      SELECT catalog_id, asset_id, asset_id, 1, COALESCE(observed_at, 0), COALESCE(observed_at, 0) FROM assets;
+    INSERT OR IGNORE INTO entry_metadata (
+      catalog_id, entry_id, archive, pick, rating, color_label, develop_json,
+      develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+      raw_xmp, xmp_state, xmp_mtime, xmp_sha256
+    ) SELECT catalog_id, asset_id, archive, pick, rating, color_label, develop_json,
+      develop_updated_at, updated_at, title, caption, copyright, keywords_json,
+      raw_xmp, xmp_state, xmp_mtime, xmp_sha256 FROM asset_metadata;
+    INSERT OR IGNORE INTO album_entries (catalog_id, album_id, entry_id, position)
+      SELECT catalog_id, album_id, asset_id, position FROM album_assets;
+    COMMIT;
+  `);
+  } catch (error) {
+    try {
+      opened.exec("ROLLBACK;");
+    } catch {
+      // SQLite may already have ended the failed upgrade transaction.
+    }
+    throw error;
+  }
+  normalizeVirtualCopyParents(opened);
 }
 
 export function isCatalogV3DatabaseEmpty(opened: DatabaseSync): boolean {

@@ -13,6 +13,7 @@ import {
   type TransferFunction,
   type V3SourceSignature,
 } from "../process";
+import { parseMatrixCameraProfile } from "../../camera-profiles/matrix";
 import type { RenderQualityRequest } from "../render-contract";
 
 export const MAX_SOURCE_EDGE = 200_000;
@@ -325,11 +326,19 @@ function color(value: unknown, path: string): SourceColorEncoding {
 
 function inputProfile(value: unknown, path: string): InputProfileState {
   const input = strictRecord(value, path, [
-    "kind", "profile", "decoderId", "decoderColorSpace", "reason",
+    "kind", "profile", "stage", "transform", "decoderId", "decoderColorSpace", "reason",
   ]);
   switch (input.kind) {
     case "available":
-      return { kind: "available", profile: profileReference(input.profile, `${path}.profile`) };
+      if (input.stage !== "before-develop-tone") {
+        throw new Error(`${path}.stage is not supported.`);
+      }
+      return {
+        kind: "available",
+        profile: profileReference(input.profile, `${path}.profile`),
+        stage: "before-develop-tone",
+        transform: parseMatrixCameraProfile(input.transform),
+      };
     case "decoder-default":
       return {
         kind: "decoder-default",

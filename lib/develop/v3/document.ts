@@ -1,36 +1,37 @@
-import type { AspectRatioPresetId } from "../crop-geometry";
+import type { AspectRatioPresetId } from "../crop-geometry.ts";
 import {
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_ID,
   DEVELOP_PROCESS_VERSION,
-} from "../process";
+} from "../process.ts";
 import type {
   CurveSettings,
   DevelopDocument,
   MixerSettings,
-} from "../types";
-import type { DevelopAssetRef } from "./assets";
-import type { CleanupLayer } from "./cleanup";
+} from "../types.ts";
+import type { DevelopAssetRef } from "./assets.ts";
+import type { CleanupLayer } from "./cleanup.ts";
 import {
   DEFAULT_LENS_BLUR_SETTINGS,
   type LensBlurSettings,
-} from "./lens-blur";
-import type { ColorGradingSettings } from "./color-grading";
+} from "./lens-blur.ts";
+import type { ColorGradingSettings } from "./color-grading.ts";
 import type {
   DevelopSharpeningSettings,
   StandardDenoiseSettings,
-} from "./detail";
-import type { GeometryFrame, Homography, UserOrientation } from "./geometry";
-import { IDENTITY_HOMOGRAPHY } from "./geometry";
-import type { MonochromeSettings } from "./monochrome";
-import { NEUTRAL_MONOCHROME_PROFILE } from "./monochrome";
-import type { PointColorSettings } from "./point-color";
-import type { InputCalibration } from "./profiles";
-import { IDENTITY_MATRIX_3 } from "./profiles";
-import type { DefringeSettings, OpticsAmounts } from "./optics";
-import type { PresenceSettings } from "./presence";
-import type { WhiteBalanceValues } from "./white-balance";
-import type { LocalMaskV3 } from "./masking";
+} from "./detail.ts";
+import type { GeometryFrame, Homography, UserOrientation } from "./geometry.ts";
+import { IDENTITY_HOMOGRAPHY } from "./geometry.ts";
+import type { MonochromeSettings } from "./monochrome.ts";
+import { NEUTRAL_MONOCHROME_PROFILE } from "./monochrome.ts";
+import type { PointColorSettings } from "./point-color.ts";
+import type { InputCalibration } from "./profiles.ts";
+import { IDENTITY_MATRIX_3 } from "./profiles.ts";
+import type { DefringeSettings, OpticsAmounts } from "./optics.ts";
+import type { PresenceSettings } from "./presence.ts";
+import type { WhiteBalanceValues } from "./white-balance.ts";
+import type { LocalMaskV3 } from "./masking.ts";
+import type { AppliedPresetState } from "../presets/schema.ts";
 
 export const LEGACY_V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-1";
 export const V3_DOCUMENT_SCHEMA_REVISION = "darkroom-v3-document-2";
@@ -204,6 +205,7 @@ export interface DevelopDocumentV3 {
   readonly effects: { readonly postCrop: PostCropEffects };
   readonly lensBlur: LensBlurSettings;
   readonly hdr: HdrEdits;
+  readonly appliedPreset: AppliedPresetState | null;
   readonly compatibility: V3Compatibility;
 }
 
@@ -380,6 +382,7 @@ export const DEFAULT_V3_DEVELOP_DOCUMENT = {
     sdrBrightness: 0,
     sdrContrast: 0,
   },
+  appliedPreset: null,
   compatibility: {
     mappingRevision: null,
     legacyV2: null,
@@ -429,5 +432,6 @@ export function canonicalV3DocumentHashInput(document: DevelopDocumentV3): strin
     effects: document.effects,
     lensBlur: document.lensBlur,
     hdr: document.hdr,
+    appliedPreset: document.appliedPreset,
   });
 }

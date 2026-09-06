@@ -149,6 +149,50 @@ import {
   type DevelopAssetTransitionResult,
 } from "../lib/develop/v3/asset-store.ts";
 import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryCommitResult,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryLoadResult,
+  parseDevelopHistoryProjection,
+  parseDevelopHistoryProjectionWriteInput,
+  parseDevelopHistoryRef,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryRevision,
+  parseDevelopHistoryTargetInput,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
+  type DevelopHistoryListInput,
+  type DevelopHistoryLoadInput,
+  type DevelopHistoryLoadResult,
+  type DevelopHistoryProjection,
+  type DevelopHistoryProjectionWriteInput,
+  type DevelopHistoryRef,
+  type DevelopHistoryRefMutationInput,
+  type DevelopHistoryRevision,
+  type DevelopHistoryTargetInput,
+} from "../lib/develop/history.ts";
+import {
+  parseDevelopDefaultRuleDeleteRequest,
+  parseDevelopDefaultRuleEnabledRequest,
+  parseDevelopDefaultsCancelRequest,
+  parseDevelopDefaultsEntryRequest,
+  parseDevelopDefaultsInstallRequest,
+  parseDevelopDefaultsPreviewRequest,
+  parseDevelopDefaultsPreviewResult,
+  parseDevelopDefaultsProductionResult,
+  type DevelopDefaultRuleDeleteRequest,
+  type DevelopDefaultRuleEnabledRequest,
+  type DevelopDefaultsCancelRequest,
+  type DevelopDefaultsEntryRequest,
+  type DevelopDefaultsInstallRequest,
+  type DevelopDefaultsPreviewRequest,
+  type DevelopDefaultsPreviewResult,
+  type DevelopDefaultsProductionResult,
+} from "../lib/develop/defaults/api.ts";
+import { parseInstalledDevelopDefault, type InstalledDevelopDefault } from "../lib/develop/defaults/installed.ts";
+import { parseDevelopDefaultRule, type DevelopDefaultRule } from "../lib/develop/defaults/schema.ts";
+import {
   parseDevelopJobAcceptanceResult,
   parseDevelopJobAcceptRequest,
   parseDevelopJobRetryRequest,
@@ -172,6 +216,55 @@ import {
   type DevelopJobSnapshot,
   type GenerativeRemoveConsentReceipt,
 } from "../lib/develop/v3/jobs.ts";
+import {
+  parseCameraProfileConflictRequest,
+  parseCameraProfileImportResult,
+  parseCameraProfileRegistrySnapshot,
+  parseCameraProfileRemoveRequest,
+  type CameraProfileConflictRequest,
+  type CameraProfileImportResult,
+  type CameraProfileRegistrySnapshot,
+  type CameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry.ts";
+import {
+  parseDevelopPresetConflictRequest,
+  parseDevelopPresetDeleteRequest,
+  parseDevelopPresetFavoriteRequest,
+  parseDevelopPresetImportResult,
+  parseDevelopPresetList,
+  parseDevelopPresetSearchRequest,
+  type DevelopPresetConflictRequest,
+  type DevelopPresetDeleteRequest,
+  type DevelopPresetFavoriteRequest,
+  type DevelopPresetImportResult,
+  type DevelopPresetSearchRequest,
+} from "../lib/develop/presets/api.ts";
+import {
+  parseDevelopPresetRecord,
+  type DevelopPresetRecord,
+} from "../lib/develop/presets/schema.ts";
+import {
+  parseDevelopClipboardGroups,
+  parseDevelopClipboardPayload,
+  parseDevelopClipboardReadResult,
+  type DevelopClipboardGroup,
+  type DevelopClipboardPayload,
+  type DevelopClipboardReadResult,
+} from "../lib/develop/clipboard/schema.ts";
+import {
+  parseDevelopBatchAutoSyncRequest,
+  parseDevelopBatchListRequest,
+  parseDevelopBatchReceiptList,
+  parseDevelopBatchStartRequest,
+  parseDevelopBatchTargetRequest,
+  parseDevelopBatchUpdate,
+  type DevelopBatchAutoSyncRequest,
+  type DevelopBatchListRequest,
+  type DevelopBatchStartRequest,
+  type DevelopBatchTargetRequest,
+  type DevelopBatchUpdate,
+} from "../lib/develop/batch/api.ts";
+import { parseDevelopBatchAutoSyncState, parseDevelopBatchReceipt, type DevelopBatchAutoSyncState, type DevelopBatchReceipt } from "../lib/develop/batch/domain.ts";
 
 const darkroom = {
   isElectron: true as const,
@@ -395,6 +488,261 @@ const darkroom = {
       parseDevelopAssetReadRequest(request),
     );
     return parseDevelopAssetReadResult(result);
+  },
+
+  async developHistoryLoad(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadResult> {
+    return parseDevelopHistoryLoadResult(await ipcRenderer.invoke(
+      "darkroom:develop-history-load",
+      parseDevelopHistoryLoadInput(input),
+    ));
+  },
+
+  async developHistoryList(input: DevelopHistoryListInput): Promise<readonly DevelopHistoryRevision[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-list", parseDevelopHistoryListInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history list response is invalid.");
+    return result.map(parseDevelopHistoryRevision);
+  },
+
+  async developHistoryCommit(input: DevelopHistoryCommitInput): Promise<DevelopHistoryCommitResult> {
+    return parseDevelopHistoryCommitResult(await ipcRenderer.invoke(
+      "darkroom:develop-history-commit",
+      parseDevelopHistoryCommitInput(input),
+    ));
+  },
+
+  async developHistoryRefs(input: DevelopHistoryTargetInput): Promise<readonly DevelopHistoryRef[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-refs", parseDevelopHistoryTargetInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history refs response is invalid.");
+    return result.map(parseDevelopHistoryRef);
+  },
+
+  async developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-ref-mutate", parseDevelopHistoryRefMutationInput(input));
+    if (!Array.isArray(result)) throw new Error("Develop history refs response is invalid.");
+    return result.map(parseDevelopHistoryRef);
+  },
+
+  async developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-history-projection-get", parseDevelopHistoryTargetInput(input));
+    return result === null ? null : parseDevelopHistoryProjection(result);
+  },
+
+  async developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection> {
+    return parseDevelopHistoryProjection(await ipcRenderer.invoke(
+      "darkroom:develop-history-projection-set",
+      parseDevelopHistoryProjectionWriteInput(input),
+    ));
+  },
+
+  async developDefaultsList(): Promise<readonly DevelopDefaultRule[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-defaults-list");
+    if (!Array.isArray(result)) throw new Error("Develop defaults list response is invalid.");
+    return result.map(parseDevelopDefaultRule);
+  },
+
+  async developDefaultsReferencedPresets(): Promise<readonly DevelopPresetRecord[]> {
+    return parseDevelopPresetList(await ipcRenderer.invoke("darkroom:develop-defaults-referenced-presets"));
+  },
+
+  async developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-create", parseDevelopDefaultRule(rule)));
+  },
+
+  async developDefaultsUpdate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-update", parseDevelopDefaultRule(rule)));
+  },
+
+  async developDefaultsSetEnabled(request: DevelopDefaultRuleEnabledRequest): Promise<DevelopDefaultRule> {
+    return parseDevelopDefaultRule(await ipcRenderer.invoke("darkroom:develop-defaults-enabled", parseDevelopDefaultRuleEnabledRequest(request)));
+  },
+
+  async developDefaultsDelete(request: DevelopDefaultRuleDeleteRequest): Promise<void> {
+    await ipcRenderer.invoke("darkroom:develop-defaults-delete", parseDevelopDefaultRuleDeleteRequest(request));
+  },
+
+  async developDefaultsPreview(request: DevelopDefaultsPreviewRequest): Promise<DevelopDefaultsPreviewResult> {
+    return parseDevelopDefaultsPreviewResult(await ipcRenderer.invoke("darkroom:develop-defaults-preview", parseDevelopDefaultsPreviewRequest(request)));
+  },
+
+  async developDefaultsInstalled(request: DevelopDefaultsEntryRequest): Promise<InstalledDevelopDefault | null> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-defaults-installed", parseDevelopDefaultsEntryRequest(request));
+    return result === null ? null : parseInstalledDevelopDefault(result);
+  },
+
+  async developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult> {
+    return parseDevelopDefaultsProductionResult(await ipcRenderer.invoke("darkroom:develop-defaults-install", parseDevelopDefaultsInstallRequest(request)));
+  },
+
+  async developDefaultsCancel(request: DevelopDefaultsCancelRequest): Promise<void> {
+    await ipcRenderer.invoke("darkroom:develop-defaults-cancel", parseDevelopDefaultsCancelRequest(request));
+  },
+
+  async cameraProfilesList(): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-list");
+    return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async cameraProfilesImport(): Promise<CameraProfileImportResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-import");
+    return parseCameraProfileImportResult(result);
+  },
+
+  async cameraProfilesResolveConflict(
+    request: CameraProfileConflictRequest,
+  ): Promise<CameraProfileImportResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:camera-profiles-resolve-conflict",
+      parseCameraProfileConflictRequest(request),
+    );
+    return parseCameraProfileImportResult(result);
+  },
+
+  async cameraProfilesRescan(): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:camera-profiles-rescan");
+    return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async cameraProfilesRemove(
+    request: CameraProfileRemoveRequest,
+  ): Promise<CameraProfileRegistrySnapshot> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:camera-profiles-remove",
+      parseCameraProfileRemoveRequest(request),
+    );
+    return parseCameraProfileRegistrySnapshot(result);
+  },
+
+  async developPresetsList(
+    request: DevelopPresetSearchRequest,
+  ): Promise<readonly DevelopPresetRecord[]> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-list",
+      parseDevelopPresetSearchRequest(request),
+    );
+    return parseDevelopPresetList(result);
+  },
+
+  async developPresetsCreate(
+    preset: DevelopPresetRecord,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-create",
+      parseDevelopPresetRecord(preset),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  async developPresetsUpdate(
+    preset: DevelopPresetRecord,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-update",
+      parseDevelopPresetRecord(preset),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  async developPresetsFavorite(
+    request: DevelopPresetFavoriteRequest,
+  ): Promise<DevelopPresetRecord> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-favorite",
+      parseDevelopPresetFavoriteRequest(request),
+    );
+    return parseDevelopPresetRecord(result);
+  },
+
+  developPresetsDelete(request: DevelopPresetDeleteRequest): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-presets-delete",
+      parseDevelopPresetDeleteRequest(request),
+    );
+  },
+
+  async developPresetsImport(): Promise<DevelopPresetImportResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-presets-import");
+    return parseDevelopPresetImportResult(result);
+  },
+
+  async developPresetsResolveConflict(
+    request: DevelopPresetConflictRequest,
+  ): Promise<DevelopPresetImportResult> {
+    const result: unknown = await ipcRenderer.invoke(
+      "darkroom:develop-presets-resolve-conflict",
+      parseDevelopPresetConflictRequest(request),
+    );
+    return parseDevelopPresetImportResult(result);
+  },
+
+  developClipboardWrite(payload: DevelopClipboardPayload): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-clipboard-write",
+      parseDevelopClipboardPayload(payload),
+    );
+  },
+
+  async developClipboardRead(): Promise<DevelopClipboardReadResult> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-clipboard-read");
+    return parseDevelopClipboardReadResult(result);
+  },
+
+  async developClipboardGroupsGet(): Promise<readonly DevelopClipboardGroup[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-clipboard-groups-get");
+    return parseDevelopClipboardGroups(result);
+  },
+
+  developClipboardGroupsSet(groups: readonly DevelopClipboardGroup[]): Promise<void> {
+    return ipcRenderer.invoke(
+      "darkroom:develop-clipboard-groups-set",
+      parseDevelopClipboardGroups(groups),
+    );
+  },
+
+  async developBatchList(request: DevelopBatchListRequest): Promise<readonly DevelopBatchReceipt[]> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-list", parseDevelopBatchListRequest(request));
+    return parseDevelopBatchReceiptList(result);
+  },
+
+  async developBatchStart(request: DevelopBatchStartRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-start", parseDevelopBatchStartRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchCancel(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-cancel", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchRetry(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-retry", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  async developBatchUndo(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-undo", parseDevelopBatchTargetRequest(request));
+    return parseDevelopBatchReceipt(result);
+  },
+
+  developBatchAutoEnable(request: DevelopBatchAutoSyncRequest): Promise<void> {
+    return ipcRenderer.invoke("darkroom:develop-batch-auto-enable", parseDevelopBatchAutoSyncRequest(request));
+  },
+
+  developBatchAutoDisable(request: CatalogSessionRequest): Promise<void> {
+    return ipcRenderer.invoke("darkroom:develop-batch-auto-disable", parseCatalogSessionRequest(request));
+  },
+
+  async developBatchAutoState(request: CatalogSessionRequest): Promise<DevelopBatchAutoSyncState> {
+    const result: unknown = await ipcRenderer.invoke("darkroom:develop-batch-auto-state", parseCatalogSessionRequest(request));
+    return parseDevelopBatchAutoSyncState(result);
+  },
+
+  onDevelopBatchUpdated(listener: (update: DevelopBatchUpdate) => void): () => void {
+    if (typeof listener !== "function") throw new Error("Develop batch listener must be a function.");
+    const wrapped = (_event: IpcRendererEvent, value: unknown) => {
+      try { listener(parseDevelopBatchUpdate(value)); } catch { /* ignore malformed main events */ }
+    };
+    ipcRenderer.on("darkroom:develop-batch-updated", wrapped);
+    return () => ipcRenderer.removeListener("darkroom:develop-batch-updated", wrapped);
   },
 
   async developAssetCollectGarbage(

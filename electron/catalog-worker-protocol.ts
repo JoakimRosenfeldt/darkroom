@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   parseAssetId,
   parseCatalogId,
+  parseEntryId,
   parseOperationId,
   parseRootId,
   type AssetId,
@@ -59,6 +60,42 @@ import {
   type CatalogLiveQueryInput,
   type CatalogLiveState,
 } from "../lib/catalog/live.ts";
+import {
+  parseDevelopBatchCommand,
+  parseDevelopBatchCommandResult,
+  type DevelopBatchCommand,
+  type DevelopBatchCommandResult,
+} from "../lib/develop/batch/domain.ts";
+import {
+  parseDevelopHistoryCommitInput,
+  parseDevelopHistoryCommitResult,
+  parseDevelopHistoryListInput,
+  parseDevelopHistoryLoadInput,
+  parseDevelopHistoryLoadResult,
+  parseDevelopHistoryProjection,
+  parseDevelopHistoryProjectionWriteInput,
+  parseDevelopHistoryRef,
+  parseDevelopHistoryRefMutationInput,
+  parseDevelopHistoryRevision,
+  type DevelopHistoryCommitInput,
+  type DevelopHistoryCommitResult,
+  type DevelopHistoryListInput,
+  type DevelopHistoryLoadInput,
+  type DevelopHistoryLoadResult,
+  type DevelopHistoryProjection,
+  type DevelopHistoryProjectionWriteInput,
+  type DevelopHistoryRef,
+  type DevelopHistoryRefMutationInput,
+  type DevelopHistoryRevision,
+} from "../lib/develop/history.ts";
+import {
+  parseDevelopDefaultInstallInput,
+  parseDevelopDefaultInstallResult,
+  parseInstalledDevelopDefault,
+  type DevelopDefaultInstallInput,
+  type DevelopDefaultInstallResult,
+  type InstalledDevelopDefault,
+} from "../lib/develop/defaults/installed.ts";
 import {
   parseCatalogFaultPoint,
   parseCatalogFaultStage,
@@ -367,6 +404,27 @@ export interface CatalogWorkerCatalogLiveApplyResponse {
   readonly result: CatalogLiveApplyResult;
 }
 
+export interface CatalogWorkerDevelopHistoryLoadRequest { readonly kind: "develop-history-load"; readonly requestId: string; readonly input: DevelopHistoryLoadInput }
+export interface CatalogWorkerDevelopHistoryLoadResponse { readonly kind: "develop-history-load"; readonly requestId: string; readonly result: DevelopHistoryLoadResult }
+export interface CatalogWorkerDevelopHistoryListRequest { readonly kind: "develop-history-list"; readonly requestId: string; readonly input: DevelopHistoryListInput }
+export interface CatalogWorkerDevelopHistoryListResponse { readonly kind: "develop-history-list"; readonly requestId: string; readonly result: readonly DevelopHistoryRevision[] }
+export interface CatalogWorkerDevelopHistoryCommitRequest { readonly kind: "develop-history-commit"; readonly requestId: string; readonly input: DevelopHistoryCommitInput }
+export interface CatalogWorkerDevelopHistoryCommitResponse { readonly kind: "develop-history-commit"; readonly requestId: string; readonly result: DevelopHistoryCommitResult }
+export interface CatalogWorkerDevelopHistoryRefsRequest { readonly kind: "develop-history-refs"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopHistoryRefsResponse { readonly kind: "develop-history-refs"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+export interface CatalogWorkerDevelopHistoryRefMutateRequest { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly input: DevelopHistoryRefMutationInput }
+export interface CatalogWorkerDevelopHistoryRefMutateResponse { readonly kind: "develop-history-ref-mutate"; readonly requestId: string; readonly result: readonly DevelopHistoryRef[] }
+export interface CatalogWorkerDevelopHistoryProjectionGetRequest { readonly kind: "develop-history-projection-get"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopHistoryProjectionGetResponse { readonly kind: "develop-history-projection-get"; readonly requestId: string; readonly result: DevelopHistoryProjection | null }
+export interface CatalogWorkerDevelopHistoryProjectionSetRequest { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly input: DevelopHistoryProjectionWriteInput }
+export interface CatalogWorkerDevelopHistoryProjectionSetResponse { readonly kind: "develop-history-projection-set"; readonly requestId: string; readonly result: DevelopHistoryProjection }
+export interface CatalogWorkerDevelopDefaultInstallRequest { readonly kind: "develop-default-install"; readonly requestId: string; readonly input: DevelopDefaultInstallInput }
+export interface CatalogWorkerDevelopDefaultInstallResponse { readonly kind: "develop-default-install"; readonly requestId: string; readonly result: DevelopDefaultInstallResult }
+export interface CatalogWorkerDevelopDefaultInstalledGetRequest { readonly kind: "develop-default-installed-get"; readonly requestId: string; readonly catalogId: CatalogId; readonly entryId: ReturnType<typeof parseEntryId> }
+export interface CatalogWorkerDevelopDefaultInstalledGetResponse { readonly kind: "develop-default-installed-get"; readonly requestId: string; readonly result: InstalledDevelopDefault | null }
+export interface CatalogWorkerDevelopBatchRequest { readonly kind: "develop-batch"; readonly requestId: string; readonly command: DevelopBatchCommand }
+export interface CatalogWorkerDevelopBatchResponse { readonly kind: "develop-batch"; readonly requestId: string; readonly result: DevelopBatchCommandResult }
+
 export interface CatalogWorkerTestTracerRunRequest {
   readonly kind: "test-tracer-run";
   readonly requestId: string;
@@ -435,6 +493,16 @@ export type CatalogWorkerRequest =
   | CatalogWorkerCatalogLiveCreateRequest
   | CatalogWorkerCatalogLiveQueryRequest
   | CatalogWorkerCatalogLiveApplyRequest
+  | CatalogWorkerDevelopHistoryLoadRequest
+  | CatalogWorkerDevelopHistoryListRequest
+  | CatalogWorkerDevelopHistoryCommitRequest
+  | CatalogWorkerDevelopHistoryRefsRequest
+  | CatalogWorkerDevelopHistoryRefMutateRequest
+  | CatalogWorkerDevelopHistoryProjectionGetRequest
+  | CatalogWorkerDevelopHistoryProjectionSetRequest
+  | CatalogWorkerDevelopDefaultInstallRequest
+  | CatalogWorkerDevelopDefaultInstalledGetRequest
+  | CatalogWorkerDevelopBatchRequest
   | CatalogWorkerTestTracerRunRequest
   | CatalogWorkerTestTracerRecoverRequest
   | CatalogWorkerTestTracerInspectRequest;
@@ -492,6 +560,16 @@ export type CatalogWorkerResponse =
   | CatalogWorkerCatalogLiveCreateResponse
   | CatalogWorkerCatalogLiveQueryResponse
   | CatalogWorkerCatalogLiveApplyResponse
+  | CatalogWorkerDevelopHistoryLoadResponse
+  | CatalogWorkerDevelopHistoryListResponse
+  | CatalogWorkerDevelopHistoryCommitResponse
+  | CatalogWorkerDevelopHistoryRefsResponse
+  | CatalogWorkerDevelopHistoryRefMutateResponse
+  | CatalogWorkerDevelopHistoryProjectionGetResponse
+  | CatalogWorkerDevelopHistoryProjectionSetResponse
+  | CatalogWorkerDevelopDefaultInstallResponse
+  | CatalogWorkerDevelopDefaultInstalledGetResponse
+  | CatalogWorkerDevelopBatchResponse
   | CatalogWorkerTestTracerRunResponse
   | CatalogWorkerTestTracerRecoverResponse
   | CatalogWorkerTestTracerInspectResponse
@@ -1285,6 +1363,26 @@ function parseRequestRecord(record: RecordValue): CatalogWorkerRequest {
       return { kind, requestId, input: parseCatalogLiveQueryInput(record.input) };
     case "live-apply":
       return { kind, requestId, input: parseCatalogLiveApplyInput(record.input) };
+    case "develop-history-load":
+      return { kind, requestId, input: parseDevelopHistoryLoadInput(record.input) };
+    case "develop-history-list":
+      return { kind, requestId, input: parseDevelopHistoryListInput(record.input) };
+    case "develop-history-commit":
+      return { kind, requestId, input: parseDevelopHistoryCommitInput(record.input) };
+    case "develop-history-refs":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
+    case "develop-history-ref-mutate":
+      return { kind, requestId, input: parseDevelopHistoryRefMutationInput(record.input) };
+    case "develop-history-projection-get":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
+    case "develop-history-projection-set":
+      return { kind, requestId, input: parseDevelopHistoryProjectionWriteInput(record.input) };
+    case "develop-default-install":
+      return { kind, requestId, input: parseDevelopDefaultInstallInput(record.input) };
+    case "develop-default-installed-get":
+      return { kind, requestId, catalogId: requiredCatalogId(record), entryId: parseEntryId(record.entryId) };
+    case "develop-batch":
+      return { kind, requestId, command: parseDevelopBatchCommand(record.command) };
     case "test-tracer-run":
       return {
         kind,
@@ -1453,6 +1551,34 @@ function parseResponseRecord(record: RecordValue): CatalogWorkerResponse {
     case "live-apply":
       if (requestId === null) throw new Error("Catalog live apply response needs a requestId.");
       return { kind, requestId, result: parseCatalogLiveApplyResult(requiredRecord(record.result, "live apply result")) };
+    case "develop-history-load":
+      if (requestId === null) throw new Error("Develop history load response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryLoadResult(record.result) };
+    case "develop-history-list":
+      if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history list response is invalid.");
+      return { kind, requestId, result: record.result.map(parseDevelopHistoryRevision) };
+    case "develop-history-commit":
+      if (requestId === null) throw new Error("Develop history commit response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryCommitResult(record.result) };
+    case "develop-history-refs":
+    case "develop-history-ref-mutate":
+      if (requestId === null || !Array.isArray(record.result)) throw new Error("Develop history refs response is invalid.");
+      return { kind, requestId, result: record.result.map(parseDevelopHistoryRef) };
+    case "develop-history-projection-get":
+      if (requestId === null) throw new Error("Develop history projection response needs a requestId.");
+      return { kind, requestId, result: record.result === null ? null : parseDevelopHistoryProjection(record.result) };
+    case "develop-history-projection-set":
+      if (requestId === null) throw new Error("Develop history projection response needs a requestId.");
+      return { kind, requestId, result: parseDevelopHistoryProjection(record.result) };
+    case "develop-default-install":
+      if (requestId === null) throw new Error("Develop default install response needs a requestId.");
+      return { kind, requestId, result: parseDevelopDefaultInstallResult(record.result) };
+    case "develop-default-installed-get":
+      if (requestId === null) throw new Error("Installed Develop default response needs a requestId.");
+      return { kind, requestId, result: record.result === null ? null : parseInstalledDevelopDefault(record.result) };
+    case "develop-batch":
+      if (requestId === null) throw new Error("Develop batch response needs a requestId.");
+      return { kind, requestId, result: parseDevelopBatchCommandResult(record.result) };
     case "test-tracer-run":
     case "test-tracer-recover":
     case "test-tracer-inspect":

@@ -8,10 +8,13 @@ import {
   cancelCatalogScan,
   clearSessionCatalog,
   closeActiveCatalog,
+  createVirtualCopy as createVirtualCopySession,
   createCatalog as createCatalogSession,
+  deleteVirtualCopy as deleteVirtualCopySession,
   getActiveCatalogView,
   queryActiveCatalog,
   relinkCatalogRoot as relinkCatalogRootSession,
+  renameVirtualCopy as renameVirtualCopySession,
   removeCatalog as removeCatalogSession,
   renameActiveCatalog,
   scanCatalogRoot,
@@ -28,7 +31,9 @@ import type {
   CatalogSummary,
 } from "@/lib/catalog/api";
 import {
+  parseEntryId,
   createOperationId,
+  type AssetId,
   type CatalogId,
   type OperationId,
   type RootId,
@@ -73,6 +78,7 @@ import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
+import { getDevelopSession } from "@/lib/develop/session";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import {
   parseMetadataXmp,
@@ -236,7 +242,17 @@ interface LibraryStore {
     entryId: string,
     flat: readonly string[],
     hierarchical: readonly string[],
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
   ) => void;
+  hydrateEntryKeywordsDurably: (
+    entryId: string,
+    flat: readonly string[],
+    hierarchical: readonly string[],
+    metadataPatch?: SidecarMetadataPatch,
+    sourceUpdatedAt?: number,
+  ) => Promise<void>;
+  persistEntryKeywords: (entryId: string) => Promise<void>;
   stackEntries: (entryIds: string[]) => string;
   addEntriesToStack: (stackId: string, entryIds: string[]) => void;
   removeEntriesFromStack: (stackId: string, entryIds: string[]) => void;
@@ -246,6 +262,9 @@ interface LibraryStore {
   excludeEntries: (entryIds: string[]) => void;
   restoreExcludedEntries: (entryIds: string[]) => void;
   trashExactDuplicates: (keeperId: string, targetIds: string[]) => Promise<ExactDuplicateTrashResult>;
+  createVirtualCopy: (entryId: string, displayName?: string) => Promise<string>;
+  renameVirtualCopy: (entryId: string, displayName: string) => Promise<void>;
+  deleteVirtualCopy: (entryId: string) => Promise<void>;
   deleteEntriesFromDisk: (entryIds: string[]) => Promise<void>;
   createCatalog: (displayName: string) => Promise<void>;
   addCatalogRoot: () => Promise<void>;
@@ -357,6 +376,14 @@ function pruneWorkspaceForEntries(
   const analysisByEntryId = Object.fromEntries(
     Object.entries(workspace.analysisByEntryId).filter(([entryId]) => validEntryIds.has(entryId)),
   );
+  const metadataOverridesByEntryId = Object.fromEntries(
+    Object.entries(workspace.metadataOverridesByEntryId)
+      .filter(([entryId]) => validEntryIds.has(entryId)),
+  );
+  const metadataSyncByEntryId = Object.fromEntries(
+    Object.entries(workspace.metadataSyncByEntryId)
+      .filter(([entryId]) => validEntryIds.has(entryId)),
+  );
   return {
     ...workspace,
     quickEntryIds: workspace.quickEntryIds.filter((id) => validEntryIds.has(id)),
@@ -364,6 +391,8 @@ function pruneWorkspaceForEntries(
     archiveMemberships: workspace.archiveMemberships.filter((item) => validEntryIds.has(item.entryId)),
     excludedEntryIds: workspace.excludedEntryIds.filter((id) => validEntryIds.has(id)),
     analysisByEntryId,
+    metadataOverridesByEntryId,
+    metadataSyncByEntryId,
     stacks: workspace.stacks.flatMap((stack) => {
       const entryIds = stack.entryIds.filter((id) => validEntryIds.has(id));
       if (entryIds.length < 2) return [];
@@ -375,6 +404,101 @@ function pruneWorkspaceForEntries(
       }];
     }),
   };
+}
+
+function cloneWorkspaceEntryState(
+  workspace: LibraryWorkspaceState,
+  sourceWorkspace: LibraryWorkspaceState,
+  sourceEntryId: string,
+  entryId: string,
+): LibraryWorkspaceState {
+  const metadataOverrides = sourceWorkspace.metadataOverridesByEntryId[sourceEntryId];
+  const entryKeywordIds = sourceWorkspace.entryKeywordIds[sourceEntryId];
+  const analysis = sourceWorkspace.analysisByEntryId[sourceEntryId];
+  const archiveMembership = sourceWorkspace.archiveMemberships.find(
+    (item) => item.entryId === sourceEntryId,
+  );
+  return {
+    ...workspace,
+    metadataOverridesByEntryId: metadataOverrides === undefined
+      ? workspace.metadataOverridesByEntryId
+      : {
+          ...workspace.metadataOverridesByEntryId,
+          [entryId]: structuredClone(metadataOverrides),
+        },
+    entryKeywordIds: entryKeywordIds === undefined
+      ? workspace.entryKeywordIds
+      : { ...workspace.entryKeywordIds, [entryId]: [...entryKeywordIds] },
+    analysisByEntryId: analysis === undefined
+      ? workspace.analysisByEntryId
+      : { ...workspace.analysisByEntryId, [entryId]: structuredClone(analysis) },
+    archiveMemberships: archiveMembership === undefined
+      ? workspace.archiveMemberships
+      : [
+          ...workspace.archiveMemberships,
+          { ...structuredClone(archiveMembership), entryId },
+        ],
+  };
+}
+
+interface CatalogSessionBinding {
+  readonly catalogId: CatalogId;
+  readonly sessionId: SessionId;
+}
+
+function catalogSessionIsCurrent(
+  binding: CatalogSessionBinding,
+  get: () => LibraryStore,
+): boolean {
+  const current = get();
+  return current.catalogId === binding.catalogId && current.sessionId === binding.sessionId;
+}
+
+function requireCatalogSession(
+  binding: CatalogSessionBinding,
+  get: () => LibraryStore,
+  message: string,
+): void {
+  if (!catalogSessionIsCurrent(binding, get)) throw new Error(message);
+}
+
+function removeEntriesForAssets(
+  assetIds: ReadonlySet<AssetId>,
+  binding: CatalogSessionBinding,
+  set: (partial: Partial<LibraryStore>) => void,
+  get: () => LibraryStore,
+  sync = true,
+): void {
+  if (assetIds.size === 0) return;
+  requireCatalogSession(
+    binding,
+    get,
+    "Catalog changed before removed photos could be reconciled. Reopen the original catalog.",
+  );
+  const current = get();
+  const entries = current.entries.filter((entry) => !assetIds.has(entry.assetId));
+  const remainingIds = new Set<string>(entries.map((entry) => entry.id));
+  const entryMetadata = pruneMetadataForEntries(current.entryMetadata, remainingIds);
+  const albums = pruneAlbumsForEntries(current.albums, remainingIds);
+  const archivedEntryIds = current.archivedEntryIds.filter((id) => remainingIds.has(id));
+  const libraryWorkspace = pruneWorkspaceForEntries(current.libraryWorkspace, remainingIds);
+  const visible = current.catalogView.type === "archive"
+    ? filterOnlyArchivedEntries(entries, archivedEntryIds)
+    : filterArchivedEntries(entries, archivedEntryIds);
+  set({
+    entries,
+    entryMetadata,
+    albums,
+    archivedEntryIds,
+    libraryWorkspace,
+    importError: null,
+    ...restoreSelection(
+      visible,
+      current.selectedEntryIds.filter((id) => remainingIds.has(id)),
+      current.selectionAnchorId,
+    ),
+  });
+  if (sync) scheduleStateSync(set, get);
 }
 
 function keywordPath(
@@ -716,15 +840,16 @@ function startMetadataAnalysis(
     return;
   }
   const requestedIds = options.entryIds === undefined ? null : new Set(options.entryIds);
-  const entryIds = current.entries
+  const analysisEntries = current.entries
     .filter((entry) => requestedIds === null || requestedIds.has(entry.id))
     .filter((entry) => (
       options.force ||
       current.libraryWorkspace.analysisByEntryId[entry.id]?.cacheSignature !==
       entryAnalysisCacheSignature(entry.size, entry.lastModified)
-    ))
-    .map((entry) => entry.id);
-  if (entryIds.length === 0) return;
+    ));
+  if (analysisEntries.length === 0) return;
+  const entryIdsByAssetId = new Map(analysisEntries.map((entry) => [entry.assetId, [] as string[]]));
+  for (const entry of analysisEntries) entryIdsByAssetId.get(entry.assetId)?.push(entry.id);
 
   let api: ReturnType<typeof getDarkroomAPI>;
   try {
@@ -745,7 +870,7 @@ function startMetadataAnalysis(
   set({
     metadataAnalysis: {
       operationId,
-      total: entryIds.length,
+      total: entryIdsByAssetId.size,
       completed: 0,
       failed: 0,
       cancelled: false,
@@ -756,7 +881,7 @@ function startMetadataAnalysis(
     catalogId,
     sessionId,
     operationId,
-    entryIds,
+    entryIds: [...entryIdsByAssetId.keys()],
     force: options.force === true,
   }).then(
     (result) => {
@@ -770,7 +895,9 @@ function startMetadataAnalysis(
       }
       const analysisByEntryId = { ...latest.libraryWorkspace.analysisByEntryId };
       for (const item of result.items) {
-        analysisByEntryId[item.entryId] = item.analysis;
+        for (const entryId of entryIdsByAssetId.get(item.entryId) ?? []) {
+          analysisByEntryId[entryId] = item.analysis;
+        }
       }
       set({
         libraryWorkspace: { ...latest.libraryWorkspace, analysisByEntryId },
@@ -1038,6 +1165,9 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     const entry = started.entries.find((item) => item.id === entryId);
     if (!entry || started.catalogId === null || started.sessionId === null) {
       throw new Error("Photo is unavailable.");
+    }
+    if (entry.entryKind === "virtual") {
+      throw new Error("Virtual copies keep metadata in the catalog and cannot publish source XMP.");
     }
     const api = getDarkroomAPI();
     const request = getAssetRequest(entry);
@@ -1845,10 +1975,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     scheduleStateSync(set, get);
   },
 
-  hydrateEntryKeywords: (entryId, flat, hierarchical) => {
+  hydrateEntryKeywords: (
+    entryId,
+    flat,
+    hierarchical,
+    metadataPatch = {},
+    sourceUpdatedAt = Date.now(),
+  ) => {
     const workspace = get().libraryWorkspace;
     const keywords = [...workspace.keywords];
-    const assigned = new Set(workspace.entryKeywordIds[entryId] ?? []);
+    const assigned = new Set<string>();
     const ensurePath = (parts: readonly string[]): string | null => {
       let parentId: string | null = null;
       let leafId: string | null = null;
@@ -1890,9 +2026,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       }
     }
     const nextIds = [...assigned];
+    const previousIds = workspace.entryKeywordIds[entryId] ?? [];
+    const currentMetadata = getEntryMetadata(get().entryMetadata, entryId);
+    const metadataChanged =
+      (metadataPatch.rating !== undefined && metadataPatch.rating !== currentMetadata.rating) ||
+      (metadataPatch.colorLabel !== undefined && metadataPatch.colorLabel !== currentMetadata.colorLabel);
     if (
       keywords.length === workspace.keywords.length &&
-      nextIds.length === (workspace.entryKeywordIds[entryId]?.length ?? 0)
+      nextIds.length === previousIds.length &&
+      nextIds.every((id) => previousIds.includes(id)) &&
+      !metadataChanged
     ) return;
     set({
       libraryWorkspace: {
@@ -1900,8 +2043,106 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
         keywords,
         entryKeywordIds: { ...workspace.entryKeywordIds, [entryId]: nextIds },
       },
+      ...(metadataChanged ? {
+        entryMetadata: {
+          ...get().entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...currentMetadata,
+            ...metadataPatch,
+            updatedAt: Math.max(sourceUpdatedAt, currentMetadata.updatedAt + 1),
+          }),
+        },
+      } : {}),
     });
     scheduleStateSync(set, get);
+  },
+
+  hydrateEntryKeywordsDurably: async (
+    entryId,
+    flat,
+    hierarchical,
+    metadataPatch = {},
+    sourceUpdatedAt = Date.now(),
+  ) => {
+    const workspace = get().libraryWorkspace;
+    const keywords = [...workspace.keywords];
+    const assigned = new Set<string>();
+    const ensurePath = (parts: readonly string[]): string | null => {
+      let parentId: string | null = null;
+      let leafId: string | null = null;
+      for (const rawPart of parts) {
+        const name = rawPart.trim();
+        if (!name) continue;
+        let keyword = keywords.find((item) =>
+          item.parentId === parentId && item.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+        );
+        if (!keyword) {
+          const now = Date.now();
+          keyword = {
+            id: crypto.randomUUID(), parentId, name, synonyms: [], export: true,
+            createdAt: now, updatedAt: now,
+          };
+          keywords.push(keyword);
+        }
+        parentId = keyword.id;
+        leafId = keyword.id;
+      }
+      return leafId;
+    };
+    for (const path of hierarchical) {
+      const id = ensurePath(path.split("|").filter(Boolean));
+      if (id) assigned.add(id);
+    }
+    for (const name of flat) {
+      const represented = keywords.some((keyword) =>
+        assigned.has(keyword.id) && keyword.name.localeCompare(name, undefined, { sensitivity: "base" }) === 0
+      );
+      if (!represented) {
+        const id = ensurePath([name]);
+        if (id) assigned.add(id);
+      }
+    }
+    const currentMetadata = getEntryMetadata(get().entryMetadata, entryId);
+    const metadataChanged =
+      (metadataPatch.rating !== undefined && metadataPatch.rating !== currentMetadata.rating) ||
+      (metadataPatch.colorLabel !== undefined && metadataPatch.colorLabel !== currentMetadata.colorLabel);
+    const previousIds = workspace.entryKeywordIds[entryId] ?? [];
+    const nextIds = [...assigned];
+    const keywordStateChanged = keywords.length !== workspace.keywords.length ||
+      nextIds.length !== previousIds.length || nextIds.some((id) => !previousIds.includes(id));
+    if (!keywordStateChanged && !metadataChanged) return;
+    set({
+      libraryWorkspace: {
+        ...workspace,
+        keywords,
+        entryKeywordIds: { ...workspace.entryKeywordIds, [entryId]: nextIds },
+      },
+      ...(metadataChanged ? {
+        entryMetadata: {
+          ...get().entryMetadata,
+          [entryId]: createEntryMetadata({
+            ...currentMetadata,
+            ...metadataPatch,
+            updatedAt: Math.max(sourceUpdatedAt, currentMetadata.updatedAt + 1),
+          }),
+        },
+      } : {}),
+    });
+    await persistStateSync(set, get);
+  },
+
+  persistEntryKeywords: async (entryId) => {
+    const current = get();
+    const entry = current.entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind === "virtual") return;
+    const assigned = current.libraryWorkspace.entryKeywordIds[entryId] ?? [];
+    const byId = new Map(current.libraryWorkspace.keywords.map((keyword) => [keyword.id, keyword]));
+    const flat = assigned.flatMap((id) => {
+      const keyword = byId.get(id);
+      return keyword ? [keyword.name, ...keyword.synonyms] : [];
+    });
+    const hierarchical = assigned.map((id) => keywordPath(id, current.libraryWorkspace)).filter(Boolean);
+    await writeKeywordSidecar(entry, flat, hierarchical);
   },
 
   stackEntries: (entryIds) => {
@@ -2045,19 +2286,37 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     if (!keeper || current.catalogId === null || current.sessionId === null) {
       throw new Error("The duplicate keeper is no longer available.");
     }
-    const targets = current.entries
-      .filter((entry) => entry.id !== keeperId && targetIds.includes(entry.id))
-      .map((entry) => entry.id);
-    if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
-    await backupCatalogAdmin();
-    const result = await getDarkroomAPI().catalogTrashExactDuplicates({
+    const binding = {
       catalogId: current.catalogId,
       sessionId: current.sessionId,
-      keeperId: keeper.id,
+    };
+    const targets = [...new Set(current.entries
+      .filter((entry) => entry.assetId !== keeper.assetId && targetIds.includes(entry.id))
+      .map((entry) => entry.assetId))];
+    if (targets.length === 0) throw new Error("Choose at least one duplicate to trash.");
+    await backupCatalogAdmin();
+    requireCatalogSession(
+      binding,
+      get,
+      "Catalog changed before duplicate files were trashed. No files were moved.",
+    );
+    const result = await getDarkroomAPI().catalogTrashExactDuplicates({
+      catalogId: binding.catalogId,
+      sessionId: binding.sessionId,
+      keeperId: keeper.assetId,
       targetIds: targets,
     });
-    const trashed = result.items.filter((item) => item.trashed).map((item) => item.entryId);
-    if (trashed.length > 0) get().excludeEntries(trashed);
+    if (!catalogSessionIsCurrent(binding, get)) {
+      const succeeded = result.items.filter((item) => item.trashed).length;
+      const failed = result.items.length - succeeded;
+      throw new Error(
+        `Catalog changed after duplicate trash completed: ${succeeded} moved, ${failed} failed. Reopen the original catalog to reconcile the results.`,
+      );
+    }
+    const trashed = new Set(result.items
+      .filter((item) => item.trashed)
+      .map((item) => item.entryId));
+    removeEntriesForAssets(trashed, binding, set, get);
     const failures = result.items.filter((item) => !item.trashed);
     if (failures.length > 0) {
       set({
@@ -2067,40 +2326,132 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     return result;
   },
 
-  deleteEntriesFromDisk: async (entryIds) => {
-    if (entryIds.length === 0) return;
-    const targets = get().entries.filter((entry) => entryIds.includes(entry.id));
+  createVirtualCopy: async (entryId, displayName) => {
+    const started = get();
+    const source = started.entries.find((entry) => entry.id === entryId);
+    if (!source || started.catalogId === null || started.sessionId === null) {
+      throw new Error("Photo is unavailable.");
+    }
+    const binding = {
+      catalogId: started.catalogId,
+      sessionId: started.sessionId,
+    };
+    const familyCopies = started.entries.filter(
+      (entry) => entry.sourceId === source.sourceId && entry.entryKind === "virtual",
+    ).length;
+    const name = displayName?.trim() || `Copy ${familyCopies + 1}`;
     try {
-      await Promise.all(targets.map((entry) => getDarkroomAPI().catalogTrashAsset(getAssetRequest(entry))));
+      await persistStateSync(set, get);
+      const current = get();
+      if (
+        current.catalogId !== binding.catalogId ||
+        current.sessionId !== binding.sessionId
+      ) {
+        throw new Error("Catalog session changed before the virtual copy was created.");
+      }
+      const metadata = current.entryMetadata[entryId];
+      if (!metadata) throw new Error("Photo metadata is unavailable.");
+      const snapshot = getDevelopSession(binding.catalogId, entryId)?.snapshot();
+      const committedDocument = snapshot && snapshot.processKind !== "read-only-newer"
+        ? snapshot.document
+        : metadata.develop ?? null;
+      const workspace = current.libraryWorkspace;
+      const result = await createVirtualCopySession(parseEntryId(entryId), name, {
+        ...binding,
+        developJson: committedDocument === null
+          ? null
+          : JSON.stringify(committedDocument),
+        expectedSourceMetadataUpdatedAt: metadata.updatedAt,
+      });
+      const libraryWorkspace = cloneWorkspaceEntryState(
+        result.state.libraryWorkspace,
+        workspace,
+        entryId,
+        result.entryId,
+      );
+      applyHydratedState(result.state, set, get);
+      set({
+        libraryWorkspace,
+        selectedEntryId: result.entryId,
+        selectedEntryIds: [result.entryId],
+        selectionAnchorId: result.entryId,
+      });
+      await persistStateSync(set, get);
+      return result.entryId;
     } catch (error) {
       const message = formatPickerError(error);
       set({ importError: message });
       throw new Error(message);
     }
-    const removeSet = new Set(entryIds);
-    const entries = get().entries.filter((entry) => !removeSet.has(entry.id));
-    const remainingIds = new Set<string>(entries.map((entry) => entry.id));
-    const entryMetadata = pruneMetadataForEntries(get().entryMetadata, remainingIds);
-    const albums = pruneAlbumsForEntries(get().albums, remainingIds);
-    const archivedEntryIds = get().archivedEntryIds.filter((id) => remainingIds.has(id));
-    const libraryWorkspace = pruneWorkspaceForEntries(get().libraryWorkspace, remainingIds);
-    const visible = get().catalogView.type === "archive"
-      ? filterOnlyArchivedEntries(entries, archivedEntryIds)
-      : filterArchivedEntries(entries, archivedEntryIds);
-    set({
-      entries,
-      entryMetadata,
-      albums,
-      archivedEntryIds,
-      libraryWorkspace,
-      importError: null,
-      ...restoreSelection(
-        visible,
-        get().selectedEntryIds.filter((id) => remainingIds.has(id)),
-        get().selectionAnchorId,
-      ),
-    });
-    scheduleStateSync(set, get);
+  },
+
+  renameVirtualCopy: async (entryId, displayName) => {
+    const entry = get().entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind !== "virtual") throw new Error("Virtual copy is unavailable.");
+    const name = displayName.trim();
+    if (!name) throw new Error("Virtual copy name is required.");
+    try {
+      const state = await renameVirtualCopySession(parseEntryId(entryId), name);
+      applyHydratedState(state, set, get);
+    } catch (error) {
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
+    }
+  },
+
+  deleteVirtualCopy: async (entryId) => {
+    const entry = get().entries.find((item) => item.id === entryId);
+    if (!entry || entry.entryKind !== "virtual") throw new Error("Virtual copy is unavailable.");
+    try {
+      const state = await deleteVirtualCopySession(parseEntryId(entryId));
+      applyHydratedState(state, set, get);
+    } catch (error) {
+      const message = formatPickerError(error);
+      set({ importError: message });
+      throw new Error(message);
+    }
+  },
+
+  deleteEntriesFromDisk: async (entryIds) => {
+    if (entryIds.length === 0) return;
+    const current = get();
+    if (current.catalogId === null || current.sessionId === null) {
+      throw new Error("Open the original catalog before removing photos from disk.");
+    }
+    const binding = {
+      catalogId: current.catalogId,
+      sessionId: current.sessionId,
+    };
+    const selected = current.entries.filter((entry) => entryIds.includes(entry.id));
+    const targets = [...new Map(selected.map((entry) => [entry.assetId, entry])).values()];
+    const api = getDarkroomAPI();
+    const outcomes = await Promise.allSettled(
+      targets.map(async (entry) => api.catalogTrashAsset(getAssetRequest(entry))),
+    );
+    const removedAssetIds = new Set(outcomes.flatMap((outcome, index) => {
+      const target = targets[index];
+      return outcome.status === "fulfilled" && target ? [target.assetId] : [];
+    }));
+    const failed = outcomes.length - removedAssetIds.size;
+    if (!catalogSessionIsCurrent(binding, get)) {
+      throw new Error(
+        `Catalog changed after photo removal completed: ${removedAssetIds.size} moved, ${failed} failed. Reopen the original catalog to reconcile the results.`,
+      );
+    }
+    removeEntriesForAssets(
+      removedAssetIds,
+      binding,
+      set,
+      get,
+      false,
+    );
+    if (removedAssetIds.size > 0) await persistStateSync(set, get);
+    if (failed > 0) {
+      const message = `${failed} photo${failed === 1 ? "" : "s"} could not be moved to Trash; ${removedAssetIds.size} succeeded.`;
+      set({ importError: message });
+      throw new Error(message);
+    }
   },
 
   createCatalog: async (displayName) => {

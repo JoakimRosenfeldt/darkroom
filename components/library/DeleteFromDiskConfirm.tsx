@@ -4,13 +4,15 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 interface DeleteFromDiskConfirmProps {
-  entryIds: string[];
+  sourceCount: number;
+  dependentEntryCount: number;
   onConfirm: () => void;
   onClose: () => void;
 }
 
 export function DeleteFromDiskConfirm({
-  entryIds,
+  sourceCount,
+  dependentEntryCount,
   onConfirm,
   onClose,
 }: DeleteFromDiskConfirmProps) {
@@ -40,8 +42,7 @@ export function DeleteFromDiskConfirm({
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [onConfirm, onClose]);
 
-  const photoLabel =
-    entryIds.length === 1 ? "1 photo" : `${entryIds.length} photos`;
+  const photoLabel = `${sourceCount} source ${sourceCount === 1 ? "file" : "files"} · ${dependentEntryCount} linked edit ${dependentEntryCount === 1 ? "entry" : "entries"}`;
 
   return createPortal(
     <div
@@ -68,13 +69,10 @@ export function DeleteFromDiskConfirm({
 
         <div className="px-3 py-3">
           <p className="text-sm text-lr-text">
-            Remove {entryIds.length === 1 ? "this file" : "these files"} from
-            disk?
+            Remove {sourceCount === 1 ? "this source file" : "these source files"} from disk?
           </p>
           <p className="mt-1.5 text-xs text-lr-text-dim">
-            Files will be moved to the system trash (Recycle Bin or Trash) and
-            removed from your library. You can restore them from the system
-            trash if needed.
+            {sourceCount === 1 ? "The source file" : `${sourceCount} source files`} will be moved to the system trash and {dependentEntryCount === 1 ? "its edit entry" : `all ${dependentEntryCount} linked edit entries`} will be removed from your library. You can restore the files from the system trash if needed.
           </p>
         </div>
 

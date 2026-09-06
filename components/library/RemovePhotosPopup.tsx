@@ -16,7 +16,7 @@ interface RemovePhotosPopupProps {
 }
 
 type ActionOption = {
-  id: "album" | "imported" | "restore" | "disk";
+  id: "album" | "imported" | "restore" | "copy" | "disk";
   label: string;
   description: string;
   disabled?: boolean;
@@ -24,6 +24,7 @@ type ActionOption = {
 
 export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps) {
   const albums = useLibraryStore((state) => state.albums);
+  const entries = useLibraryStore((state) => state.entries);
   const catalogView = useLibraryStore((state) => state.catalogView);
   const removeEntriesFromAlbum = useLibraryStore(
     (state) => state.removeEntriesFromAlbum,
@@ -33,6 +34,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   );
   const archiveEntries = useLibraryStore((state) => state.archiveEntries);
   const restoreEntries = useLibraryStore((state) => state.restoreEntries);
+  const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
   const isArchiveView = catalogView.type === "archive";
   const [highlightIndex, setHighlightIndex] = useState(0);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -40,12 +42,19 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
   const options = useMemo(() => {
     if (isArchiveView) {
+      const targetSet = new Set(entryIds);
+      const targets = entries.filter((entry) => targetSet.has(entry.id));
       return [
         {
           id: "restore" as const,
           label: "Restore to imported",
           description: "Move back into your library.",
         },
+        ...(targets.length > 0 && targets.every((entry) => entry.entryKind === "virtual") ? [{
+          id: "copy" as const,
+          label: targets.length === 1 ? "Delete virtual copy" : `Delete ${targets.length} virtual copies`,
+          description: "Source files and other edits stay in the catalog.",
+        }] : []),
         {
           id: "disk" as const,
           label: "Remove from disk — unavailable",
@@ -57,6 +66,14 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
     const result: ActionOption[] = [];
     const targetSet = new Set(entryIds);
+    const targets = entries.filter((entry) => targetSet.has(entry.id));
+    if (targets.length > 0 && targets.every((entry) => entry.entryKind === "virtual")) {
+      result.push({
+        id: "copy",
+        label: targets.length === 1 ? "Delete virtual copy" : `Delete ${targets.length} virtual copies`,
+        description: "Source files and other edits stay in the catalog.",
+      });
+    }
     const inAlbum =
       catalogView.type === "album" ||
       albums.some((album) => album.entryIds.some((id) => targetSet.has(id)));
@@ -91,7 +108,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
     });
 
     return result;
-  }, [albums, catalogView, entryIds, isArchiveView]);
+  }, [albums, catalogView, entries, entryIds, isArchiveView]);
 
   const activeIndex = options.length === 0
     ? 0
@@ -133,10 +150,20 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
         return;
       }
 
+      if (option.id === "copy") {
+        const confirmed = window.confirm(
+          `Delete ${entryIds.length === 1 ? "this virtual copy" : `${entryIds.length} virtual copies`}? The source files and other edits will stay in the catalog.`,
+        );
+        if (!confirmed) return;
+        for (const entryId of entryIds) await deleteVirtualCopy(entryId);
+        onClose();
+      }
+
     },
     [
       archiveEntries,
       catalogView,
+      deleteVirtualCopy,
       entryIds,
       onClose,
       removeEntriesFromAlbum,
@@ -196,6 +223,8 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
       case "restore":
         return IconFolder;
       case "disk":
+        return IconTrash;
+      case "copy":
         return IconTrash;
     }
   }

@@ -8,9 +8,15 @@ import {
   parseOperationId,
   parseAssetId,
   type AssetId,
+  type CatalogId,
   type OperationId,
 } from "../lib/catalog/ids.ts";
-import { CATALOG_V3_TABLES, verifyCatalogV3Schema } from "./catalog-v3-schema.ts";
+import {
+  CATALOG_V3_IDENTITY_TABLES,
+  CATALOG_V3_TABLES,
+  upgradeCatalogV3IdentitySchema,
+  verifyCatalogV3Schema,
+} from "./catalog-v3-schema.ts";
 import {
   CatalogFaultInjectedError,
   createCatalogFaultInjectorForTests,
@@ -34,6 +40,24 @@ import {
 } from "./catalog-worker-protocol.ts";
 import { CatalogV3Repository } from "./catalog-v3-repository.ts";
 import { CatalogLiveRepository } from "./catalog-live-repository.ts";
+import { DEVELOP_HISTORY_TABLES, upgradeDevelopHistorySchema } from "./develop-history-schema.ts";
+import { DevelopHistoryRepository } from "./develop-history-repository.ts";
+import { installDevelopHistoryDocumentDecoder } from "../lib/develop/history.ts";
+import { DEVELOP_BATCH_TABLES, upgradeDevelopBatchSchema } from "./develop-batch-schema.ts";
+import { DevelopBatchRepository, type DevelopBatchOperationExecutor } from "./develop-batch-repository.ts";
+import type { DevelopBatchCommand, DevelopBatchCommandResult, DevelopBatchId } from "../lib/develop/batch/domain.ts";
+
+let developBatchOperationExecutor: DevelopBatchOperationExecutor | null = null;
+const developRuntimeReady = process.execArgv.includes("--experimental-strip-types")
+  ? Promise.resolve()
+  : Promise.all([
+      import("../lib/develop/v3/codec.ts").then(({ decodePersistedDevelopDocument }) => {
+        installDevelopHistoryDocumentDecoder(decodePersistedDevelopDocument);
+      }),
+      import("./develop-batch-executor.ts").then(({ executeDevelopBatchOperation }) => {
+        developBatchOperationExecutor = executeDevelopBatchOperation;
+      }),
+    ]).then(() => undefined);
 
 function requiredWorkerPort(): NonNullable<typeof parentPort> {
   if (!parentPort) {
@@ -50,6 +74,8 @@ const faultInjector = testHarness?.faultPoint
 
 let database: DatabaseSync | null = null;
 let databasePath: string | null = null;
+let batchRepository: DevelopBatchRepository | null = null;
+const activeBatchRuns = new Map<string, Promise<DevelopBatchCommandResult>>();
 
 class CatalogWorkerTestDisabledError extends Error {
   constructor() {
@@ -102,6 +128,12 @@ function catalogV3Repository(): CatalogV3Repository {
 
 function catalogLiveRepository(): CatalogLiveRepository {
   return new CatalogLiveRepository(requireDatabase());
+}
+
+function developBatchRepository(): DevelopBatchRepository {
+  if (!developBatchOperationExecutor) throw new Error("Develop batch runtime is unavailable.");
+  batchRepository ??= new DevelopBatchRepository(requireDatabase(), developBatchOperationExecutor);
+  return batchRepository;
 }
 
 function rowValue(row: Record<string, unknown>, key: string): unknown {
@@ -194,12 +226,16 @@ function openDatabase(targetPath: string): boolean {
   });
   try {
     opened.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    upgradeCatalogV3IdentitySchema(opened);
+    upgradeDevelopHistorySchema(opened);
+    upgradeDevelopBatchSchema(opened);
   } catch (error) {
     opened.close();
     throw error;
   }
   database = opened;
   databasePath = targetPath;
+  batchRepository = null;
   return created;
 }
 
@@ -211,6 +247,7 @@ function closeDatabase(): boolean {
   database.close();
   database = null;
   databasePath = null;
+  batchRepository = null;
   return true;
 }
 
@@ -326,6 +363,9 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
       enableForeignKeyConstraints: true,
       timeout: 500,
     });
+    upgradeCatalogV3IdentitySchema(cloned);
+    upgradeDevelopHistorySchema(cloned);
+    upgradeDevelopBatchSchema(cloned);
     verifyCatalogV3Schema(cloned);
     cloned.exec("PRAGMA foreign_keys = ON; PRAGMA defer_foreign_keys = ON; BEGIN IMMEDIATE;");
     cloned.prepare(`
@@ -335,6 +375,25 @@ async function cloneCatalogDatabase(request: CatalogWorkerCloneCatalogRequest): 
     `).run(request.catalogId, request.displayName, request.appVersion, sourceCatalogId);
     for (const table of CATALOG_V3_TABLES) {
       if (table === "catalog_meta") continue;
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of CATALOG_V3_IDENTITY_TABLES) {
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of DEVELOP_HISTORY_TABLES) {
+      cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
+        request.catalogId,
+        sourceCatalogId,
+      );
+    }
+    for (const table of DEVELOP_BATCH_TABLES) {
+      if (table === "develop_batch_schema_meta") continue;
       cloned.prepare(`UPDATE ${table} SET catalog_id = ? WHERE catalog_id = ?`).run(
         request.catalogId,
         sourceCatalogId,
@@ -696,6 +755,101 @@ function inspectTestTracer(
   return testTracerResult(opened, row);
 }
 
+async function handleDevelopBatch(command: DevelopBatchCommand): Promise<DevelopBatchCommandResult> {
+  const repository = developBatchRepository();
+  switch (command.kind) {
+    case "create": return repository.create(command.input);
+    case "get": return repository.get(command.catalogId, command.batchId);
+    case "list": return repository.list(command.catalogId, command.limit);
+    case "auto-get": return repository.autoSyncState(command.catalogId);
+    case "run": {
+      return runDevelopBatchAndReconcile(repository, command.catalogId, command.batchId);
+    }
+    case "cancel": return repository.cancel(command.catalogId, command.batchId);
+    case "retry": return repository.retry(command.catalogId, command.batchId);
+    case "freeze": return repository.freeze({
+      catalogId: command.catalogId,
+      batchId: command.batchId,
+      operationId: command.operationId,
+      kind: command.batchKind,
+      sourceEntryId: command.sourceEntryId,
+      targetEntryIds: command.targetEntryIds,
+      operation: command.operation,
+      createdAt: command.createdAt,
+    });
+    case "prepare": return repository.prepare({
+      catalogId: command.catalogId,
+      batchId: command.batchId,
+      operationId: command.operationId,
+      kind: command.batchKind,
+      sourceEntryId: command.sourceEntryId,
+      targetEntryIds: command.targetEntryIds,
+      action: command.action,
+      createdAt: command.createdAt,
+    });
+    case "previous-prepare": return repository.preparePrevious(command);
+    case "complete-preparation": return repository.completePreparation(command.catalogId, command.batchId, command.operation);
+    case "fail-preparation": return repository.failPreparation(command.catalogId, command.batchId, command.error);
+    case "previous": return repository.previous(command);
+    case "previous-frozen": return repository.previousFrozen(command);
+    case "undo": return repository.undo(command);
+    case "auto-enable":
+      repository.enableAutoSync(command);
+      return null;
+    case "auto-enable-frozen":
+      repository.enableAutoSyncFrozen(command);
+      return null;
+    case "auto-disable":
+      repository.disableAutoSync(command.catalogId, command.updatedAt);
+      return null;
+    case "auto-emit": return repository.emitAutoSync(command);
+    default: {
+      const _exhaustive: never = command;
+      throw new Error(`Unknown Develop batch command: ${_exhaustive}.`);
+    }
+  }
+}
+
+async function runDevelopBatchAndReconcile(
+  repository: DevelopBatchRepository,
+  catalogId: CatalogId,
+  batchId: DevelopBatchId,
+): Promise<DevelopBatchCommandResult> {
+  const runTracked = async (requestedBatchId: typeof batchId): Promise<DevelopBatchCommandResult> => {
+    const key = JSON.stringify([catalogId, requestedBatchId]);
+    const existing = activeBatchRuns.get(key);
+    if (existing) return existing;
+    const running = repository.run(catalogId, requestedBatchId);
+    activeBatchRuns.set(key, running);
+    try { return await running; }
+    finally { activeBatchRuns.delete(key); }
+  };
+  const result = await runTracked(batchId);
+  let emitted = repository.reconcileAutoSync(catalogId);
+  while (emitted !== null) {
+    await runTracked(emitted.batchId);
+    emitted = repository.reconcileAutoSync(catalogId);
+  }
+  return result;
+}
+
+async function recoverDevelopBatches(): Promise<void> {
+  const repository = developBatchRepository();
+  const reconciled = new Set<string>();
+  for (const pending of repository.resumableBatchIds()) {
+    await runDevelopBatchAndReconcile(repository, pending.catalogId, pending.batchId);
+    reconciled.add(pending.catalogId);
+  }
+  for (const catalogId of repository.enabledAutoSyncCatalogIds()) {
+    if (reconciled.has(catalogId)) continue;
+    let emitted = repository.reconcileAutoSync(catalogId);
+    while (emitted !== null) {
+      await runDevelopBatchAndReconcile(repository, catalogId, emitted.batchId);
+      emitted = repository.reconcileAutoSync(catalogId);
+    }
+  }
+}
+
 async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
   switch (request.kind) {
     case "runtime-info":
@@ -714,6 +868,9 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
         requestId: request.requestId,
         databasePath: request.databasePath,
         created,
+      });
+      setImmediate(() => {
+        queue = queue.then(recoverDevelopBatches).catch(() => undefined);
       });
       return;
     }
@@ -859,6 +1016,36 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
         result: catalogLiveRepository().apply(request.input),
       });
       return;
+    case "develop-history-load":
+      post({ kind: "develop-history-load", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).load(request.input) });
+      return;
+    case "develop-history-list":
+      post({ kind: "develop-history-list", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).list(request.input) });
+      return;
+    case "develop-history-commit":
+      post({ kind: "develop-history-commit", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).commit(request.input) });
+      return;
+    case "develop-history-refs":
+      post({ kind: "develop-history-refs", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).refs(request.catalogId, request.entryId) });
+      return;
+    case "develop-history-ref-mutate":
+      post({ kind: "develop-history-ref-mutate", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).mutateRef(request.input) });
+      return;
+    case "develop-history-projection-get":
+      post({ kind: "develop-history-projection-get", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).projection(request.catalogId, request.entryId) });
+      return;
+    case "develop-history-projection-set":
+      post({ kind: "develop-history-projection-set", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).recordProjection(request.input) });
+      return;
+    case "develop-default-install":
+      post({ kind: "develop-default-install", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).installDefault(request.input) });
+      return;
+    case "develop-default-installed-get":
+      post({ kind: "develop-default-installed-get", requestId: request.requestId, result: new DevelopHistoryRepository(requireDatabase()).installedDefault(request.catalogId, request.entryId) });
+      return;
+    case "develop-batch":
+      post({ kind: "develop-batch", requestId: request.requestId, result: await handleDevelopBatch(request.command) });
+      return;
     case "test-tracer-run": {
       const result = await runTestTracer(request);
       post({ kind: "test-tracer-run", requestId: request.requestId, ...result });
@@ -883,8 +1070,60 @@ async function handleRequest(request: CatalogWorkerRequest): Promise<void> {
 
 let queue = Promise.resolve();
 
+function handleActiveBatchCancel(value: unknown): boolean {
+  let request: CatalogWorkerRequest;
+  try {
+    request = parseCatalogWorkerRequest(value);
+  } catch {
+    return false;
+  }
+  if (request.kind !== "develop-batch" || request.command.kind !== "cancel") return false;
+  const command = request.command;
+  const key = JSON.stringify([command.catalogId, command.batchId]);
+  const running = activeBatchRuns.get(key);
+  if (!running) return false;
+  void developRuntimeReady.then(async () => {
+    developBatchRepository().cancel(command.catalogId, command.batchId);
+    await running;
+    post({
+      kind: "develop-batch",
+      requestId: request.requestId,
+      result: developBatchRepository().get(command.catalogId, command.batchId),
+    });
+  }).catch((error: unknown) => {
+    postError({ kind: "error", requestId: request.requestId, code: "runtime", message: safeErrorMessage(error) });
+  });
+  return true;
+}
+
+function handleActiveBatchRead(value: unknown): boolean {
+  if (activeBatchRuns.size === 0) return false;
+  let request: CatalogWorkerRequest;
+  try {
+    request = parseCatalogWorkerRequest(value);
+  } catch {
+    return false;
+  }
+  if (request.kind !== "develop-batch" || (request.command.kind !== "get" && request.command.kind !== "list" && request.command.kind !== "auto-get")) return false;
+  try {
+    const repository = developBatchRepository();
+    const result = request.command.kind === "get"
+      ? repository.get(request.command.catalogId, request.command.batchId)
+      : request.command.kind === "list"
+        ? repository.list(request.command.catalogId, request.command.limit)
+        : repository.autoSyncState(request.command.catalogId);
+    post({ kind: "develop-batch", requestId: request.requestId, result });
+  } catch (error) {
+    postError({ kind: "error", requestId: request.requestId, code: "runtime", message: safeErrorMessage(error) });
+  }
+  return true;
+}
+
 workerPort.on("message", (value: unknown) => {
+  if (handleActiveBatchCancel(value)) return;
+  if (handleActiveBatchRead(value)) return;
   queue = queue.then(async () => {
+    await developRuntimeReady;
     let request: CatalogWorkerRequest;
     try {
       request = parseCatalogWorkerRequest(value);

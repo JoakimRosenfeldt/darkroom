@@ -4,6 +4,7 @@ import {
   parseRootId,
   type AssetId,
   type CatalogId,
+  type EntryId,
   type OperationId,
   type RootId,
 } from "./ids.ts";
@@ -29,6 +30,7 @@ import {
   type CatalogLiveApplyResult,
   type CatalogLiveAutoImportConfig,
   type CatalogLiveCatalogIdentity,
+  type CatalogLiveEntrySnapshot,
   type CatalogLiveFingerprintMatch,
   type CatalogLiveMutation,
   type CatalogLiveOperationItem,
@@ -45,7 +47,7 @@ import {
   type ReconcileStartedPayload,
   type WatchStatePayload,
 } from "./watch.ts";
-import type { CatalogV3AssetSnapshot, CatalogV3FingerprintCoverage } from "./v3.ts";
+import type { CatalogV3FingerprintCoverage } from "./v3.ts";
 
 type RecordValue = Record<string, unknown>;
 const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
@@ -225,6 +227,7 @@ export interface CatalogOperationRequest {
 
 export interface CatalogQueryRequest extends CatalogSessionRequest {
   readonly expectedRevision: number | null;
+  readonly entryId?: EntryId;
   readonly assetId?: AssetId;
   readonly rootId?: RootId;
   readonly fingerprintSha256?: string;
@@ -232,6 +235,9 @@ export interface CatalogQueryRequest extends CatalogSessionRequest {
 
 export type CatalogApplyMutation =
   | Extract<CatalogLiveMutation, { readonly kind: "rename-catalog" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-create" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-rename" }>
+  | Extract<CatalogLiveMutation, { readonly kind: "edit-entry-delete" }>
   | Extract<CatalogLiveMutation, { readonly kind: "metadata-patch" }>
   | Extract<CatalogLiveMutation, { readonly kind: "album-create" }>
   | Extract<CatalogLiveMutation, { readonly kind: "album-rename" }>
@@ -292,7 +298,8 @@ export interface CatalogPresetView {
 export interface CatalogLiveStateView {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRootView[];
-  readonly assets: readonly CatalogV3AssetSnapshot[];
+  readonly assets: readonly CatalogLiveEntrySnapshot[];
+  readonly tombstonedEntryIds: readonly EntryId[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogOperationView[];
   readonly presets: readonly CatalogPresetView[];
@@ -461,6 +468,7 @@ function parsedSizedMutation(value: unknown): CatalogLiveMutation {
     throw new Error("Catalog mutation is not serializable.");
   }
   const maximum = parsed.kind === "library-state-replace" ||
+      parsed.kind === "edit-entry-create" ||
       (parsed.kind === "metadata-patch" &&
         (parsed.patch.developJson !== undefined || parsed.patch.rawXmp !== undefined))
     ? MAX_STATE_MUTATION_BYTES
@@ -475,6 +483,9 @@ function safeMutation(value: unknown): CatalogApplyMutation {
   const parsed = parsedSizedMutation(value);
   switch (parsed.kind) {
     case "rename-catalog":
+    case "edit-entry-create":
+    case "edit-entry-rename":
+    case "edit-entry-delete":
     case "metadata-patch":
     case "album-create":
     case "album-rename":
@@ -842,6 +853,7 @@ export function toCatalogLiveStateView(value: CatalogLiveState): CatalogLiveStat
       ...asset,
       metadata: { ...asset.metadata, rawXmp: null },
     })),
+    tombstonedEntryIds: value.tombstonedEntryIds ?? [],
     albums: value.albums,
     operations: value.operations.map((operation) => ({
       operationId: operation.operationId,

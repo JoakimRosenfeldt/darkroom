@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import { useDevelopStore } from "@/stores/develop-store";
 
 interface SliderRowProps {
@@ -54,14 +54,32 @@ export function SliderRow({
   const displayValue = value.toFixed(decimalPlaces);
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
+  const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
+  const activeEntryId = useDevelopStore((state) => state.activeEntryId);
+  const interactionActive = useRef(false);
+
+  useEffect(() => {
+    interactionActive.current = false;
+  }, [activeEntryId]);
 
   function beginInteraction(): void {
+    if (interactionActive.current) return;
+    interactionActive.current = true;
     beginEditGroup(`Adjust ${label}`);
     onInteractionStart?.();
   }
 
   function endInteraction(): void {
+    if (!interactionActive.current) return;
+    interactionActive.current = false;
     endEditGroup();
+    onInteractionEnd?.();
+  }
+
+  function cancelInteraction(): void {
+    if (!interactionActive.current) return;
+    interactionActive.current = false;
+    cancelEditGroup();
     onInteractionEnd?.();
   }
 
@@ -91,9 +109,14 @@ export function SliderRow({
         disabled={disabled}
         onPointerDown={beginInteraction}
         onPointerUp={endInteraction}
-        onPointerCancel={endInteraction}
+        onPointerCancel={cancelInteraction}
         onBlur={endInteraction}
         onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancelInteraction();
+            return;
+          }
           if (RANGE_ADJUSTMENT_KEYS.has(event.key)) beginInteraction();
         }}
         onKeyUp={(event) => {
@@ -104,7 +127,7 @@ export function SliderRow({
         style={track ? ({ "--develop-slider-track": track } as CSSProperties) : undefined}
         className="develop-slider"
       />
-      <span className="text-right font-mono text-[11px] text-lr-text-muted">
+      <span className="text-right font-mono text-xs text-lr-text-muted">
         {value > 0 ? "+" : ""}
         {displayValue}
         {suffix}

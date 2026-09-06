@@ -90,6 +90,8 @@ function errorMessage(code: string): string {
     case "ELOOP":
     case "UNSAFE":
     case "CHANGED": return "Transaction path or file changed during the operation.";
+    case "CLEANUP": return "Native file transaction cleanup could not be made durable.";
+    case "ROLLBACK": return "Native file transaction rollback could not be made durable.";
     case "PAUSE_TIMEOUT": return "Native file transaction test pause timed out.";
     case "INVALID_ARGUMENT": return "Native file transaction arguments are invalid.";
     default: return "Native file transaction failed.";
@@ -107,14 +109,22 @@ function boundedText(chunks: readonly Buffer[]): string {
   return Buffer.concat(chunks).toString("utf8").slice(0, MAX_ERROR_OUTPUT_BYTES);
 }
 
-function helperProcess(command: string, args: readonly string[], resolvePath: HelperPathResolver) {
+function helperProcess(
+  command: string,
+  args: readonly string[],
+  resolvePath: HelperPathResolver,
+  input: Uint8Array | null = null,
+) {
   const helperPath = resolvePath();
   if (helperPath === null) throw new NativeFileTransactionUnavailableError();
   try {
-    return spawn(helperPath, [command, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
+    const child = spawn(helperPath, [command, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    child.stdin.on("error", () => undefined);
+    if (input === null) child.stdin.end();
+    return child;
   } catch {
     throw new NativeFileTransactionUnavailableError();
   }
@@ -124,14 +134,16 @@ async function runHelper(
   command: string,
   args: readonly string[],
   resolvePath: HelperPathResolver,
+  input: Uint8Array | null = null,
 ): Promise<HelperCommandResult> {
-  const child = helperProcess(command, args, resolvePath);
+  const child = helperProcess(command, args, resolvePath, input);
   const stdoutChunks: Buffer[] = [];
   const stderrChunks: Buffer[] = [];
   let stdoutBytes = 0;
   let stderrBytes = 0;
   let outputError: NativeFileTransactionError | null = null;
   return new Promise((resolve, reject) => {
+    if (input !== null) child.stdin.end(input);
     child.stdout.on("data", (chunk: Buffer | string) => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       stdoutBytes += bytes.byteLength;
@@ -159,6 +171,24 @@ async function runHelper(
       resolve({ stdout: Buffer.concat(stdoutChunks), stderr });
     });
   });
+}
+
+export async function nativeAtomicWriteFile(
+  filePath: string,
+  contents: Uint8Array,
+  expectedParent: { readonly dev: number; readonly ino: number },
+  mode: "exclusive" | "replace",
+): Promise<void> {
+  if (!Number.isSafeInteger(expectedParent.dev) || !Number.isSafeInteger(expectedParent.ino)) {
+    throw new NativeFileTransactionError("INVALID_ARGUMENT", "Native file transaction directory identity is invalid.");
+  }
+  const resolvePath: HelperPathResolver = resolveHelperPath;
+  await runHelper(
+    "atomic-write",
+    [filePath, String(expectedParent.dev), String(expectedParent.ino), mode],
+    resolvePath,
+    contents,
+  );
 }
 
 function parseObservationLine(line: string, prefix: "OBS" | "META"): FileObservation {

@@ -1,27 +1,27 @@
-import { ASPECT_RATIO_PRESETS } from "../crop-geometry";
-import { parseDevelopDocument, parseDevelopLocalMasks } from "../document";
+import { ASPECT_RATIO_PRESETS } from "../crop-geometry.ts";
+import { parseDevelopDocument, parseDevelopLocalMasks } from "../document.ts";
 import {
   COORDINATE_FRAME_REVISION,
   DEVELOP_PROCESS_ID,
   DEVELOP_PROCESS_VERSION,
   type DevelopDiagnostic,
-} from "../process";
+} from "../process.ts";
 import {
   parseDevelopAssetRefs,
   type DevelopAssetRef,
-} from "./assets";
-import { parseCleanupLayer } from "./cleanup";
+} from "./assets.ts";
+import { parseCleanupLayer } from "./cleanup.ts";
 import type {
   CurvePoint,
   CurveSettings,
   MixerBandSettings,
   MixerColor,
   MixerSettings,
-} from "../types";
+} from "../types.ts";
 import {
   MAX_POINT_COLOR_SAMPLES,
   type PointColorAdjustment,
-} from "./point-color";
+} from "./point-color.ts";
 import {
   LEGACY_V3_DOCUMENT_SCHEMA_REVISION,
   V3_DOCUMENT_SCHEMA_REVISION,
@@ -39,15 +39,17 @@ import {
   type PostCropEffects,
   type QuarantinedV3Field,
   type V3Compatibility,
-} from "./document";
+} from "./document.ts";
 import {
   migrateLegacyMask,
+  maskSourceNodes,
   parseLocalMasksV3,
   referencedMaskArtifacts,
-} from "./masking";
-import type { Homography, QuarterTurns } from "./geometry";
-import { parseLensBlurSettings } from "./lens-blur";
-import type { Matrix3, Rgb } from "./profiles";
+} from "./masking.ts";
+import type { Homography, QuarterTurns } from "./geometry.ts";
+import { parseLensBlurSettings } from "./lens-blur.ts";
+import type { Matrix3, Rgb } from "./profiles.ts";
+import { parseAppliedPresetState } from "../presets/schema.ts";
 
 export const MAX_V3_PAYLOAD_BYTES = 32 * 1024 * 1024;
 export const MAX_V3_QUARANTINE_BYTES = 64 * 1024;
@@ -638,7 +640,7 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
   const input = record(value, "develop document", [
     "version", "process", "schemaRevision", "tone", "color", "optics", "geometry",
     "local", "cleanup", "presence", "detail", "effects", "lensBlur", "hdr",
-    "compatibility",
+    "appliedPreset", "compatibility",
   ], state);
   if (input.version !== DEVELOP_PROCESS_VERSION) invalid("Develop document version must be 3.");
   if (input.process !== DEVELOP_PROCESS_ID) invalid("Develop document process is not darkroom-v3.");
@@ -708,6 +710,27 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
     maskAssetRefs.some((asset) => !referencedMaskAssets.has(asset.assetId))
   ) {
     invalid("local.maskAssetRefs must cover every referenced mask matte.");
+  }
+  const maskAssetsById = new Map(maskAssetRefs.map((asset) => [asset.assetId, asset]));
+  const embeddedMaskAssets = localMasks.flatMap((mask) => referencedMaskArtifacts(mask.expression));
+  const embeddedKindsValid = localMasks.every((mask) =>
+    maskSourceNodes(mask.expression).every((node) =>
+      node.source.kind !== "ai-matte" || node.source.asset.kind === "mask-matte"
+    )
+  );
+  if (!embeddedKindsValid) {
+    invalid("AI matte sources must embed mask-matte asset references.");
+  }
+  if (embeddedMaskAssets.some((asset) => {
+    const reference = maskAssetsById.get(asset.assetId);
+    return !reference ||
+      reference.kind !== asset.kind ||
+      reference.sha256 !== asset.sha256 ||
+      reference.producerRevision !== asset.producerRevision ||
+      reference.coordinateFrameRevision !== asset.coordinateFrameRevision ||
+      reference.colorStageId !== asset.colorStageId;
+  })) {
+    invalid("local.maskAssetRefs must exactly match embedded mask asset references.");
   }
   const presence = record(input.presence, "presence", ["texture", "clarity", "dehaze"], state);
   const detail = record(input.detail, "detail", ["noiseReduction", "sharpening"], state);
@@ -818,6 +841,9 @@ export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
       }
     })(),
     hdr: hdr(input.hdr, "hdr", state),
+    appliedPreset: input.appliedPreset === undefined || input.appliedPreset === null
+      ? null
+      : parseAppliedPresetState(input.appliedPreset),
     compatibility: { ...parsedCompatibility, quarantine: state.quarantine },
   };
   return parsedDocument;

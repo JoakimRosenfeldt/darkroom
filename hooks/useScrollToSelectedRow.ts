@@ -17,7 +17,9 @@ export function useScrollToSelectedRow({
 }: UseScrollToSelectedRowOptions): void {
   const previousRowIndexRef = useRef(-1);
   const virtualizerRef = useRef(virtualizer);
-  virtualizerRef.current = virtualizer;
+  useLayoutEffect(() => {
+    virtualizerRef.current = virtualizer;
+  }, [virtualizer]);
 
   useLayoutEffect(() => {
     if (!layoutReady || selectedRowIndex < 0) {

@@ -27,6 +27,7 @@ async function decodeEmbeddedSourcePixels(
       rgb: context.getImageData(0, 0, bitmap.width, bitmap.height).data,
       bits: 8,
       colors: 4,
+      pixelProvenance: embedded.pixelProvenance,
       metadata: embedded.metadata,
     };
   } finally {
@@ -65,6 +66,17 @@ async function decodeDevelopedNef(
           rgb: new Uint16Array(result.pixels),
           bits: result.bitDepth,
           colors: result.channels,
+          pixelProvenance: {
+            decoderPath: result.provenance,
+            decoderRevision: "rgb16le-v1",
+            colorSpace: result.colorSpace,
+            transfer: "encoded",
+            bitDepth: result.bitDepth,
+            cameraProfileStage: {
+              kind: "unavailable",
+              reason: "The Nikon decoder protocol returns rendered sRGB pixels.",
+            },
+          },
           metadata: {
             decoderProvenance: result.provenance,
             developSource: "native",
@@ -105,14 +117,49 @@ async function decodeDevelopedNef(
     : embedded;
 }
 
+function cameraProfileFallbackReason(error: unknown): string {
+  const message = error instanceof Error && error.message.trim().length > 0
+    ? error.message.trim()
+    : "The LibRaw camera profile stage failed.";
+  return `The LibRaw camera profile stage is unavailable: ${message}`;
+}
+
+async function decodeWithCameraProfileFallback(
+  input: Uint8Array,
+  options: DecodeOptions,
+): Promise<DecodedImage> {
+  try {
+    return await decodeWithLibRaw(input, options);
+  } catch (error) {
+    const fallback = await decodeDevelopedNef(input, {
+      ...options,
+      cameraProfile: { kind: "none" },
+    });
+    return {
+      ...fallback,
+      pixelProvenance: {
+        ...fallback.pixelProvenance,
+        cameraProfileStage: {
+          kind: "unavailable",
+          reason: cameraProfileFallbackReason(error),
+        },
+      },
+    };
+  }
+}
+
 export const nefProfile: ImageProfile = {
   id: "nef",
   extensions: getFormatExtensionsForProfile("nef"),
   detect: (file) =>
     getFormatCapabilityForFileName(file.name)?.profileId === "nef",
-  decode: (input, options: DecodeOptions = {}) =>
-    options.fullResolution ||
-    (options.thumbnail && options.rawSource === "developed")
-      ? decodeDevelopedNef(input, options)
-      : decodeWithLibRaw(input, options),
+  decode: (input, options: DecodeOptions = {}) => {
+    if (options.cameraProfile?.kind === "libraw-camera-matrix") {
+      return decodeWithCameraProfileFallback(input, options);
+    }
+    return options.fullResolution ||
+      (options.thumbnail && options.rawSource === "developed")
+        ? decodeDevelopedNef(input, options)
+        : decodeWithLibRaw(input, options);
+  },
 };

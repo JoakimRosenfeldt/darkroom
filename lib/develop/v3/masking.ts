@@ -1,14 +1,14 @@
-import { parseDevelopAssetRefs, type DevelopAssetRef } from "./assets";
+import { parseDevelopAssetRefs, type DevelopAssetRef } from "./assets.ts";
 import type {
   BrushStroke,
   LocalMask,
   MaskComponent,
   SourceSignature,
-} from "../types";
-import { sourceSignaturesEqual } from "../source-transform";
-import type { GeometryPoint } from "./geometry";
-import { legacyBasicLocalAdjustments, parseLocalAdjustmentValues, type LocalAdjustmentValues } from "./local-adjustments";
-import type { Rgb } from "./profiles";
+} from "../types.ts";
+import { sourceSignaturesEqual } from "../source-transform.ts";
+import type { GeometryPoint } from "./geometry.ts";
+import { legacyBasicLocalAdjustments, parseLocalAdjustmentValues, type LocalAdjustmentValues } from "./local-adjustments.ts";
+import type { Rgb } from "./profiles.ts";
 
 export const MAX_LOCAL_MASKS = 64;
 export const MAX_MASK_NODES = 256;

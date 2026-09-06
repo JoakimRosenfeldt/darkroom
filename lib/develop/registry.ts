@@ -1,11 +1,11 @@
-import { basicPlugin } from "@/lib/develop/plugins/basic";
-import { cropPlugin } from "@/lib/develop/plugins/crop";
+import { basicPlugin } from "./plugins/basic.ts";
+import { cropPlugin } from "./plugins/crop.ts";
 import {
   curvePlugin,
   normalizeCurveSettings,
-} from "@/lib/develop/plugins/curve";
-import { effectsPlugin } from "@/lib/develop/plugins/effects";
-import { mixerPlugin } from "@/lib/develop/plugins/mixer";
+} from "./plugins/curve.ts";
+import { effectsPlugin } from "./plugins/effects.ts";
+import { mixerPlugin } from "./plugins/mixer.ts";
 import type {
   DevelopPlugin,
   DevelopPluginId,

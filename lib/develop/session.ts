@@ -23,16 +23,13 @@ import type {
 import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
 import {
   applyV3EditCommand,
-  mergeV3GroupPatches,
-  replayV3Patches,
   type V3EditCommand,
-  type V3GroupPatch,
 } from "@/lib/develop/v3/commands";
+import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
 import type {
   DevelopDocumentV3,
   NewerDevelopDocument,
   PersistedDevelopDocument,
-  StoredDevelopDocument,
 } from "@/lib/develop/v3/document";
 import {
   createV3MigrationCandidate,
@@ -74,9 +71,9 @@ export type DevelopSessionOpenDocument =
     };
 
 export function openDevelopSessionDocument(
-  value: StoredDevelopDocument,
+  value: unknown,
 ): DevelopSessionOpenDocument {
-  const decoded = decodePersistedDevelopDocument(value);
+  const decoded = decodePersistedDevelopDocument(value === null ? createDefaultV3DevelopDocument() : value);
   if (decoded.kind === "invalid") {
     throw new DevelopSessionCommandError("invalid-document", decoded.message);
   }
@@ -95,6 +92,21 @@ export function openDevelopSessionDocument(
   return { kind: "editable", document: decoded.document };
 }
 
+export interface V3CompleteStatePatch {
+  readonly kind: "replace-v3-complete-state";
+  readonly document: DevelopDocumentV3;
+}
+
+export interface CommittedDevelopCommand {
+  readonly entryId: string;
+  readonly operationId: string;
+  readonly label: string;
+  readonly before: DevelopDocumentV3;
+  readonly after: DevelopDocumentV3;
+  readonly forwardPatch: V3CompleteStatePatch;
+  readonly inversePatch: V3CompleteStatePatch;
+}
+
 export type DevelopHistoryEntry =
   | {
       readonly kind: "document";
@@ -105,8 +117,14 @@ export type DevelopHistoryEntry =
   | {
       readonly kind: "v3-document";
       readonly label: string;
-      readonly patches: readonly V3GroupPatch[];
-      readonly editGroup: string | null;
+      readonly command: CommittedDevelopCommand;
+    }
+  | {
+      readonly kind: "v3-document-metadata";
+      readonly label: string;
+      readonly command: CommittedDevelopCommand;
+      readonly beforeMetadata: DevelopMetadataValues;
+      readonly afterMetadata: DevelopMetadataValues;
     }
   | {
       readonly kind: "metadata";
@@ -125,6 +143,7 @@ interface DevelopSessionSnapshotBase {
   readonly undo: readonly DevelopHistoryEntry[];
   readonly redo: readonly DevelopHistoryEntry[];
   readonly transientEdit: { readonly id: string; readonly label: string } | null;
+  readonly previewDocument: DevelopDocumentV3 | null;
 }
 
 export type DevelopSessionSnapshot = DevelopSessionSnapshotBase & (
@@ -161,6 +180,12 @@ export interface DevelopMetadataMutation {
   readonly values: DevelopMetadataValues;
 }
 
+export interface DevelopCompositeCommitResult {
+  readonly snapshot: DevelopSessionSnapshot;
+  readonly documentChanged: boolean;
+  readonly metadataChanged: boolean;
+}
+
 export interface V3AssetCopyReceipt {
   readonly kind: "copied";
   readonly references: readonly DevelopAssetRef[];
@@ -190,6 +215,7 @@ export type DevelopSessionCommandErrorCode =
   | "asset-copy-failed"
   | "asset-copy-invalid"
   | "invalid-document"
+  | "edit-blocked"
   | "process-mismatch"
   | "read-only"
   | "upgrade-stale";
@@ -222,6 +248,20 @@ export interface DevelopSession {
   readonly entryId: string;
   snapshot(): DevelopSessionSnapshot;
   dispatch(command: DevelopSessionCommand, label?: string): DevelopSessionSnapshot;
+  subscribeCommittedCommands(
+    listener: (command: CommittedDevelopCommand) => void,
+  ): () => void;
+  beginEditBlock(token: string): DevelopSessionSnapshot;
+  finishEditBlock(token: string): DevelopSessionSnapshot;
+  beginEditGroup(label: string): DevelopSessionSnapshot;
+  endEditGroup(): DevelopSessionSnapshot;
+  cancelEditGroup(): DevelopSessionSnapshot;
+  commitV3CompleteStateWithMetadata(
+    document: DevelopDocumentV3,
+    beforeMetadata: DevelopMetadataValues,
+    afterMetadata: DevelopMetadataValues,
+    label: string,
+  ): DevelopCompositeCommitResult;
   upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot>;
   render(request: FrozenV2PrepareRequest): Promise<RenderPreparation>;
   render(request: FrozenV2PreviewRequest): Promise<RenderPreparation>;
@@ -241,7 +281,15 @@ interface MutableDevelopSessionState {
   persistedMetadataRevision: number;
   undo: DevelopHistoryEntry[];
   redo: DevelopHistoryEntry[];
-  transientEdit: { id: string; label: string } | null;
+  transientEdit:
+    | { kind: "v2"; id: string; label: string }
+    | {
+        kind: "v3";
+        id: string;
+        label: string;
+        previewDocument: DevelopDocumentV3;
+      }
+    | null;
 }
 
 function metadataValues(metadata: DevelopMetadataValues): DevelopMetadataValues {
@@ -256,6 +304,23 @@ function boundedHistory(entries: DevelopHistoryEntry[]): DevelopHistoryEntry[] {
   return entries.length > HISTORY_LIMIT
     ? entries.slice(entries.length - HISTORY_LIMIT)
     : entries;
+}
+
+function createCommittedDevelopCommand(
+  entryId: string,
+  label: string,
+  before: DevelopDocumentV3,
+  after: DevelopDocumentV3,
+): CommittedDevelopCommand {
+  return {
+    entryId,
+    operationId: crypto.randomUUID(),
+    label,
+    before,
+    after,
+    forwardPatch: { kind: "replace-v3-complete-state", document: after },
+    inversePatch: { kind: "replace-v3-complete-state", document: before },
+  };
 }
 
 function patchTarget(patch: DevelopPatch): string {
@@ -329,6 +394,7 @@ function isV3EditCommand(command: DevelopSessionCommand): command is V3EditComma
     case "reset-v3-all":
     case "commit-v3-crop-draft":
     case "accept-v3-job-result":
+    case "replace-v3-complete-state":
       return true;
     default:
       return false;
@@ -358,6 +424,10 @@ export class DevelopSessionCore implements DevelopSession {
   #repository: DevelopSessionRepository | null;
   #assetCopy: V3UpgradeAssetCopyAdapter | null = null;
   #sourceSignatureProvider: (() => Readonly<SourceSignature> | null) | null = null;
+  #editBlockToken: string | null = null;
+  #committedCommandListeners = new Set<
+    (command: CommittedDevelopCommand) => void
+  >();
 
   constructor(
     catalogId: string,
@@ -409,7 +479,12 @@ export class DevelopSessionCore implements DevelopSession {
       persistedMetadataRevision: this.#state.persistedMetadataRevision,
       undo: [...this.#state.undo],
       redo: [...this.#state.redo],
-      transientEdit: this.#state.transientEdit,
+      transientEdit: this.#state.transientEdit
+        ? { id: this.#state.transientEdit.id, label: this.#state.transientEdit.label }
+        : null,
+      previewDocument: this.#state.transientEdit?.kind === "v3"
+        ? this.#state.transientEdit.previewDocument
+        : null,
     };
     if (this.#state.process.kind === "read-only-newer") {
       return {
@@ -436,6 +511,34 @@ export class DevelopSessionCore implements DevelopSession {
     };
   }
 
+  subscribeCommittedCommands(
+    listener: (command: CommittedDevelopCommand) => void,
+  ): () => void {
+    this.#committedCommandListeners.add(listener);
+    return () => this.#committedCommandListeners.delete(listener);
+  }
+
+  beginEditBlock(token: string): DevelopSessionSnapshot {
+    if (!token) throw new Error("Develop edit block token is invalid.");
+    this.#editBlockToken = token;
+    this.#state.transientEdit = null;
+    return this.snapshot();
+  }
+
+  finishEditBlock(token: string): DevelopSessionSnapshot {
+    if (this.#editBlockToken === token) this.#editBlockToken = null;
+    return this.snapshot();
+  }
+
+  #assertEditingAllowed(): void {
+    if (this.#editBlockToken !== null) {
+      throw new DevelopSessionCommandError(
+        "edit-blocked",
+        "Develop edits are unavailable until the initial default resolution finishes.",
+      );
+    }
+  }
+
   hydrate(process: DevelopSessionOpenDocument): DevelopSessionSnapshot {
     if (this.#state.documentRevision !== this.#state.persistedDocumentRevision) {
       return this.snapshot();
@@ -452,10 +555,25 @@ export class DevelopSessionCore implements DevelopSession {
     return this.snapshot();
   }
 
+  hydrateAuthoritative(process: DevelopSessionOpenDocument): DevelopSessionSnapshot {
+    const revision = this.#state.documentRevision + 1;
+    this.#state = {
+      ...this.#state,
+      process,
+      documentRevision: revision,
+      persistedDocumentRevision: revision,
+      undo: [],
+      redo: [],
+      transientEdit: null,
+    };
+    return this.snapshot();
+  }
+
   dispatch(
     command: DevelopSessionCommand,
     label = "Edit",
   ): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     if (command.kind === "undo") {
       this.undo();
       return this.snapshot();
@@ -535,33 +653,117 @@ export class DevelopSessionCore implements DevelopSession {
     if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) {
       throw new DevelopSessionCommandError("process-mismatch", "The session is not editable v3.");
     }
-    const result = applyV3EditCommand(this.#state.process.document, command);
+    const preview = this.#state.transientEdit?.kind === "v3"
+      ? this.#state.transientEdit
+      : null;
+    const baseDocument = preview?.previewDocument ?? this.#state.process.document;
+    const result = applyV3EditCommand(baseDocument, command);
     if (!result.changed) return this.snapshot();
-    const editGroup = this.#state.transientEdit?.id ?? null;
-    const previous = this.#state.undo.at(-1);
-    if (editGroup && previous?.kind === "v3-document" && previous.editGroup === editGroup) {
-      this.#state.undo[this.#state.undo.length - 1] = {
-        ...previous,
-        patches: mergeV3GroupPatches(previous.patches, result.patches),
-      };
-    } else {
-      this.#state.undo = boundedHistory([
-        ...this.#state.undo,
-        {
-          kind: "v3-document",
-          label: this.#state.transientEdit?.label ?? label,
-          patches: result.patches,
-          editGroup,
-        },
-      ]);
+    if (preview) {
+      preview.previewDocument = result.document;
+      return this.snapshot();
     }
-    this.#state.process = { kind: "editable", document: result.document };
+    return this.#commitV3Document(result.document, label);
+  }
+
+  #commitV3Document(
+    after: DevelopDocumentV3,
+    label: string,
+  ): DevelopSessionSnapshot {
+    return this.#commitV3DocumentWithMetadata(after, label).snapshot;
+  }
+
+  commitV3CompleteStateWithMetadata(
+    document: DevelopDocumentV3,
+    beforeMetadata: DevelopMetadataValues,
+    afterMetadata: DevelopMetadataValues,
+    label: string,
+  ): DevelopCompositeCommitResult {
+    this.#assertEditingAllowed();
+    return this.#commitV3DocumentWithMetadata(document, label, {
+      before: metadataValues(beforeMetadata),
+      after: metadataValues(afterMetadata),
+    });
+  }
+
+  #commitV3DocumentWithMetadata(
+    after: DevelopDocumentV3,
+    label: string,
+    metadata?: {
+      readonly before: DevelopMetadataValues;
+      readonly after: DevelopMetadataValues;
+    },
+  ): DevelopCompositeCommitResult {
+    if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) {
+      throw new DevelopSessionCommandError("process-mismatch", "The session is not editable v3.");
+    }
+    const before = this.#state.process.document;
+    const validatedAfter = decodePersistedDevelopDocument(after);
+    if (validatedAfter.kind !== "editable" || validatedAfter.document.version !== 3) {
+      throw new DevelopSessionCommandError(
+        "invalid-document",
+        validatedAfter.kind === "invalid"
+          ? validatedAfter.message
+          : "The completed command did not produce an editable v3 document.",
+      );
+    }
+    const documentChanged = JSON.stringify(before) !== JSON.stringify(validatedAfter.document);
+    const metadataChanged = metadata !== undefined &&
+      JSON.stringify(metadata.before) !== JSON.stringify(metadata.after);
+    if (!documentChanged) {
+      if (metadataChanged && metadata) {
+        this.#state.undo = boundedHistory([
+          ...this.#state.undo,
+          {
+            kind: "metadata",
+            label,
+            before: metadata.before,
+            after: metadata.after,
+          },
+        ]);
+        this.#state.redo = [];
+        this.#state.metadataRevision += 1;
+      }
+      return { snapshot: this.snapshot(), documentChanged, metadataChanged };
+    }
+    const command = createCommittedDevelopCommand(
+      this.entryId,
+      label,
+      before,
+      validatedAfter.document,
+    );
+    this.#state.undo = boundedHistory([
+      ...this.#state.undo,
+      metadataChanged && metadata
+        ? {
+            kind: "v3-document-metadata",
+            label,
+            command,
+            beforeMetadata: metadata.before,
+            afterMetadata: metadata.after,
+          }
+        : { kind: "v3-document", label, command },
+    ]);
+    this.#state.process = { kind: "editable", document: command.after };
     this.#state.documentRevision += 1;
+    if (metadataChanged) this.#state.metadataRevision += 1;
     this.#state.redo = [];
-    return this.snapshot();
+    this.#emitCommittedCommand(command);
+    return { snapshot: this.snapshot(), documentChanged, metadataChanged };
+  }
+
+  #emitCommittedCommand(command: CommittedDevelopCommand): void {
+    for (const listener of this.#committedCommandListeners) {
+      try {
+        listener(command);
+      } catch {
+        continue;
+      }
+    }
   }
 
   async upgradeToCurrentProcess(): Promise<DevelopSessionSnapshot> {
+    this.#assertEditingAllowed();
     if (this.#state.process.kind === "read-only-newer") {
       throw new DevelopSessionCommandError("read-only", this.#state.process.reason.message);
     }
@@ -622,6 +824,7 @@ export class DevelopSessionCore implements DevelopSession {
       }
     }
     const latestSourceSignature = this.#sourceSignatureProvider?.() ?? null;
+    this.#assertEditingAllowed();
     if (
       this.#state.documentRevision !== sourceDocumentRevision ||
       this.#state.process.kind !== "editable" ||
@@ -644,18 +847,45 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   beginEditGroup(label: string): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     if (!this.#state.transientEdit) {
-      this.#state.transientEdit = { id: crypto.randomUUID(), label };
+      if (
+        this.#state.process.kind === "editable" &&
+        this.#state.process.document.version === 3
+      ) {
+        this.#state.transientEdit = {
+          kind: "v3",
+          id: crypto.randomUUID(),
+          label,
+          previewDocument: this.#state.process.document,
+        };
+      } else {
+        this.#state.transientEdit = {
+          kind: "v2",
+          id: crypto.randomUUID(),
+          label,
+        };
+      }
     }
     return this.snapshot();
   }
 
   endEditGroup(): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
+    const transientEdit = this.#state.transientEdit;
+    this.#state.transientEdit = null;
+    return transientEdit?.kind === "v3"
+      ? this.#commitV3Document(transientEdit.previewDocument, transientEdit.label)
+      : this.snapshot();
+  }
+
+  cancelEditGroup(): DevelopSessionSnapshot {
     this.#state.transientEdit = null;
     return this.snapshot();
   }
 
   undo(): DevelopMetadataMutation | null {
+    this.#assertEditingAllowed();
     const history = this.#state.undo.at(-1);
     if (!history) return null;
     if (
@@ -665,7 +895,7 @@ export class DevelopSessionCore implements DevelopSession {
       throw new DevelopSessionCommandError("process-mismatch", "V2 undo history is not applicable.");
     }
     if (
-      history.kind === "v3-document" &&
+      (history.kind === "v3-document" || history.kind === "v3-document-metadata") &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V3 undo history is not applicable.");
@@ -685,12 +915,36 @@ export class DevelopSessionCore implements DevelopSession {
       }
       case "v3-document": {
         if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
         this.#state.process = {
           kind: "editable",
-          document: replayV3Patches(this.#state.process.document, history.patches, "backward"),
+          document: history.command.before,
         };
         this.#state.documentRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Undo ${history.label}`,
+          before,
+          history.command.before,
+        ));
         return null;
+      }
+      case "v3-document-metadata": {
+        if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
+        this.#state.process = {
+          kind: "editable",
+          document: history.command.before,
+        };
+        this.#state.documentRevision += 1;
+        this.#state.metadataRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Undo ${history.label}`,
+          before,
+          history.command.before,
+        ));
+        return { entryId: this.entryId, values: history.beforeMetadata };
       }
       case "metadata":
         this.#state.metadataRevision += 1;
@@ -703,6 +957,7 @@ export class DevelopSessionCore implements DevelopSession {
   }
 
   redo(): DevelopMetadataMutation | null {
+    this.#assertEditingAllowed();
     const history = this.#state.redo.at(-1);
     if (!history) return null;
     if (
@@ -712,7 +967,7 @@ export class DevelopSessionCore implements DevelopSession {
       throw new DevelopSessionCommandError("process-mismatch", "V2 redo history is not applicable.");
     }
     if (
-      history.kind === "v3-document" &&
+      (history.kind === "v3-document" || history.kind === "v3-document-metadata") &&
       (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3)
     ) {
       throw new DevelopSessionCommandError("process-mismatch", "V3 redo history is not applicable.");
@@ -732,12 +987,36 @@ export class DevelopSessionCore implements DevelopSession {
       }
       case "v3-document": {
         if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
         this.#state.process = {
           kind: "editable",
-          document: replayV3Patches(this.#state.process.document, history.patches, "forward"),
+          document: history.command.after,
         };
         this.#state.documentRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Redo ${history.label}`,
+          before,
+          history.command.after,
+        ));
         return null;
+      }
+      case "v3-document-metadata": {
+        if (this.#state.process.kind !== "editable" || this.#state.process.document.version !== 3) return null;
+        const before = this.#state.process.document;
+        this.#state.process = {
+          kind: "editable",
+          document: history.command.after,
+        };
+        this.#state.documentRevision += 1;
+        this.#state.metadataRevision += 1;
+        this.#emitCommittedCommand(createCommittedDevelopCommand(
+          this.entryId,
+          `Redo ${history.label}`,
+          before,
+          history.command.after,
+        ));
+        return { entryId: this.entryId, values: history.afterMetadata };
       }
       case "metadata":
         this.#state.metadataRevision += 1;
@@ -753,6 +1032,7 @@ export class DevelopSessionCore implements DevelopSession {
     before: DevelopMetadataValues,
     after: DevelopMetadataValues,
   ): DevelopSessionSnapshot {
+    this.#assertEditingAllowed();
     const beforeMetadata = metadataValues(before);
     const afterMetadata = metadataValues(after);
     if (JSON.stringify(beforeMetadata) === JSON.stringify(afterMetadata)) {

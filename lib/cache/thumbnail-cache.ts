@@ -2,8 +2,10 @@ import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { decodeEntry } from "@/lib/raw/decode";
 import { assetCacheKey, type AssetCacheIdentity } from "./asset-cache-key";
+import type { StoredDevelopDocument } from "@/lib/develop/v3/document";
+import { renderEditedPreview } from "./render-edited-preview";
 
-const CACHE_PREFIX = "darkroom-thumb:";
+const CACHE_PREFIX = "darkroom-thumb-v2:";
 const MAX_MEMORY_THUMBNAILS = 300;
 
 export interface ThumbnailCacheKey {
@@ -11,11 +13,15 @@ export interface ThumbnailCacheKey {
   assetId: AssetCacheIdentity["assetId"];
   revision: number;
   thumbnail: boolean;
+  maxEdge?: number;
+  entryId?: string;
+  editHash?: string;
 }
 
 interface LoadThumbnailOptions {
   priority?: number;
   signal?: AbortSignal;
+  document?: StoredDevelopDocument | null;
 }
 
 const memoryCache = new Map<string, Blob>();
@@ -66,7 +72,21 @@ function waitForCaller(
 }
 
 function buildCacheKey(key: ThumbnailCacheKey): string {
-  return `${CACHE_PREFIX}${assetCacheKey(key, key.thumbnail ? "thumb" : "full")}`;
+  return `${CACHE_PREFIX}${assetCacheKey(key, key.thumbnail ? "thumb" : "full")}:${JSON.stringify([key.maxEdge ?? 360, key.entryId ?? null, key.editHash ?? "source"])}`;
+}
+
+const documentHashes = new WeakMap<StoredDevelopDocument, Promise<string>>();
+
+function editHash(document: StoredDevelopDocument | null | undefined): Promise<string> {
+  if (document === undefined) return Promise.resolve("source");
+  if (document === null) return Promise.resolve("neutral-v3");
+  let digest = documentHashes.get(document);
+  if (!digest) {
+    digest = crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(document)))
+      .then((bytes) => Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join(""));
+    documentHashes.set(document, digest);
+  }
+  return digest;
 }
 
 function rememberThumbnail(cacheKey: string, blob: Blob): void {
@@ -117,11 +137,19 @@ export async function loadThumbnailBlob(
   maxEdge: number,
   options: LoadThumbnailOptions = {},
 ): Promise<Blob> {
+  options.signal?.throwIfAborted();
+  const edge = Math.max(1, Math.min(16_384, Math.ceil(maxEdge)));
+  if (!Number.isFinite(edge)) throw new Error("Thumbnail size must be finite.");
+  const documentHash = await editHash(options.document);
+  options.signal?.throwIfAborted();
   const key = {
     catalogId: entry.catalogId,
-    assetId: entry.id,
+    assetId: entry.assetId,
     revision: entry.assetRevision,
     thumbnail: true,
+    maxEdge: edge,
+    entryId: options.document === undefined ? undefined : entry.id,
+    editHash: documentHash,
   };
   const cacheKey = buildCacheKey(key);
   const activeLoad = inFlightLoads.get(cacheKey);
@@ -137,9 +165,15 @@ export async function loadThumbnailBlob(
       return cached;
     }
 
+    if (options.document != null) {
+      const blob = await renderEditedPreview(entry, options.document, edge, { priority: options.priority, signal: controller.signal });
+      controller.signal.throwIfAborted();
+      await setCachedThumbnail(key, blob);
+      return blob;
+    }
     const decoded = await decodeEntry(entry, {
       thumbnail: true,
-      maxEdge,
+      maxEdge: edge,
       priority: options.priority,
       signal: controller.signal,
     });

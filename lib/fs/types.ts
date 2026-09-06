@@ -3,7 +3,7 @@ import {
   SUPPORTED_INPUT_EXTENSIONS,
 } from "../formats/registry";
 import type { CapabilityStatus } from "../formats/types";
-import type { AssetId, CatalogId, RootId } from "../catalog/ids";
+import type { AssetId, CatalogId, EntryId, RootId, SourceId } from "../catalog/ids";
 import type { SessionId } from "../catalog/runtime";
 
 export interface EntryFormatAvailability {
@@ -11,8 +11,10 @@ export interface EntryFormatAvailability {
   readonly reason: string | null;
 }
 
-export interface LibraryEntry {
-  id: AssetId;
+interface LibraryEntryBase {
+  id: EntryId;
+  sourceId: SourceId;
+  assetId: AssetId;
   catalogId: CatalogId;
   sessionId: SessionId;
   rootId: RootId;
@@ -27,7 +29,22 @@ export interface LibraryEntry {
   formatAvailability: EntryFormatAvailability;
   fingerprintStatus?: "missing" | "hashing" | "valid" | "stale" | "failed";
   fingerprintSha256?: string | null;
+  entryCreatedAt: number;
 }
+
+export interface OriginalLibraryEntry extends LibraryEntryBase {
+  readonly entryKind: "original";
+  readonly parentEntryId: null;
+  readonly displayName: null;
+}
+
+export interface VirtualLibraryEntry extends LibraryEntryBase {
+  readonly entryKind: "virtual";
+  readonly parentEntryId: EntryId;
+  readonly displayName: string;
+}
+
+export type LibraryEntry = OriginalLibraryEntry | VirtualLibraryEntry;
 
 export const SUPPORTED_EXTENSIONS = SUPPORTED_INPUT_EXTENSIONS;
 

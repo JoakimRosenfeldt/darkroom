@@ -1,10 +1,11 @@
-import { decodePersistedDevelopDocument } from "./codec";
+import { decodePersistedDevelopDocument } from "./codec.ts";
 import {
   createDefaultV3DevelopDocument,
   type DevelopDocumentV3,
   type PersistedCrop,
-} from "./document";
-import type { GeneratedAcceptanceResult } from "./generated-jobs";
+} from "./document.ts";
+import type { GeneratedAcceptanceResult } from "./generated-jobs.ts";
+import { markAppliedPresetModified } from "../presets/apply.ts";
 
 export const V3_SEMANTIC_GROUP_IDS = [
   "tone",
@@ -43,7 +44,11 @@ export type V3DirectEditCommand =
   | PatchV3SemanticGroupCommand
   | { readonly kind: "reset-v3-semantic-group"; readonly group: V3SemanticGroupId }
   | { readonly kind: "reset-v3-all" }
-  | { readonly kind: "commit-v3-crop-draft"; readonly crop: PersistedCrop };
+  | { readonly kind: "commit-v3-crop-draft"; readonly crop: PersistedCrop }
+  | {
+      readonly kind: "replace-v3-complete-state";
+      readonly document: DevelopDocumentV3;
+    };
 
 export type V3EditCommand =
   | V3DirectEditCommand
@@ -53,7 +58,7 @@ export type V3EditCommand =
       readonly edit: V3DirectEditCommand;
     };
 
-export type V3GroupPatch = {
+type V3SemanticGroupPatch = {
   [K in V3SemanticGroupId]: {
     readonly kind: "v3-semantic-group";
     readonly group: K;
@@ -62,12 +67,19 @@ export type V3GroupPatch = {
   };
 }[V3SemanticGroupId];
 
+export type V3GroupPatch = V3SemanticGroupPatch | {
+  readonly kind: "v3-applied-preset";
+  readonly group: "appliedPreset";
+  readonly before: DevelopDocumentV3["appliedPreset"];
+  readonly after: DevelopDocumentV3["appliedPreset"];
+};
+
 export type V3CommandResult =
   | { readonly changed: false; readonly document: DevelopDocumentV3 }
   | {
       readonly changed: true;
       readonly document: DevelopDocumentV3;
-      readonly patches: readonly [V3GroupPatch, ...V3GroupPatch[]];
+      readonly patches: readonly V3GroupPatch[];
     };
 
 function equal(left: unknown, right: unknown): boolean {
@@ -156,11 +168,19 @@ function changedResult(
   after: DevelopDocumentV3,
   groups: readonly V3SemanticGroupId[],
 ): V3CommandResult {
-  const patches = groups.flatMap((group) =>
+  const patches: V3GroupPatch[] = groups.flatMap((group) =>
     equal(groupValue(before, group), groupValue(after, group))
       ? []
       : [groupPatch(before, after, group)],
   );
+  if (!equal(before.appliedPreset, after.appliedPreset)) {
+    patches.push({
+      kind: "v3-applied-preset",
+      group: "appliedPreset",
+      before: before.appliedPreset,
+      after: after.appliedPreset,
+    });
+  }
   const first = patches[0];
   return first
     ? { changed: true, document: after, patches: [first, ...patches.slice(1)] }
@@ -208,6 +228,14 @@ function applyDirectV3Command(
       });
       return changedResult(document, next, ["geometry"]);
     }
+    case "replace-v3-complete-state": {
+      const next = validateV3CommandDocument(command.document);
+      if (equal(document, next)) return { changed: false, document };
+      const result = changedResult(document, next, V3_SEMANTIC_GROUP_IDS);
+      return result.changed
+        ? result
+        : { changed: true, document: next, patches: [] };
+    }
     default: {
       const exhaustive: never = command;
       return exhaustive;
@@ -220,7 +248,21 @@ export function applyV3EditCommand(
   command: V3EditCommand,
 ): V3CommandResult {
   if (command.kind !== "accept-v3-job-result") {
-    return applyDirectV3Command(document, command);
+    const edited = applyDirectV3Command(document, command);
+    if (!edited.changed || command.kind === "replace-v3-complete-state") return edited;
+    const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
+    return equal(edited.document.appliedPreset, next.appliedPreset)
+      ? { ...edited, document: next }
+      : {
+          ...edited,
+          document: next,
+          patches: [...edited.patches, {
+            kind: "v3-applied-preset",
+            group: "appliedPreset",
+            before: edited.document.appliedPreset,
+            after: next.appliedPreset,
+          }],
+        };
   }
   const edited = applyDirectV3Command(document, command.edit);
   const referenced = new Map(
@@ -251,7 +293,20 @@ export function applyV3EditCommand(
       );
     }
   }
-  return edited;
+  if (!edited.changed || command.edit.kind === "replace-v3-complete-state") return edited;
+  const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
+  return equal(edited.document.appliedPreset, next.appliedPreset)
+    ? { ...edited, document: next }
+    : {
+        ...edited,
+        document: next,
+        patches: [...edited.patches, {
+          kind: "v3-applied-preset",
+          group: "appliedPreset",
+          before: edited.document.appliedPreset,
+          after: next.appliedPreset,
+        }],
+      };
 }
 
 export function replayV3Patches(
@@ -261,11 +316,16 @@ export function replayV3Patches(
 ): DevelopDocumentV3 {
   const ordered = direction === "forward" ? patches : [...patches].reverse();
   return ordered.reduce(
-    (current, patch) => replaceGroup(
-      current,
-      patch.group,
-      direction === "forward" ? patch.after : patch.before,
-    ),
+    (current, patch) => patch.kind === "v3-applied-preset"
+      ? validateV3CommandDocument({
+          ...current,
+          appliedPreset: direction === "forward" ? patch.after : patch.before,
+        })
+      : replaceGroup(
+          current,
+          patch.group,
+          direction === "forward" ? patch.after : patch.before,
+        ),
     document,
   );
 }
@@ -290,6 +350,9 @@ function mergePatchPair(
   last: V3GroupPatch,
 ): V3GroupPatch {
   switch (first.group) {
+    case "appliedPreset":
+      if (last.group !== "appliedPreset") throw new Error("V3 history groups do not match.");
+      return { ...first, after: last.after };
     case "tone":
       if (last.group !== "tone") throw new Error("V3 history groups do not match.");
       return { ...first, after: last.after };

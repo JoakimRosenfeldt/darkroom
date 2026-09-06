@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
 import { MIXER_COLORS } from "@/lib/develop/plugins/mixer";
 import type { MixerColor } from "@/lib/develop/types";
@@ -19,12 +19,11 @@ import {
   manualPerspectiveHomographyForFrame,
   type QuarterTurns,
 } from "@/lib/develop/v3/geometry";
-import { resolveAdjustedWhiteBalance } from "@/lib/develop/v3/white-balance";
+import { proposeAutoWhiteBalance, resolveManualWhiteBalance, resolveAdjustedWhiteBalance } from "@/lib/develop/v3/white-balance";
 import type { ColorGradingWheel } from "@/lib/develop/v3/color-grading";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
-import { V3BatchDialog } from "@/components/develop/V3BatchDialog";
+import { DevelopBatchPanel } from "@/components/develop/DevelopBatchPanel";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { BatchSemanticGroup } from "@/lib/develop/v3/batch";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import type {
   V3CanvasDiagnostic,
@@ -48,17 +47,25 @@ import {
   StatusCard,
   ToggleRow,
 } from "@/components/develop/V3PanelControls";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
+import { CameraProfileControls } from "@/components/develop/CameraProfileControls";
+import { DevelopPresetPanel } from "@/components/develop/DevelopPresetPanel";
+import { DevelopClipboardControls } from "@/components/develop/DevelopClipboardControls";
 
-type V3Tab = "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
+import { useExperimentalTools } from "@/hooks/useExperimentalTools";
+import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
+import { sampleWhiteBalanceSource } from "@/lib/develop/v3/canvas-coordinates";
+
+type V3Tab = "presets" | "light" | "color" | "detail" | "geometry" | "masking" | "cleanup" | "output";
 type MixerMode = "hue" | "saturation" | "luminance";
 type GradingRange = "shadows" | "midtones" | "highlights";
 
 const TABS: readonly { readonly id: V3Tab; readonly label: string }[] = [
-  { id: "light", label: "Light" },
+  { id: "presets", label: "Presets" },
+  { id: "light", label: "Basic" },
   { id: "color", label: "Color" },
   { id: "detail", label: "Detail" },
-  { id: "output", label: "Output" },
+
 ];
 
 const MIXER_LABELS: Record<MixerColor, string> = {
@@ -90,22 +97,6 @@ function tabForPanel(panel: DevelopPanelId | null): V3Tab | null {
   return null;
 }
 
-function batchGroupForTab(tab: V3Tab): BatchSemanticGroup {
-  switch (tab) {
-    case "light": return "tone";
-    case "color": return "curve-and-color";
-    case "detail": return "detail";
-    case "geometry": return "geometry-and-crop";
-    case "masking": return "local-adjustments";
-    case "cleanup": return "cleanup";
-    case "output": return "output-intent";
-    default: {
-      const exhaustive: never = tab;
-      return exhaustive;
-    }
-  }
-}
-
 export interface V3BatchContext {
   readonly sourceEntry: LibraryEntry;
   readonly entries: readonly LibraryEntry[];
@@ -117,11 +108,13 @@ export interface V3BatchContext {
 
 function saveLabel(input: {
   readonly sidecarStatus: string;
+  readonly previewing: boolean;
   readonly documentRevision: number;
   readonly persistedDocumentRevision: number;
   readonly metadataRevision: number;
   readonly persistedMetadataRevision: number;
 }): string {
+  if (input.previewing) return "Previewing";
   if (input.sidecarStatus === "saving") return "Saving…";
   if (input.sidecarStatus === "error") return "Save failed";
   return input.documentRevision === input.persistedDocumentRevision &&
@@ -153,49 +146,70 @@ export function EditPanel({
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] : undefined;
   });
+  const [experimental, setExperimental] = useExperimentalTools();
   const resetAll = useDevelopStore((state) => state.resetV3All);
   const [activeTab, setActiveTab] = useState<V3Tab>(
     tabForPanel(activePanel) ?? "light",
   );
   const [batchOpen, setBatchOpen] = useState(false);
+  const tabRefs = useRef(new Map<V3Tab, HTMLButtonElement>());
 
-  const document = session?.persistedDocument;
+  const document = session?.previewDocument ?? session?.persistedDocument;
   if (!session || session.processKind !== "v3" || document?.version !== 3) {
     return null;
   }
 
   const status = saveLabel({
     sidecarStatus: session.ui.sidecarStatus,
+    previewing: session.transientEdit !== null,
     documentRevision: session.documentRevision,
     persistedDocumentRevision: session.persistedDocumentRevision,
     metadataRevision: session.metadataRevision,
     persistedMetadataRevision: session.persistedMetadataRevision,
   });
   const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
+  const presetTransient = isPresetTransientEdit(session.transientEdit);
+  const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, tabId: V3Tab) => {
+    const currentIndex = TABS.findIndex((tab) => tab.id === tabId);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = TABS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = TABS[nextIndex];
+    if (!nextTab) return;
+    setActiveTab(nextTab.id);
+    tabRefs.current.get(nextTab.id)?.focus();
+  };
 
   return (
     <>
       <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="flex min-h-[58px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
             {panelTitle}
           </h2>
-          <p className="mt-0.5 text-[10px] text-lr-text-faint">
-            {status} · SDR · 8-bit output
+          <p className="mt-0.5 text-xs text-lr-text-faint">
+            {status}
           </p>
           {session.ui.sidecarError ? (
-            <p className="mt-0.5 break-words text-[10px] leading-4 text-lr-danger">
+            <p className="mt-0.5 break-words text-xs leading-4 text-lr-danger">
               XMP: {session.ui.sidecarError}
             </p>
           ) : null}
         </div>
         <div className="flex-1" />
-        <ActionButton onClick={() => setBatchOpen(true)}>Batch</ActionButton>
-        <ActionButton onClick={resetAll}>Reset all</ActionButton>
+        <ActionButton onClick={() => setBatchOpen(true)} disabled={presetTransient}>Batch</ActionButton>
+        <ActionButton onClick={resetAll} disabled={presetTransient}>Reset all</ActionButton>
       </div>
 
-      <PrototypeOperations decoded={decoded} document={document} entry={entry} />
+      {experimental ? <div className={presetTransient ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient}>
+        <PrototypeOperations decoded={decoded} document={document} entry={entry} />
+      </div> : null}
+      <DevelopClipboardControls document={document} image={decoded} entry={entry} disabled={presetTransient} />
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
@@ -209,8 +223,14 @@ export function EditPanel({
               type="button"
               role="tab"
               aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              ref={(node) => {
+                if (node) tabRefs.current.set(tab.id, node);
+                else tabRefs.current.delete(tab.id);
+              }}
               onClick={() => setActiveTab(tab.id)}
-              className={`rounded-[7px] px-1 py-1.5 text-[10px] transition ${
+              onKeyDown={(event) => moveTabFocus(event, tab.id)}
+              className={`rounded-[7px] px-1 py-1.5 text-xs transition ${
                 activeTab === tab.id
                   ? "bg-lr-panel-raised text-lr-text"
                   : "text-lr-text-muted hover:bg-lr-panel-raised/60 hover:text-lr-text"
@@ -223,27 +243,32 @@ export function EditPanel({
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {activeTab === "light" ? <LightTab document={document} analysis={analysis} /> : null}
-        {activeTab === "color" ? <ColorTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
+        {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
+        <div className={presetTransient && activeTab !== "presets" ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient && activeTab !== "presets"}>
+        {activeTab === "light" ? <>
+          <PanelSection title="Histogram"><V3HistogramPanel analysis={analysis} /></PanelSection>
+          <WhiteBalanceControls document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} />
+          <LightTab document={document} analysis={analysis} />
+        </> : null}
+        {activeTab === "color" ? <ColorTab document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
         {activeTab === "detail" ? <DetailTab document={document} /> : null}
         {activeTab === "geometry" ? <GeometryTab document={document} /> : null}
         {activeTab === "masking" ? (
           <MaskingTab document={document} entry={batch.sourceEntry} />
         ) : null}
         {activeTab === "cleanup" ? <CleanupTab document={document} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} /> : null}
-        {activeTab === "output" ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
+        <details className="border-t border-lr-border-subtle px-4 py-3 text-xs">
+          <summary className="cursor-pointer text-lr-text-muted">Advanced</summary>
+          <ToggleRow label="Experimental tools" checked={experimental} onChange={setExperimental} />
+          {diagnostics.length > 0 ? <details className="mt-2"><summary className="cursor-pointer">Image details</summary><ul className="mt-2 space-y-1 text-lr-text-muted">{diagnostics.map((diagnostic, index) => <li key={index}>{diagnosticMessage(diagnostic)}</li>)}</ul></details> : null}
+          {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
+        </details>
+        </div>
       </div>
       </aside>
       {batchOpen ? (
-        <V3BatchDialog
+        <DevelopBatchPanel
           sourceEntry={batch.sourceEntry}
-          entries={batch.entries}
-          resultId={batch.resultId}
-          catalogId={batch.sourceEntry.catalogId}
-          catalogRevision={batch.catalogRevision}
-          resultEntryIds={batch.resultEntryIds}
-          missingEntryIds={batch.missingEntryIds}
-          currentGroup={batchGroupForTab(activeTab)}
           onClose={() => setBatchOpen(false)}
         />
       ) : null}
@@ -320,40 +345,44 @@ function whiteBalanceMode(value: string): PersistedWhiteBalanceMode | null {
   }
 }
 
-function profileDescription(document: DevelopDocumentV3): string {
+function profileDescription(
+  document: DevelopDocumentV3,
+  pixelProvenance: DevelopImage["pixelProvenance"],
+): string {
   const selection = document.color.inputProfile.selection;
   if (selection.kind === "decoder-default") {
-    return "Decoder-provided color. No licensed camera profile registry is installed.";
+    const stage = pixelProvenance.cameraProfileStage;
+    if (stage.kind === "available") {
+      return `${stage.profile.label} applied before Develop tone. ${stage.profile.id} · revision ${stage.profile.revision}.`;
+    }
+    return `Camera profile unavailable: ${stage.reason} Using decoder-provided color.`;
   }
   if (selection.kind === "unavailable") return selection.reason;
-  return `${selection.profileId} · revision ${selection.profileRevision}. Stored calibration only; no registry lookup is available.`;
+  return `${selection.profileId} · revision ${selection.profileRevision}. Validated calibration applied before Develop tone.`;
 }
 
-function ColorTab({
+function WhiteBalanceControls({
   document,
+  image,
+  entry,
   canvasTool,
   onCanvasToolChange,
 }: {
   readonly document: DevelopDocumentV3;
+  readonly image: DevelopImage;
+  readonly entry: LibraryEntry;
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
-  const reset = useDevelopStore((state) => state.resetV3Group);
-  const [mixerMode, setMixerMode] = useState<MixerMode>("hue");
   const [autoStatus, setAutoStatus] = useState<string | null>(null);
   const color = document.color;
-
   const replaceColor = (value: DevelopDocumentV3["color"], label: string) =>
     dispatch({ kind: "replace-v3-semantic-group", group: "color", value }, label);
-
   const setWhiteBalanceMode = (raw: string) => {
     const mode = whiteBalanceMode(raw);
     if (!mode) return;
-    if (mode === "auto") {
-      setAutoStatus("Auto WB is unavailable until renderer analysis is connected. The document was not changed.");
-      return;
-    }
+    if (mode === "auto") { requestAutoWhiteBalance(); return; }
     if (mode === "sampled") {
       setAutoStatus("Click a neutral source area in the canvas. Press Escape to cancel.");
       onCanvasToolChange(canvasTool.kind === "white-balance"
@@ -362,14 +391,22 @@ function ColorTab({
       return;
     }
     setAutoStatus(null);
+    if (mode === "custom") { replaceColor({ ...color, whiteBalance: { ...color.whiteBalance, mode } }, "Custom white balance"); return; }
     replaceColor({
       ...color,
-      whiteBalance: { ...color.whiteBalance, mode },
+      whiteBalance: { mode, adjustment: { temperature: 0, tint: 0 }, resolved: resolveManualWhiteBalance({ temperature: 0, tint: 0 }) },
     }, "Change white balance mode");
   };
 
   const requestAutoWhiteBalance = () => {
-    setAutoStatus("Auto WB is unavailable until renderer analysis is connected. The document was not changed.");
+    const source = buildV3SourceRecord(entry, image, "preview");
+    if (source.kind !== "source") { setAutoStatus("White balance needs a decoded photo."); return; }
+    const samples = sampleWhiteBalanceSource(image, source.source, document);
+    if (samples.kind !== "sampled") { setAutoStatus(samples.reason); return; }
+    const proposal = proposeAutoWhiteBalance({ kind: "source-linear", samples: samples.samples });
+    if (proposal.kind !== "proposal") { setAutoStatus("No neutral area was found. Use the eyedropper instead."); return; }
+    replaceColor({ ...color, whiteBalance: { mode: "auto", adjustment: { temperature: 0, tint: 0 }, resolved: proposal.values } }, "Auto white balance");
+    setAutoStatus(null);
   };
 
   const updateWhiteBalance = (field: "temperature" | "tint", value: number) => {
@@ -389,36 +426,60 @@ function ColorTab({
     }, "Adjust white balance");
   };
 
-  return (
-    <PanelSection title="Color" onReset={() => reset("color")}>
-      <SectionLabel>White balance</SectionLabel>
+  return <PanelSection title="White balance">
       <SelectRow label="Mode" value={color.whiteBalance.mode} onChange={setWhiteBalanceMode}>
         <option value="current">Current</option>
         <option value="camera">As shot</option>
         <option value="custom">Custom</option>
         <option value="sampled">Sample from canvas</option>
-        <option value="auto" disabled>Auto requested · unavailable</option>
+        <option value="auto">Auto</option>
         <option value="legacy-custom">Imported custom</option>
       </SelectRow>
-      <SliderRow label="Temperature" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000} suffix=" K" track={COLOR_SLIDER_TRACKS.temperature} onChange={(value) => updateWhiteBalance("temperature", value)} />
+      <SliderRow label="Warmth" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000}  track={COLOR_SLIDER_TRACKS.temperature} onChange={(value) => updateWhiteBalance("temperature", value)} />
       <SliderRow label="Tint" value={color.whiteBalance.adjustment.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(value) => updateWhiteBalance("tint", value)} />
       <div className="mt-2 flex items-center gap-2">
         <ActionButton onClick={() => onCanvasToolChange(canvasTool.kind === "white-balance" ? { kind: "none" } : { kind: "white-balance" })}>
           {canvasTool.kind === "white-balance" ? "Cancel sampler" : "Sample neutral"}
         </ActionButton>
-        <ActionButton onClick={requestAutoWhiteBalance}>Request Auto</ActionButton>
-        <p className="text-[9px] leading-3 text-lr-text-faint">
-          Resolved: {color.whiteBalance.resolved.temperatureKelvin} K
-        </p>
-      </div>
-      {autoStatus ? <p role="status" className="mt-2 text-[10px] leading-4 text-lr-accent">{autoStatus}</p> : null}
+        <ActionButton onClick={requestAutoWhiteBalance}>Auto</ActionButton>
 
+      </div>
+      {autoStatus ? <p role="status" className="mt-2 text-xs leading-4 text-lr-accent">{autoStatus}</p> : null}
+
+    </PanelSection>;
+}
+
+function ColorTab({
+  document,
+  image,
+  entry,
+  canvasTool,
+  onCanvasToolChange,
+}: {
+  readonly document: DevelopDocumentV3;
+  readonly image: DevelopImage;
+  readonly entry: LibraryEntry;
+  readonly canvasTool: V3CanvasTool;
+  readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
+}) {
+  const dispatch = useDevelopStore((state) => state.dispatchV3);
+  const reset = useDevelopStore((state) => state.resetV3Group);
+  const [mixerMode, setMixerMode] = useState<MixerMode>("hue");
+  const color = document.color;
+
+  const replaceColor = (value: DevelopDocumentV3["color"], label: string) =>
+    dispatch({ kind: "replace-v3-semantic-group", group: "color", value }, label);
+
+  return (
+    <PanelSection title="Color" onReset={() => reset("color")}>
       <SectionLabel>Global color</SectionLabel>
       <SliderRow label="Vibrance" value={color.global.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => replaceColor({ ...color, global: { ...color.global, vibrance } }, "Adjust vibrance")} />
       <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation")} />
 
-      <SectionLabel>Input profile</SectionLabel>
-      <StatusCard title="Profile status">{profileDescription(document)}</StatusCard>
+      <details className="my-3 text-xs"><summary className="cursor-pointer text-lr-text-muted">Camera profile</summary>
+        <StatusCard title="Profile">{profileDescription(document, image.pixelProvenance)}</StatusCard>
+        <CameraProfileControls document={document} image={image} entry={entry} />
+      </details>
 
       <PointColorControls
         document={document}
@@ -493,20 +554,20 @@ function PointColorControls({
           Add numeric point
         </ActionButton>
       </div>
-      <p className="mb-1.5 text-[10px] leading-4 text-lr-text-faint">
+      <p className="mb-1.5 text-xs leading-4 text-lr-text-faint">
         Canvas sampling records the clicked SDR color. Numeric points start from neutral mid-color values.
       </p>
       {settings.adjustments.length === 0 ? (
-        <p className="text-[10px] leading-4 text-lr-text-faint">No Point Color samples.</p>
+        <p className="text-xs leading-4 text-lr-text-faint">No Point Color samples.</p>
       ) : settings.adjustments.map((adjustment, index) => (
         <div key={adjustment.id} className="mb-2 rounded-[7px] border border-lr-border-subtle p-2">
           <div className="mb-1 flex items-center gap-2">
-            <label className="flex items-center gap-1.5 text-[10px] text-lr-text-muted">
+            <label className="flex items-center gap-1.5 text-xs text-lr-text-muted">
               <input type="checkbox" checked={adjustment.enabled} onChange={(event) => update(adjustment.id, { enabled: event.target.checked })} className="size-3 accent-lr-accent" />
               Sample {index + 1}
             </label>
             <div className="flex-1" />
-            <button type="button" onClick={() => replaceColor({ ...document.color, pointColor: { adjustments: settings.adjustments.filter((item) => item.id !== adjustment.id) } }, "Remove Point Color")} className="text-[10px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+            <button type="button" onClick={() => replaceColor({ ...document.color, pointColor: { adjustments: settings.adjustments.filter((item) => item.id !== adjustment.id) } }, "Remove Point Color")} className="text-xs text-lr-text-faint hover:text-lr-danger">Remove</button>
           </div>
           <SliderRow label="Source hue" value={adjustment.sourceHueDegrees} min={0} max={360} onChange={(sourceHueDegrees) => update(adjustment.id, { sourceHueDegrees })} />
           <SliderRow label="Source sat." value={adjustment.sourceSaturation} min={0} max={1} step={0.01} onChange={(sourceSaturation) => update(adjustment.id, { sourceSaturation })} />
@@ -601,7 +662,7 @@ function ColorGradingControls({
       <SectionLabel>Color grading</SectionLabel>
       {(["shadows", "midtones", "highlights"] as const).map((range) => (
         <div key={range} className="mb-1.5">
-          <p className="text-[9px] font-medium capitalize text-lr-text-faint">{range}</p>
+          <p className="text-[11px] font-medium capitalize text-lr-text-faint">{range}</p>
           <SliderRow label="Hue" value={grading[range].hueDegrees} min={0} max={360} onChange={(hueDegrees) => updateWheel(range, { hueDegrees })} />
           <SliderRow label="Saturation" value={grading[range].saturation} min={0} max={100} onChange={(saturation) => updateWheel(range, { saturation })} />
           <SliderRow label="Luminance" value={grading[range].luminance} min={-100} max={100} onChange={(luminance) => updateWheel(range, { luminance })} />
@@ -780,7 +841,7 @@ function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
           <SliderRow label="Custom height" value={crop.customAspectHeight} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(customAspectHeight) => replace({ ...geometry, crop: { ...crop, customAspectHeight } }, "Adjust custom crop height")} />
         </>
       ) : null}
-      <p className="mt-2 text-[10px] leading-4 text-lr-text-faint">
+      <p className="mt-2 text-xs leading-4 text-lr-text-faint">
         Open Crop from the Develop rail to drag the frame and handles on the photo. Each completed drag commits one crop command.
       </p>
     </PanelSection>
@@ -862,7 +923,8 @@ function CleanupTab({
     if (result.kind === "invalid") setMessage(result.reason);
   };
 
-  const unavailable = (["people", "reflection", "dust"] as const).map((kind) =>
+  const [experimental] = useExperimentalTools();
+  const unavailable = (experimental ? ["people", "reflection", "dust"] as const : []).map((kind) =>
     currentGeneratedJobCapability(kind)
   );
 
@@ -874,10 +936,10 @@ function CleanupTab({
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("remove") }, "Add sampled removal")}>Add remove</ActionButton>
         <ActionButton onClick={() => commit({ kind: "add", component: defaultCleanupComponent("red-eye") }, "Add red eye")}>Add red eye</ActionButton>
       </div>
-      <p className="mb-2 text-[10px] leading-4 text-lr-text-faint">
+      <p className="mb-2 text-xs leading-4 text-lr-text-faint">
         Add a component, then place its target and sampled source on the canvas. Numeric controls remain available below.
       </p>
-      {message ? <p role="alert" className="mb-2 text-[10px] text-lr-danger">{message}</p> : null}
+      {message ? <p role="alert" className="mb-2 text-xs text-lr-danger">{message}</p> : null}
       {document.cleanup.components.length === 0 ? (
         <StatusCard title="No cleanup components">Add a manual heal, clone, or red-eye component.</StatusCard>
       ) : (
@@ -891,7 +953,7 @@ function CleanupTab({
                 </label>
                 <button type="button" disabled={index === 0} aria-label={`Move ${cleanupLabel(component)} up`} onClick={() => commit({ kind: "move", componentId: component.id, targetIndex: index - 1 }, `Move ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-text disabled:opacity-25">↑</button>
                 <button type="button" disabled={index === document.cleanup.components.length - 1} aria-label={`Move ${cleanupLabel(component)} down`} onClick={() => commit({ kind: "move", componentId: component.id, targetIndex: index + 1 }, `Move ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-text disabled:opacity-25">↓</button>
-                <button type="button" aria-label={`Remove ${cleanupLabel(component)}`} onClick={() => commit({ kind: "delete", componentId: component.id }, `Remove ${cleanupLabel(component)}`)} className="px-1 text-[10px] text-lr-text-faint hover:text-lr-danger">Remove</button>
+                <button type="button" aria-label={`Remove ${cleanupLabel(component)}`} onClick={() => commit({ kind: "delete", componentId: component.id }, `Remove ${cleanupLabel(component)}`)} className="px-1 text-xs text-lr-text-faint hover:text-lr-danger">Remove</button>
               </div>
               <V3CleanupComponentEditor
                 component={component}
@@ -987,7 +1049,7 @@ function OutputTab({
           HDR display, high-bit output, ICC proof transforms, and gamut analysis are not verified in this build. Stored HDR edits are not changed here; preview and output remain explicit SDR fallback.
         </StatusCard>
         {document.hdr.enabled ? (
-          <p className="mt-2 text-[10px] leading-4 text-lr-danger">
+          <p className="mt-2 text-xs leading-4 text-lr-danger">
             This document requests HDR edits, but the current capability tier cannot render or export them as HDR.
           </p>
         ) : null}
@@ -1007,10 +1069,10 @@ export function NewerDevelopReadOnlyPanel({
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="border-b border-lr-border-subtle px-4 py-3">
         <div className="flex items-center gap-1.5">
-          <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Develop</h2>
-          <span className="rounded bg-[#3c2925] px-1.5 py-0.5 font-mono text-[9px] text-lr-danger">v{version} · read-only</span>
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-lr-text-muted">Develop</h2>
+          <span className="rounded bg-[#3c2925] px-1.5 py-0.5 font-mono text-[11px] text-lr-danger">v{version} · read-only</span>
         </div>
-        <p className="mt-1 text-[10px] text-lr-text-faint">Not editable or saved by this app</p>
+        <p className="mt-1 text-xs text-lr-text-faint">Not editable or saved by this app</p>
       </div>
       <div className="p-4">
         <StatusCard title="Newer process" tone="danger">{reason}</StatusCard>
@@ -1023,11 +1085,11 @@ export function PreparingDevelopPanel({ error }: { readonly error: string | null
   return (
     <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="border-b border-lr-border-subtle px-4 py-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
           Develop
         </h2>
         <p
-          className={`mt-1 text-[10px] ${error ? "text-lr-danger" : "text-lr-text-faint"}`}
+          className={`mt-1 text-xs ${error ? "text-lr-danger" : "text-lr-text-faint"}`}
           role={error ? "alert" : "status"}
         >
           {error ?? "Preparing editor…"}

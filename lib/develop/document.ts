@@ -1,9 +1,9 @@
-import { ASPECT_RATIO_PRESETS } from "@/lib/develop/crop-geometry";
+import { ASPECT_RATIO_PRESETS } from "./crop-geometry.ts";
 import {
   createDevelopSettings,
-} from "@/lib/develop/registry";
-import { normalizeCurveSettings } from "@/lib/develop/plugins/curve";
-import { DEFAULT_EFFECTS_SETTINGS } from "@/lib/develop/plugins/effects";
+} from "./registry.ts";
+import { normalizeCurveSettings } from "./plugins/curve.ts";
+import { DEFAULT_EFFECTS_SETTINGS } from "./plugins/effects.ts";
 import type {
   AiMaskComponent,
   BasicSettings,

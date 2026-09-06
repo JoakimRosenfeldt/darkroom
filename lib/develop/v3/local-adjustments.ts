@@ -1,5 +1,5 @@
-import type { BasicSettings } from "../types";
-import type { Rgb } from "./profiles";
+import type { BasicSettings } from "../types.ts";
+import type { Rgb } from "./profiles.ts";
 
 export interface LocalAdjustmentValues {
   readonly basic: BasicSettings;
@@ -76,6 +76,8 @@ const REGISTRY: readonly LocalAdjustmentDefinition[] = DEFINITIONS.map(
   }),
 );
 
+const DEFINITIONS_BY_FIELD = new Map(REGISTRY.map((definition) => [definition.field, definition]));
+
 const BASIC_FIELDS = [
   "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
   "temperature", "tint", "vibrance", "saturation",
@@ -125,7 +127,7 @@ export function parseLocalAdjustmentValues(value: unknown): LocalAdjustmentValue
     throw new Error("local adjustments.colorize.color must contain three channels.");
   }
   const definition = (field: LocalAdjustmentField): LocalAdjustmentDefinition => {
-    const found = REGISTRY.find((item) => item.field === field);
+    const found = DEFINITIONS_BY_FIELD.get(field);
     if (!found) throw new Error(`Missing local adjustment definition for ${field}.`);
     return found;
   };
@@ -192,7 +194,7 @@ export interface LocalAccumulationInput {
 export function accumulateLocalAdjustments(
   input: LocalAccumulationInput,
 ): LocalAdjustmentValues {
-  const basic = structuredClone(DEFAULT_LOCAL_ADJUSTMENTS.basic);
+  const basic = { ...DEFAULT_LOCAL_ADJUSTMENTS.basic };
   let texture = 0;
   let clarity = 0;
   let sharpness = 0;
@@ -221,7 +223,7 @@ export function accumulateLocalAdjustments(
     blue += contribution.values.colorize.color[2] * weight;
   }
   const boundsFor = (field: LocalAdjustmentField): LocalAdjustmentDefinition => {
-    const definition = REGISTRY.find((item) => item.field === field);
+    const definition = DEFINITIONS_BY_FIELD.get(field);
     if (!definition) throw new Error(`Missing local adjustment definition for ${field}.`);
     return definition;
   };

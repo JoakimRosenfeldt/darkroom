@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Darkroom landing page concepts</title>
+<style>
+  :root {
+    --chrome-bg: #16181d;
+    --chrome-line: #2c313b;
+    --chrome-ink: #e6e8ec;
+    --chrome-dim: #9aa2b1;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--chrome-bg);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--chrome-ink);
+  }
+  img, svg { max-width: 100%; display: block; }
+
+  /* ---------- document chrome ---------- */
+  .chrome {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(22,24,29,.94);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--chrome-line);
+  }
+  .chrome-inner {
+    max-width: 1180px; margin: 0 auto; padding: 10px 20px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .chrome-title {
+    font-size: 13px; font-weight: 600; letter-spacing: .02em; margin: 0;
+    white-space: nowrap;
+  }
+  .chrome-title span { color: var(--chrome-dim); font-weight: 400; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .tab {
+    appearance: none; cursor: pointer;
+    background: transparent; color: var(--chrome-dim);
+    border: 1px solid var(--chrome-line); border-radius: 6px;
+    padding: 6px 11px; font: inherit; font-size: 12.5px; line-height: 1.2;
+    display: flex; align-items: baseline; gap: 7px;
+  }
+  .tab:hover { color: var(--chrome-ink); border-color: #454c59; }
+  .tab:focus-visible { outline: 2px solid #6ea8fe; outline-offset: 2px; }
+  .tab b { font-weight: 700; font-size: 11px; letter-spacing: .08em; }
+  .tab[aria-selected="true"] {
+    background: var(--chrome-ink); color: #16181d; border-color: var(--chrome-ink);
+  }
+  .chrome-hint {
+    max-width: 1180px; margin: 0 auto; padding: 0 20px 10px;
+    font-size: 12px; color: var(--chrome-dim);
+  }
+  .panel[hidden] { display: none; }
+  @media (max-width: 620px) {
+    .tabs { margin-left: 0; width: 100%; }
+    .tab span { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* ================= A. Safelight ================= */
+  #lp-a {
+    background: #0a0908; color: #e9e3da;
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    position: relative; overflow: hidden;
+  }
+  #lp-a::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23n)' opacity='.32'/></svg>");
+  }
+  .a-wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+  .a-nav { display: flex; align-items: center; gap: 20px; padding: 26px 0 0; }
+  .a-mark { font-size: 13px; letter-spacing: .34em; text-transform: uppercase; font-weight: 700; }
+  .a-mark i { font-style: normal; color: #ff3b1f; }
+  .a-nav ul { list-style: none; display: flex; gap: 22px; margin: 0 0 0 auto; padding: 0;
+    font-size: 13px; color: #857e74; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .a-hero { padding: 110px 0 86px; max-width: 780px; }
+  .a-kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    letter-spacing: .18em; text-transform: uppercase; color: #ff3b1f; margin: 0 0 26px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .a-kicker::after { content: ""; height: 1px; flex: 1; background: linear-gradient(90deg,#ff3b1f,transparent); }
+  .a-hero h1 {
+    font-size: clamp(40px, 6.6vw, 78px); line-height: .98; letter-spacing: -.035em;
+    font-weight: 700; margin: 0 0 28px;
+  }
+  .a-hero h1 em { font-style: normal; color: #ff3b1f; }
+  .a-lede { font-size: clamp(17px, 2vw, 20px); line-height: 1.55; color: #b2aaa0; margin: 0 0 40px; max-width: 56ch; }
+  .a-cta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .a-btn {
+    display: inline-block; padding: 14px 26px; border-radius: 2px; font-size: 15px;
+    font-weight: 600; text-decoration: none; border: 1px solid #ff3b1f;
+    background: #ff3b1f; color: #0a0908;
+  }
+  .a-btn:hover { background: #ff5638; border-color: #ff5638; }
+  .a-btn.ghost { background: transparent; color: #e9e3da; border-color: #3a352f; }
+  .a-btn.ghost:hover { border-color: #6d655b; }
+  .a-note { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: #6f675e; margin: 18px 0 0; }
+  .a-rule { height: 1px; background: #23201c; }
+  .a-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .a-col { padding: 52px 34px 60px; border-right: 1px solid #23201c; }
+  .a-col:first-child { padding-left: 0; }
+  .a-col:last-child { border-right: 0; padding-right: 0; }
+  .a-num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #ff3b1f; letter-spacing: .16em; }
+  .a-col h3 { font-size: 21px; letter-spacing: -.02em; margin: 16px 0 12px; }
+  .a-col p { font-size: 15px; line-height: 1.65; color: #a09890; margin: 0; }
+  .a-spec { padding: 56px 0 100px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 34px 26px; }
+  .a-spec dt {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    letter-spacing: .2em; text-transform: uppercase; color: #6f675e; margin-bottom: 9px;
+  }
+  .a-spec dd { margin: 0; font-size: 15.5px; line-height: 1.5; color: #ddd5cb; }
+  .a-safelight {
+    position: absolute; top: -260px; right: -200px; width: 720px; height: 720px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,59,31,.20), rgba(255,59,31,.05) 45%, transparent 68%);
+    pointer-events: none;
+  }
+  .a-foot { border-top: 1px solid #23201c; padding: 28px 0 60px; display: flex; gap: 18px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #6f675e; flex-wrap: wrap; }
+  @media (max-width: 800px) {
+    .a-cols { grid-template-columns: 1fr; }
+    .a-col { border-right: 0; border-bottom: 1px solid #23201c; padding: 40px 0; }
+    .a-nav ul { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="chrome">
+  <div class="chrome-inner">
+    <h1 class="chrome-title">Darkroom landing pages <span>/ five directions</span></h1>
+    <div class="tabs" role="tablist" aria-label="Landing page concepts">
+      <button class="tab" role="tab" id="tab-a" aria-controls="lp-a" aria-selected="true"><b>A</b><span>Safelight</span></button>
+      <button class="tab" role="tab" id="tab-b" aria-controls="lp-b" aria-selected="false"><b>B</b><span>Swiss print</span></button>
+      <button class="tab" role="tab" id="tab-c" aria-controls="lp-c" aria-selected="false"><b>C</b><span>Gallery</span></button>
+      <button class="tab" role="tab" id="tab-d" aria-controls="lp-d" aria-selected="false"><b>D</b><span>Spec sheet</span></button>
+      <button class="tab" role="tab" id="tab-e" aria-controls="lp-e" aria-selected="false"><b>E</b><span>Paper</span></button>
+    </div>
+  </div>
+  <p class="chrome-hint">Press 1 to 5, or the left and right arrows, to switch. Each direction is a full page, not a fragment.</p>
+</header>
+
+<main>
+
+<!-- ============ A. SAFELIGHT ============ -->
+<section class="panel" id="lp-a" role="tabpanel" aria-labelledby="tab-a">
+  <div class="a-safelight" aria-hidden="true"></div>
+  <div class="a-wrap">
+    <nav class="a-nav">
+      <div class="a-mark">Dark<i>room</i></div>
+      <ul><li>Develop</li><li>Library</li><li>Formats</li><li>Source</li></ul>
+    </nav>
+
+    <div class="a-hero">
+      <p class="a-kicker">Desktop photo editor, version 0.1.0</p>
+      <h1>The photos stay in <em>your</em> folders.</h1>
+      <p class="a-lede">Darkroom opens a directory on your disk and edits what is already there. There is no import step, no library format that swallows your files, and nothing to sign into.</p>
+      <div class="a-cta">
+        <a class="a-btn" href="#lp-a">Download for macOS</a>
+        <a class="a-btn ghost" href="#lp-a">Build from source</a>
+      </div>
+      <p class="a-note">macOS, Windows, Linux. Reads NEF, JPEG, PNG, WebP.</p>
+    </div>
+
+    <div class="a-rule"></div>
+
+    <div class="a-cols">
+      <div class="a-col">
+        <div class="a-num">01</div>
+        <h3>Reads in place</h3>
+        <p>Point it at a folder. Darkroom walks the subfolders, indexes every file it can decode, and leaves each one byte for byte where it was. Nothing is copied into an app container.</p>
+      </div>
+      <div class="a-col">
+        <div class="a-num">02</div>
+        <h3>Edits sit next to the file</h3>
+        <p>Every adjustment lands in a local JSON catalog and in an XMP sidecar beside the photo. Uninstall the app tomorrow and your originals are exactly as the camera wrote them.</p>
+      </div>
+      <div class="a-col">
+        <div class="a-num">03</div>
+        <h3>Says no out loud</h3>
+        <p>Hand it a CR2 or a HEIC and it names the file, tells you which decoder is missing, and moves on. No broken thumbnail, no silent skip, no guessing why a photo vanished.</p>
+      </div>
+    </div>
+
+    <div class="a-rule"></div>
+
+    <dl class="a-spec">
+      <div><dt>Reads</dt><dd>NEF, JPEG, PNG, WebP</dd></div>
+      <div><dt>Writes</dt><dd>JPEG, PNG, WebP, AVIF, TIFF</dd></div>
+      <div><dt>Renderer</dt><dd>WebGL2, with a CPU path when the GPU is unavailable</dd></div>
+      <div><dt>Masks</dt><dd>Brush, linear, radial, plus subject and sky from a local model</dd></div>
+      <div><dt>Network</dt><dd>One optional model download. Otherwise none.</dd></div>
+      <div><dt>Catalog</dt><dd>JSON on disk, one per folder root</dd></div>
+    </dl>
+
+    <div class="a-foot">
+      <span>Darkroom 0.1.0</span>
+      <span>Electron and Next.js</span>
+      <span>Not finished, and honest about it</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ B. SWISS PRINT ============ -->
+<style>
+  #lp-b {
+    background: #f2f1ee; color: #101010;
+    font-family: "Helvetica Neue", Helvetica, Inter, ui-sans-serif, Arial, sans-serif;
+  }
+  .b-wrap { max-width: 1240px; margin: 0 auto; padding: 0 32px; }
+  .b-nav {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; align-items: end;
+    border-bottom: 2px solid #101010; padding: 22px 0 12px;
+  }
+  .b-logo { font-size: 22px; font-weight: 700; letter-spacing: -.04em; }
+  .b-nav div:not(.b-logo) { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; }
+  .b-hero { display: grid; grid-template-columns: 8fr 4fr; gap: 0; border-bottom: 1px solid #101010; }
+  .b-hero-main { padding: 64px 40px 72px 0; border-right: 1px solid #101010; }
+  .b-tag {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .14em; margin: 0 0 40px;
+    color: #d92b13; font-weight: 700;
+  }
+  .b-hero h2 {
+    font-size: clamp(38px, 7.2vw, 94px); line-height: .92; letter-spacing: -.045em;
+    font-weight: 700; margin: 0; text-wrap: balance;
+  }
+  .b-hero-side { padding: 64px 0 72px 40px; display: flex; flex-direction: column; }
+  .b-hero-side p { font-size: 16px; line-height: 1.55; margin: 0 0 24px; }
+  .b-hero-side p:first-child { font-size: 19px; line-height: 1.45; }
+  .b-links { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+  .b-link {
+    display: flex; justify-content: space-between; align-items: center;
+    text-decoration: none; color: #101010; border-top: 1px solid #101010;
+    padding: 12px 0 10px; font-size: 15px; font-weight: 600;
+  }
+  .b-link:hover { color: #d92b13; }
+  .b-link em { font-style: normal; font-weight: 400; }
+  .b-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .b-cell { border-right: 1px solid #101010; border-bottom: 1px solid #101010; padding: 34px 26px 46px; }
+  .b-cell:nth-child(4n) { border-right: 0; }
+  .b-cell .n {
+    font-size: 12px; font-weight: 700; letter-spacing: .1em; color: #d92b13;
+    display: block; margin-bottom: 40px;
+  }
+  .b-cell h3 { font-size: 20px; letter-spacing: -.025em; margin: 0 0 12px; }
+  .b-cell p { font-size: 14.5px; line-height: 1.6; margin: 0; color: #3a3a38; }
+  .b-plate {
+    display: grid; grid-template-columns: 5fr 7fr; border-bottom: 1px solid #101010;
+  }
+  .b-plate-text { padding: 62px 40px 62px 0; border-right: 1px solid #101010; }
+  .b-plate-text h3 { font-size: clamp(26px,3.4vw,40px); letter-spacing: -.035em; line-height: 1.02; margin: 0 0 20px; }
+  .b-plate-text p { font-size: 16px; line-height: 1.6; color: #3a3a38; margin: 0 0 16px; max-width: 42ch; }
+  .b-swatches { display: flex; height: 100%; min-height: 300px; }
+  .b-swatches div { flex: 1; }
+  .b-table { width: 100%; border-collapse: collapse; margin: 0 0 4px; }
+  .b-table th, .b-table td { text-align: left; padding: 13px 12px 13px 0; border-bottom: 1px solid #cecdc8; font-size: 14.5px; }
+  .b-table th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; color: #6d6c67; font-weight: 700; border-bottom-color: #101010; }
+  .b-table td:last-child { color: #3a3a38; }
+  .b-yes { color: #d92b13; font-weight: 700; }
+  .b-close { padding: 70px 0 90px; display: grid; grid-template-columns: 8fr 4fr; gap: 40px; align-items: end; }
+  .b-close h3 { font-size: clamp(30px,4.6vw,56px); letter-spacing: -.04em; line-height: .98; margin: 0; }
+  .b-close a {
+    display: inline-block; background: #101010; color: #f2f1ee; text-decoration: none;
+    padding: 16px 30px; font-size: 15px; font-weight: 600;
+  }
+  .b-close a:hover { background: #d92b13; }
+  .b-foot { border-top: 2px solid #101010; padding: 16px 0 60px; display: flex; gap: 26px;
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: .1em; flex-wrap: wrap; color: #6d6c67; }
+  @media (max-width: 900px) {
+    .b-hero, .b-plate, .b-close { grid-template-columns: 1fr; }
+    .b-hero-main, .b-plate-text { border-right: 0; padding-right: 0; border-bottom: 1px solid #101010; }
+    .b-hero-side { padding-left: 0; }
+    .b-grid { grid-template-columns: repeat(2, 1fr); }
+    .b-cell:nth-child(2n) { border-right: 0; }
+    .b-nav { grid-template-columns: 1fr 1fr; gap: 8px; }
+  }
+</style>
+<section class="panel" id="lp-b" role="tabpanel" aria-labelledby="tab-b" hidden>
+  <div class="b-wrap">
+    <nav class="b-nav">
+      <div class="b-logo">Darkroom</div>
+      <div>Develop</div>
+      <div>Library</div>
+      <div>Download</div>
+    </nav>
+
+    <div class="b-hero">
+      <div class="b-hero-main">
+        <p class="b-tag">Version 0.1.0 / macOS, Windows, Linux</p>
+        <h2>A photo library that does not move your photos.</h2>
+      </div>
+      <div class="b-hero-side">
+        <p>Pick a folder. Darkroom indexes it, edits it, and exports from it. Your directory structure is the library.</p>
+        <p>Everything runs on the machine in front of you. No account, no sync, no upload, no subscription to keep your own catalog readable.</p>
+        <div class="b-links">
+          <a class="b-link" href="#lp-b">Download <em>0.1.0</em></a>
+          <a class="b-link" href="#lp-b">Read the source <em>GitHub</em></a>
+        </div>
+      </div>
+    </div>
+
+    <div class="b-grid">
+      <div class="b-cell">
+        <span class="n">01</span>
+        <h3>Scan</h3>
+        <p>Choose a directory and Darkroom walks it recursively. Files are read on demand, thumbnails are cached by path and modification time, and the grid stays smooth because it only draws the rows you can see.</p>
+      </div>
+      <div class="b-cell">
+        <span class="n">02</span>
+        <h3>Sort</h3>
+        <p>Flags, five stars, five color labels, keywords, albums and smart albums that follow a rule instead of a list. Compare two frames side by side and pick the sharper one.</p>
+      </div>
+      <div class="b-cell">
+        <span class="n">03</span>
+        <h3>Develop</h3>
+        <p>Exposure, tone, curves, HSL, color grading, point color, detail, optics, crop and upright. Brush, linear and radial masks. Subject and sky selection from a model that runs offline once you have it.</p>
+      </div>
+      <div class="b-cell">
+        <span class="n">04</span>
+        <h3>Deliver</h3>
+        <p>Copy settings from one frame and paste them onto a selection, or queue a batch. Batch jobs are written to disk as they run, so quitting halfway does not throw away the work.</p>
+      </div>
+    </div>
+
+    <div class="b-plate">
+      <div class="b-plate-text">
+        <h3>Nothing you do here is destructive.</h3>
+        <p>Adjustments live in a per folder JSON catalog and in XMP sidecars written beside each photo. The original file is opened for reading and never rewritten.</p>
+        <p>History is per photo and undoable. Versions are saved separately, so a second crop does not overwrite the first one.</p>
+      </div>
+      <div class="b-swatches" aria-hidden="true">
+        <div style="background:#d92b13"></div>
+        <div style="background:#101010"></div>
+        <div style="background:#f2f1ee"></div>
+        <div style="background:#1a3a8f"></div>
+      </div>
+    </div>
+
+    <div class="b-plate">
+      <div class="b-plate-text">
+        <h3>What it opens, and what it refuses.</h3>
+        <p>Formats it cannot decode are still recognized. The file appears with the reason it cannot be opened rather than disappearing from the grid.</p>
+      </div>
+      <div style="padding:62px 0 62px 40px">
+        <table class="b-table">
+          <thead><tr><th>Format</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td>NEF</td><td class="b-yes">Reads, develops, exports</td></tr>
+            <tr><td>JPEG, PNG, WebP</td><td class="b-yes">Reads, develops, exports</td></tr>
+            <tr><td>DNG, CR2, CR3, ARW, RAF, ORF, RW2</td><td>Recognized, no decoder yet</td></tr>
+            <tr><td>HEIC, TIFF, PSD, JPEG XL</td><td>Recognized, no decoder yet</td></tr>
+            <tr><td>Video</td><td>Not implemented</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="b-close">
+      <h3>Your files were fine before this app. They will be fine after it.</h3>
+      <div><a href="#lp-b">Download Darkroom</a></div>
+    </div>
+
+    <div class="b-foot">
+      <span>Darkroom 0.1.0</span><span>Electron</span><span>Local only</span><span>No account</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ C. GALLERY ============ -->
+<style>
+  #lp-c {
+    background: #0f0f10; color: #f0eeea;
+    font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  }
+  .c-wrap { max-width: 1160px; margin: 0 auto; padding: 0 28px; }
+  .c-nav { display: flex; align-items: center; padding: 30px 0; gap: 28px; }
+  .c-nav .brand { font-size: 19px; letter-spacing: .22em; text-transform: uppercase; }
+  .c-nav .meta {
+    margin-left: auto; font-family: ui-sans-serif, Helvetica, Arial, sans-serif;
+    font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #857f76;
+  }
+  .c-hero { position: relative; margin: 0 -28px; }
+  .c-frame {
+    height: min(74vh, 640px); position: relative; overflow: hidden;
+    background:
+      radial-gradient(120% 90% at 18% 12%, rgba(255,214,170,.55), transparent 55%),
+      radial-gradient(90% 80% at 78% 30%, rgba(96,132,178,.45), transparent 60%),
+      linear-gradient(160deg, #2a2320 0%, #171a20 42%, #0d0e10 100%);
+  }
+  .c-frame::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(15,15,16,.25) 0%, rgba(15,15,16,0) 30%, rgba(15,15,16,.92) 100%);
+  }
+  .c-hero-copy {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+    padding: 0 28px 54px; max-width: 1160px; margin: 0 auto;
+  }
+  .c-hero-copy h2 {
+    font-size: clamp(38px, 6.4vw, 76px); line-height: 1.02; letter-spacing: -.02em;
+    font-weight: 400; margin: 0 0 20px; max-width: 15ch;
+  }
+  .c-hero-copy h2 i { color: #e6b98a; }
+  .c-hero-copy p {
+    font-family: ui-sans-serif, Helvetica, Arial, sans-serif;
+    font-size: 17px; line-height: 1.6; color: #bab4ab; max-width: 52ch; margin: 0 0 28px;
+  }
+  .c-actions { display: flex; gap: 26px; align-items: center; flex-wrap: wrap;
+    font-family: ui-sans-serif, Helvetica, Arial, sans-serif; }
+  .c-primary {
+    text-decoration: none; background: #f0eeea; color: #0f0f10;
+    padding: 15px 30px; border-radius: 999px; font-size: 15px; font-weight: 600;
+  }
+  .c-primary:hover { background: #e6b98a; }
+  .c-secondary { text-decoration: none; color: #bab4ab; font-size: 14px; border-bottom: 1px solid #4a453e; padding-bottom: 3px; }
+  .c-secondary:hover { color: #f0eeea; border-color: #e6b98a; }
+  .c-strip { display: flex; gap: 10px; padding: 40px 0 0; overflow: hidden; }
+  .c-strip div { flex: 1; height: 88px; border-radius: 3px; opacity: .85; }
+  .c-section { padding: 96px 0; border-bottom: 1px solid #232324; }
+  .c-eyebrow {
+    font-family: ui-sans-serif, Helvetica, Arial, sans-serif; font-size: 11px;
+    letter-spacing: .22em; text-transform: uppercase; color: #857f76; margin: 0 0 22px;
+  }
+  .c-split { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center; }
+  .c-split h3 { font-size: clamp(28px, 3.6vw, 42px); font-weight: 400; line-height: 1.1; letter-spacing: -.015em; margin: 0 0 22px; }
+  .c-split p { font-family: ui-sans-serif, Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.7; color: #a9a39a; margin: 0 0 16px; }
+  .c-plate { height: 380px; border-radius: 4px; }
+  .c-plate.one { background: linear-gradient(145deg,#3b2f28,#0f1114 70%), radial-gradient(60% 60% at 30% 25%, rgba(230,185,138,.5), transparent); }
+  .c-plate.two { background: radial-gradient(70% 70% at 70% 30%, rgba(120,160,200,.5), transparent), linear-gradient(200deg,#1b2a33,#0e1013); }
+  .c-quote { padding: 100px 0; text-align: center; }
+  .c-quote p { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.3; font-weight: 400; margin: 0 auto 22px; max-width: 22ch; }
+  .c-quote span { font-family: ui-sans-serif, Helvetica, Arial, sans-serif; font-size: 12px;
+    letter-spacing: .18em; text-transform: uppercase; color: #857f76; }
+  .c-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 44px; padding: 0 0 96px; }
+  .c-facts h4 { font-family: ui-sans-serif, Helvetica, Arial, sans-serif; font-size: 12px;
+    letter-spacing: .16em; text-transform: uppercase; color: #857f76; margin: 0 0 10px; font-weight: 600; }
+  .c-facts p { font-size: 17px; line-height: 1.55; margin: 0; color: #ddd8d0; }
+  .c-foot { padding: 34px 0 70px; font-family: ui-sans-serif, Helvetica, Arial, sans-serif;
+    font-size: 12px; color: #6f6a63; display: flex; gap: 24px; flex-wrap: wrap; border-top: 1px solid #232324; }
+  @media (max-width: 860px) {
+    .c-split { grid-template-columns: 1fr; gap: 34px; }
+    .c-plate { height: 240px; }
+  }
+</style>
+<section class="panel" id="lp-c" role="tabpanel" aria-labelledby="tab-c" hidden>
+  <div class="c-wrap">
+    <nav class="c-nav">
+      <div class="brand">Darkroom</div>
+      <div class="meta">Desktop editor / 0.1.0</div>
+    </nav>
+  </div>
+
+  <div class="c-hero">
+    <div class="c-frame" aria-hidden="true"></div>
+    <div class="c-hero-copy">
+      <h2>Edit the picture. <i>Leave the file alone.</i></h2>
+      <p>Darkroom is a desktop editor for photographers who already have a folder structure they like and would rather not hand it to someone else's cloud.</p>
+      <div class="c-actions">
+        <a class="c-primary" href="#lp-c">Download for macOS</a>
+        <a class="c-secondary" href="#lp-c">Windows and Linux builds</a>
+        <a class="c-secondary" href="#lp-c">Read the source</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="c-wrap">
+    <div class="c-strip" aria-hidden="true">
+      <div style="background:linear-gradient(160deg,#4a3a2c,#12151a)"></div>
+      <div style="background:linear-gradient(160deg,#2c3b4a,#101418)"></div>
+      <div style="background:linear-gradient(160deg,#4a2c34,#151013)"></div>
+      <div style="background:linear-gradient(160deg,#33422c,#111510)"></div>
+      <div style="background:linear-gradient(160deg,#3d3550,#121016)"></div>
+      <div style="background:linear-gradient(160deg,#5a4a33,#191512)"></div>
+    </div>
+
+    <div class="c-section">
+      <div class="c-split">
+        <div>
+          <p class="c-eyebrow">One frame</p>
+          <h3>The whole window gives way to the photograph.</h3>
+          <p>Open a frame and the interface steps back. Filmstrip along the bottom, metadata on the side when you want it, zoom on click, and hold the backslash key to see the original underneath your edit.</p>
+          <p>Adjustments render through WebGL2 as you drag the slider. There is a CPU path for machines where that is not available.</p>
+        </div>
+        <div class="c-plate one" aria-hidden="true"></div>
+      </div>
+    </div>
+
+    <div class="c-section">
+      <div class="c-split">
+        <div class="c-plate two" aria-hidden="true"></div>
+        <div>
+          <p class="c-eyebrow">Four hundred frames</p>
+          <h3>Then it gets out of the way of the boring part.</h3>
+          <p>Select a run from a shoot, apply a preset, and let the batch run. Progress is written to disk as it goes, so closing the laptop does not cost you the queue.</p>
+          <p>Copy settings from one photo and paste them onto a selection. Camera aware defaults mean a body you shoot often starts closer to where you want it.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="c-quote">
+      <p>Your edits are a text file next to your photo.</p>
+      <span>XMP sidecars and a local JSON catalog</span>
+    </div>
+
+    <div class="c-facts">
+      <div><h4>Reads</h4><p>NEF, JPEG, PNG and WebP. Anything else is named and explained rather than dropped.</p></div>
+      <div><h4>Exports</h4><p>JPEG, PNG, WebP, AVIF and TIFF, with resize and quality per job.</p></div>
+      <div><h4>Masks</h4><p>Brush, linear and radial, plus subject and sky from a model that runs on your machine.</p></div>
+      <div><h4>Network</h4><p>One optional download for the mask models. After that it works with the wifi off.</p></div>
+    </div>
+
+    <div class="c-foot">
+      <span>Darkroom 0.1.0</span><span>Electron and Next.js</span><span>Early, and open about it</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ D. SPEC SHEET ============ -->
+<style>
+  #lp-d {
+    background: #06100c; color: #cfe8d8;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px; line-height: 1.6;
+  }
+  #lp-d::selection, #lp-d ::selection { background: #58e08a; color: #06100c; }
+  .d-wrap { max-width: 980px; margin: 0 auto; padding: 0 22px; }
+  .d-bar {
+    border-bottom: 1px solid #17402d; padding: 14px 0; display: flex; gap: 18px;
+    font-size: 12.5px; color: #5d8a72; flex-wrap: wrap;
+  }
+  .d-bar b { color: #58e08a; font-weight: 700; }
+  .d-bar span:last-child { margin-left: auto; }
+  .d-prompt { padding: 56px 0 8px; color: #5d8a72; font-size: 14px; }
+  .d-prompt b { color: #58e08a; }
+  .d-hero h2 {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: clamp(28px, 4.6vw, 50px); line-height: 1.12; letter-spacing: -.02em;
+    margin: 12px 0 24px; color: #eafff2; font-weight: 700;
+  }
+  .d-hero h2 mark { background: #58e08a; color: #06100c; padding: 0 6px; }
+  .d-hero p { max-width: 62ch; color: #9dc4ad; margin: 0 0 30px; font-size: 14.5px; }
+  .d-run { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .d-run a {
+    text-decoration: none; border: 1px solid #58e08a; color: #58e08a;
+    padding: 11px 20px; font-size: 13.5px;
+  }
+  .d-run a:hover { background: #58e08a; color: #06100c; }
+  .d-run a.dim { border-color: #17402d; color: #5d8a72; }
+  .d-run a.dim:hover { background: #0c1f17; color: #cfe8d8; }
+  .d-out {
+    border: 1px solid #17402d; background: #08170f; padding: 18px 20px;
+    margin: 46px 0; white-space: pre-wrap; font-size: 13px; color: #9dc4ad; overflow-x: auto;
+  }
+  .d-out b { color: #58e08a; }
+  .d-out i { color: #e2b25c; font-style: normal; }
+  .d-out u { color: #ff7b6b; text-decoration: none; }
+  .d-h3 {
+    margin: 54px 0 16px; font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+    color: #58e08a; border-bottom: 1px solid #17402d; padding-bottom: 10px;
+  }
+  .d-tab { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .d-tab th, .d-tab td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px dotted #17402d; vertical-align: top; }
+  .d-tab th { color: #5d8a72; font-weight: 400; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+  .d-tab td:first-child { color: #eafff2; white-space: nowrap; }
+  .ok { color: #58e08a; }
+  .no { color: #ff7b6b; }
+  .wip { color: #e2b25c; }
+  .d-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 2px; background: #17402d; border: 1px solid #17402d; }
+  .d-kv div { background: #08170f; padding: 16px 18px; }
+  .d-kv dt { color: #5d8a72; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; }
+  .d-kv dd { margin: 0; color: #eafff2; font-size: 14px; }
+  .d-note { border-left: 2px solid #e2b25c; padding: 4px 0 4px 16px; color: #c9b183; margin: 26px 0; font-size: 13.5px; }
+  .d-foot { border-top: 1px solid #17402d; margin-top: 60px; padding: 18px 0 70px; color: #40614f; font-size: 12.5px; }
+  @media (max-width: 620px) { .d-tab td:first-child { white-space: normal; } }
+</style>
+<section class="panel" id="lp-d" role="tabpanel" aria-labelledby="tab-d" hidden>
+  <div class="d-wrap">
+    <div class="d-bar">
+      <span><b>darkroom</b> 0.1.0</span>
+      <span>electron 43</span>
+      <span>macos / windows / linux</span>
+      <span>no telemetry</span>
+    </div>
+
+    <div class="d-hero">
+      <p class="d-prompt"><b>$</b> darkroom ~/Pictures/2026</p>
+      <h2>Local files. GPU render.<br><mark>No account.</mark></h2>
+      <p>A desktop photo library and raw editor that treats your filesystem as the catalog. It scans a folder, decodes what it can, and writes edits to sidecars beside the originals. Everything below is what the build actually does today, not a roadmap.</p>
+      <div class="d-run">
+        <a href="#lp-d">Download 0.1.0</a>
+        <a class="dim" href="#lp-d">git clone</a>
+        <a class="dim" href="#lp-d">Read the format table</a>
+      </div>
+    </div>
+
+    <div class="d-out">scanning /Users/you/Pictures/2026 ...
+  <b>4,812 files indexed</b>   1,208 nef   3,411 jpeg   193 png
+  <i>27 recognized, no decoder: .cr3 (#90), .heic (#91)</i>
+  <b>catalog</b> ~/Library/Application Support/darkroom/catalogs/2026.json
+  <b>network</b> 0 requests
+ready in 3.2s</div>
+
+    <h3 class="d-h3">Input formats</h3>
+    <table class="d-tab">
+      <thead><tr><th>Extension</th><th>Status</th><th>Path</th></tr></thead>
+      <tbody>
+        <tr><td>.nef</td><td class="ok">supported</td><td>LibRaw wasm, with a native Nikon decoder as fallback on macOS</td></tr>
+        <tr><td>.jpg .jpeg</td><td class="ok">supported</td><td>createImageBitmap</td></tr>
+        <tr><td>.png .webp</td><td class="ok">supported</td><td>createImageBitmap</td></tr>
+        <tr><td>.dng</td><td class="wip">recognized</td><td>no qualified decoder, issue #89</td></tr>
+        <tr><td>.cr2 .cr3 .arw .raf .orf .rw2</td><td class="wip">recognized</td><td>no qualified decoder, issue #90</td></tr>
+        <tr><td>.heic .heif .hif</td><td class="wip">recognized</td><td>no packaged input codec, issue #91</td></tr>
+        <tr><td>.tif .tiff</td><td class="wip">recognized</td><td>read path missing, export works, issue #92</td></tr>
+        <tr><td>.psd .psb .jxl</td><td class="wip">recognized</td><td>no decoder, issue #93</td></tr>
+        <tr><td>.mov .mp4 .m4v .avi .mkv</td><td class="no">unsupported</td><td>video is not implemented, issues #95 to #98</td></tr>
+      </tbody>
+    </table>
+
+    <p class="d-note">Unsupported does not mean invisible. A recognized file still shows up with the reason it will not open, so you are never left wondering where a photo went.</p>
+
+    <h3 class="d-h3">Develop pipeline</h3>
+    <table class="d-tab">
+      <tbody>
+        <tr><td>tone</td><td colspan="2">exposure, contrast, highlights, shadows, whites, blacks, presence</td></tr>
+        <tr><td>color</td><td colspan="2">white balance, vibrance, saturation, HSL mixer, color grading, point color, monochrome</td></tr>
+        <tr><td>curves</td><td colspan="2">RGB plus per channel red, green, blue</td></tr>
+        <tr><td>detail</td><td colspan="2">sharpening, noise reduction, grain, vignette, lens blur</td></tr>
+        <tr><td>geometry</td><td colspan="2">crop, rotate, aspect presets, perspective, upright, auto straighten</td></tr>
+        <tr><td>masks</td><td colspan="2">brush, linear, radial, add and subtract, subject and sky from a local ONNX model</td></tr>
+        <tr><td>backend</td><td colspan="2">WebGL2, falls back to CPU</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="d-h3">Storage and output</h3>
+    <div class="d-kv">
+      <div><dt>Catalog</dt><dd>JSON, one per folder root</dd></div>
+      <div><dt>Sidecars</dt><dd>XMP written beside each photo</dd></div>
+      <div><dt>Thumbnails</dt><dd>IndexedDB, keyed by path and mtime</dd></div>
+      <div><dt>Export</dt><dd>jpeg, png, webp, avif, tiff</dd></div>
+      <div><dt>Batch jobs</dt><dd>persisted, resume after a restart</dd></div>
+      <div><dt>Originals</dt><dd>opened read only, never rewritten</dd></div>
+    </div>
+
+    <div class="d-foot">darkroom 0.1.0 / built with electron and next.js / issues and source on github</div>
+  </div>
+</section>
+
+<!-- ============ E. PAPER ============ -->
+<style>
+  #lp-e {
+    background: #f5ecdc; color: #2b211a;
+    font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  }
+  .e-wrap { max-width: 1080px; margin: 0 auto; padding: 0 26px; }
+  .e-sprocket {
+    height: 26px; background:
+      repeating-linear-gradient(90deg, #2b211a 0 14px, transparent 14px 34px);
+    -webkit-mask-image: linear-gradient(#000,#000);
+    opacity: .12;
+  }
+  .e-nav { display: flex; align-items: center; gap: 24px; padding: 26px 0 0;
+    font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .e-nav .brand { font-family: "Iowan Old Style", Palatino, Georgia, serif; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+  .e-nav .brand span { color: #c2410c; }
+  .e-nav ul { list-style: none; display: flex; gap: 20px; margin: 0 0 0 auto; padding: 0; font-size: 14px; color: #6b5b4c; }
+  .e-hero { padding: 78px 0 60px; text-align: center; }
+  .e-badge {
+    display: inline-block; background: #fff6e7; border: 1px solid #e0cdb0; color: #9a6b2f;
+    border-radius: 999px; padding: 7px 16px; font-size: 13px; margin-bottom: 30px;
+    font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .e-hero h2 { font-size: clamp(38px, 6.2vw, 72px); line-height: 1.02; letter-spacing: -.03em; margin: 0 0 24px; font-weight: 700; }
+  .e-hero h2 span { color: #c2410c; }
+  .e-hero p {
+    font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 18px; line-height: 1.62; color: #5c4d40; max-width: 56ch; margin: 0 auto 34px;
+  }
+  .e-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;
+    font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .e-cta a {
+    text-decoration: none; border-radius: 12px; padding: 15px 28px; font-size: 15.5px; font-weight: 600;
+    background: #c2410c; color: #fff6e7; box-shadow: 0 3px 0 #93300a;
+  }
+  .e-cta a:hover { background: #d4500f; }
+  .e-cta a.alt { background: transparent; color: #2b211a; border: 1px solid #d8c3a4; box-shadow: none; }
+  .e-cta a.alt:hover { background: #fff6e7; }
+  .e-small { font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 13.5px; color: #8a7867; margin: 20px 0 0; }
+  .e-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 20px; padding: 30px 0 20px; }
+  .e-card {
+    background: #fffaf0; border: 1px solid #e3d3ba; border-radius: 16px; padding: 26px 24px 28px;
+    box-shadow: 0 1px 0 #e9dcc7, 0 10px 24px -18px rgba(43,33,26,.5);
+  }
+  .e-card .ico { width: 38px; height: 38px; border-radius: 10px; margin-bottom: 18px; }
+  .e-card h3 { font-size: 20px; margin: 0 0 10px; letter-spacing: -.01em; }
+  .e-card p { font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14.5px; line-height: 1.65; color: #5c4d40; margin: 0; }
+  .e-band {
+    background: #2b211a; color: #f5ecdc; border-radius: 20px; margin: 56px 0;
+    padding: 54px 44px; display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center;
+  }
+  .e-band h3 { font-size: clamp(26px,3.4vw,38px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -.02em; }
+  .e-band p { font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15.5px; line-height: 1.7; color: #cbbba9; margin: 0 0 14px; }
+  .e-band code { background: #3d3027; color: #f0c58a; padding: 2px 7px; border-radius: 5px; font-size: 13.5px; }
+  .e-list { list-style: none; margin: 0; padding: 0; font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .e-list li { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid #43352b; font-size: 15px; color: #e5d9c9; }
+  .e-list li:last-child { border-bottom: 0; }
+  .e-list b { color: #f0c58a; font-weight: 600; min-width: 84px; }
+  .e-faq { padding: 20px 0 40px; }
+  .e-faq h3 { font-size: clamp(26px,3.4vw,38px); margin: 0 0 26px; letter-spacing: -.02em; }
+  .e-q { border-top: 1px solid #ded0b6; padding: 22px 0; display: grid; grid-template-columns: 1fr 1.6fr; gap: 30px; }
+  .e-q h4 { font-size: 18px; margin: 0; font-weight: 700; }
+  .e-q p { font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 15px; line-height: 1.68; color: #5c4d40; margin: 0; }
+  .e-foot {
+    border-top: 1px solid #ded0b6; padding: 26px 0 70px; display: flex; gap: 22px; flex-wrap: wrap;
+    font-family: ui-sans-serif, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; color: #8a7867;
+  }
+  @media (max-width: 800px) {
+    .e-band { grid-template-columns: 1fr; padding: 36px 26px; }
+    .e-q { grid-template-columns: 1fr; gap: 10px; }
+    .e-nav ul { display: none; }
+  }
+</style>
+<section class="panel" id="lp-e" role="tabpanel" aria-labelledby="tab-e" hidden>
+  <div class="e-sprocket" aria-hidden="true"></div>
+  <div class="e-wrap">
+    <nav class="e-nav">
+      <div class="brand">Dark<span>room</span></div>
+      <ul><li>Features</li><li>Formats</li><li>Questions</li><li>Download</li></ul>
+    </nav>
+
+    <div class="e-hero">
+      <span class="e-badge">Version 0.1.0 for macOS, Windows and Linux</span>
+      <h2>Still opens in <span>ten years.</span></h2>
+      <p>Darkroom keeps your library in the place you already keep it: folders, on your own disk. The catalog is JSON. The edits are XMP files sitting next to your photos. There is nothing here that stops working when a company changes its mind.</p>
+      <div class="e-cta">
+        <a href="#lp-e">Download Darkroom</a>
+        <a class="alt" href="#lp-e">Look at the code</a>
+      </div>
+      <p class="e-small">No account. No subscription. No upload.</p>
+    </div>
+
+    <div class="e-cards">
+      <div class="e-card">
+        <div class="ico" style="background:#c2410c" aria-hidden="true"></div>
+        <h3>Your folders, unchanged</h3>
+        <p>Pick a directory and Darkroom indexes it recursively. Files are read on demand and never moved, renamed or copied into a hidden library.</p>
+      </div>
+      <div class="e-card">
+        <div class="ico" style="background:#0f766e" aria-hidden="true"></div>
+        <h3>A real develop module</h3>
+        <p>Exposure and tone, curves, HSL, color grading, point color, detail, optics, crop and upright. Brush, linear and radial masks, with subject and sky selection that runs on your own machine.</p>
+      </div>
+      <div class="e-card">
+        <div class="ico" style="background:#7c3aed" aria-hidden="true"></div>
+        <h3>Batches that survive a crash</h3>
+        <p>Apply a preset to a whole shoot. The job is written to disk as it runs, so quitting the app in the middle costs you nothing but the current frame.</p>
+      </div>
+    </div>
+
+    <div class="e-band">
+      <div>
+        <h3>Look inside the catalog. It is a text file.</h3>
+        <p>Darkroom stores one <code>catalog.json</code> per folder root and writes an <code>.xmp</code> sidecar beside each edited photo. Both are readable with any text editor.</p>
+        <p>If this project disappears tomorrow, your originals are untouched and your edits are still legible.</p>
+      </div>
+      <ul class="e-list">
+        <li><b>Reads</b><span>NEF, JPEG, PNG, WebP</span></li>
+        <li><b>Exports</b><span>JPEG, PNG, WebP, AVIF, TIFF</span></li>
+        <li><b>Renders</b><span>WebGL2, CPU fallback</span></li>
+        <li><b>Stores</b><span>JSON catalog and XMP sidecars</span></li>
+        <li><b>Sends</b><span>Nothing, unless you download the mask models</span></li>
+      </ul>
+    </div>
+
+    <div class="e-faq">
+      <h3>Reasonable questions</h3>
+      <div class="e-q">
+        <h4>Does it upload my photos?</h4>
+        <p>No. The only network request the app makes is an optional one time download of the subject and sky mask models. Skip it and Darkroom never touches the network.</p>
+      </div>
+      <div class="e-q">
+        <h4>What if I stop using it?</h4>
+        <p>Your photos are where you left them, unmodified. The edits are XMP sidecars and a JSON catalog, both plain text. Delete them and you are back to the raw files.</p>
+      </div>
+      <div class="e-q">
+        <h4>Which cameras work?</h4>
+        <p>Nikon NEF today, plus JPEG, PNG and WebP. Canon, Sony, Fujifilm and DNG files are recognized and listed with the reason they cannot be decoded yet, rather than being quietly hidden.</p>
+      </div>
+      <div class="e-q">
+        <h4>Is it finished?</h4>
+        <p>No. It is version 0.1.0. Compare view, smart albums, keywords, presets, batch develop and export all work. Video does not exist and most raw formats are still missing.</p>
+      </div>
+    </div>
+
+    <div class="e-foot">
+      <span>Darkroom 0.1.0</span><span>Electron and Next.js</span><span>Built for one person's photo folder</span>
+    </div>
+  </div>
+  <div class="e-sprocket" aria-hidden="true"></div>
+</section>
+
+</main>
+
+<script>
+(function () {
+  var ids = ["a", "b", "c", "d", "e"];
+  var tabs = ids.map(function (id) { return document.getElementById("tab-" + id); });
+  var panels = ids.map(function (id) { return document.getElementById("lp-" + id); });
+
+  function show(index, focusTab) {
+    if (index < 0) index = ids.length - 1;
+    if (index >= ids.length) index = 0;
+    tabs.forEach(function (tab, i) {
+      var active = i === index;
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.tabIndex = active ? 0 : -1;
+      panels[i].hidden = !active;
+    });
+    if (focusTab) tabs[index].focus();
+    if (location.hash !== "#" + ids[index]) {
+      history.replaceState(null, "", "#" + ids[index]);
+    }
+    window.scrollTo(0, 0);
+  }
+
+  tabs.forEach(function (tab, i) {
+    tab.addEventListener("click", function () { show(i, false); });
+    tab.addEventListener("keydown", function (event) {
+      if (event.key === "ArrowRight") { show(i + 1, true); event.preventDefault(); }
+      if (event.key === "ArrowLeft") { show(i - 1, true); event.preventDefault(); }
+    });
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    var target = event.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    var number = parseInt(event.key, 10);
+    if (number >= 1 && number <= ids.length) { show(number - 1, false); return; }
+    if (target && target.getAttribute && target.getAttribute("role") === "tab") return;
+    var current = tabs.findIndex(function (tab) { return tab.getAttribute("aria-selected") === "true"; });
+    if (event.key === "ArrowRight") show(current + 1, false);
+    if (event.key === "ArrowLeft") show(current - 1, false);
+  });
+
+  var start = ids.indexOf((location.hash || "#a").slice(1));
+  show(start === -1 ? 0 : start, false);
+})();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-import { circularHueDistanceDegrees, rgbToHsl } from "./point-color";
-import type { Rgb } from "./profiles";
+import { circularHueDistanceDegrees, rgbToHsl } from "./point-color.ts";
+import type { Rgb } from "./profiles.ts";
 
 export const MONOCHROME_CHANNELS = [
   "red",

@@ -112,6 +112,58 @@ import type {
   DevelopJobSnapshot,
   GenerativeRemoveConsentReceipt,
 } from "../lib/develop/v3/jobs";
+import type {
+  CameraProfileConflictRequest,
+  CameraProfileImportResult,
+  CameraProfileRegistrySnapshot,
+  CameraProfileRemoveRequest,
+} from "../lib/camera-profiles/registry";
+import type {
+  DevelopPresetConflictRequest,
+  DevelopPresetDeleteRequest,
+  DevelopPresetFavoriteRequest,
+  DevelopPresetImportResult,
+  DevelopPresetSearchRequest,
+} from "../lib/develop/presets/api";
+import type { DevelopPresetRecord } from "../lib/develop/presets/schema";
+import type {
+  DevelopClipboardGroup,
+  DevelopClipboardPayload,
+  DevelopClipboardReadResult,
+} from "../lib/develop/clipboard/schema";
+import type {
+  DevelopHistoryCommitInput,
+  DevelopHistoryCommitResult,
+  DevelopHistoryListInput,
+  DevelopHistoryLoadInput,
+  DevelopHistoryLoadResult,
+  DevelopHistoryProjection,
+  DevelopHistoryProjectionWriteInput,
+  DevelopHistoryRef,
+  DevelopHistoryRefMutationInput,
+  DevelopHistoryRevision,
+  DevelopHistoryTargetInput,
+} from "../lib/develop/history";
+import type {
+  DevelopDefaultRuleDeleteRequest,
+  DevelopDefaultRuleEnabledRequest,
+  DevelopDefaultsCancelRequest,
+  DevelopDefaultsEntryRequest,
+  DevelopDefaultsInstallRequest,
+  DevelopDefaultsPreviewRequest,
+  DevelopDefaultsPreviewResult,
+  DevelopDefaultsProductionResult,
+} from "../lib/develop/defaults/api";
+import type { InstalledDevelopDefault } from "../lib/develop/defaults/installed";
+import type { DevelopDefaultRule } from "../lib/develop/defaults/schema";
+import type {
+  DevelopBatchAutoSyncRequest,
+  DevelopBatchListRequest,
+  DevelopBatchStartRequest,
+  DevelopBatchTargetRequest,
+  DevelopBatchUpdate,
+} from "../lib/develop/batch/api";
+import type { DevelopBatchAutoSyncState, DevelopBatchReceipt } from "../lib/develop/batch/domain";
 
 export interface DarkroomAPI {
   isElectron: true;
@@ -152,6 +204,58 @@ export interface DarkroomAPI {
     request: DevelopAssetTransitionRequest,
   ): Promise<DevelopAssetTransitionResult>;
   developAssetRead(request: DevelopAssetReadRequest): Promise<DevelopAssetReadResult>;
+  developHistoryLoad(input: DevelopHistoryLoadInput): Promise<DevelopHistoryLoadResult>;
+  developHistoryList(input: DevelopHistoryListInput): Promise<readonly DevelopHistoryRevision[]>;
+  developHistoryCommit(input: DevelopHistoryCommitInput): Promise<DevelopHistoryCommitResult>;
+  developHistoryRefs(input: DevelopHistoryTargetInput): Promise<readonly DevelopHistoryRef[]>;
+  developHistoryRefMutate(input: DevelopHistoryRefMutationInput): Promise<readonly DevelopHistoryRef[]>;
+  developHistoryProjection(input: DevelopHistoryTargetInput): Promise<DevelopHistoryProjection | null>;
+  developHistoryRecordProjection(input: DevelopHistoryProjectionWriteInput): Promise<DevelopHistoryProjection>;
+  developBatchList(request: DevelopBatchListRequest): Promise<readonly DevelopBatchReceipt[]>;
+  developBatchStart(request: DevelopBatchStartRequest): Promise<DevelopBatchReceipt>;
+  developBatchCancel(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchRetry(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchUndo(request: DevelopBatchTargetRequest): Promise<DevelopBatchReceipt>;
+  developBatchAutoEnable(request: DevelopBatchAutoSyncRequest): Promise<void>;
+  developBatchAutoDisable(request: CatalogSessionRequest): Promise<void>;
+  developBatchAutoState(request: CatalogSessionRequest): Promise<DevelopBatchAutoSyncState>;
+  onDevelopBatchUpdated(listener: (update: DevelopBatchUpdate) => void): Unsubscribe;
+  developDefaultsList(): Promise<readonly DevelopDefaultRule[]>;
+  developDefaultsReferencedPresets(): Promise<readonly DevelopPresetRecord[]>;
+  developDefaultsCreate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
+  developDefaultsUpdate(rule: DevelopDefaultRule): Promise<DevelopDefaultRule>;
+  developDefaultsSetEnabled(request: DevelopDefaultRuleEnabledRequest): Promise<DevelopDefaultRule>;
+  developDefaultsDelete(request: DevelopDefaultRuleDeleteRequest): Promise<void>;
+  developDefaultsPreview(request: DevelopDefaultsPreviewRequest): Promise<DevelopDefaultsPreviewResult>;
+  developDefaultsInstalled(request: DevelopDefaultsEntryRequest): Promise<InstalledDevelopDefault | null>;
+  developDefaultsInstall(request: DevelopDefaultsInstallRequest): Promise<DevelopDefaultsProductionResult>;
+  developDefaultsCancel(request: DevelopDefaultsCancelRequest): Promise<void>;
+  cameraProfilesList(): Promise<CameraProfileRegistrySnapshot>;
+  cameraProfilesImport(): Promise<CameraProfileImportResult>;
+  cameraProfilesResolveConflict(
+    request: CameraProfileConflictRequest,
+  ): Promise<CameraProfileImportResult>;
+  cameraProfilesRescan(): Promise<CameraProfileRegistrySnapshot>;
+  cameraProfilesRemove(
+    request: CameraProfileRemoveRequest,
+  ): Promise<CameraProfileRegistrySnapshot>;
+  developPresetsList(
+    request: DevelopPresetSearchRequest,
+  ): Promise<readonly DevelopPresetRecord[]>;
+  developPresetsCreate(preset: DevelopPresetRecord): Promise<DevelopPresetRecord>;
+  developPresetsUpdate(preset: DevelopPresetRecord): Promise<DevelopPresetRecord>;
+  developPresetsFavorite(
+    request: DevelopPresetFavoriteRequest,
+  ): Promise<DevelopPresetRecord>;
+  developPresetsDelete(request: DevelopPresetDeleteRequest): Promise<void>;
+  developPresetsImport(): Promise<DevelopPresetImportResult>;
+  developPresetsResolveConflict(
+    request: DevelopPresetConflictRequest,
+  ): Promise<DevelopPresetImportResult>;
+  developClipboardWrite(payload: DevelopClipboardPayload): Promise<void>;
+  developClipboardRead(): Promise<DevelopClipboardReadResult>;
+  developClipboardGroupsGet(): Promise<readonly DevelopClipboardGroup[]>;
+  developClipboardGroupsSet(groups: readonly DevelopClipboardGroup[]): Promise<void>;
   developAssetCollectGarbage(
     request: DevelopAssetGcRequest,
   ): Promise<DevelopAssetGcResult>;

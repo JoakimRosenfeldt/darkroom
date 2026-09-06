@@ -272,6 +272,7 @@ export function buildQueryIndex(
     const metadataSync = workspace.metadataSyncByEntryId[entry.id]?.status ?? "clean";
     const searchableText = normalizeSearchText([
       entry.name,
+      entry.displayName,
       entry.relativePath,
       camera,
       lens,

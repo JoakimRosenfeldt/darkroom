@@ -29,7 +29,9 @@ import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { isEditableTarget } from "@/hooks/is-editable-target";
-import { updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
+import { refreshViewerSession, updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
+import { developDefaultFactsFromSource } from "@/lib/develop/defaults/matcher";
+import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -67,6 +69,16 @@ function captureSummary(metadata: Record<string, unknown>): string[] {
   return summary;
 }
 
+function sourceIso(metadata: Record<string, unknown>): number | null {
+  const value = metadata.iso_speed ?? metadata.iso;
+  const parsed = typeof value === "string" && value.trim().length > 0
+    ? Number(value)
+    : value;
+  return typeof parsed === "number" && Number.isSafeInteger(parsed) && parsed >= 1
+    ? parsed
+    : null;
+}
+
 export function PhotoViewer({
   entry,
   entries,
@@ -85,6 +97,9 @@ export function PhotoViewer({
   const reorderStackEntry = useLibraryStore((state) => state.reorderStackEntry);
   const removeEntriesFromStack = useLibraryStore((state) => state.removeEntriesFromStack);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
+  const createVirtualCopy = useLibraryStore((state) => state.createVirtualCopy);
+  const renameVirtualCopy = useLibraryStore((state) => state.renameVirtualCopy);
+  const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
@@ -92,6 +107,7 @@ export function PhotoViewer({
   const [decoded, setDecoded] = useState<DevelopImage | null>(null);
   const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
   const [error, setError] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
   const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
@@ -137,33 +153,48 @@ export function PhotoViewer({
     [entry.id, selectedEntryIds],
   );
   const persistDevelopState = useLibraryStore((state) => state.persistDevelopState);
-  const hydrateEntryKeywords = useLibraryStore((state) => state.hydrateEntryKeywords);
+  const hydrateEntryKeywordsDurably = useLibraryStore((state) => state.hydrateEntryKeywordsDurably);
   const persistCatalog = useCallback(
     (input: Parameters<typeof persistDevelopState>[2]) =>
       persistDevelopState(entry.catalogId, entry.id, input),
     [entry.catalogId, entry.id, persistDevelopState],
   );
   const hydrateKeywords = useCallback(
-    (flat: readonly string[], hierarchical: readonly string[]) => {
-      hydrateEntryKeywords(entry.id, flat, hierarchical);
+    (
+      flat: readonly string[],
+      hierarchical: readonly string[],
+      metadataPatch?: Parameters<typeof hydrateEntryKeywordsDurably>[3],
+      sourceUpdatedAt?: number,
+    ) => {
+      return hydrateEntryKeywordsDurably(entry.id, flat, hierarchical, metadataPatch, sourceUpdatedAt);
     },
-    [entry.id, hydrateEntryKeywords],
+    [entry.id, hydrateEntryKeywordsDurably],
   );
+  const defaultFacts = useMemo(() => {
+    if (!decoded) return undefined;
+    const source = buildV3SourceRecord(entry, decoded, "preview");
+    return source.kind === "source"
+      ? developDefaultFactsFromSource(source.source, sourceIso(decoded.metadata))
+      : null;
+  }, [decoded, entry]);
 
-  useDevelopSettingsSync({
+  const defaultsResolution = useDevelopSettingsSync({
     entry,
     metadata,
     persistCatalog,
     hydrateKeywords,
+    defaultFacts,
   });
-  const persistedV3Document = useDevelopStore((state) => {
+  const defaultsPending = defaultsResolution.kind === "pending";
+  const visibleV3Document = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
-    return session?.processKind === "v3" && session.persistedDocument?.version === 3
-      ? session.persistedDocument
+    const document = session?.previewDocument ?? session?.persistedDocument;
+    return session?.processKind === "v3" && document?.version === 3
+      ? document
       : null;
   });
   const developProcessKind = useDevelopStore(
-    (state) => state.sessions[entry.id]?.processKind ?? "v2",
+    (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
   );
   const undo = useDevelopStore((state) => state.undo);
   const redo = useDevelopStore((state) => state.redo);
@@ -176,10 +207,88 @@ export function PhotoViewer({
   const setMaskOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
   const setMaskTool = useDevelopStore((state) => state.setMaskTool);
   const [exportOpen, setExportOpen] = useState(false);
-  const headerMasks = persistedV3Document?.local.masks ?? [];
+  const headerMasks = visibleV3Document?.local.masks ?? [];
   const headerSelectedMask = headerMasks.find((mask) => mask.id === maskUi?.selectedMaskId);
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
+
+  async function createCopy() {
+    const familyCount = useLibraryStore.getState().entries.filter(
+      (item) => item.sourceId === entry.sourceId && item.entryKind === "virtual",
+    ).length;
+    const name = window.prompt("Name this virtual copy", `Copy ${familyCount + 1}`);
+    if (!name?.trim()) return;
+    try {
+      const entryId = await createVirtualCopy(entry.id, name);
+      const current = useLibraryStore.getState();
+      const nextEntry = current.entries.find((item) => item.id === entryId);
+      if (!nextEntry || current.catalogId === null) throw new Error("The virtual copy could not be opened.");
+      const availableEntryIds = current.entries.filter((item) => item.health === "present").map((item) => item.id);
+      const available = new Set<string>(availableEntryIds);
+      const orderedEntryIds = resultEntryIds.filter((id) => available.has(id));
+      const familyIndexes = orderedEntryIds.flatMap((id, index) => {
+        const item = current.entries.find((candidate) => candidate.id === id);
+        return item?.sourceId === nextEntry.sourceId ? [index] : [];
+      });
+      orderedEntryIds.splice((familyIndexes.at(-1) ?? orderedEntryIds.length - 1) + 1, 0, entryId);
+      refreshViewerSession({
+        resultId,
+        catalogId: current.catalogId,
+        catalogRevision: current.catalogRevision,
+        orderedEntryIds,
+        activeEntryId: entryId,
+        availableEntryIds,
+        selectedEntryIds: [entryId],
+      });
+      setCopyError(null);
+      router.push(viewerPhotoHref(entryId, resultId));
+    } catch (copyCreateError) {
+      setCopyError(copyCreateError instanceof Error ? copyCreateError.message : "Virtual copy could not be created.");
+    }
+  }
+
+  async function renameCopy() {
+    if (entry.entryKind !== "virtual") return;
+    const name = window.prompt("Rename virtual copy", entry.displayName);
+    if (!name?.trim() || name.trim() === entry.displayName) return;
+    try {
+      await renameVirtualCopy(entry.id, name);
+      setCopyError(null);
+    } catch (copyRenameError) {
+      setCopyError(copyRenameError instanceof Error ? copyRenameError.message : "Virtual copy could not be renamed.");
+    }
+  }
+
+  async function removeCopy() {
+    if (entry.entryKind !== "virtual") return;
+    if (!window.confirm(`Delete “${entry.displayName}”? The source file and other edits will stay in the catalog.`)) return;
+    try {
+      await deleteVirtualCopy(entry.id);
+      const current = useLibraryStore.getState();
+      const availableEntryIds = current.entries.filter((item) => item.health === "present").map((item) => item.id);
+      const available = new Set<string>(availableEntryIds);
+      const orderedEntryIds = resultEntryIds.filter((id) => id !== entry.id && available.has(id));
+      if (current.catalogId === null || orderedEntryIds.length === 0) {
+        router.push("/");
+        return;
+      }
+      const oldIndex = resultEntryIds.indexOf(entry.id);
+      const activeEntryId = orderedEntryIds[Math.min(Math.max(oldIndex, 0), orderedEntryIds.length - 1)]!;
+      refreshViewerSession({
+        resultId,
+        catalogId: current.catalogId,
+        catalogRevision: current.catalogRevision,
+        orderedEntryIds,
+        activeEntryId,
+        availableEntryIds,
+        selectedEntryIds: [activeEntryId],
+      });
+      setCopyError(null);
+      router.push(viewerPhotoHref(activeEntryId, resultId));
+    } catch (copyDeleteError) {
+      setCopyError(copyDeleteError instanceof Error ? copyDeleteError.message : "Virtual copy could not be deleted.");
+    }
+  }
 
   useEffect(() => {
     updateViewerSessionActive(resultId, entry.id);
@@ -214,12 +323,18 @@ export function PhotoViewer({
       }
 
       try {
-        const result = await loadDevelopImage(entry);
+        const result = await loadDevelopImage(entry, {
+          rawColorMode: developProcessKind === "v3"
+            ? "libraw-camera-matrix"
+            : "decoder-rendered",
+        });
         if (!active) {
           return;
         }
         setDecoded(result);
-        preloadDevelopImages(entries, availableActiveIndex);
+        preloadDevelopImages(entries, availableActiveIndex, {
+          rawColorMode: developProcessKind === "v3" ? "libraw-camera-matrix" : "decoder-rendered",
+        });
       } catch (loadError) {
         if (active) {
           setError(
@@ -240,7 +355,7 @@ export function PhotoViewer({
     return () => {
       active = false;
     };
-  }, [entry, entries, availableActiveIndex]);
+  }, [entry, entries, availableActiveIndex, developProcessKind]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
@@ -306,6 +421,7 @@ export function PhotoViewer({
       }
       const plainKey = !event.metaKey && !event.ctrlKey && !event.altKey;
       if (
+        !defaultsPending &&
         developProcessKind === "v3" &&
         activePanel === "masking" &&
         plainKey &&
@@ -316,7 +432,7 @@ export function PhotoViewer({
         return;
       }
       const key = event.key.toLowerCase();
-      if (developProcessKind === "v3" && plainKey && (key === "k" || key === "m")) {
+      if (!defaultsPending && developProcessKind === "v3" && plainKey && (key === "k" || key === "m")) {
         event.preventDefault();
         setActivePanel("masking");
         setMaskOverlayVisible(true);
@@ -328,7 +444,7 @@ export function PhotoViewer({
         closeEditingTools();
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if (!defaultsPending && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
@@ -388,6 +504,7 @@ export function PhotoViewer({
     setV3CanvasTool,
     v3CanvasTool.kind,
     developProcessKind,
+    defaultsPending,
   ]);
 
   return (
@@ -397,11 +514,13 @@ export function PhotoViewer({
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1">
           <div className="relative flex min-w-0 flex-1 flex-col bg-[#131110]">
-          {sessionMessage ? (
-            <div role="status" className="border-b border-amber-300/20 bg-amber-950/25 px-4 py-1.5 text-[11px] text-amber-100/80">{sessionMessage}</div>
+          {copyError ?? sessionMessage ? (
+            <div role="status" className="border-b border-amber-300/20 bg-amber-950/25 px-4 py-1.5 text-[11px] text-amber-100/80">{copyError ?? sessionMessage}</div>
           ) : null}
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-toolbar px-4">
-            <span className="font-mono text-xs text-lr-text">{entry.name}</span>
+            <span className="font-mono text-xs text-lr-text">
+              {entry.entryKind === "virtual" ? `${entry.name} · ${entry.displayName}` : entry.name}
+            </span>
             <span className={[
               "rounded-md px-1.5 py-0.5 font-mono text-[10px] text-lr-accent",
               activePanel === "crop" || activePanel === "masking" || activePanel === "cleanup"
@@ -430,6 +549,23 @@ export function PhotoViewer({
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => void createCopy()}
+              className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+            >
+              Virtual copy…
+            </button>
+            {entry.entryKind === "virtual" ? (
+              <>
+                <button type="button" onClick={() => void renameCopy()} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
+                  Rename
+                </button>
+                <button type="button" onClick={() => void removeCopy()} className="h-8 rounded-md border border-red-400/30 px-2.5 text-xs text-red-300 hover:bg-red-500/10">
+                  Delete copy
+                </button>
+              </>
+            ) : null}
             {developProcessKind === "v3" && activePanel === "masking" ? (
               <>
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
@@ -451,10 +587,10 @@ export function PhotoViewer({
               </>
             ) : developProcessKind === "v3" && activePanel !== "crop" ? (
               <>
-                <button type="button" disabled={!canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                <button type="button" disabled={defaultsPending || !canUndo} onClick={undo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
                   Undo
                 </button>
-                <button type="button" disabled={!canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
+                <button type="button" disabled={defaultsPending || !canRedo} onClick={redo} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40">
                   Redo
                 </button>
                 <button
@@ -506,11 +642,11 @@ export function PhotoViewer({
                   alt={entry.name}
                   onRenderDiagnostics={setV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
-                  cropActive={activePanel === "crop"}
+                  cropActive={!defaultsPending && activePanel === "crop"}
                   maskingActive={
-                    activePanel === "masking" || (maskUi?.tool ?? "none") !== "none"
+                    !defaultsPending && (activePanel === "masking" || (maskUi?.tool ?? "none") !== "none")
                   }
-                  canvasTool={v3CanvasTool}
+                  canvasTool={defaultsPending ? { kind: "none" } : v3CanvasTool}
                   onCanvasToolChange={setV3CanvasTool}
                 />
             ) : decoded && !error ? (
@@ -552,6 +688,8 @@ export function PhotoViewer({
               v3RenderDiagnostics={v3RenderDiagnostics}
               v3CanvasTool={v3CanvasTool}
               onV3CanvasToolChange={setV3CanvasTool}
+              defaultFacts={defaultFacts}
+              defaultsResolution={defaultsResolution}
               activePanel={activePanel}
               onSelect={selectDevelopPanel}
             />

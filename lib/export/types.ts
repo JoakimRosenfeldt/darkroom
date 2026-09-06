@@ -62,9 +62,11 @@ export function parseExportDestinationRequest(value: unknown): ExportDestination
   ) {
     throw new Error("Export destination request is invalid.");
   }
+  const count = Number(value.count);
   const assetIds = value.assetIds.map(parseAssetId);
   if (
-    assetIds.length !== value.count ||
+    assetIds.length < 1 ||
+    assetIds.length > count ||
     new Set(assetIds).size !== assetIds.length
   ) {
     throw new Error("Export selection is invalid.");
@@ -73,7 +75,7 @@ export function parseExportDestinationRequest(value: unknown): ExportDestination
     catalogId: parseCatalogId(value.catalogId),
     sessionId: parseSessionId(value.sessionId),
     assetIds,
-    count: value.count,
+    count,
     format: value.format,
     suggestedFilename: value.suggestedFilename,
   };
@@ -87,7 +89,11 @@ export interface ExportDestination {
 export type ExportRevealCapability = string;
 
 /** Options remembered between export sessions. */
+export type ExportMetadataMode = "all" | "copyright" | "none";
+
 export interface ExportPreferences {
+  metadata?: ExportMetadataMode;
+  includeLocation?: boolean;
   format: ExportFormatId;
   quality: number;
   lossless: boolean;
@@ -126,6 +132,8 @@ export const DEFAULT_EXPORT_SUFFIX = "-darkroom";
 
 export const DEFAULT_EXPORT_PREFERENCES: ExportPreferences = {
   format: "jpeg",
+  metadata: "all",
+  includeLocation: false,
   quality: 90,
   lossless: false,
   size: { mode: "original" },
@@ -134,6 +142,8 @@ export const DEFAULT_EXPORT_PREFERENCES: ExportPreferences = {
 };
 
 export interface ExportJobOptions {
+  metadata?: ExportMetadataMode;
+  includeLocation?: boolean;
   format: ExportFormatId;
   size: ExportSizeOptions;
   quality?: number;
@@ -145,6 +155,7 @@ export interface ExportJobOptions {
 }
 
 export interface ExportEncodeOptions {
+  exif?: { IFD0?: Record<string, string>; IFD2?: Record<string, string> };
   format: ExportFormatId;
   size?: ExportSizeOptions;
   quality?: number;
@@ -174,15 +185,28 @@ export interface ExportEncodeResult {
   warning?: string;
 }
 
-export type ExportFileStatus = "success" | "skipped" | "warning" | "error";
+export type ExportActivePhase = "decode" | "render" | "encode" | "write";
+
+export type ExportItemState =
+  | { readonly kind: "queued" }
+  | { readonly kind: "active"; readonly phase: ExportActivePhase }
+  | {
+      readonly kind: "completed";
+      readonly outputPath: string;
+      readonly warnings: readonly string[];
+    }
+  | { readonly kind: "skipped"; readonly reason: string }
+  | { readonly kind: "cancelled"; readonly reason: "not-started" }
+  | {
+      readonly kind: "failed";
+      readonly error: string;
+      readonly retryable: boolean;
+    };
 
 export interface ExportFileResult {
-  entryId: string;
-  sourceName?: string;
-  outputName?: string;
-  status: ExportFileStatus;
-  warning?: string;
-  error?: string;
+  readonly entryId: string;
+  readonly sourceName: string;
+  readonly state: ExportItemState;
 }
 
 export type ExportRenderProvenance = "decoded" | "embedded-preview";
