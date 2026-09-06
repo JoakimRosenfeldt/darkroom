@@ -4,8 +4,12 @@ import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
-import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import type {
+  DevelopImage,
+  DevelopImageLoadOptions,
+} from "@/lib/cache/develop-image-cache";
 import {
+  getCachedDevelopImage,
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
@@ -307,8 +311,25 @@ export function PhotoViewer({
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
+    const progressiveRaw = entry.formatId === "nef" && developProcessKind === "v3";
+    const includeBlob = developProcessKind === "v2";
+    const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
+      ? "libraw-camera-matrix"
+      : "decoder-rendered";
+    const foregroundOptions = {
+      signal: controller.signal,
+      priority: 100,
+      includeBlob,
+      rawColorMode,
+    };
+    const prefetchOptions = {
+      includeBlob,
+      rawColorMode,
+      ...(progressiveRaw ? { maxEdge: 720 } : {}),
+    };
 
     async function loadImage() {
+      let hasImage = false;
       setLoading(true);
       setError(null);
       setDecoded(null);
@@ -323,23 +344,43 @@ export function PhotoViewer({
       }
 
       try {
-        const loadingImage = loadDevelopImage(entry, {
-          signal: controller.signal,
-          priority: 100,
-          includeBlob: developProcessKind === "v2",
-          rawColorMode: developProcessKind === "v3"
-            ? "libraw-camera-matrix"
-            : "decoder-rendered",
-        });
-        preloadDevelopImages(entries, availableActiveIndex, {
-          includeBlob: developProcessKind === "v2",
-          rawColorMode: developProcessKind === "v3" ? "libraw-camera-matrix" : "decoder-rendered",
-        });
+        const fullPreview = progressiveRaw
+          ? getCachedDevelopImage(entry, {
+              maxEdge: 2_560,
+              includeBlob,
+              rawColorMode,
+            })
+          : null;
+        if (fullPreview) {
+          if (!active) return;
+          hasImage = true;
+          setDecoded(fullPreview);
+          setLoading(false);
+          preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
+          return;
+        }
+
+        const loadingImage = loadDevelopImage(entry, progressiveRaw
+          ? { ...foregroundOptions, maxEdge: 720 }
+          : foregroundOptions);
+        preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
         const result = await loadingImage;
         if (!active) return;
+        hasImage = true;
         setDecoded(result);
+        setLoading(false);
+
+        if (progressiveRaw) {
+          const refined = await loadDevelopImage(entry, {
+            ...foregroundOptions,
+            maxEdge: 2_560,
+          });
+          if (active) {
+            setDecoded(refined);
+          }
+        }
       } catch (loadError) {
-        if (active) {
+        if (active && !hasImage) {
           setError(
             loadError instanceof Error
               ? loadError.message

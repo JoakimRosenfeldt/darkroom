@@ -32,6 +32,8 @@ export interface DevelopImageLoadOptions {
 
 const EDITOR_CACHE_BYTES = 160 * 1024 * 1024;
 const THUMBNAIL_CACHE_BYTES = 32 * 1024 * 1024;
+const FULL_IMAGE_CACHE_BYTES = 320 * 1024 * 1024;
+const FULL_IMAGE_IDLE_MS = 30_000;
 const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
@@ -43,7 +45,16 @@ interface ImageLoad {
   readonly priority: { value: number };
 }
 const inFlightImages = new Map<string, ImageLoad>();
+const fullInFlightImages = new Map<string, ImageLoad>();
 const preloads = new Map<string, AbortController>();
+
+interface FullImageCacheEntry {
+  readonly key: string;
+  readonly image: DevelopImage;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+let fullImageCache: FullImageCacheEntry | null = null;
 
 function waitForImage(load: ImageLoad, signal?: AbortSignal): Promise<DevelopImage> {
   signal?.throwIfAborted();
@@ -104,6 +115,17 @@ function cacheKey(
     : `develop-${maxEdge}`);
 }
 
+function fullImageCacheKey(
+  entry: LibraryEntry,
+  rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]>,
+): string {
+  return assetCacheKey({
+    catalogId: entry.catalogId,
+    assetId: entry.assetId,
+    revision: entry.assetRevision,
+  }, `develop-full-v1-${rawColorMode}`);
+}
+
 function cameraProfileDecode(
   entry: LibraryEntry,
   rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]>,
@@ -127,23 +149,124 @@ function rememberImage(
   }
 }
 
+function previewCacheLookup(
+  entry: LibraryEntry,
+  options: DevelopImageLoadOptions,
+): {
+  readonly cache: Map<string, DevelopImage>;
+  readonly key: string;
+  readonly maxEdge: number;
+  readonly rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]>;
+} {
+  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
+  const requestedEdge = options.maxEdge ?? PREVIEW_MAX_EDGE;
+  if (!Number.isFinite(requestedEdge) || requestedEdge <= 0) throw new Error("Preview size must be positive.");
+  const maxEdge = [360, 720, 1280, PREVIEW_MAX_EDGE].find((edge) => edge >= requestedEdge) ?? PREVIEW_MAX_EDGE;
+  return {
+    cache: options.cache === "thumbnail" ? thumbnailImageCache : imageCache,
+    key: `${cacheKey(entry, rawColorMode, maxEdge)}-${options.includeBlob ? "blob" : "pixels"}`,
+    maxEdge,
+    rawColorMode,
+  };
+}
+
+function getCachedImage(
+  cache: Map<string, DevelopImage>,
+  key: string,
+): DevelopImage | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  cache.delete(key);
+  cache.set(key, cached);
+  return cached;
+}
+
+function clearFullImageCache(): void {
+  if (!fullImageCache) return;
+  if (fullImageCache.timer !== null) clearTimeout(fullImageCache.timer);
+  fullImageCache = null;
+}
+
+function touchFullImageCache(entry: FullImageCacheEntry): void {
+  if (entry.timer !== null) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    if (fullImageCache === entry) fullImageCache = null;
+  }, FULL_IMAGE_IDLE_MS);
+}
+
+function getFullImage(key: string): DevelopImage | undefined {
+  if (fullImageCache?.key !== key) return undefined;
+  touchFullImageCache(fullImageCache);
+  return fullImageCache.image;
+}
+
+function rememberFullImage(key: string, image: DevelopImage): void {
+  const bytes = image.rgb.byteLength + (image.blob?.size ?? 0);
+  if (bytes > FULL_IMAGE_CACHE_BYTES) return;
+
+  clearFullImageCache();
+  const entry: FullImageCacheEntry = { key, image, timer: null };
+  fullImageCache = entry;
+  touchFullImageCache(entry);
+}
+
+function cloneRgb(rgb: DevelopImage["rgb"]): DevelopImage["rgb"] {
+  if (rgb instanceof Uint16Array) return new Uint16Array(rgb);
+  if (rgb instanceof Uint8ClampedArray) return new Uint8ClampedArray(rgb);
+  return new Uint8Array(rgb);
+}
+
+async function loadFullResolutionImage(
+  entry: LibraryEntry,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode" | "signal" | "priority"> = {},
+): Promise<DevelopImage> {
+  options.signal?.throwIfAborted();
+  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
+  const key = fullImageCacheKey(entry, rawColorMode);
+  const cached = getFullImage(key);
+  if (cached) return cached;
+
+  let load = fullInFlightImages.get(key);
+  if (!load || load.controller.signal.aborted) {
+    const controller = new AbortController();
+    const priority = { value: options.priority ?? 0 };
+    const promise = decodeEntry(entry, {
+      fullResolution: true,
+      sourcePixels: true,
+      signal: controller.signal,
+      priority: () => priority.value,
+      cameraProfile: cameraProfileDecode(entry, rawColorMode),
+    }).then((decoded) => {
+      if (controller.signal.aborted && decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
+      controller.signal.throwIfAborted();
+      const image = toDevelopImage(decoded);
+      if (image.pixelProvenance.decoderPath !== "embedded-preview") {
+        rememberFullImage(key, image);
+      }
+      return image;
+    });
+    load = { promise, controller, consumers: 0, priority };
+    fullInFlightImages.set(key, load);
+    const completedLoad = load;
+    const clear = () => {
+      if (fullInFlightImages.get(key) === completedLoad) fullInFlightImages.delete(key);
+    };
+    promise.then(clear, clear);
+  }
+  load.priority.value = Math.max(load.priority.value, options.priority ?? 0);
+  const image = await waitForImage(load, options.signal);
+  options.signal?.throwIfAborted();
+  return image;
+}
+
 export async function loadDevelopImage(
   entry: LibraryEntry,
   options: DevelopImageLoadOptions = {},
 ): Promise<DevelopImage> {
   options.signal?.throwIfAborted();
-  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
-  const requestedEdge = options.maxEdge ?? PREVIEW_MAX_EDGE;
-  if (!Number.isFinite(requestedEdge) || requestedEdge <= 0) throw new Error("Preview size must be positive.");
-  const maxEdge = [360, 720, 1280, PREVIEW_MAX_EDGE].find((edge) => edge >= requestedEdge) ?? PREVIEW_MAX_EDGE;
-  const key = `${cacheKey(entry, rawColorMode, maxEdge)}-${options.includeBlob ? "blob" : "pixels"}`;
-  const cache = options.cache === "thumbnail" ? thumbnailImageCache : imageCache;
-  const cached = cache.get(key);
-  if (cached) {
-    cache.delete(key);
-    cache.set(key, cached);
-    return cached;
-  }
+  const { cache, key, maxEdge, rawColorMode } = previewCacheLookup(entry, options);
+  const cached = getCachedImage(cache, key);
+  if (cached) return cached;
   let load = inFlightImages.get(key);
   if (!load || load.controller.signal.aborted) {
     const controller = new AbortController();
@@ -176,23 +299,24 @@ export async function loadDevelopImage(
   return image;
 }
 
+export function getCachedDevelopImage(
+  entry: LibraryEntry,
+  options: DevelopImageLoadOptions = {},
+): DevelopImage | null {
+  const { cache, key } = previewCacheLookup(entry, options);
+  return getCachedImage(cache, key);
+}
+
 export async function loadDevelopExportImage(
   entry: LibraryEntry,
   options: DevelopImageLoadOptions = {},
 ): Promise<DevelopImage> {
-  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
-  const decoded = await decodeEntry(entry, {
-    fullResolution: true,
-    sourcePixels: true,
-    signal: options.signal,
-    cameraProfile: cameraProfileDecode(entry, rawColorMode),
-  });
-  return toDevelopImage(decoded);
+  return loadFullResolutionImage(entry, options);
 }
 
 /**
- * Load a fresh source decode for local AI inference. This skips the editor
- * cache and requests source pixels without changing thumbnail semantics.
+ * Load source pixels for local AI inference. The caller transfers the pixels,
+ * so return an owned copy when the full-resolution image came from the cache.
  */
 export async function loadDevelopInferenceImage(
   entry: LibraryEntry,
@@ -201,15 +325,11 @@ export async function loadDevelopInferenceImage(
   if (signal?.aborted) {
     throw new Error("AI source loading was cancelled.");
   }
-  const decoded = await decodeEntry(entry, {
-    fullResolution: true,
-    sourcePixels: true,
-    signal,
-  });
+  const decoded = await loadFullResolutionImage(entry, { signal });
   if (signal?.aborted) {
     throw new Error("AI source loading was cancelled.");
   }
-  return toDevelopImage(decoded);
+  return { ...decoded, rgb: cloneRgb(decoded.rgb) };
 }
 
 export function disposeDevelopImage(image: DevelopImage): void {
