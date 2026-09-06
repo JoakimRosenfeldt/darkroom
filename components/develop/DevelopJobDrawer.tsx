@@ -3,7 +3,7 @@
 import { useExperimentalTools } from "@/hooks/useExperimentalTools";
 
 import { useEffect, useSyncExternalStore } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
 import type { DevelopJobSnapshot } from "@/lib/develop/v3/jobs";
 import { useDevelopJobStore } from "@/stores/develop-job-store";
@@ -25,7 +25,7 @@ function subscribeRuntime(): () => void {
 
 export function DevelopJobDrawer() {
   const [experimental] = useExperimentalTools();
-  const router = useRouter();
+  const navigate = useNavigate();
   const jobs = useDevelopJobStore((state) => state.jobs);
   const initialize = useDevelopJobStore((state) => state.initialize);
   const refresh = useDevelopJobStore((state) => state.refresh);
@@ -41,7 +41,7 @@ export function DevelopJobDrawer() {
     const result = getVisibleLibraryResult();
     if (!result.query || !result.entryIds.includes(entryId)) return;
     const session = createViewerSession({ query: result.query, orderedEntryIds: result.viewerEntryIds, activeEntryId: entryId, selectedEntryIds });
-    router.push(viewerPhotoHref(entryId, session.id));
+    navigate(viewerPhotoHref(entryId, session.id));
   };
   return <details className="fixed bottom-3 right-3 z-[65] w-[min(360px,calc(100vw-24px))] rounded-lg border border-lr-border bg-lr-panel-raised shadow-xl">
     <summary className="cursor-pointer px-3 py-2 text-[10px] font-semibold text-lr-text">Prototype jobs ({visible.length})</summary>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -94,7 +94,7 @@ export function PhotoViewer({
   sessionMessage,
   onRefreshResult,
 }: PhotoViewerProps) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const activeSelectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
@@ -244,7 +244,7 @@ export function PhotoViewer({
         selectedEntryIds: [entryId],
       });
       setCopyError(null);
-      router.push(viewerPhotoHref(entryId, resultId));
+      navigate(viewerPhotoHref(entryId, resultId));
     } catch (copyCreateError) {
       setCopyError(copyCreateError instanceof Error ? copyCreateError.message : "Virtual copy could not be created.");
     }
@@ -272,7 +272,7 @@ export function PhotoViewer({
       const available = new Set<string>(availableEntryIds);
       const orderedEntryIds = resultEntryIds.filter((id) => id !== entry.id && available.has(id));
       if (current.catalogId === null || orderedEntryIds.length === 0) {
-        router.push("/");
+        navigate("/");
         return;
       }
       const oldIndex = resultEntryIds.indexOf(entry.id);
@@ -287,7 +287,7 @@ export function PhotoViewer({
         selectedEntryIds: [activeEntryId],
       });
       setCopyError(null);
-      router.push(viewerPhotoHref(activeEntryId, resultId));
+      navigate(viewerPhotoHref(activeEntryId, resultId));
     } catch (copyDeleteError) {
       setCopyError(copyDeleteError instanceof Error ? copyDeleteError.message : "Virtual copy could not be deleted.");
     }
@@ -304,9 +304,9 @@ export function PhotoViewer({
       selectedEntryIds.includes(entry.id) &&
       entries.some((item) => item.id === activeSelectedEntryId)
     ) {
-      router.replace(viewerPhotoHref(activeSelectedEntryId, resultId));
+      navigate(viewerPhotoHref(activeSelectedEntryId, resultId), { replace: true });
     }
-  }, [activeSelectedEntryId, entries, entry.id, resultId, router, selectedEntryIds]);
+  }, [activeSelectedEntryId, entries, entry.id, resultId, navigate, selectedEntryIds]);
 
   useEffect(() => {
     let active = true;
@@ -434,13 +434,13 @@ export function PhotoViewer({
       const nextActiveId =
         removing && id === entry.id ? remaining.at(-1) : removing ? entry.id : id;
       if (nextActiveId && nextActiveId !== entry.id) {
-        router.push(viewerPhotoHref(nextActiveId, resultId));
+        navigate(viewerPhotoHref(nextActiveId, resultId));
       }
     },
     [
       closeEditingTools,
       entry.id,
-      router,
+      navigate,
       selectEntry,
       selectedEntryIds,
       resultId,
@@ -527,7 +527,7 @@ export function PhotoViewer({
           closeEditingTools();
           return;
         }
-        router.push("/");
+        navigate("/");
       }
     }
 
@@ -535,7 +535,7 @@ export function PhotoViewer({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     adjacentEntry,
-    router,
+    navigate,
     activePanel,
     closeEditingTools,
     exportOpen,
@@ -643,7 +643,7 @@ export function PhotoViewer({
                   disabled={adjacentEntry(1) === null}
                   onClick={() => {
                     const candidate = adjacentEntry(1);
-                    if (candidate) router.push(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
+                    if (candidate) navigate(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
                   }}
                   className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
                 >

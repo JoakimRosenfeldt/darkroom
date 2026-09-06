@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 :root {
+  --font-geist-sans: "Geist Variable";
+  --font-geist-mono: "Geist Mono Variable";
   --lr-bg: #131110;
   --lr-canvas: #0f0d0c;
   --lr-panel: #1b1917;

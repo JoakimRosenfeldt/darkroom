@@ -1,11 +1,3 @@
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-
-<!-- END:nextjs-agent-rules -->
-
 # Model use
 
 Always follow this section when orchestrating work or delegating to subagents. The pattern is: **write the code with the cheap model, then debug and review it with the expensive ones.**
@@ -43,7 +35,7 @@ If a task cannot be described this way, it is not ready to delegate: investigate
 
 ## Cursor Cloud specific instructions
 
-Darkroom is a single-product Electron + Next.js 16 (static-export, webpack) desktop photo library. Standard commands live in `package.json`/`README.md`: `npm run lint`, `npm run build`, and `npm run electron:dev` (dev). No databases, secrets, or external services are needed.
+Darkroom is a single-product Electron + React 19 + Vite desktop photo library. Standard commands live in `package.json`/`README.md`: `npm run lint`, `npm run build`, and `npm run electron:dev` (dev). Catalogs use local SQLite. No secrets or external services are needed.
 
 Non-obvious caveats:
 
@@ -52,4 +44,5 @@ Non-obvious caveats:
 - `npm run dev` alone only serves the UI in a browser; native file access / IPC (`window.darkroom`) requires the full Electron app.
 - Renderer console logs (`[darkroom:fs]`, `[Darkroom]`) go to the Electron DevTools console, not the `electron:dev` stdout/log.
 - `scripts/capture-screenshots.mjs` mocks `window.showDirectoryPicker`, which the current import flow no longer uses (it uses Electron IPC), so that script is stale for driving imports.
-- `npm run lint` currently reports pre-existing errors in the repo's existing code.
+- The renderer builds to `out/`. Electron serves it over loopback HTTP with a fallback to `index.html` for client routes. Keep worker and WASM assets available in both development and production.
+- `npm run build` runs TypeScript checks before bundling the renderer. The Electron build remains in `electron/build.mjs`.

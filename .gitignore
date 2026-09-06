@@ -13,7 +13,7 @@
 # testing
 /coverage
 
-# next.js
+# renderer builds, including legacy Next.js output
 /.next/
 /out/
 

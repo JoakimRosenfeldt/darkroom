@@ -15,6 +15,7 @@ const MIME_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".wasm": "application/wasm",
+  ".woff2": "font/woff2",
   ".txt": "text/plain; charset=utf-8",
 };
 
@@ -31,14 +32,8 @@ function resolveRequestPath(outDir: string, requestUrl: string): string | null {
     return directPath;
   }
 
-  const htmlPath = path.join(outDir, `${pathname.replace(/^\//, "")}.html`);
-  if (fs.existsSync(htmlPath) && fs.statSync(htmlPath).isFile()) {
-    return htmlPath;
-  }
-
-  const indexPath = path.join(outDir, pathname, "index.html");
-  if (fs.existsSync(indexPath) && fs.statSync(indexPath).isFile()) {
-    return indexPath;
+  if (!path.extname(pathname)) {
+    return path.join(outDir, "index.html");
   }
 
   return null;

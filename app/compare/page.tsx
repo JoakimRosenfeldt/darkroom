@@ -1,13 +1,13 @@
 "use client";
 
 import { Suspense, useMemo } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams } from "react-router";
 import { CompareView } from "@/components/viewer/CompareView";
 import { useLibraryResult } from "@/hooks/useLibraryResult";
 import { useLibraryStore } from "@/stores/library-store";
 
 function ComparePageContent() {
-  const searchParams = useSearchParams();
+  const [searchParams] = useSearchParams();
   const entries = useLibraryStore((state) => state.entries);
   const result = useLibraryResult();
   const ordered = useMemo(() => {

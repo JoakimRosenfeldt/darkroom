@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "react-router";
 import { IconGrid, IconSliders } from "@/components/shell/icons";
 import { useLibraryStore } from "@/stores/library-store";
 
@@ -48,7 +48,7 @@ export function ModuleSpine({
       aria-label="Modules"
     >
       <Link
-        href="/"
+        to="/"
         className="mb-2 flex h-7 w-7 items-center justify-center"
         aria-label="Darkroom library"
       >
@@ -100,7 +100,7 @@ export function ModuleSpine({
         ) : module.enabled ? (
           <Link
             key={module.id}
-            href={module.href}
+            to={module.href}
             className={className}
             title={module.title}
             aria-current={isActive ? "page" : undefined}

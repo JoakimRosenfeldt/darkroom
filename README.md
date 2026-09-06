@@ -2,7 +2,7 @@
 
 A desktop photo library inspired by Lightroom. Darkroom reads photos directly from local folders on your machine — nothing is uploaded or copied to a server.
 
-Built as an **Electron** app with a Next.js UI, native folder access, and automatic restoration of your last library on launch.
+Darkroom uses **Electron**, React, and Vite, with native folder access and automatic restoration of your last library on launch.
 
 ## Features
 
@@ -24,7 +24,11 @@ npm install
 npm run electron:dev
 ```
 
-This starts the Next.js dev server and opens the Electron window. Click **Import folder**, create a catalog, and select a photo folder.
+This starts the Vite dev server on port 3000 and opens the Electron window. Click **Import folder**, create a catalog, and select a photo folder.
+
+Use Node.js 24 for development.
+
+`npm run typecheck` checks TypeScript. `npm run build` checks types and writes the renderer to `out/` before building Electron.
 
 ### Production build
 
@@ -45,10 +49,12 @@ The macOS arm64 package injects the approved Nikon runtime from
 `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another private
 location. Packaging fails when a required runtime file is missing.
 
+The Nikon helper expects `prm.bin` under `Contents/Resources/Contents/Resources` in the packaged app. The release configuration copies it there.
+
 ## Architecture
 
 ```
-app/                    Next.js routes (client-only, static export)
+app/                    React entry point, routes, and styles
 components/             UI: folder picker, grid, viewer
 electron/               Main process, preload, native file I/O
 lib/fs/                 Folder scanning, file reads, persistence
@@ -104,7 +110,8 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 ## Tech stack
 
 - [Electron](https://www.electronjs.org/) — desktop shell and native file access
-- [Next.js 16](https://nextjs.org/) (App Router, static export)
+- [Vite](https://vite.dev/) for renderer development and builds
+- [React Router](https://reactrouter.com/) for client navigation
 - [React 19](https://react.dev/)
 - [Tailwind CSS 4](https://tailwindcss.com/)
 - [Zustand](https://github.com/pmndrs/zustand) — library state

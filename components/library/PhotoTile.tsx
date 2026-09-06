@@ -1,7 +1,6 @@
 "use client";
 
-import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { EntryMetadata } from "@/lib/catalog/types";
@@ -46,7 +45,7 @@ export const PhotoTile = memo(function PhotoTile({
   onContextMenu,
   getScrollRoot,
 }: PhotoTileProps) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const [viewSettings, updateViewSettings] = useLibraryViewSettings();
@@ -82,7 +81,7 @@ export const PhotoTile = memo(function PhotoTile({
         activeEntryId: entry.id,
         selectedEntryIds: selectedIds,
       });
-      router.push(viewerPhotoHref(entry.id, session.id));
+      navigate(viewerPhotoHref(entry.id, session.id));
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "The Library result could not be saved.");
     }
@@ -216,13 +215,12 @@ export const PhotoTile = memo(function PhotoTile({
       style={{ width, height }}
     >
       {thumbnailUrl ? (
-        <Image
+        <img
           src={thumbnailUrl}
           alt={entry.name}
-          fill
-          unoptimized
-          className={imageFit}
-          sizes={`${width}px`}
+          loading="lazy"
+          decoding="async"
+          className={`absolute inset-0 h-full w-full ${imageFit}`}
         />
       ) : (
         <div
