@@ -72,6 +72,162 @@ function workerFactory(): Worker {
   });
 }
 
+const WORKER_IDLE_MS = 61_000;
+
+interface PendingInference {
+  readonly resolve: (result: AiInferenceResult) => void;
+  readonly reject: (error: AiInferenceError) => void;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: AiInferenceProgress) => void;
+  readonly abort: () => void;
+}
+
+interface SharedWorkerState {
+  readonly worker: Worker;
+  readonly pending: Map<string, PendingInference>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+}
+
+let sharedWorkerState: SharedWorkerState | null = null;
+
+function runtimeError(): AiInferenceError {
+  return new AiInferenceError(
+    "runtime",
+    "The AI inference worker stopped unexpectedly.",
+  );
+}
+
+function clearWorkerIdleTimer(state: SharedWorkerState): void {
+  if (state.idleTimer === null) {
+    return;
+  }
+  clearTimeout(state.idleTimer);
+  state.idleTimer = null;
+}
+
+function scheduleWorkerIdle(state: SharedWorkerState): void {
+  clearWorkerIdleTimer(state);
+  if (state.pending.size > 0) {
+    return;
+  }
+  state.idleTimer = setTimeout(() => {
+    state.idleTimer = null;
+    if (sharedWorkerState !== state || state.pending.size > 0) {
+      return;
+    }
+    resetWorkerState(state);
+  }, WORKER_IDLE_MS);
+}
+
+function takePending(
+  state: SharedWorkerState,
+  id: string,
+): PendingInference | undefined {
+  const pending = state.pending.get(id);
+  if (pending === undefined) {
+    return undefined;
+  }
+  state.pending.delete(id);
+  pending.signal?.removeEventListener("abort", pending.abort);
+  if (state.pending.size === 0) {
+    scheduleWorkerIdle(state);
+  }
+  return pending;
+}
+
+function resetWorkerState(
+  state: SharedWorkerState,
+  rejection: AiInferenceError = runtimeError(),
+): void {
+  if (sharedWorkerState === state) {
+    sharedWorkerState = null;
+  }
+  clearWorkerIdleTimer(state);
+  state.worker.onmessage = null;
+  state.worker.onerror = null;
+  state.worker.onmessageerror = null;
+  state.worker.terminate();
+  const pending = [...state.pending.values()];
+  state.pending.clear();
+  for (const request of pending) {
+    request.signal?.removeEventListener("abort", request.abort);
+    request.reject(rejection);
+  }
+}
+
+function handleWorkerResponse(
+  state: SharedWorkerState,
+  event: MessageEvent<AiInferenceWorkerResponse>,
+): void {
+  const response = event.data;
+  if (!response || typeof response.requestId !== "string") {
+    return;
+  }
+  const pending = state.pending.get(response.requestId);
+  if (pending === undefined) {
+    return;
+  }
+  if (response.kind === "progress") {
+    pending.onProgress?.({ stage: response.stage, progress: response.progress });
+    return;
+  }
+  const request = takePending(state, response.requestId);
+  if (request === undefined) {
+    return;
+  }
+  if (response.kind === "result") {
+    request.resolve(response);
+    return;
+  }
+  const error = safeWorkerError(response);
+  request.reject(error);
+  if (error.code !== "cancelled") {
+    resetWorkerState(state, error);
+  }
+}
+
+function createWorkerState(): SharedWorkerState {
+  const state: SharedWorkerState = {
+    worker: workerFactory(),
+    pending: new Map(),
+    idleTimer: null,
+  };
+  state.worker.onmessage = (event: MessageEvent<AiInferenceWorkerResponse>): void => {
+    handleWorkerResponse(state, event);
+  };
+  state.worker.onerror = (): void => {
+    resetWorkerState(state);
+  };
+  state.worker.onmessageerror = (): void => {
+    resetWorkerState(state);
+  };
+  return state;
+}
+
+function getWorkerState(): SharedWorkerState {
+  if (sharedWorkerState === null) {
+    sharedWorkerState = createWorkerState();
+  }
+  return sharedWorkerState;
+}
+
+function abortPending(state: SharedWorkerState, id: string): void {
+  const pending = takePending(state, id);
+  if (pending === undefined) {
+    return;
+  }
+  pending.reject(abortError());
+  try {
+    state.worker.postMessage({ kind: "cancel", requestId: id });
+  } catch {
+    resetWorkerState(state);
+    return;
+  }
+  if (state.pending.size === 0) {
+    resetWorkerState(state);
+  }
+}
+
 function sourceImageForWorker(image: DevelopImage): AiInferenceSourceImage {
   const buffer = image.rgb.buffer;
   if (!(buffer instanceof ArrayBuffer)) {
@@ -109,68 +265,52 @@ export async function runAiMaskInference(
       );
     }
     const id = requestId();
-    const worker = workerFactory();
+    let state: SharedWorkerState;
+    try {
+      state = getWorkerState();
+    } catch {
+      throw runtimeError();
+    }
     const backend = options.forceWasm ? "wasm" : "auto";
 
     return await new Promise<AiInferenceResult>((resolve, reject) => {
-      let settled = false;
-
-      const finish = (callback: () => void): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        options.signal?.removeEventListener("abort", abort);
-        worker.onmessage = null;
-        worker.onerror = null;
-        worker.terminate();
-        callback();
-      };
-
       const abort = (): void => {
-        finish(() => reject(abortError()));
+        abortPending(state, id);
       };
-
-      worker.onmessage = (event: MessageEvent<AiInferenceWorkerResponse>): void => {
-        const response = event.data;
-        if (!response || response.requestId !== id) {
-          return;
-        }
-        if (response.kind === "progress") {
-          options.onProgress?.({ stage: response.stage, progress: response.progress });
-          return;
-        }
-        if (response.kind === "result") {
-          finish(() => resolve(response));
-          return;
-        }
-        finish(() => reject(safeWorkerError(response)));
-      };
-
-      worker.onerror = (): void => {
-        finish(() => reject(new AiInferenceError(
-          "runtime",
-          "The AI inference worker stopped unexpectedly.",
-        )));
-      };
-
+      state.pending.set(id, {
+        resolve,
+        reject,
+        signal: options.signal,
+        onProgress: options.onProgress,
+        abort,
+      });
       if (options.signal?.aborted) {
         abort();
         return;
       }
       options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.signal?.aborted) {
+        abort();
+        return;
+      }
 
-      worker.postMessage(
-        {
-          kind: "run",
-          requestId: id,
-          modelId: options.modelId,
-          image,
-          sourceSignature: options.sourceSignature,
-          backend,
-        },
-        [pixelBuffer],
-      );
+      try {
+        state.worker.postMessage(
+          {
+            kind: "run",
+            requestId: id,
+            modelId: options.modelId,
+            image,
+            sourceSignature: options.sourceSignature,
+            backend,
+          },
+          [pixelBuffer],
+        );
+      } catch {
+        const pending = takePending(state, id);
+        pending?.reject(runtimeError());
+        resetWorkerState(state);
+      }
     });
   } finally {
     disposeDevelopImage(sourceImage);

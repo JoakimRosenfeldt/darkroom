@@ -395,6 +395,12 @@ function prepareFreshCatalogV3Database(database: DatabaseSync): void {
   }
 }
 
+const querySnapshots = new WeakMap<DatabaseSync, {
+  readonly catalogId: CatalogId;
+  readonly revision: number;
+  readonly rows: ReadonlyMap<EntryId, Row>;
+}>();
+
 export class CatalogLiveRepository {
   private readonly database: DatabaseSync;
 
@@ -1549,7 +1555,21 @@ export class CatalogLiveRepository {
     if (input.entryId !== undefined) { conditions.push("e.entry_id = ?"); parameters.push(input.entryId); }
     if (input.assetId !== undefined) { conditions.push("a.asset_id = ?"); parameters.push(input.assetId); }
     if (input.rootId !== undefined) { conditions.push("a.root_id = ?"); parameters.push(input.rootId); }
-    const assets = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id, e.is_original DESC, e.created_at, e.entry_id`).all(...parameters).map((value) => this.assetSnapshotFromRow(value));
+    const rows = this.database.prepare(`${ASSET_SNAPSHOT_SELECT} WHERE ${conditions.join(" AND ")} ORDER BY a.relative_path, a.asset_id, e.is_original DESC, e.created_at, e.entry_id`).all(...parameters);
+    const fullQuery = input.entryId === undefined && input.assetId === undefined && input.rootId === undefined;
+    const previous = querySnapshots.get(this.database);
+    const useDelta = fullQuery && previous?.catalogId === input.catalogId &&
+      input.knownRevision !== undefined && input.knownRevision === previous.revision;
+    const nextRows = new Map<EntryId, Row>();
+    const assets: CatalogLiveEntrySnapshot[] = [];
+    for (const row of rows) {
+      const entryId = parseEntryId(requiredString(row, "entryId"));
+      nextRows.set(entryId, row);
+      const prior = useDelta ? previous.rows.get(entryId) : undefined;
+      if (prior && Object.keys(prior).length === Object.keys(row).length &&
+          Object.entries(row).every(([key, value]) => prior[key] === value)) continue;
+      assets.push(this.assetSnapshotFromRow(row));
+    }
     const tombstonedEntryIds = this.database.prepare(`
       SELECT entry_id AS entryId
       FROM edit_entries
@@ -1579,6 +1599,7 @@ export class CatalogLiveRepository {
       catalog,
       roots: this.roots(input.catalogId),
       assets,
+      ...(useDelta ? { assetDelta: { baseRevision: previous.revision, entryIds: [...nextRows.keys()] } } : {}),
       tombstonedEntryIds,
       albums: this.albums(input.catalogId),
       operations: this.operationRows(input.catalogId),
@@ -1588,7 +1609,11 @@ export class CatalogLiveRepository {
       fingerprintCoverage: coverage,
       fingerprintMatches,
     };
-    return parseCatalogLiveQueryResult(raw);
+    const result = parseCatalogLiveQueryResult(raw);
+    if (fullQuery && input.knownRevision !== undefined) {
+      querySnapshots.set(this.database, { catalogId: input.catalogId, revision: catalog.revision, rows: nextRows });
+    }
+    return result;
   }
 
   public query(input: CatalogLiveQueryInput): CatalogLiveState {

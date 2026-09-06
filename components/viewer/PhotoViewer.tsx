@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
@@ -186,12 +187,12 @@ export function PhotoViewer({
     defaultFacts,
   });
   const defaultsPending = defaultsResolution.kind === "pending";
-  const visibleV3Document = useDevelopStore((state) => {
+  const maskHeader = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
     const document = session?.previewDocument ?? session?.persistedDocument;
-    return session?.processKind === "v3" && document?.version === 3
-      ? document
-      : null;
+    const masks = session?.processKind === "v3" && document?.version === 3 ? document.local.masks : [];
+    const selected = masks.find((mask) => mask.id === session?.ui.selectedMaskId);
+    return `${masks.length} ${masks.length === 1 ? "mask" : "masks"}${selected ? ` · ${selected.name}` : ""}`;
   });
   const developProcessKind = useDevelopStore(
     (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
@@ -200,15 +201,13 @@ export function PhotoViewer({
   const redo = useDevelopStore((state) => state.redo);
   const canUndo = useDevelopStore((state) => (state.sessions[entry.id]?.undo.length ?? 0) > 0);
   const canRedo = useDevelopStore((state) => (state.sessions[entry.id]?.redo.length ?? 0) > 0);
-  const maskUi = useDevelopStore((state) => {
-    const session = state.sessions[entry.id];
-    return session?.ui ?? null;
-  });
+  const maskUi = useDevelopStore(useShallow((state) => {
+    const ui = state.sessions[entry.id]?.ui;
+    return ui ? { tool: ui.tool, overlayVisible: ui.overlayVisible } : null;
+  }));
   const setMaskOverlayVisible = useDevelopStore((state) => state.setMaskOverlayVisible);
   const setMaskTool = useDevelopStore((state) => state.setMaskTool);
   const [exportOpen, setExportOpen] = useState(false);
-  const headerMasks = visibleV3Document?.local.masks ?? [];
-  const headerSelectedMask = headerMasks.find((mask) => mask.id === maskUi?.selectedMaskId);
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
 
@@ -307,6 +306,7 @@ export function PhotoViewer({
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
 
     async function loadImage() {
       setLoading(true);
@@ -323,18 +323,21 @@ export function PhotoViewer({
       }
 
       try {
-        const result = await loadDevelopImage(entry, {
+        const loadingImage = loadDevelopImage(entry, {
+          signal: controller.signal,
+          priority: 100,
+          includeBlob: developProcessKind === "v2",
           rawColorMode: developProcessKind === "v3"
             ? "libraw-camera-matrix"
             : "decoder-rendered",
         });
-        if (!active) {
-          return;
-        }
-        setDecoded(result);
         preloadDevelopImages(entries, availableActiveIndex, {
+          includeBlob: developProcessKind === "v2",
           rawColorMode: developProcessKind === "v3" ? "libraw-camera-matrix" : "decoder-rendered",
         });
+        const result = await loadingImage;
+        if (!active) return;
+        setDecoded(result);
       } catch (loadError) {
         if (active) {
           setError(
@@ -354,6 +357,7 @@ export function PhotoViewer({
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [entry, entries, availableActiveIndex, developProcessKind]);
 
@@ -539,7 +543,7 @@ export function PhotoViewer({
               {activePanel === "crop"
                 ? "Adjust framing on the photo"
                 : activePanel === "masking"
-                  ? `${headerMasks.length} ${headerMasks.length === 1 ? "mask" : "masks"}${headerSelectedMask ? ` · ${headerSelectedMask.name}` : ""}`
+                  ? maskHeader
                   : activePanel === "cleanup"
                     ? "Remove spots and distractions"
                   : decoded

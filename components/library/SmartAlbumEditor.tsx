@@ -9,7 +9,7 @@ import type {
   SmartRuleGroup,
   SmartTextField,
 } from "@/lib/library/model";
-import { buildQueryIndex, evaluateSmartRule } from "@/lib/library/query";
+import { getQueryIndex, evaluateSmartRule } from "@/lib/library/query";
 import { useLibraryStore } from "@/stores/library-store";
 
 const TEXT_FIELDS: readonly SmartTextField[] = [
@@ -87,7 +87,7 @@ export function SmartAlbumEditor({
   const previewCount = useMemo(() => {
     const archived = new Set(archivedEntryIds);
     const excluded = new Set(workspace.excludedEntryIds);
-    const index = buildQueryIndex(entries, metadata, albums, workspace);
+    const index = getQueryIndex(entries, metadata, albums, workspace);
     return entries.filter((entry) => {
       const record = index.get(entry.id);
       return !archived.has(entry.id) &&

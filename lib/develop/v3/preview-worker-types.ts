@@ -47,6 +47,7 @@ export type V3PreviewWorkerRequest =
       readonly devicePixelRatio: number;
       readonly previewMode: V3PreviewRenderMode;
       readonly includeAnalysis: boolean;
+  readonly includePointColor?: boolean;
       readonly maskMattes: readonly V3PreviewWorkerMaskMatte[];
     };
 

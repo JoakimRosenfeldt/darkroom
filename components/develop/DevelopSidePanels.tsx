@@ -60,12 +60,11 @@ export function DevelopSidePanels({
   defaultFacts,
   defaultsResolution,
 }: DevelopSidePanelsProps) {
-  const session = useDevelopStore((state) => {
-    const entryId = state.activeEntryId;
-    return entryId ? state.sessions[entryId] : undefined;
-  });
-
-  const projectionConflict = session?.ui.projection.kind === "divergent";
+  const processKind = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.processKind : undefined);
+  const projectionConflict = useDevelopStore((state) => state.activeEntryId
+    ? state.sessions[state.activeEntryId]?.ui.projection.kind === "divergent" : false);
+  const readOnly = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.readOnly : undefined);
+  const sidecarError = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.ui.sidecarError : undefined);
   const effectivePanel = projectionConflict ? "history" : activePanel;
   const defaultsPending = defaultsResolution.kind === "pending";
   const panel = effectivePanel === "history" ? (
@@ -79,7 +78,7 @@ export function DevelopSidePanels({
       entry={entry}
       decodedMetadata={decoded.metadata}
     />
-  ) : session?.processKind === "v3" && defaultsResolution.kind !== "pending" ? (
+  ) : processKind === "v3" && defaultsResolution.kind !== "pending" ? (
     <EditPanel
       key={effectivePanel ?? "edit"}
       decoded={decoded}
@@ -98,13 +97,13 @@ export function DevelopSidePanels({
         missingEntryIds,
       }}
     />
-  ) : session?.processKind === "read-only-newer" && session.readOnly ? (
+  ) : processKind === "read-only-newer" && readOnly ? (
     <NewerDevelopReadOnlyPanel
-      version={session.readOnly.foundVersion}
-      reason={session.readOnly.message}
+      version={readOnly.foundVersion}
+      reason={readOnly.message}
     />
   ) : (
-    <PreparingDevelopPanel error={session?.ui.sidecarError ?? null} />
+    <PreparingDevelopPanel error={sidecarError ?? null} />
   );
 
   return (
@@ -113,7 +112,7 @@ export function DevelopSidePanels({
       <DevelopPanelRail
         activePanel={effectivePanel}
         onSelect={onSelect}
-    editingDisabled={session?.processKind !== "v3" || projectionConflict || defaultsPending}
+    editingDisabled={processKind !== "v3" || projectionConflict || defaultsPending}
       />
       <DevelopJobDrawer />
     </>

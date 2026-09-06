@@ -229,6 +229,7 @@ export function DevelopCanvas({
   const requestRef = useRef(0);
   const quickWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const detailWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const analysisWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
@@ -261,6 +262,7 @@ export function DevelopCanvas({
     return session?.transientEdit ? "interactive" : "settled";
   });
   const previewModeRef = useRef(previewMode);
+  const includePointColor = canvasTool.kind === "point-color";
   const maskTool = useDevelopStore((state) => {
     const session = state.activeCatalogId === entry.catalogId
       ? state.sessions[entry.id]
@@ -332,11 +334,13 @@ export function DevelopCanvas({
       worker.dispose();
       detailWorkerRef.current?.dispose();
       beforeWorkerRef.current?.dispose();
+      analysisWorkerRef.current?.dispose();
       pointColorInputRef.current = null;
       clearActiveAnalysis(entry.catalogId, entry.id);
       quickWorkerRef.current = null;
       detailWorkerRef.current = null;
       beforeWorkerRef.current = null;
+      analysisWorkerRef.current = null;
     };
   }, [entry, image]);
 
@@ -353,6 +357,8 @@ export function DevelopCanvas({
     let disposed = false;
     let renderedViewportWidth = 0;
     let renderedViewportHeight = 0;
+    let refineTimer: ReturnType<typeof setTimeout> | undefined;
+    let animationFrame = 0;
 
     const render = (force = false) => {
       const width = Math.max(1, Math.round(container.clientWidth));
@@ -384,8 +390,10 @@ export function DevelopCanvas({
       }
       const interactionRelease = previewMode === "settled" &&
         lastInteractiveRevisionRef.current === renderSnapshot.documentRevision;
-      if (interactionRelease && sameFrame && drawnFrame.mode === "settled") return;
+      if (interactionRelease && sameFrame && drawnFrame.mode === "settled" &&
+          (!includePointColor || pointColorInputRef.current !== null)) return;
 
+      clearTimeout(refineTimer);
       pointColorInputRef.current = null;
       setShowBefore(false);
       clearActiveAnalysis(entry.catalogId, entry.id);
@@ -552,8 +560,9 @@ export function DevelopCanvas({
           viewportDimensions: { width, height },
           devicePixelRatio: window.devicePixelRatio || 1,
           maskMattes,
+          includePointColor,
         } as const;
-        let backend = sameFrame ? drawnFrame.backend : null;
+        let backend = drawnFrame?.backend ?? null;
         if (!interactionRelease) {
           const quick = await quickWorker.render(renderDocument, {
             ...options,
@@ -566,12 +575,16 @@ export function DevelopCanvas({
         }
 
         if (previewMode === "interactive") {
-          const refined = await quickWorker.render(renderDocument, {
-            ...options,
-            previewMode: "refined",
-            includeAnalysis: false,
-          });
-          applyResult(refined.result, "refined", refined.backend, true);
+          refineTimer = setTimeout(() => {
+            if (disposed || requestId !== requestRef.current) return;
+            void quickWorker.render(renderDocument, {
+              ...options,
+              previewMode: "refined",
+              includeAnalysis: false,
+            }).then((refined) => {
+              applyResult(refined.result, "refined", refined.backend, true);
+            }).catch(handleRenderError);
+          }, 100);
           return;
         }
 
@@ -582,12 +595,34 @@ export function DevelopCanvas({
         const detailed = await detailWorker.render(renderDocument, {
           ...options,
           previewMode: "settled",
+          includeAnalysis: backend !== "gpu" && !cropActive,
+        });
+        if (!applyResult(detailed.result, "settled", detailed.backend)) return;
+        if (cropActive || disposed || requestId !== requestRef.current ||
+            (detailed.result.kind === "rendered" && detailed.result.analysis.length > 0)) return;
+        const analysisWorker = analysisWorkerRef.current ??= new V3PreviewWorkerClient(entry, image);
+        const analyzed = await analysisWorker.render(renderDocument, {
+          ...options,
+          previewMode: "settled",
           includeAnalysis: true,
         });
-        applyResult(detailed.result, "settled", detailed.backend);
+        const result = analyzed.result;
+        if (result.kind !== "rendered") return;
+        if ("bitmap" in result) result.bitmap.close();
+        if (disposed || requestId !== requestRef.current ||
+            session.snapshot().documentRevision !== renderSnapshot.documentRevision) return;
+        pointColorInputRef.current = result.pointColorInput;
+        bindActiveAnalysis(result.analysis, {
+          catalogId: entry.catalogId,
+          entryId: entry.id,
+          assetRevision: entry.assetRevision,
+          documentRevision: renderSnapshot.documentRevision,
+          planFingerprint: result.planFingerprint,
+        });
+        analysisCallbackRef.current?.(result.analysis);
       };
 
-      void renderPreview().catch((error: unknown) => {
+      const handleRenderError = (error: unknown): void => {
         if (disposed || requestId !== requestRef.current) return;
         if (!hasRenderedRef.current) {
           diagnosticsCallbackRef.current?.([]);
@@ -597,19 +632,26 @@ export function DevelopCanvas({
             message: error instanceof Error ? error.message : "Could not render the preview.",
           });
         }
-      });
+      };
+      void renderPreview().catch(handleRenderError);
     };
 
-    render(true);
-    const observer = new ResizeObserver(() => render());
+    const scheduleRender = (force = false): void => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(() => render(force));
+    };
+    scheduleRender(true);
+    const observer = new ResizeObserver(() => scheduleRender());
     observer.observe(container);
     return () => {
       disposed = true;
+      clearTimeout(refineTimer);
+      cancelAnimationFrame(animationFrame);
       detailWorkerRef.current?.dispose();
       detailWorkerRef.current = null;
       observer.disconnect();
     };
-  }, [cropActive, document, documentRevision, entry, image, previewMode]);
+  }, [cropActive, document, documentRevision, entry, image, includePointColor, previewMode]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -882,7 +924,7 @@ export function DevelopCanvas({
     };
   }, [beforeReady, canvasInteractionActive, stepZoom]);
 
-  const sourceResult = buildV3SourceRecord(entry, image, "preview");
+  const sourceResult = useMemo(() => buildV3SourceRecord(entry, image, "preview"), [entry, image]);
   const samplePointColorInput = useCallback((output: GeometryPoint): Rgb | null => {
     const input = pointColorInputRef.current;
     if (!input || input.dimensions.width < 1 || input.dimensions.height < 1) return null;

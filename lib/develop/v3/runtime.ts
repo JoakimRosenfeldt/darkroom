@@ -95,9 +95,12 @@ export interface V3PreviewSessionRenderRequest extends V3RuntimeRequestBase {
   readonly viewportDimensions: PixelDimensions;
   readonly devicePixelRatio: number;
   readonly previewMode: V3PreviewRenderMode;
+  readonly includeAnalysis?: boolean;
+  readonly includePointColor?: boolean;
 }
 
 export interface V3ExportSessionRenderRequest extends V3RuntimeRequestBase {
+  readonly includeAnalysis?: boolean;
   readonly kind: "v3-export";
   readonly size: ExportSizeOptions;
   readonly format: ExportFormatId;
@@ -705,7 +708,7 @@ async function renderRequest(
             renderingIntent: "relative-colorimetric",
           },
         },
-        requestedTaps: EXPORT_ANALYSIS_TAPS,
+        requestedTaps: request.includeAnalysis === false ? [] : EXPORT_ANALYSIS_TAPS,
       };
     }
     const qualityAndDimensions = previewQuality(document, source, request);
@@ -733,7 +736,7 @@ async function renderRequest(
           proofView: { kind: "disabled" },
         },
       },
-      requestedTaps: PREVIEW_ANALYSIS_TAPS,
+      requestedTaps: request.includeAnalysis === false ? [] : PREVIEW_ANALYSIS_TAPS,
     };
   } catch (error) {
     return invalidResult(
@@ -770,6 +773,9 @@ export async function prepareV3RuntimeRender(
       capabilities: BASELINE_CAPABILITY_REPORT,
       cancellation: request.cancellation,
       assets,
+      includePointColor: request.kind === "v3-preview"
+        ? request.includePointColor ?? request.includeAnalysis !== false
+        : false,
     },
   };
 }

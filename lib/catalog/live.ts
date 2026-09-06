@@ -207,6 +207,7 @@ export interface CatalogLiveState {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRoot[];
   readonly assets: readonly CatalogLiveEntrySnapshot[];
+  readonly assetDelta?: { readonly baseRevision: number; readonly entryIds: readonly EntryId[] };
   readonly tombstonedEntryIds?: readonly EntryId[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogLiveOperation[];
@@ -218,6 +219,7 @@ export interface CatalogLiveState {
 }
 
 export interface CatalogLiveQueryInput {
+  readonly knownRevision?: number;
   readonly catalogId: CatalogId;
   readonly expectedRevision: number | null;
   readonly assetId?: AssetId;
@@ -756,8 +758,23 @@ function parseFingerprint(value: unknown): CatalogLiveFingerprintTransition {
 function parseState(value: unknown): CatalogLiveState {
   const input = record(value, "live state");
   const catalogValue = record(input.catalog, "live catalog");
+  const delta = input.assetDelta === undefined ? undefined : record(input.assetDelta, "asset delta");
+  const assetDelta = delta && {
+    baseRevision: integer(delta.baseRevision, "asset delta base revision"),
+    entryIds: Array.isArray(delta.entryIds) ? delta.entryIds.map(parseEntryId) : fail("asset delta entry ids are invalid"),
+  };
+  if (assetDelta && new Set(assetDelta.entryIds).size !== assetDelta.entryIds.length) {
+    return fail("asset delta entry ids contain duplicates");
+  }
   const roots = Array.isArray(input.roots) ? input.roots.map(parseRootOutput) : fail("live roots are invalid");
   const assets = Array.isArray(input.assets) ? input.assets.map(parseAssetSnapshot) : fail("live assets are invalid");
+  if (assetDelta) {
+    const entryIds = new Set(assetDelta.entryIds);
+    const changedIds = assets.map((asset) => asset.entryId ?? parseEntryId(asset.assetId));
+    if (new Set(changedIds).size !== changedIds.length || changedIds.some((id) => !entryIds.has(id))) {
+      return fail("asset delta contains unexpected or repeated entries");
+    }
+  }
   const tombstonedEntryIds = input.tombstonedEntryIds === undefined
     ? []
     : Array.isArray(input.tombstonedEntryIds)
@@ -789,6 +806,7 @@ function parseState(value: unknown): CatalogLiveState {
     },
     roots,
     assets,
+    ...(assetDelta ? { assetDelta } : {}),
     tombstonedEntryIds,
     albums,
     operations,
@@ -1199,6 +1217,7 @@ export function parseCatalogLiveQueryInput(value: unknown): CatalogLiveQueryInpu
   const input = record(value, "query input");
   return {
     catalogId: parseCatalogId(input.catalogId),
+    ...(input.knownRevision === undefined ? {} : { knownRevision: integer(input.knownRevision, "knownRevision") }),
     expectedRevision: input.expectedRevision === undefined || input.expectedRevision === null
       ? null
       : integer(input.expectedRevision, "expectedRevision"),

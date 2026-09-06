@@ -226,6 +226,7 @@ export interface CatalogOperationRequest {
 }
 
 export interface CatalogQueryRequest extends CatalogSessionRequest {
+  readonly knownRevision?: number;
   readonly expectedRevision: number | null;
   readonly entryId?: EntryId;
   readonly assetId?: AssetId;
@@ -299,6 +300,7 @@ export interface CatalogLiveStateView {
   readonly catalog: CatalogLiveCatalogIdentity;
   readonly roots: readonly CatalogLiveRootView[];
   readonly assets: readonly CatalogLiveEntrySnapshot[];
+  readonly assetDelta?: CatalogLiveState["assetDelta"];
   readonly tombstonedEntryIds: readonly EntryId[];
   readonly albums: readonly CatalogLiveAlbum[];
   readonly operations: readonly CatalogOperationView[];
@@ -453,6 +455,8 @@ export function parseCatalogQueryRequest(value: unknown): CatalogQueryRequest {
   return {
     ...session,
     expectedRevision: query.expectedRevision,
+    ...(query.knownRevision === undefined ? {} : { knownRevision: query.knownRevision }),
+    ...(query.entryId === undefined ? {} : { entryId: query.entryId }),
     ...(query.assetId === undefined ? {} : { assetId: query.assetId }),
     ...(query.rootId === undefined ? {} : { rootId: query.rootId }),
     ...(query.fingerprintSha256 === undefined ? {} : { fingerprintSha256: query.fingerprintSha256 }),
@@ -853,6 +857,7 @@ export function toCatalogLiveStateView(value: CatalogLiveState): CatalogLiveStat
       ...asset,
       metadata: { ...asset.metadata, rawXmp: null },
     })),
+    ...(value.assetDelta ? { assetDelta: value.assetDelta } : {}),
     tombstonedEntryIds: value.tombstonedEntryIds ?? [],
     albums: value.albums,
     operations: value.operations.map((operation) => ({

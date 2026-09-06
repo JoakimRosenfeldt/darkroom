@@ -46,10 +46,10 @@ import {
 } from "./document";
 import {
   IDENTITY_HOMOGRAPHY,
-  mapOutputToStored,
+  createOutputToStoredMapper,
   resolveConstrainedCrop,
   type CanonicalGeometry,
-  type GeometryCrop,
+  type GeometryMapResult,
   type GeometryPoint,
 } from "./geometry";
 import {
@@ -268,6 +268,7 @@ export interface CpuRenderInput {
   readonly capabilities: DevelopCapabilityReport;
   readonly cancellation?: CancellationProbe;
   readonly assets?: CpuAssetAvailability;
+  readonly includePointColor?: boolean;
 }
 
 interface FloatRgbImage extends ReadonlyRgbImage {
@@ -289,10 +290,9 @@ export interface RenderRegion {
 }
 
 interface GeometryContext {
-  readonly user: CanonicalGeometry;
-  readonly userCrop: GeometryCrop;
+  readonly userMapper: (output: GeometryPoint) => GeometryMapResult;
   readonly optics: CanonicalGeometry;
-  readonly opticsCrop: GeometryCrop;
+  readonly opticsMapper: (output: GeometryPoint) => GeometryMapResult;
 }
 
 interface MappedRenderPoint {
@@ -711,7 +711,7 @@ function opticsNotice(document: DevelopDocumentV3): DevelopDiagnostic | null {
     : null;
 }
 
-function activeStageHalo(input: CpuRenderInput): number {
+export function activeStageHalo(input: CpuRenderInput): number {
   const scale = clamp(sourceScale(input), 1 / 64, 64);
   const presence = input.document.presence;
   const sharpening = input.document.detail.sharpening;
@@ -898,17 +898,18 @@ function userStageGeometry(
 function createGeometryContext(input: CpuRenderInput): GeometryContext {
   const oriented = orientedDimensions(input.source);
   const user = userStageGeometry(input.document, oriented);
+  const userCrop = resolveConstrainedCrop(user);
   const optics = opticsStageGeometry(
     input,
     input.document.local.geometryFrame === "legacy-oriented-v2"
       ? NEUTRAL_LENS_CALIBRATION
       : manualLensCalibration(input.document),
   );
+  const opticsCrop = resolveConstrainedCrop(optics);
   return {
-    user,
-    userCrop: resolveConstrainedCrop(user),
+    userMapper: createOutputToStoredMapper(user, userCrop),
     optics,
-    opticsCrop: resolveConstrainedCrop(optics),
+    opticsMapper: createOutputToStoredMapper(optics, opticsCrop),
   };
 }
 
@@ -1003,7 +1004,7 @@ function mappedRenderPoint(
   y: number,
 ): MappedRenderPoint | null {
   const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
-  const userMapped = mapOutputToStored(
+  const userMapped = context.userMapper(
     outputPoint(
       x,
       y,
@@ -1011,8 +1012,6 @@ function mappedRenderPoint(
       input.request.plan.qualityAndDimensions,
       region,
     ),
-    context.user,
-    context.userCrop,
   );
   if (userMapped.kind !== "mapped") return null;
   const legacy = input.document.local.geometryFrame === "legacy-oriented-v2";
@@ -1057,11 +1056,10 @@ function sampleOpticsStage(
   input: CpuRenderInput,
   point: GeometryPoint,
   transfer: TransferFunction,
-  geometry: CanonicalGeometry,
-  crop: GeometryCrop,
+  mapper: (output: GeometryPoint) => GeometryMapResult,
 ): Rgb | null {
   const bounded = { x: clamp(point.x, 0, 1), y: clamp(point.y, 0, 1) };
-  const mapped = mapOutputToStored(bounded, geometry, crop);
+  const mapped = mapper(bounded);
   return mapped.kind === "mapped" && mapped.insideDestination
     ? sampleSource(input, mapped.point, transfer)
     : null;
@@ -1071,10 +1069,9 @@ function denoisedOpticsSample(
   input: CpuRenderInput,
   point: GeometryPoint,
   transfer: TransferFunction,
-  geometry: CanonicalGeometry,
-  crop: GeometryCrop,
+  mapper: (output: GeometryPoint) => GeometryMapResult,
 ): Rgb | null {
-  const center = sampleOpticsStage(input, point, transfer, geometry, crop);
+  const center = sampleOpticsStage(input, point, transfer, mapper);
   if (!center || !denoiseIsActive(input.document)) return center;
   const settings = input.document.detail.noiseReduction;
   const luminanceAmount = clamp(settings.noiseReduction, 0, 100) / 100;
@@ -1100,7 +1097,7 @@ function denoisedOpticsSample(
     const sample = sampleOpticsStage(input, {
       x: point.x + offset[0] / oriented.width,
       y: point.y - offset[1] / oriented.height,
-    }, transfer, geometry, crop) ?? center;
+    }, transfer, mapper) ?? center;
     red += sample[0];
     green += sample[1];
     blue += sample[2];
@@ -1147,8 +1144,7 @@ function renderGeometry(
         input,
         mapped.postOptics,
         transfer,
-        context.optics,
-        context.opticsCrop,
+        context.opticsMapper,
       );
       if (!sample) continue;
       writeRgb(data, pixel, sample);
@@ -1195,8 +1191,7 @@ function sampleCanonicalBase(
     input,
     postOptics,
     transfer,
-    context.optics,
-    context.opticsCrop,
+    context.opticsMapper,
   );
 }
 
@@ -1767,8 +1762,7 @@ function sampleLegacyTonedOutput(
     input,
     mapped.postOptics,
     transfer,
-    geometry.context.optics,
-    geometry.context.opticsCrop,
+    geometry.context.opticsMapper,
   );
   return source
     ? applyLegacyToneStages(
@@ -2106,7 +2100,7 @@ function executeRegion(
   if (!geometry) return null;
   if (!applyManualCleanup(input, geometry, region, transfer)) return null;
   beforeTone?.(geometry.image);
-  const pointColorInputPixels = outputIsExport(
+  const pointColorInputPixels = input.includePointColor === false || outputIsExport(
     input.request.plan.qualityAndDimensions,
   ) ? null : new Float32Array(region.width * region.height * 3);
   const frozenV2 = usesFrozenV2Rendering(input.document);

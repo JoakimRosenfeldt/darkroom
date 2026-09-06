@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import {
   applyCropDrag,
@@ -37,6 +37,7 @@ import {
 import {
   mapV3CanonicalToCanvasOutput,
   mapV3CanvasOutputToCanonical,
+  createV3CanvasOutputMapper,
   sampleWhiteBalanceSource,
   v3OrientedDimensions,
 } from "@/lib/develop/v3/canvas-coordinates";
@@ -392,7 +393,15 @@ export function V3CanvasOverlay({
 
   const cropDraft = cropPreview ?? document.geometry.crop;
 
-  useEffect(() => {
+  const overlayKey = JSON.stringify({
+    geometry: document.geometry,
+    geometryFrame: document.local.geometryFrame,
+    distortion: document.optics.manualDistortion,
+    assets: document.local.maskAssetRefs,
+    mask: selectedMask && { enabled: selectedMask.enabled, expression: selectedMask.expression },
+    selectedAiSource,
+  });
+  const startMaskOverlay = useEffectEvent(() => {
     const canvas = maskOverlayCanvasRef.current;
     if (!canvas) return;
     const context = canvas.getContext("2d");
@@ -422,6 +431,7 @@ export function V3CanvasOverlay({
       const dimensions = maskOverlayDimensions(width, height);
       const pixels = new Uint8ClampedArray(dimensions.width * dimensions.height * 4);
       const sourceDimensions = v3OrientedDimensions(source);
+      const mapOutput = createV3CanvasOutputMapper(document, source);
       for (let y = 0; y < dimensions.height; y += 1) {
         if (y % 32 === 0) {
           await nextAnimationFrame();
@@ -432,7 +442,7 @@ export function V3CanvasOverlay({
             x: (x + 0.5) / dimensions.width,
             y: 1 - (y + 0.5) / dimensions.height,
           };
-          const mapped = mapV3CanvasOutputToCanonical(output, document, source);
+          const mapped = mapOutput(output);
           if (mapped.kind !== "mapped" || !mapped.insideDestination) continue;
           const coverage = manualMaskCoverage(
             selectedMask,
@@ -450,13 +460,11 @@ export function V3CanvasOverlay({
       }
 
       const state = useDevelopStore.getState();
-      const session = state.sessions[source.signature.entryId];
       if (
         cancelled ||
         requestId !== maskOverlayRequestRef.current ||
         state.activeCatalogId !== source.signature.catalogId ||
         state.activeEntryId !== source.signature.entryId ||
-        (session.previewDocument ?? session.persistedDocument) !== document ||
         maskOverlayCanvasRef.current !== canvas
       ) return;
       canvas.width = dimensions.width;
@@ -468,13 +476,13 @@ export function V3CanvasOverlay({
     return () => {
       cancelled = true;
     };
-  }, [
-    document,
+  });
+
+  useEffect(() => startMaskOverlay(), [
+    overlayKey,
     height,
     maskingActive,
     overlayVisible,
-    selectedAiSource,
-    selectedMask,
     source,
     width,
   ]);

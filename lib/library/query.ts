@@ -103,6 +103,19 @@ export interface QueryIndexRecord {
 
 export type QueryIndex = ReadonlyMap<string, QueryIndexRecord>;
 
+let cachedInputs: Parameters<typeof buildQueryIndex> | null = null;
+let cachedResult: ReturnType<typeof buildQueryIndex> | null = null;
+
+export function getQueryIndex(...inputs: Parameters<typeof buildQueryIndex>): ReturnType<typeof buildQueryIndex> {
+  const previous = cachedInputs;
+  if (previous && cachedResult && inputs.every((value, index) => value === previous[index])) {
+    return cachedResult;
+  }
+  cachedInputs = inputs;
+  cachedResult = buildQueryIndex(...inputs);
+  return cachedResult;
+}
+
 export function normalizeSearchText(value: string): string {
   return value
     .normalize("NFKD")
