@@ -1,7 +1,6 @@
 "use client";
 
-import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import { loadThumbnailBlob } from "@/lib/cache/thumbnail-cache";
 import { COLOR_LABEL_HEX, getEntryMetadata } from "@/lib/catalog/defaults";
@@ -22,7 +21,7 @@ export function CompareView({
   candidate: LibraryEntry;
   entries: readonly LibraryEntry[];
 }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   const metadata = useLibraryStore((state) => state.entryMetadata);
   const applyMetadata = useLibraryStore((state) => state.applyMetadataToEntries);
   const [candidateId, setCandidateId] = useState(candidate.id);
@@ -60,7 +59,7 @@ export function CompareView({
       <ModuleSpine activeModule="develop" developPhotoId={select.id} />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-toolbar px-4">
-          <button type="button" onClick={() => router.push("/")} className="rounded border border-lr-border-subtle px-3 py-1.5 text-xs text-lr-text-muted hover:text-lr-text">
+          <button type="button" onClick={() => navigate("/")} className="rounded border border-lr-border-subtle px-3 py-1.5 text-xs text-lr-text-muted hover:text-lr-text">
             Back to Library
           </button>
           <span className="ml-2 text-sm font-semibold text-lr-text">Compare</span>
@@ -175,7 +174,7 @@ function ComparePane({
       </div>
       <div className="relative flex min-h-[calc(100%-40px)] min-w-full items-center justify-center p-8" style={{ height: "calc(100% - 40px)" }}>
         {zoom === 100 && decoded.kind === "editable" && decoded.document.version === 3 ? <PhotoLoupe entry={entry} document={decoded.document} position={position} onPositionChange={onPositionChange} /> : zoom === 100 ? <p className="text-sm text-lr-text">Open this legacy edit in Develop to enable full-resolution comparison.</p> : url ? (
-          <Image src={url} alt={entry.name} fill unoptimized className="object-contain p-8" sizes="50vw" />
+          <img src={url} alt={entry.name} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-contain p-8" />
         ) : error ? (
           <p className="max-w-sm text-center text-sm text-lr-danger">{error}</p>
         ) : (

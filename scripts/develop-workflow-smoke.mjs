@@ -39,10 +39,25 @@ async function launch() {
   await runtime();
 }
 async function runtime() {
-  await page.evaluate(() => {
-    window.webpackChunk_N_E.push([[`smoke-${Date.now()}`], {}, (require) => {
-      window.smokeModule = (name) => require(`(app-pages-browser)/./${name}`);
-    }]);
+  await page.evaluate(async () => {
+    const names = [
+      "stores/develop-store.ts",
+      "stores/library-store.ts",
+      "lib/develop/repository.ts",
+      "lib/develop/v3/local-adjustments.ts",
+      "lib/cache/thumbnail-cache.ts",
+      "lib/develop/presets/apply.ts",
+      "lib/cache/develop-image-cache.ts",
+      "lib/develop/v3/preview-worker-client.ts",
+      "lib/export/runner.ts",
+    ];
+    const modules = new Map(await Promise.all(
+      names.map(async (name) => [name, await import(`/${name}`)]),
+    ));
+    window.smokeModule = (name) => {
+      if (!modules.has(name)) throw new Error(`Unknown smoke module: ${name}`);
+      return modules.get(name);
+    };
   });
 }
 async function ready() {

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useNavigate, useSearchParams } from "react-router";
 import { PhotoViewer } from "@/components/viewer/PhotoViewer";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import { useLibraryResultForQuery } from "@/hooks/useLibraryResult";
@@ -18,7 +18,7 @@ import { recordVisibleLibraryResult } from "@/lib/library/result-session";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 
 function ResultUnavailable({ message }: { message: string }) {
-  const router = useRouter();
+  const navigate = useNavigate();
   return (
     <div className="flex h-screen bg-lr-toolbar">
       <ModuleSpine activeModule="library" />
@@ -26,7 +26,7 @@ function ResultUnavailable({ message }: { message: string }) {
         <p className="max-w-lg text-sm text-lr-text-muted">{message}</p>
         <button
           type="button"
-          onClick={() => router.push("/")}
+          onClick={() => navigate("/")}
           className="rounded bg-lr-accent px-4 py-2 text-xs font-medium text-[#14202a]"
         >
           Return to Library
@@ -37,8 +37,8 @@ function ResultUnavailable({ message }: { message: string }) {
 }
 
 function PhotoPageContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const entries = useLibraryStore((state) => state.entries);
   const catalogId = useLibraryStore((state) => state.catalogId);
   const catalogRevision = useLibraryStore((state) => state.catalogRevision);
@@ -144,9 +144,9 @@ function PhotoPageContent() {
       resultId && photoId && resolvedSession?.snapshot &&
       resolvedSession.snapshot.activeEntryId !== photoId
     ) {
-      router.replace(viewerPhotoHref(resolvedSession.snapshot.activeEntryId, resultId));
+      navigate(viewerPhotoHref(resolvedSession.snapshot.activeEntryId, resultId), { replace: true });
     }
-  }, [photoId, resolvedSession, resultId, router]);
+  }, [photoId, resolvedSession, resultId, navigate]);
 
   useEffect(() => {
     if (!resolvedSession?.snapshot) return;
@@ -186,7 +186,7 @@ function PhotoPageContent() {
       setRefreshError(null);
       setRedirectNotice(null);
       if (snapshot.activeEntryId !== photoId) {
-        router.replace(viewerPhotoHref(snapshot.activeEntryId, resultId));
+        navigate(viewerPhotoHref(snapshot.activeEntryId, resultId), { replace: true });
       }
     } catch (error) {
       setRefreshError(error instanceof Error ? error.message : "The Library result could not be refreshed.");

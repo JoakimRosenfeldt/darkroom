@@ -1,5 +1,7 @@
 "use client";
 
+import styles from "./ExportDialog.module.css";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -605,7 +607,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                       setQuality(descriptor.defaultQuality);
                     }
                   }}
-                  className="control"
+                  className={styles.control}
                 >
                   {formats.length === 0 ? <option>Loading formats…</option> : null}
                   {formats.map((item) => (
@@ -624,7 +626,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                         ? { mode, width: 2048, height: 2048, neverUpscale: true }
                         : defaultSize());
                   }}
-                  className="control"
+                  className={styles.control}
                 >
                   <option value="original">Original</option>
                   <option value="long-edge">Long edge</option>
@@ -653,7 +655,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                     step={1}
                     value={size.longEdge ?? ""}
                     onChange={(event) => setSize({ ...size, longEdge: Number(event.target.value) })}
-                    className="control font-mono"
+                    className={`${styles.control} font-mono`}
                   />
                 </Field>
               ) : null}
@@ -666,7 +668,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                       step={1}
                       value={size.width ?? ""}
                       onChange={(event) => setSize({ ...size, width: Number(event.target.value) })}
-                      className="control font-mono"
+                      className={`${styles.control} font-mono`}
                     />
                   </Field>
                   <Field label="Height (px)">
@@ -676,7 +678,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                       step={1}
                       value={size.height ?? ""}
                       onChange={(event) => setSize({ ...size, height: Number(event.target.value) })}
-                      className="control font-mono"
+                      className={`${styles.control} font-mono`}
                     />
                   </Field>
                 </>
@@ -694,7 +696,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
               ) : null}
               <p className="col-span-2 text-xs text-lr-text-muted">8-bit sRGB with an embedded color profile. JPEG quality 90 is a good everyday starting point.</p>
               <Field label="Metadata">
-                <select className="control" value={metadataMode} onChange={(event) => setMetadataMode(event.target.value as "all" | "copyright" | "none")}>
+                <select className={styles.control} value={metadataMode} onChange={(event) => setMetadataMode(event.target.value as "all" | "copyright" | "none")}>
                   <option value="all">Camera and description</option><option value="copyright">Copyright only</option><option value="none">None</option>
                 </select>
               </Field>
@@ -704,7 +706,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                   type="text"
                   value={suffix}
                   onChange={(event) => setSuffix(event.target.value)}
-                  className="control font-mono"
+                  className={`${styles.control} font-mono`}
                   spellCheck={false}
                 />
               </Field>
@@ -712,7 +714,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
                 <select
                   value={conflict}
                   onChange={(event) => setConflict(event.target.value as ExportConflictBehavior)}
-                  className="control"
+                  className={styles.control}
                 >
                   <option value="rename">Rename with -2, -3…</option>
                   <option value="skip">Skip</option>
@@ -742,12 +744,12 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
               {error ? <p className="col-span-2 text-xs text-red-400">{error}</p> : null}
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-lr-border-subtle px-[18px] py-3.5">
-              <button type="button" onClick={onClose} className="button-secondary">Cancel</button>
+              <button type="button" onClick={onClose} className={styles.buttonSecondary}>Cancel</button>
               <button
                 type="button"
                 onClick={() => void startExport()}
                 disabled={formatsLoading || !selectedFormat || entries.length === 0 || !jobsHydrated || Boolean(jobsError) || (unappliedPrototypeJobs.length > 0 && !prototypeAcknowledged)}
-                className="button-primary"
+                className={styles.buttonPrimary}
               >
                 Start export
               </button>
@@ -768,7 +770,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
             </div>
             <div className="flex items-center gap-2">
               <p className="min-w-0 flex-1 truncate font-mono text-[11px] text-lr-text-muted">{currentEntry?.name ?? "Preparing export…"}</p>
-              <button type="button" onClick={() => { cancelledRef.current = true; }} className="button-secondary">Stop export</button>
+              <button type="button" onClick={() => { cancelledRef.current = true; }} className={styles.buttonSecondary}>Stop export</button>
             </div>
             <div className="max-h-44 space-y-1 overflow-auto rounded border border-lr-border-subtle bg-lr-panel p-1.5">
               {liveResults.map((result) => <ExportResultRow key={result.entryId} result={result} />)}
@@ -806,35 +808,25 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
             {error ? <p className="text-xs text-red-400">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
               {summary.results.some((result) => result.state.kind === "cancelled" && result.state.reason === "not-started") ? (
-                <button type="button" onClick={() => void resumeCancelled()} className="button-secondary">
+                <button type="button" onClick={() => void resumeCancelled()} className={styles.buttonSecondary}>
                   Resume remaining
                 </button>
               ) : null}
               {summary.results.some((result) =>
                 result.state.kind === "failed" && result.state.retryable
               ) ? (
-                <button type="button" onClick={() => void retryFailed()} className="button-secondary">
+                <button type="button" onClick={() => void retryFailed()} className={styles.buttonSecondary}>
                   Retry failed
                 </button>
               ) : null}
               {summary.revealCapability ? (
-                <button type="button" onClick={showInFolder} className="button-secondary">Show in folder</button>
+                <button type="button" onClick={showInFolder} className={styles.buttonSecondary}>Show in folder</button>
               ) : null}
-              <button type="button" onClick={onClose} className="button-primary">Done</button>
+              <button type="button" onClick={onClose} className={styles.buttonPrimary}>Done</button>
             </div>
           </div>
         ) : null}
       </div>
-      <style jsx>{`
-        .control { width: 100%; height: 34px; border: 1px solid #3a3633; border-radius: 8px; background: #1b1917; padding: 0 10px; color: #ece7e3; font-size: 12px; outline: none; }
-        .control:focus { border-color: #8fb8e0; }
-        .button-primary, .button-secondary { height: 32px; border-radius: 8px; padding: 0 12px; font-size: 12px; transition: background .15s, color .15s; }
-        .button-primary { background: #8fb8e0; color: #14202a; }
-        .button-primary:hover { background: #a6c9ec; }
-        .button-primary:disabled { cursor: not-allowed; opacity: .45; }
-        .button-secondary { border: 1px solid #3a3633; color: #b9b1ab; }
-        .button-secondary:hover { background: #2b2827; color: #ece7e3; }
-      `}</style>
     </div>
   );
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigate } from "react-router";
 import { DynamicPhotoGrid } from "@/components/library/DynamicPhotoGrid";
 import { DuplicateWorkspace } from "@/components/library/DuplicateWorkspace";
 import { PhotoGrid } from "@/components/library/PhotoGrid";
@@ -25,7 +25,7 @@ import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
 import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
 
 export default function HomePage() {
-  const router = useRouter();
+  const navigate = useNavigate();
   const entries = useLibraryStore((state) => state.entries);
   const archivedEntryIds = useLibraryStore((state) => state.archivedEntryIds);
   const entryMetadata = useLibraryStore((state) => state.entryMetadata);
@@ -95,7 +95,7 @@ export default function HomePage() {
         selectedEntryIds,
       });
       setViewerError(null);
-      router.push(viewerPhotoHref(id, session.id));
+      navigate(viewerPhotoHref(id, session.id));
     } catch (error) {
       setViewerError(error instanceof Error ? error.message : "The Library result could not be saved.");
     }
@@ -185,7 +185,7 @@ export default function HomePage() {
             onCompare={() => {
               const [candidateId, selectId] = selectedEntryIds;
               if (candidateId && selectId) {
-                router.push(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
+                navigate(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
               }
             }}
             onExport={() => setExportEntryIds(selectedEntryIds)}

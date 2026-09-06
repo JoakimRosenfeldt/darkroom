@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { CatalogFingerprintBackfill } from "@/components/catalog/CatalogFingerprintBackfill";
 import { loadThumbnailBlob } from "@/lib/cache/thumbnail-cache";
@@ -180,7 +179,7 @@ function DuplicatePreview({ entry }: { entry: LibraryEntry }) {
   }, [entry]);
   return (
     <span className="relative h-12 w-12 overflow-hidden rounded bg-lr-bg">
-      {url ? <Image src={url} alt="" fill unoptimized className="object-cover" sizes="48px" /> : null}
+      {url ? <img src={url} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" /> : null}
     </span>
   );
 }
