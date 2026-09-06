@@ -14,8 +14,7 @@ import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import {
   IDENTITY_HOMOGRAPHY,
   geometryCacheIdentity,
-  mapOutputToStored,
-  resolveConstrainedCrop,
+  createOutputToStoredMapper,
   type CanonicalGeometry,
 } from "@/lib/develop/v3/geometry";
 import {
@@ -40,9 +39,11 @@ import {
 import { effectiveInputCalibration } from "@/lib/develop/v3/profiles";
 
 const CURVE_LUT_SIZE = 1_024;
-const MAX_CACHED_GEOMETRY_MAPS = 3;
+const MAX_CACHED_GEOMETRY_MAPS = 16;
+const MAX_CACHED_GEOMETRY_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_TARGETS = 3;
-const MAX_CACHED_LOCAL_ADJUSTMENTS = 2;
+const MAX_CACHED_LOCAL_ADJUSTMENTS = 16;
+const MAX_CACHED_LOCAL_ADJUSTMENT_BYTES = 192 * 1024 * 1024;
 const GPU_TILE_EDGE = 512;
 const REFINED_PREVIEW_MAX_PIXELS = 64_000;
 const MIXER_BANDS = [
@@ -729,6 +730,7 @@ interface GpuTargets {
 
 interface GeometryMap {
   readonly key: string;
+  readonly bytes: number;
   readonly texture: WebGLTexture;
 }
 
@@ -740,7 +742,7 @@ interface GpuState {
   readonly sourceIsInteger: boolean;
   readonly targets: Map<string, GpuTargets>;
   readonly geometryMaps: Map<string, GeometryMap>;
-  readonly localAdjustments: Map<string, WebGLTexture>;
+  readonly localAdjustments: Map<string, { readonly texture: WebGLTexture; readonly bytes: number }>;
 }
 
 interface GpuRenderedFrame {
@@ -1135,18 +1137,18 @@ function geometryMapPixels(
 ): Float32Array {
   const dimensions = { width: region.width, height: region.height };
   const stages = geometryStages(input);
-  const userCrop = resolveConstrainedCrop(stages.user);
-  const opticsCrop = resolveConstrainedCrop(stages.optics);
+  const mapUser = createOutputToStoredMapper(stages.user);
+  const mapOptics = createOutputToStoredMapper(stages.optics);
   const pixels = new Float32Array(dimensions.width * dimensions.height * 4);
   for (let y = 0; y < dimensions.height; y += 1) {
     for (let x = 0; x < dimensions.width; x += 1) {
       const output = outputPointForRegion(input, region, x, y);
-      const user = mapOutputToStored(output, stages.user, userCrop);
+      const user = mapUser(output);
       if (user.kind !== "mapped" || !user.insideDestination) continue;
-      const optics = mapOutputToStored({
+      const optics = mapOptics({
         x: clamp(user.point.x, 0, 1),
         y: clamp(user.point.y, 0, 1),
-      }, stages.optics, opticsCrop);
+      });
       if (optics.kind !== "mapped" || !optics.insideDestination) continue;
       const offset = (y * dimensions.width + x) * 4;
       pixels[offset] = optics.point.x;
@@ -1165,6 +1167,7 @@ function geometryMapKey(input: CpuRenderInput, region: RenderRegion): string {
     region.y,
     region.width,
     region.height,
+    JSON.stringify(input.request.plan.qualityAndDimensions),
     geometryCacheIdentity(stages.user),
     geometryCacheIdentity(stages.optics),
   ].join("\u001f");
@@ -1192,7 +1195,7 @@ function localAdjustmentCacheKey(input: CpuRenderInput, region: RenderRegion): s
   const stages = geometryStages(input);
   return JSON.stringify({
     region,
-    dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
+    qualityAndDimensions: input.request.plan.qualityAndDimensions,
     source: input.source.signature,
     geometry: [
       geometryCacheIdentity(stages.user),
@@ -1216,12 +1219,12 @@ function localAdjustmentTexture(
   if (cached) {
     state.localAdjustments.delete(key);
     state.localAdjustments.set(key, cached);
-    return cached;
+    return cached.texture;
   }
   const gl = state.gl;
   const dimensions = { width: region.width, height: region.height };
   const stages = geometryStages(input);
-  const userCrop = resolveConstrainedCrop(stages.user);
+  const mapUser = createOutputToStoredMapper(stages.user);
   const oriented = orientedDimensions(input);
   const assets = {
     sourceSignature: input.source.signature,
@@ -1243,7 +1246,7 @@ function localAdjustmentTexture(
   for (let y = 0; y < dimensions.height; y += 1) {
     for (let x = 0; x < dimensions.width; x += 1) {
       const output = outputPointForRegion(input, region, x, y);
-      const userMapped = mapOutputToStored(output, stages.user, userCrop);
+      const userMapped = mapUser(output);
       if (userMapped.kind !== "mapped" || !userMapped.insideDestination) continue;
       const canonical = mapDistortedUv(
         userMapped.point,
@@ -1312,13 +1315,19 @@ function localAdjustmentTexture(
     pixels,
     filter: gl.NEAREST,
   });
-  state.localAdjustments.set(key, value);
-  while (state.localAdjustments.size > MAX_CACHED_LOCAL_ADJUSTMENTS) {
+  state.localAdjustments.set(key, { texture: value, bytes: pixels.byteLength });
+  let bytes = [...state.localAdjustments.values()].reduce((total, field) => total + field.bytes, 0);
+  while (state.localAdjustments.size > 1 && (
+    state.localAdjustments.size > MAX_CACHED_LOCAL_ADJUSTMENTS || bytes > MAX_CACHED_LOCAL_ADJUSTMENT_BYTES
+  )) {
     const oldestKey = state.localAdjustments.keys().next().value;
     if (oldestKey === undefined) break;
     const oldest = state.localAdjustments.get(oldestKey);
     state.localAdjustments.delete(oldestKey);
-    if (oldest) gl.deleteTexture(oldest);
+    if (oldest) {
+      bytes -= oldest.bytes;
+      gl.deleteTexture(oldest.texture);
+    }
   }
   return value;
 }
@@ -1903,7 +1912,7 @@ export class V3GpuPreviewRenderer {
     state.gl.deleteProgram(state.programs.postCrop);
     state.gl.deleteProgram(state.programs.encode);
     for (const value of state.localAdjustments.values()) {
-      state.gl.deleteTexture(value);
+      state.gl.deleteTexture(value.texture);
     }
     this.#state = null;
   }
@@ -2154,13 +2163,19 @@ export class V3GpuPreviewRenderer {
       pixels: geometryMapPixels(input, region),
       filter: state.gl.NEAREST,
     });
-    state.geometryMaps.set(key, { key, texture: value });
-    while (state.geometryMaps.size > MAX_CACHED_GEOMETRY_MAPS) {
+    state.geometryMaps.set(key, { key, texture: value, bytes: region.width * region.height * 16 });
+    let bytes = [...state.geometryMaps.values()].reduce((total, map) => total + map.bytes, 0);
+    while (state.geometryMaps.size > 1 && (
+      state.geometryMaps.size > MAX_CACHED_GEOMETRY_MAPS || bytes > MAX_CACHED_GEOMETRY_BYTES
+    )) {
       const oldestKey = state.geometryMaps.keys().next().value;
       if (oldestKey === undefined) break;
       const oldest = state.geometryMaps.get(oldestKey);
       state.geometryMaps.delete(oldestKey);
-      if (oldest) state.gl.deleteTexture(oldest.texture);
+      if (oldest) {
+        bytes -= oldest.bytes;
+        state.gl.deleteTexture(oldest.texture);
+      }
     }
     return value;
   }

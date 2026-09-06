@@ -62,20 +62,43 @@ function buildSettings(
   };
 }
 
-function buildFromEmbeddedThumbnail(
+async function buildFromEmbeddedThumbnail(
   thumbnail: { data: Uint8Array; width: number; height: number },
   metadata: Record<string, unknown>,
-): DecodedImage {
-  const blob = new Blob([thumbnail.data as BlobPart], { type: "image/jpeg" });
-  const objectUrl = URL.createObjectURL(blob);
-  const size = orientedImageSize(
+  options: DecodeOptions,
+): Promise<DecodedImage> {
+  let blob = new Blob([thumbnail.data as BlobPart], { type: "image/jpeg" });
+  let size = orientedImageSize(
     thumbnail.width,
     thumbnail.height,
     Number(metadata.flip),
   );
+  if (options.maxEdge && Math.max(size.width, size.height) > options.maxEdge) {
+    const bitmap = await createImageBitmap(blob, {
+      resizeWidth: Math.max(1, Math.round(options.maxEdge)),
+      resizeQuality: "high",
+    });
+    try {
+      options.signal?.throwIfAborted();
+      const bitmapScale = Math.min(1, options.maxEdge / Math.max(bitmap.width, bitmap.height));
+      size = {
+        width: Math.max(1, Math.round(bitmap.width * bitmapScale)),
+        height: Math.max(1, Math.round(bitmap.height * bitmapScale)),
+      };
+      const canvas = new OffscreenCanvas(size.width, size.height);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not resize the embedded RAW preview.");
+      context.drawImage(bitmap, 0, 0, size.width, size.height);
+      blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    } finally {
+      bitmap.close();
+    }
+  }
+  options.signal?.throwIfAborted();
+  const objectUrl = URL.createObjectURL(blob);
   return {
     ...size,
-    rgb: thumbnail.data,
+    rgb: new Uint8Array(0),
     bits: 8,
     colors: 3,
     pixelProvenance: {
@@ -229,7 +252,7 @@ export async function decodeEmbeddedThumbnail(
   input: Uint8Array,
   options: DecodeOptions = {},
 ): Promise<DecodedImage | null> {
-  return runLibRaw(async (raw) => {
+  const embedded = await runLibRaw(async (raw) => {
     await raw.open(
       input.slice() as BufferSource,
       buildSettings({ thumbnail: true }, true),
@@ -249,11 +272,14 @@ export async function decodeEmbeddedThumbnail(
       return null;
     }
 
-    return buildFromEmbeddedThumbnail(
+    return {
       thumbnail,
-      structuredClone(metadata as Record<string, unknown>),
-    );
+      metadata: structuredClone(metadata as Record<string, unknown>),
+    };
   }, options);
+  return embedded
+    ? buildFromEmbeddedThumbnail(embedded.thumbnail, embedded.metadata, options)
+    : null;
 }
 
 export async function readRawDimensions(

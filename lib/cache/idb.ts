@@ -2,13 +2,16 @@ const DB_NAME = "darkroom";
 const STORE_NAME = "kv";
 const LEGACY_DB_NAME = "keyval-store";
 const LEGACY_STORE_NAME = "keyval";
+const connections = new Map<string, Promise<IDBDatabase>>();
 
 function openDb(
   dbName = DB_NAME,
   storeName = STORE_NAME,
   createStore = true,
 ): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  const cached = connections.get(dbName);
+  if (cached) return cached;
+  const connection = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(dbName);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
@@ -17,6 +20,13 @@ function openDb(
         reject(new Error(`IndexedDB store "${storeName}" was not found.`));
         return;
       }
+      request.result.onversionchange = () => {
+        request.result.close();
+        if (connections.get(dbName) === connection) connections.delete(dbName);
+      };
+      request.result.onclose = () => {
+        if (connections.get(dbName) === connection) connections.delete(dbName);
+      };
       resolve(request.result);
     };
     request.onupgradeneeded = () => {
@@ -27,6 +37,11 @@ function openDb(
       request.transaction?.abort();
     };
   });
+  connections.set(dbName, connection);
+  void connection.catch(() => {
+    if (connections.get(dbName) === connection) connections.delete(dbName);
+  });
+  return connection;
 }
 
 async function readFromStore<T>(

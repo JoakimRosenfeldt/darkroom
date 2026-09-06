@@ -55,8 +55,23 @@ export function buildExactDuplicateGroups(
     group.push(entry);
     byHash.set(key, group);
   }
-  return [...byHash.entries()].flatMap(([id, group]) => {
-    if (group.length < 2) return [];
+  const duplicateGroups = [...byHash.entries()].filter(([, group]) => group.length > 1);
+  if (duplicateGroups.length === 0) return [];
+  const albumNamesByEntry = new Map<string, string[]>();
+  for (const album of albums) {
+    for (const entryId of new Set(album.entryIds)) {
+      const names = albumNamesByEntry.get(entryId) ?? [];
+      names.push(album.name);
+      albumNamesByEntry.set(entryId, names);
+    }
+  }
+  const stackIdByEntry = new Map<string, string>();
+  for (const stack of workspace.stacks) {
+    for (const entryId of stack.entryIds) {
+      if (!stackIdByEntry.has(entryId)) stackIdByEntry.set(entryId, stack.id);
+    }
+  }
+  return duplicateGroups.flatMap(([id, group]) => {
     const ordered = [...group].sort((left, right) => {
       const archiveDifference = Number(archived.has(left.id)) - Number(archived.has(right.id));
       return archiveDifference || left.relativePath.localeCompare(right.relativePath) || left.id.localeCompare(right.id);
@@ -70,9 +85,9 @@ export function buildExactDuplicateGroups(
       members: ordered.map((entry) => ({
         entry,
         archived: archived.has(entry.id),
-        albumNames: albums.filter((album) => album.entryIds.includes(entry.id)).map((album) => album.name),
+        albumNames: albumNamesByEntry.get(entry.id) ?? [],
         keywordCount: workspace.entryKeywordIds[entry.id]?.length ?? 0,
-        stackId: workspace.stacks.find((stack) => stack.entryIds.includes(entry.id))?.id ?? null,
+        stackId: stackIdByEntry.get(entry.id) ?? null,
         metadata: metadata[entry.id],
       })),
       defaultKeeperId: first.id,

@@ -5,7 +5,7 @@ import { assetCacheKey, type AssetCacheIdentity } from "./asset-cache-key";
 import type { StoredDevelopDocument } from "@/lib/develop/v3/document";
 import { renderEditedPreview } from "./render-edited-preview";
 
-const CACHE_PREFIX = "darkroom-thumb-v2:";
+const CACHE_PREFIX = "darkroom-thumb-v3:";
 const MAX_MEMORY_THUMBNAILS = 300;
 
 export interface ThumbnailCacheKey {
@@ -154,7 +154,7 @@ export async function loadThumbnailBlob(
   const cacheKey = buildCacheKey(key);
   const activeLoad = inFlightLoads.get(cacheKey);
 
-  if (activeLoad) {
+  if (activeLoad && !activeLoad.controller.signal.aborted) {
     return waitForCaller(activeLoad, options.signal);
   }
 

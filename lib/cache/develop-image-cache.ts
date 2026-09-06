@@ -86,7 +86,7 @@ function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): Devel
     : 1;
   const rotated = orientation >= 5;
 
-  return {
+  const image: DevelopImage = {
     width: rotated ? decoded.height : decoded.width,
     height: rotated ? decoded.width : decoded.height,
     sourceWidth: decoded.width,
@@ -99,6 +99,9 @@ function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): Devel
     pixelProvenance: decoded.pixelProvenance,
     blob: decoded.blob,
   };
+  // React's development prop tracing otherwise enumerates every pixel sample.
+  Object.defineProperty(image, "rgb", { enumerable: false });
+  return image;
 }
 
 function cacheKey(
