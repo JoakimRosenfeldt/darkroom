@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   DevelopRepositoryError,
@@ -58,12 +59,16 @@ export function useDevelopSettingsSync({
   const defaultsKey = defaultFacts
     ? `${entry.catalogId}:${entry.sessionId}:${entry.id}:${JSON.stringify(defaultFacts)}`
     : null;
-  const sessionState = useDevelopStore((state) => state.sessions[entry.id]);
-  const documentRevision = sessionState?.documentRevision;
-  const persistedDocumentRevision = sessionState?.persistedDocumentRevision;
-  const metadataRevision = sessionState?.metadataRevision;
-  const persistedMetadataRevision = sessionState?.persistedMetadataRevision;
-  const sidecarStatus = sessionState?.ui.sidecarStatus;
+  const { documentRevision, persistedDocumentRevision, metadataRevision, persistedMetadataRevision, sidecarStatus } = useDevelopStore(useShallow((state) => {
+    const session = state.sessions[entry.id];
+    return {
+      documentRevision: session?.documentRevision,
+      persistedDocumentRevision: session?.persistedDocumentRevision,
+      metadataRevision: session?.metadataRevision,
+      persistedMetadataRevision: session?.persistedMetadataRevision,
+      sidecarStatus: session?.ui.sidecarStatus,
+    };
+  }));
   const activateEntry = useDevelopStore((state) => state.activateEntry);
   const beginDefaultResolution = useDevelopStore((state) => state.beginDefaultResolution);
   const finishDefaultResolution = useDevelopStore((state) => state.finishDefaultResolution);

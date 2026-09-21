@@ -97,6 +97,7 @@ export interface V3PreviewSessionRenderRequest extends V3RuntimeRequestBase {
   readonly previewMode: V3PreviewRenderMode;
   readonly includeAnalysis?: boolean;
   readonly includePointColor?: boolean;
+  readonly maximumPreviewPixels?: number;
 }
 
 export interface V3ExportSessionRenderRequest extends V3RuntimeRequestBase {
@@ -528,7 +529,7 @@ function previewQuality(
   ) {
     return null;
   }
-  const devicePixelRatio = Math.min(1, Math.max(0.5, request.devicePixelRatio));
+  const devicePixelRatio = Math.min(2, Math.max(0.5, request.devicePixelRatio));
   const bounds = {
     width: Math.max(1, Math.round(viewport.width * devicePixelRatio)),
     height: Math.max(1, Math.round(viewport.height * devicePixelRatio)),
@@ -538,11 +539,14 @@ function previewQuality(
     bounds,
     false,
   );
-  const maximumPixels = request.previewMode === "interactive"
+  const maximumPixels = request.maximumPreviewPixels ?? (request.previewMode === "interactive"
     ? INTERACTIVE_PREVIEW_MAX_PIXELS
     : request.previewMode === "refined"
       ? REFINED_PREVIEW_MAX_PIXELS
-      : MAX_CPU_RENDER_PIXELS;
+      : MAX_CPU_RENDER_PIXELS);
+  if (!Number.isSafeInteger(maximumPixels) || maximumPixels < 1 || maximumPixels > MAX_CPU_RENDER_PIXELS) {
+    return null;
+  }
   const pixelCount = outputDimensions.width * outputDimensions.height;
   if (pixelCount > maximumPixels) {
     const scale = Math.sqrt(maximumPixels / pixelCount);

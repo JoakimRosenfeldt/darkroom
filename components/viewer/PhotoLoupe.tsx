@@ -5,6 +5,7 @@ import { disposeDevelopImage, loadDevelopExportImage, type DevelopImage } from "
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import { buildV3SourceRecord, loadV3PreviewMaskMattes, resolveV3ExportDimensions } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
+import type { V3PreviewBackend } from "@/lib/develop/v3/preview-worker-types";
 import { useDevelopStore } from "@/stores/develop-store";
 import type { ExportSizeOptions } from "@/lib/export/types";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -79,8 +80,9 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
     let rendering = false;
     let animationFrame = 0;
     let pending: { document: DevelopDocumentV3; center: LoupePosition; interactive: boolean } | null = null;
-    let exactLocalKey: string | null = null;
     let draftCanvas: OffscreenCanvas | null = null;
+    let backend: V3PreviewBackend | null = null;
+    let maskMattes: { key: string; value: ReturnType<typeof loadV3PreviewMaskMattes> } | null = null;
 
     const renderLatest = async (): Promise<void> => {
       animationFrame = 0;
@@ -97,8 +99,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
         const width = Math.min(dimensions.width, Math.max(1, Math.round(viewport.width * viewport.dpr)));
         const height = Math.min(dimensions.height, Math.max(1, Math.round(viewport.height * viewport.dpr)));
         const { x, y } = regionOrigin(center, dimensions, width, height);
-        const localKey = JSON.stringify(document.local);
-        const draft = interactive && localKey !== exactLocalKey && width * height > 64_000;
+        const draft = interactive && backend !== "gpu" && width * height > 64_000;
         const size: ExportSizeOptions = draft
           ? { mode: "long-edge", pixels: Math.max(1, Math.round(Math.max(dimensions.width, dimensions.height) * Math.sqrt(64_000 / (width * height)))) }
           : { mode: "original" };
@@ -107,9 +108,15 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
         const renderWidth = Math.max(1, Math.round(width * renderDimensions.width / dimensions.width));
         const renderHeight = Math.max(1, Math.round(height * renderDimensions.height / dimensions.height));
         const renderOrigin = regionOrigin(center, renderDimensions, renderWidth, renderHeight);
-        const mattes = await loadV3PreviewMaskMattes(document, entry, source.image);
+        const matteKey = JSON.stringify(document.local.maskAssetRefs);
+        if (maskMattes?.key !== matteKey) {
+          maskMattes = { key: matteKey, value: loadV3PreviewMaskMattes(document, entry, source.image) };
+        }
+        const mattes = await maskMattes.value;
         if (!active) return;
-        const { result } = await source.worker.renderExport(document, size, mattes, { ...renderOrigin, width: renderWidth, height: renderHeight });
+        const rendered = await source.worker.renderExport(document, size, mattes, { ...renderOrigin, width: renderWidth, height: renderHeight });
+        const { result } = rendered;
+        backend = rendered.backend;
         if (!active) return;
         if (result.kind === "cancelled") return;
         if (result.kind !== "rendered" || "bitmap" in result) throw new Error("The saved edit could not be rendered at 1:1.");
@@ -122,17 +129,19 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
         canvas.style.height = `${height / viewport.dpr}px`;
         const context = canvas.getContext("2d");
         if (!context) throw new Error("Detail canvas rendering is unavailable.");
-        const pixels = new ImageData(new Uint8ClampedArray(result.pixels.pixels), renderWidth, renderHeight);
+        const rgba = result.pixels.pixels;
+        const pixels = new ImageData(rgba.buffer instanceof ArrayBuffer
+          ? new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength)
+          : new Uint8ClampedArray(rgba), renderWidth, renderHeight);
         if (draft) {
           draftCanvas ??= new OffscreenCanvas(renderWidth, renderHeight);
-          draftCanvas.width = renderWidth;
-          draftCanvas.height = renderHeight;
+          if (draftCanvas.width !== renderWidth) draftCanvas.width = renderWidth;
+          if (draftCanvas.height !== renderHeight) draftCanvas.height = renderHeight;
           draftCanvas.getContext("2d")?.putImageData(pixels, 0, 0);
           context.clearRect(0, 0, width, height);
           context.drawImage(draftCanvas, 0, 0, width, height);
         } else {
           context.putImageData(pixels, 0, 0);
-          exactLocalKey = localKey;
         }
         setRenderedSource(source);
         setPaintedRegion({ x, y, width, height, dimensions, viewport, geometry: JSON.stringify([document.geometry, document.optics.manualDistortion]) });

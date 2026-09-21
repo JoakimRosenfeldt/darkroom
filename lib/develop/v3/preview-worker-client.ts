@@ -7,6 +7,7 @@ import type {
   V3PreviewWorkerMaskMatte,
   V3PreviewWorkerRenderResult,
   V3PreviewWorkerResponse,
+  V3PreviewWorkerRequest,
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { ExportSizeOptions } from "@/lib/export/types";
@@ -25,6 +26,12 @@ interface PendingRender {
   readonly resolve: (result: V3PreviewWorkerRenderResult) => void;
   readonly reject: (error: Error) => void;
 }
+
+interface QueuedPreview extends PendingRender {
+  readonly message: Extract<V3PreviewWorkerRequest, { readonly kind: "render" }>;
+}
+
+const EMPTY_MASK_MATTES: readonly V3PreviewWorkerMaskMatte[] = [];
 
 function workerFactory(): Worker {
   return new Worker(new URL("./preview-worker.ts", import.meta.url), {
@@ -58,6 +65,9 @@ export class V3PreviewWorkerClient {
   readonly #pending = new Map<number, PendingRender>();
   #nextRequestId = 0;
   #disposed = false;
+  #activePreview: number | null = null;
+  #queuedPreview: QueuedPreview | null = null;
+  #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
 
   constructor(entry: LibraryEntry, image: DevelopImage) {
     this.#worker = workerFactory();
@@ -73,6 +83,12 @@ export class V3PreviewWorkerClient {
         return;
       }
       this.#pending.delete(response.requestId);
+      if (this.#activePreview === response.requestId) {
+        this.#activePreview = null;
+        const queued = this.#queuedPreview;
+        this.#queuedPreview = null;
+        if (queued) this.#sendPreview(queued);
+      }
       if (response.kind === "result") {
         pending.resolve({ backend: response.backend, result: response.result });
       } else {
@@ -83,6 +99,10 @@ export class V3PreviewWorkerClient {
       const error = new Error("The preview worker stopped unexpectedly.");
       for (const pending of this.#pending.values()) pending.reject(error);
       this.#pending.clear();
+      this.#queuedPreview?.reject(error);
+      this.#queuedPreview = null;
+      this.#disposed = true;
+      this.#worker.terminate();
     };
 
     const workerImage = sourceImage(image);
@@ -105,8 +125,7 @@ export class V3PreviewWorkerClient {
     }
     const requestId = ++this.#nextRequestId;
     return new Promise((resolve, reject) => {
-      this.#pending.set(requestId, { resolve, reject });
-      this.#worker.postMessage({
+      const preview: QueuedPreview = { resolve, reject, message: {
         kind: "render",
         requestId,
         document,
@@ -115,9 +134,32 @@ export class V3PreviewWorkerClient {
         previewMode: options.previewMode,
         includeAnalysis: options.includeAnalysis,
         includePointColor: options.includePointColor,
-        maskMattes: options.maskMattes ?? [],
-      });
+        maskMattes: options.maskMattes ?? EMPTY_MASK_MATTES,
+      } };
+      if (this.#activePreview !== null) {
+        this.#queuedPreview?.resolve({ backend: "cpu", result: { kind: "cancelled" } });
+        this.#queuedPreview = preview;
+      } else {
+        this.#sendPreview(preview);
+      }
     });
+  }
+
+  #sendPreview(preview: QueuedPreview): void {
+    const { message } = preview;
+    this.#activePreview = message.requestId;
+    this.#pending.set(message.requestId, preview);
+    try {
+      this.#worker.postMessage({
+        ...message,
+        maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes,
+      });
+      this.#maskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
+    } catch (error) {
+      this.#pending.delete(message.requestId);
+      this.#activePreview = null;
+      preview.reject(error instanceof Error ? error : new Error("Could not send the preview request."));
+    }
   }
 
   dispose(): void {
@@ -128,19 +170,25 @@ export class V3PreviewWorkerClient {
       pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     }
     this.#pending.clear();
+    this.#queuedPreview?.resolve({ backend: "cpu", result: { kind: "cancelled" } });
+    this.#queuedPreview = null;
   }
 
   renderExport(
     document: DevelopDocumentV3,
     size: ExportSizeOptions,
-    maskMattes: readonly V3PreviewWorkerMaskMatte[] = [],
+    maskMattes: readonly V3PreviewWorkerMaskMatte[] = EMPTY_MASK_MATTES,
     region?: RenderRegion,
   ): Promise<V3PreviewWorkerRenderResult> {
     if (this.#disposed) return Promise.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     const requestId = ++this.#nextRequestId;
     return new Promise((resolve, reject) => {
       this.#pending.set(requestId, { resolve, reject });
-      this.#worker.postMessage({ kind: "export", requestId, document, size, maskMattes, region });
+      this.#worker.postMessage({
+        kind: "export", requestId, document, size, region,
+        maskMattes: maskMattes === this.#maskMattes ? undefined : maskMattes,
+      });
+      this.#maskMattes = maskMattes;
     });
   }
 }
