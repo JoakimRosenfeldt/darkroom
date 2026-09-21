@@ -42,10 +42,12 @@ const CURVE_LUT_SIZE = 1_024;
 const MAX_CACHED_GEOMETRY_MAPS = 16;
 const MAX_CACHED_GEOMETRY_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_TARGETS = 3;
+const MAX_CACHED_TARGET_BYTES = 192 * 1024 * 1024;
 const MAX_CACHED_LOCAL_ADJUSTMENTS = 16;
 const MAX_CACHED_LOCAL_ADJUSTMENT_BYTES = 192 * 1024 * 1024;
 const GPU_TILE_EDGE = 512;
-const REFINED_PREVIEW_MAX_PIXELS = 64_000;
+const MAX_GPU_MASK_LAYERS = 8;
+const MAX_CACHED_MASK_COVERAGE_BYTES = 64 * 1024 * 1024;
 const MIXER_BANDS = [
   { id: "red", center: 0 },
   { id: "orange", center: 30 },
@@ -85,6 +87,9 @@ precision highp sampler2D;
 uniform sampler2D uSource;
 #endif
 uniform sampler2D uMap;
+uniform bool uIdentityGeometry;
+uniform vec2 uRegionOrigin;
+uniform vec2 uFullOutputSize;
 uniform sampler2D uCurves;
 uniform ivec2 uOutputSize;
 uniform int uTransfer;
@@ -110,6 +115,9 @@ uniform float uDenoiseColor;
 uniform float uDenoiseColorDetail;
 uniform float uDenoiseColorSmoothness;
 uniform sampler2D uLocalAdjustments;
+uniform highp sampler2DArray uMaskCoverage;
+uniform int uMaskCount;
+uniform vec4 uMaskValues[${MAX_GPU_MASK_LAYERS * 5}];
 uniform float uLocalEnabled;
 uniform int uPointColorCount;
 uniform float uPointColorEnabled[${MAX_POINT_COLOR_SAMPLES}];
@@ -469,6 +477,23 @@ vec3 denoise(vec2 uv) {
 
 vec4 localLayer(int layer) {
   ivec2 pixel = ivec2(gl_FragCoord.xy);
+  if (uMaskCount > 0) {
+    vec4 value = vec4(0.0);
+    for (int mask = 0; mask < ${MAX_GPU_MASK_LAYERS}; ++mask) {
+      if (mask >= uMaskCount) break;
+      float coverage = texelFetch(uMaskCoverage, ivec3(pixel.x, uOutputSize.y - 1 - pixel.y, mask), 0).r;
+      vec4 adjustment = uMaskValues[mask * 5 + layer];
+      if (layer == 4) {
+        float weight = adjustment.a * coverage;
+        value += vec4(adjustment.rgb * weight, weight);
+      } else {
+        value += adjustment * coverage;
+      }
+    }
+    if (layer == 4) return vec4(value.a > 0.0 ? value.rgb / value.a : vec3(1.0), clamp(value.a, 0.0, 100.0));
+    if (layer == 0) return clamp(value, vec4(-5.0, -100.0, -100.0, -100.0), vec4(5.0, 100.0, 100.0, 100.0));
+    return clamp(value, vec4(layer == 3 ? 0.0 : -100.0), vec4(100.0));
+  }
   return texelFetch(
     uLocalAdjustments,
     ivec2(pixel.x * 5 + layer, uOutputSize.y - 1 - pixel.y),
@@ -544,7 +569,9 @@ vec3 applyLocalAdjustments(vec3 color) {
 void main() {
   ivec2 pixel = ivec2(gl_FragCoord.xy);
   ivec2 mapPixel = ivec2(pixel.x, uOutputSize.y - 1 - pixel.y);
-  vec4 mapping = texelFetch(uMap, mapPixel, 0);
+  vec4 mapping = uIdentityGeometry
+    ? vec4((gl_FragCoord.xy + uRegionOrigin) / uFullOutputSize, 0.0, 1.0)
+    : texelFetch(uMap, mapPixel, 0);
   if (mapping.a < 0.5) {
     outColor = vec4(0.0);
     outToneInput = vec4(0.0);
@@ -646,6 +673,7 @@ void main() {
 }`;
 const POST_CROP_SHADER = `#version 300 es
 precision highp float;
+precision highp int;
 uniform sampler2D uImage;
 uniform vec2 uImageSize;
 uniform vec2 uImageOrigin;
@@ -654,11 +682,23 @@ uniform float uMidpoint;
 uniform float uRoundness;
 uniform float uFeather;
 uniform float uHighlights;
+uniform float uGrain;
+uniform float uGrainRoughness;
+uniform highp usampler2D uGrainCoordinates;
+uniform int uRegionHeight;
 in vec2 vUv;
 out vec4 outColor;
 
 float luminance(vec3 color) {
   return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+float noise01(uvec2 pixel) {
+  uint value = (pixel.x + 1u) * 0x1f123bb5u ^ (pixel.y + 1u) * 0x5f356495u;
+  value ^= value >> 16u;
+  value *= 0x45d9f3bu;
+  value ^= value >> 16u;
+  return float(value) / 4294967295.0;
 }
 
 void main() {
@@ -678,6 +718,13 @@ void main() {
     float darken = 1.0 - mask * max(0.0, -uVignette) * 0.008;
     float lighten = mask * max(0.0, uVignette) * 0.006;
     color = color * darken + lighten;
+  }
+  if (source.a > 0.0 && uGrain != 0.0) {
+    uvec4 x = texelFetch(uGrainCoordinates, ivec2(int(gl_FragCoord.x), 0), 0);
+    uvec4 y = texelFetch(uGrainCoordinates, ivec2(uRegionHeight - 1 - int(gl_FragCoord.y), 0), 0);
+    float fine = noise01(uvec2(x.r, y.b));
+    float coarse = noise01(uvec2(x.g, y.a));
+    color += (mix(fine, coarse, uGrainRoughness / 100.0) - 0.5) * uGrain * 0.004;
   }
   outColor = vec4(color, source.a);
 }`;
@@ -710,7 +757,6 @@ type GpuSupport =
 
 interface GpuPrograms {
   readonly pointwise: WebGLProgram;
-  readonly pointwiseInteger: WebGLProgram;
   readonly spatial: WebGLProgram;
   readonly postCrop: WebGLProgram;
   readonly encode: WebGLProgram;
@@ -725,7 +771,7 @@ interface GpuTargets {
   readonly pointColorInput: WebGLTexture;
   readonly scratch: WebGLTexture;
   readonly postCrop: WebGLTexture;
-  readonly framebuffer: WebGLFramebuffer;
+  readonly framebuffers: Map<string, WebGLFramebuffer>;
 }
 
 interface GeometryMap {
@@ -740,9 +786,13 @@ interface GpuState {
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
   readonly sourceIsInteger: boolean;
+  readonly maximumTextureSize: number;
+  curves: { readonly key: string; readonly texture: WebGLTexture } | null;
+  grainCoordinates: { readonly key: string; readonly texture: WebGLTexture } | null;
   readonly targets: Map<string, GpuTargets>;
   readonly geometryMaps: Map<string, GeometryMap>;
   readonly localAdjustments: Map<string, { readonly texture: WebGLTexture; readonly bytes: number }>;
+  readonly maskCoverage: Map<string, { readonly texture: WebGLTexture; readonly bytes: number }>;
 }
 
 interface GpuRenderedFrame {
@@ -750,12 +800,13 @@ interface GpuRenderedFrame {
   readonly pixels: Uint8Array | null;
   readonly pointColorInput: CpuPointColorInput | null;
   readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly renderDurationMs: number;
 }
 
 export type V3GpuPreviewRenderResult =
   | (
       Omit<Extract<CpuRenderResult, { readonly kind: "rendered" }>, "pixels"> &
-      { readonly bitmap: ImageBitmap }
+      { readonly bitmap: ImageBitmap; readonly renderDurationMs: number }
     )
   | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
 
@@ -864,9 +915,6 @@ export function v3GpuPreviewSupport(input: CpuRenderInput): GpuSupport {
   }
   if (input.document.optics.defringe.amount !== 0) {
     return { kind: "unsupported", reason: "Active defringe uses the CPU reference path." };
-  }
-  if (input.document.effects.postCrop.grain !== 0) {
-    return { kind: "unsupported", reason: "Active grain uses the CPU reference path." };
   }
   return { kind: "supported" };
 }
@@ -1020,8 +1068,6 @@ function createTargets(
   height: number,
   precision: "half" | "float",
 ): GpuTargets {
-  const framebuffer = gl.createFramebuffer();
-  if (!framebuffer) throw new Error("Could not create a GPU framebuffer.");
   return {
     width,
     height,
@@ -1031,7 +1077,7 @@ function createTargets(
     pointColorInput: floatTarget(gl, width, height, precision),
     scratch: floatTarget(gl, width, height, precision),
     postCrop: floatTarget(gl, width, height, precision),
-    framebuffer,
+    framebuffers: new Map(),
   };
 }
 
@@ -1041,7 +1087,7 @@ function deleteTargets(gl: WebGL2RenderingContext, targets: GpuTargets): void {
   gl.deleteTexture(targets.pointColorInput);
   gl.deleteTexture(targets.scratch);
   gl.deleteTexture(targets.postCrop);
-  gl.deleteFramebuffer(targets.framebuffer);
+  for (const framebuffer of targets.framebuffers.values()) gl.deleteFramebuffer(framebuffer);
 }
 
 function manualLensCalibration(document: DevelopDocumentV3): LensCalibration {
@@ -1178,7 +1224,7 @@ function gpuRegionWithinLimits(
   input: CpuRenderInput,
   region: RenderRegion,
 ): boolean {
-  const maximum = state.gl.getParameter(state.gl.MAX_TEXTURE_SIZE) as number;
+  const maximum = state.maximumTextureSize;
   if (
     input.image.sourceWidth > maximum ||
     input.image.sourceHeight > maximum ||
@@ -1188,7 +1234,72 @@ function gpuRegionWithinLimits(
   const hasLocalAdjustments = input.document.local.masks.some((mask) =>
     mask.enabled && !localAdjustmentsAreNeutral(mask.adjustments)
   );
-  return !hasLocalAdjustments || region.width * 5 <= maximum;
+  const maskCount = input.document.local.masks.filter((mask) => mask.enabled).length;
+  return !hasLocalAdjustments || maskCount <= MAX_GPU_MASK_LAYERS || region.width * 5 <= maximum;
+}
+
+function maskCoverageTexture(
+  state: GpuState,
+  input: CpuRenderInput,
+  region: RenderRegion,
+): WebGLTexture | null {
+  const masks = input.document.local.masks.filter((mask) => mask.enabled);
+  if (masks.length === 0 || masks.length > MAX_GPU_MASK_LAYERS || inactiveLocalEdits(input.document)) return null;
+  const key = JSON.stringify({
+    geometry: geometryMapKey(input, region),
+    source: input.source.signature,
+    frame: input.document.local.geometryFrame,
+    expressions: masks.map((mask) => mask.expression),
+    assets: input.document.local.maskAssetRefs,
+  });
+  const cached = state.maskCoverage.get(key);
+  if (cached) {
+    state.maskCoverage.delete(key);
+    state.maskCoverage.set(key, cached);
+    return cached.texture;
+  }
+  const stages = geometryStages(input);
+  const mapUser = createOutputToStoredMapper(stages.user);
+  const oriented = orientedDimensions(input);
+  const assets = {
+    sourceSignature: input.source.signature,
+    maskMatte: (assetId: string) => input.assets?.maskMatte?.(assetId),
+    depthMap: (assetId: string) => input.assets?.depthMap?.(assetId),
+  };
+  const pixelCount = region.width * region.height;
+  const pixels = new Float32Array(pixelCount * masks.length);
+  for (let y = 0; y < region.height; y += 1) {
+    for (let x = 0; x < region.width; x += 1) {
+      const user = mapUser(outputPointForRegion(input, region, x, y));
+      if (user.kind !== "mapped" || !user.insideDestination) continue;
+      const canonical = mapDistortedUv(user.point, stages.optics.optics.calibration.distortion, stages.optics.optics.amounts.distortion);
+      const legacy = input.document.local.geometryFrame === "legacy-oriented-v2";
+      if (!legacy && (canonical.x < 0 || canonical.x > 1 || canonical.y < 0 || canonical.y > 1)) continue;
+      const point = legacy ? { x: clamp(canonical.x, 0, 1), y: clamp(canonical.y, 0, 1) } : canonical;
+      for (let index = 0; index < masks.length; index += 1) {
+        pixels[index * pixelCount + y * region.width + x] = manualMaskCoverage(masks[index], point, oriented, assets);
+      }
+    }
+  }
+  const gl = state.gl;
+  const value = gl.createTexture();
+  if (!value) throw new Error("Could not create a GPU mask texture.");
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, value);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R32F, region.width, region.height, masks.length, 0, gl.RED, gl.FLOAT, pixels);
+  state.maskCoverage.set(key, { texture: value, bytes: pixels.byteLength });
+  let bytes = [...state.maskCoverage.values()].reduce((total, coverage) => total + coverage.bytes, 0);
+  while (state.maskCoverage.size > 1 && bytes > MAX_CACHED_MASK_COVERAGE_BYTES) {
+    const oldestKey = state.maskCoverage.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = state.maskCoverage.get(oldestKey);
+    state.maskCoverage.delete(oldestKey);
+    if (oldest) { bytes -= oldest.bytes; gl.deleteTexture(oldest.texture); }
+  }
+  return value;
 }
 
 function localAdjustmentCacheKey(input: CpuRenderInput, region: RenderRegion): string {
@@ -1350,7 +1461,10 @@ function curveValue(
   return points.at(-1)?.y ?? bounded;
 }
 
-function curveTexture(gl: WebGL2RenderingContext, document: DevelopDocumentV3): WebGLTexture {
+function curveTexture(state: GpuState, document: DevelopDocumentV3): WebGLTexture {
+  const key = JSON.stringify(document.tone.curves);
+  if (state.curves?.key === key) return state.curves.texture;
+  const gl = state.gl;
   const values = new Float32Array(CURVE_LUT_SIZE * 4);
   for (let index = 0; index < CURVE_LUT_SIZE; index += 1) {
     const value = index / (CURVE_LUT_SIZE - 1);
@@ -1360,7 +1474,7 @@ function curveTexture(gl: WebGL2RenderingContext, document: DevelopDocumentV3): 
     values[offset + 2] = curveValue(value, document.tone.curves.green);
     values[offset + 3] = curveValue(value, document.tone.curves.blue);
   }
-  return texture(gl, {
+  const value = texture(gl, {
     width: CURVE_LUT_SIZE,
     height: 1,
     internalFormat: gl.RGBA32F,
@@ -1369,6 +1483,9 @@ function curveTexture(gl: WebGL2RenderingContext, document: DevelopDocumentV3): 
     pixels: values,
     filter: gl.NEAREST,
   });
+  if (state.curves) gl.deleteTexture(state.curves.texture);
+  state.curves = { key, texture: value };
+  return value;
 }
 
 function curvesAreIdentity(document: DevelopDocumentV3): boolean {
@@ -1397,7 +1514,17 @@ function attach(
   targets: GpuTargets,
   textures: readonly WebGLTexture[],
 ): void {
-  gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer);
+  const attachments = [targets.pointwise, targets.toneInput, targets.pointColorInput, targets.scratch, targets.postCrop];
+  const key = textures.map((value) => attachments.indexOf(value)).join(",");
+  const cached = targets.framebuffers.get(key);
+  if (cached) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, cached);
+    return;
+  }
+  const framebuffer = gl.createFramebuffer();
+  if (!framebuffer) throw new Error("Could not create a GPU framebuffer.");
+  targets.framebuffers.set(key, framebuffer);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
   for (let index = 0; index < 3; index += 1) {
     gl.framebufferTexture2D(
       gl.FRAMEBUFFER,
@@ -1431,16 +1558,23 @@ function renderPointwise(
   targets: GpuTargets,
   map: WebGLTexture,
   localAdjustments: WebGLTexture | null,
+  maskCoverage: WebGLTexture | null,
+  region: RenderRegion,
+  identityGeometry: boolean,
 ): void {
   const gl = state.gl;
-  const programValue = state.sourceIsInteger
-    ? state.programs.pointwiseInteger
-    : state.programs.pointwise;
-  const curves = curveTexture(gl, input.document);
-  attach(gl, targets, [targets.pointwise, targets.toneInput, targets.pointColorInput]);
+  const programValue = state.programs.pointwise;
+  const curves = curveTexture(state, input.document);
+  attach(gl, targets, input.includePointColor !== false || input.request.requestedTaps.includes("tone-input")
+    ? [targets.pointwise, targets.toneInput, targets.pointColorInput]
+    : [targets.pointwise]);
   gl.useProgram(programValue);
   bindTexture(gl, programValue, "uSource", 0, state.source);
   bindTexture(gl, programValue, "uMap", 1, map);
+  const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
+  gl.uniform1i(gl.getUniformLocation(programValue, "uIdentityGeometry"), identityGeometry ? 1 : 0);
+  gl.uniform2f(gl.getUniformLocation(programValue, "uRegionOrigin"), region.x, outputDimensions.height - region.y - region.height);
+  gl.uniform2f(gl.getUniformLocation(programValue, "uFullOutputSize"), outputDimensions.width, outputDimensions.height);
   bindTexture(gl, programValue, "uCurves", 2, curves);
   bindTexture(
     gl,
@@ -1451,8 +1585,24 @@ function renderPointwise(
   );
   gl.uniform1f(
     gl.getUniformLocation(programValue, "uLocalEnabled"),
-    localAdjustments ? 1 : 0,
+    localAdjustments || maskCoverage ? 1 : 0,
   );
+  const masks = maskCoverage ? input.document.local.masks.filter((mask) => mask.enabled) : [];
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, maskCoverage);
+  gl.uniform1i(gl.getUniformLocation(programValue, "uMaskCoverage"), 4);
+  gl.uniform1i(gl.getUniformLocation(programValue, "uMaskCount"), masks.length);
+  if (masks.length > 0) {
+    const values = new Float32Array(MAX_GPU_MASK_LAYERS * 20);
+    masks.forEach(({ adjustments: a }, index) => values.set([
+      a.basic.exposure, a.basic.contrast, a.basic.highlights, a.basic.shadows,
+      a.basic.whites, a.basic.blacks, a.basic.temperature, a.basic.tint,
+      a.basic.vibrance, a.basic.saturation, a.texture, a.clarity,
+      a.sharpness, a.noise, a.moire, a.defringe,
+      ...a.colorize.color, a.colorize.amount,
+    ], index * 20));
+    gl.uniform4fv(gl.getUniformLocation(programValue, "uMaskValues[0]"), values);
+  }
   const dimensions = { width: targets.width, height: targets.height };
   gl.uniform2i(gl.getUniformLocation(programValue, "uOutputSize"), dimensions.width, dimensions.height);
   gl.uniform1f(
@@ -1615,7 +1765,6 @@ function renderPointwise(
   gl.uniform1f(gl.getUniformLocation(programValue, "uGradingBalance"), grading.balance);
   gl.uniform1f(gl.getUniformLocation(programValue, "uGradingBlending"), grading.blending);
   draw(gl);
-  gl.deleteTexture(curves);
 }
 
 function renderSpatialPass(
@@ -1704,6 +1853,31 @@ function renderSpatial(
   return current;
 }
 
+function grainCoordinatesTexture(state: GpuState, input: CpuRenderInput, region: RenderRegion): WebGLTexture {
+  const settings = input.document.effects.postCrop;
+  if (settings.grain === 0 && state.grainCoordinates) return state.grainCoordinates.texture;
+  const key = settings.grain === 0 ? "off" : JSON.stringify([settings.grainSize, region]);
+  if (state.grainCoordinates?.key === key) return state.grainCoordinates.texture;
+  const width = settings.grain === 0 ? 1 : Math.max(region.width, region.height);
+  const pixels = new Uint32Array(width * 4);
+  const scale = 0.75 + 3.25 * settings.grainSize / 100;
+  // Keep CPU noise-cell boundaries, including double-precision division rounding.
+  for (let index = 0; index < width; index += 1) {
+    pixels[index * 4] = Math.floor((region.x + index) / scale);
+    pixels[index * 4 + 1] = Math.floor((region.x + index) / scale / 2);
+    pixels[index * 4 + 2] = Math.floor((region.y + index) / scale);
+    pixels[index * 4 + 3] = Math.floor((region.y + index) / scale / 2);
+  }
+  const gl = state.gl;
+  const value = texture(gl, {
+    width, height: 1, internalFormat: gl.RGBA32UI, format: gl.RGBA_INTEGER,
+    type: gl.UNSIGNED_INT, pixels, filter: gl.NEAREST,
+  });
+  if (state.grainCoordinates) gl.deleteTexture(state.grainCoordinates.texture);
+  state.grainCoordinates = { key, texture: value };
+  return value;
+}
+
 function renderPostCrop(
   state: GpuState,
   input: CpuRenderInput,
@@ -1713,9 +1887,12 @@ function renderPostCrop(
 ): void {
   const gl = state.gl;
   const programValue = state.programs.postCrop;
+  const grainCoordinates = grainCoordinatesTexture(state, input, region);
   attach(gl, targets, [targets.postCrop]);
   gl.useProgram(programValue);
   bindTexture(gl, programValue, "uImage", 0, source);
+  bindTexture(gl, programValue, "uGrainCoordinates", 1, grainCoordinates);
+  gl.uniform1i(gl.getUniformLocation(programValue, "uRegionHeight"), region.height);
   const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
   gl.uniform2f(gl.getUniformLocation(programValue, "uImageSize"), dimensions.width, dimensions.height);
   gl.uniform2f(
@@ -1729,6 +1906,8 @@ function renderPostCrop(
   gl.uniform1f(gl.getUniformLocation(programValue, "uRoundness"), postCrop.vignetteRoundness);
   gl.uniform1f(gl.getUniformLocation(programValue, "uFeather"), postCrop.vignetteFeather);
   gl.uniform1f(gl.getUniformLocation(programValue, "uHighlights"), postCrop.vignetteHighlights);
+  gl.uniform1f(gl.getUniformLocation(programValue, "uGrain"), postCrop.grain);
+  gl.uniform1f(gl.getUniformLocation(programValue, "uGrainRoughness"), postCrop.grainRoughness);
   draw(gl);
 }
 
@@ -1906,14 +2085,16 @@ export class V3GpuPreviewRenderer {
       state.gl.deleteTexture(map.texture);
     }
     state.gl.deleteTexture(state.source);
+    if (state.curves) state.gl.deleteTexture(state.curves.texture);
+    if (state.grainCoordinates) state.gl.deleteTexture(state.grainCoordinates.texture);
     state.gl.deleteProgram(state.programs.pointwise);
-    state.gl.deleteProgram(state.programs.pointwiseInteger);
     state.gl.deleteProgram(state.programs.spatial);
     state.gl.deleteProgram(state.programs.postCrop);
     state.gl.deleteProgram(state.programs.encode);
     for (const value of state.localAdjustments.values()) {
       state.gl.deleteTexture(value.texture);
     }
+    for (const value of state.maskCoverage.values()) state.gl.deleteTexture(value.texture);
     this.#state = null;
   }
 
@@ -1939,6 +2120,7 @@ export class V3GpuPreviewRenderer {
         frameIdentity: preparation.frameIdentity,
         dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
         bitmap: frame.bitmap,
+        renderDurationMs: frame.renderDurationMs,
         pointColorInput: frame.pointColorInput,
         diagnostics: preparation.diagnostics,
         analysis: frame.analysis,
@@ -2065,7 +2247,7 @@ export class V3GpuPreviewRenderer {
       alpha: true,
       antialias: false,
       depth: false,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
       premultipliedAlpha: false,
     });
     if (!gl || !gl.getExtension("EXT_color_buffer_float")) {
@@ -2085,17 +2267,20 @@ export class V3GpuPreviewRenderer {
       canvas,
       gl,
       programs: {
-        pointwise: program(gl, POINTWISE_SHADER),
-        pointwiseInteger: program(gl, POINTWISE_SHADER, true),
+        pointwise: program(gl, POINTWISE_SHADER, integerSource(input)),
         spatial: program(gl, SPATIAL_SHADER),
         postCrop: program(gl, POST_CROP_SHADER),
         encode: program(gl, ENCODE_SHADER),
       },
       source: sourceTexture(gl, input),
       sourceIsInteger: integerSource(input),
+      maximumTextureSize,
+      curves: null,
+      grainCoordinates: null,
       targets: new Map(),
       geometryMaps: new Map(),
       localAdjustments: new Map(),
+      maskCoverage: new Map(),
     };
     this.#state = state;
     return state;
@@ -2112,32 +2297,30 @@ export class V3GpuPreviewRenderer {
     if (current) {
       state.targets.delete(key);
       state.targets.set(key, current);
-      state.canvas.width = width;
-      state.canvas.height = height;
+      if (state.canvas.width !== width) state.canvas.width = width;
+      if (state.canvas.height !== height) state.canvas.height = height;
       state.gl.viewport(0, 0, width, height);
       return current;
     }
     const targets = createTargets(state.gl, width, height, precision);
     state.targets.set(key, targets);
-    for (const [cachedKey, cachedTargets] of state.targets) {
-      if (
-        cachedKey !== key &&
-        width * height > REFINED_PREVIEW_MAX_PIXELS &&
-        cachedTargets.width * cachedTargets.height > REFINED_PREVIEW_MAX_PIXELS
-      ) {
-        state.targets.delete(cachedKey);
-        deleteTargets(state.gl, cachedTargets);
-      }
-    }
-    while (state.targets.size > MAX_CACHED_TARGETS) {
+    const targetBytes = (value: GpuTargets): number =>
+      value.width * value.height * 5 * (value.precision === "half" ? 8 : 16);
+    let bytes = [...state.targets.values()].reduce((total, value) => total + targetBytes(value), 0);
+    while (state.targets.size > 1 && (
+      state.targets.size > MAX_CACHED_TARGETS || bytes > MAX_CACHED_TARGET_BYTES
+    )) {
       const oldestKey = state.targets.keys().next().value;
       if (oldestKey === undefined) break;
       const oldest = state.targets.get(oldestKey);
       state.targets.delete(oldestKey);
-      if (oldest) deleteTargets(state.gl, oldest);
+      if (oldest) {
+        bytes -= targetBytes(oldest);
+        deleteTargets(state.gl, oldest);
+      }
     }
-    state.canvas.width = width;
-    state.canvas.height = height;
+    if (state.canvas.width !== width) state.canvas.width = width;
+    if (state.canvas.height !== height) state.canvas.height = height;
     state.gl.viewport(0, 0, width, height);
     return targets;
   }
@@ -2197,9 +2380,12 @@ export class V3GpuPreviewRenderer {
     }
     const dimensions = { width: region.width, height: region.height };
     const targets = this.#targets(state, dimensions.width, dimensions.height, precision);
-    const map = this.#geometryMap(state, input, region);
-    const localAdjustments = localAdjustmentTexture(state, input, region);
-    renderPointwise(state, input, targets, map, localAdjustments);
+    const identityGeometry = denoiseGeometryIsIdentity(input) && input.request.plan.qualityAndDimensions.kind !== "loupe";
+    const map = identityGeometry ? targets.scratch : this.#geometryMap(state, input, region);
+    const maskCoverage = maskCoverageTexture(state, input, region);
+    const localAdjustments = maskCoverage ? null : localAdjustmentTexture(state, input, region);
+    const started = performance.now();
+    renderPointwise(state, input, targets, map, localAdjustments, maskCoverage, region, identityGeometry);
     const spatial = renderSpatial(state, input, targets);
     renderPostCrop(state, input, targets, spatial, region);
     renderEncoded(state, targets);
@@ -2213,8 +2399,10 @@ export class V3GpuPreviewRenderer {
       const pointInput = wantsPointColor
         ? readFloatTexture(state.gl, targets, targets.pointColorInput)
         : null;
+      const bitmap = readPixels ? null : state.canvas.transferToImageBitmap();
       return {
-        bitmap: readPixels ? null : state.canvas.transferToImageBitmap(),
+        bitmap,
+        renderDurationMs: performance.now() - started,
         pixels,
         pointColorInput: pointInput
           ? pointColorInput(pointInput, dimensions.width, dimensions.height)
@@ -2240,8 +2428,10 @@ export class V3GpuPreviewRenderer {
       ? null
       : readFloatTexture(state.gl, targets, targets.pointColorInput);
     const analysis = requestedAnalysis(input, toneInput, scene, pixels);
+    const bitmap = readPixels ? null : state.canvas.transferToImageBitmap();
     return {
-      bitmap: readPixels ? null : state.canvas.transferToImageBitmap(),
+      bitmap,
+      renderDurationMs: performance.now() - started,
       pixels: readPixels ? pixels : null,
       pointColorInput: pointInput
         ? pointColorInput(pointInput, dimensions.width, dimensions.height)

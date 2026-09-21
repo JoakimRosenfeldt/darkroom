@@ -32,7 +32,7 @@ export type V3PreviewWorkerRequest =
       readonly document: DevelopDocumentV3;
       readonly size: ExportSizeOptions;
       readonly region?: RenderRegion;
-      readonly maskMattes: readonly V3PreviewWorkerMaskMatte[];
+      readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
     }
   | {
       readonly kind: "initialize";
@@ -47,8 +47,8 @@ export type V3PreviewWorkerRequest =
       readonly devicePixelRatio: number;
       readonly previewMode: V3PreviewRenderMode;
       readonly includeAnalysis: boolean;
-  readonly includePointColor?: boolean;
-      readonly maskMattes: readonly V3PreviewWorkerMaskMatte[];
+      readonly includePointColor?: boolean;
+      readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
     };
 
 export type V3PreviewWorkerResponse =

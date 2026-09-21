@@ -282,6 +282,43 @@ interface GeometryRenderResult {
   readonly context: GeometryContext;
 }
 
+export class V3CpuPreviewCache {
+  #image: DevelopImage | null = null;
+  readonly #entries = new Map<string, GeometryRenderResult>();
+  #bytes = 0;
+
+  get(image: DevelopImage, key: string): GeometryRenderResult | undefined {
+    if (image !== this.#image) {
+      this.#entries.clear();
+      this.#bytes = 0;
+      this.#image = image;
+    }
+    const cached = this.#entries.get(key);
+    if (!cached) return undefined;
+    this.#entries.delete(key);
+    this.#entries.set(key, cached);
+    return { ...cached, image: { ...cached.image, data: cached.image.data.slice() } };
+  }
+
+  set(key: string, geometry: GeometryRenderResult): void {
+    const bytes = geometry.image.data.byteLength + geometry.alpha.byteLength;
+    const budget = 64 * 1024 * 1024;
+    if (bytes > budget) return;
+    const previous = this.#entries.get(key);
+    if (previous) this.#bytes -= previous.image.data.byteLength + previous.alpha.byteLength;
+    this.#entries.delete(key);
+    this.#entries.set(key, { ...geometry, image: { ...geometry.image, data: geometry.image.data.slice() } });
+    this.#bytes += bytes;
+    while (this.#entries.size > 4 || this.#bytes > budget) {
+      const oldestKey = this.#entries.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.#entries.get(oldestKey);
+      this.#entries.delete(oldestKey);
+      if (oldest) this.#bytes -= oldest.image.data.byteLength + oldest.alpha.byteLength;
+    }
+  }
+}
+
 export interface RenderRegion {
   readonly x: number;
   readonly y: number;
@@ -1558,6 +1595,18 @@ function applyPointwiseStages(
   image: FloatRgbImage,
   pointColorInputPixels: Float32Array | null,
 ): boolean {
+  const document = input.document;
+  const basicActive = Object.values(document.tone.basic).some((value) => value !== 0) ||
+    document.color.global.vibrance !== 0 || document.color.global.saturation !== 0;
+  const curvesActive = Object.values(document.tone.curves).some((points) => !curveIsIdentity(points));
+  const grading = document.color.grading;
+  const colorActive = document.color.pointColor.adjustments.length > 0 ||
+    !mixerIsNeutral(document) || document.color.monochrome.enabled ||
+    [grading.shadows, grading.midtones, grading.highlights].some((wheel) => wheel.saturation !== 0 || wheel.luminance !== 0);
+  if (!basicActive && !curvesActive && !colorActive) {
+    pointColorInputPixels?.set(image.data);
+    return !cancelled(input.cancellation);
+  }
   for (let y = 0; y < image.height; y += 1) {
     if (y % CHECKPOINT_ROW_INTERVAL === 0 && cancelled(input.cancellation)) return false;
     for (let x = 0; x < image.width; x += 1) {
@@ -1568,12 +1617,10 @@ function applyPointwiseStages(
         image.data[offset + 1] ?? 0,
         image.data[offset + 2] ?? 0,
       ];
-      const pointColorInput = applyCurves(
-        applyBasicTone(source, input.document),
-        input.document,
-      );
+      const toned = basicActive ? applyBasicTone(source, document) : source;
+      const pointColorInput = curvesActive ? applyCurves(toned, document) : toned;
       if (pointColorInputPixels) writeRgb(pointColorInputPixels, pixel, pointColorInput);
-      writeRgb(image.data, pixel, applyColorAfterPointColorInput(pointColorInput, input.document));
+      writeRgb(image.data, pixel, colorActive ? applyColorAfterPointColorInput(pointColorInput, document) : pointColorInput);
     }
   }
   return true;
@@ -2095,10 +2142,22 @@ function executeRegion(
   transfer: TransferFunction,
   region: RenderRegion,
   beforeTone?: (image: FloatRgbImage) => void,
+  cache?: V3CpuPreviewCache,
 ): ExecutedRegion | null {
-  const geometry = renderGeometry(input, transfer, region);
+  const document = input.document;
+  const key = cache ? JSON.stringify([
+    input.source, transfer, region, input.request.plan.qualityAndDimensions,
+    document.geometry, document.optics, document.color.whiteBalance.resolved,
+    document.color.inputProfile, document.detail.noiseReduction,
+    document.compatibility, document.cleanup, document.local.geometryFrame,
+  ]) : null;
+  const cached = key ? cache?.get(input.image, key) : undefined;
+  const geometry = cached ?? renderGeometry(input, transfer, region);
   if (!geometry) return null;
-  if (!applyManualCleanup(input, geometry, region, transfer)) return null;
+  if (!cached) {
+    if (!applyManualCleanup(input, geometry, region, transfer)) return null;
+    if (key) cache?.set(key, geometry);
+  }
   beforeTone?.(geometry.image);
   const pointColorInputPixels = input.includePointColor === false || outputIsExport(
     input.request.plan.qualityAndDimensions,
@@ -2473,6 +2532,7 @@ interface RenderedPixelsAndAnalysis {
 function renderFullFrame(
   input: CpuRenderInput,
   transfer: TransferFunction,
+  cache?: V3CpuPreviewCache,
 ): RenderedPixelsAndAnalysis | null {
   const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
   const region = { x: 0, y: 0, width: dimensions.width, height: dimensions.height };
@@ -2484,6 +2544,7 @@ function renderFullFrame(
     input.request.requestedTaps.includes("tone-input")
       ? (image) => { toneInput = analyzeV3ToneInput(image); }
       : undefined,
+    cache,
   );
   if (!executed) return null;
   return {
@@ -2635,12 +2696,12 @@ export async function prepareV3CpuRender(
   };
 }
 
-export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResult> {
+export async function renderV3Cpu(input: CpuRenderInput, cache?: V3CpuPreviewCache): Promise<CpuRenderResult> {
   const preparation = await prepareV3CpuRender(input);
   if (preparation.kind !== "ready") return preparation;
   const rendered = outputIsExport(input.request.plan.qualityAndDimensions)
     ? renderTiledExport(input, preparation.transfer)
-    : renderFullFrame(input, preparation.transfer);
+    : renderFullFrame(input, preparation.transfer, cache);
   if (!rendered) return { kind: "cancelled" };
   if (cancelled(input.cancellation)) return { kind: "cancelled" };
   return {
@@ -2658,6 +2719,7 @@ export async function renderV3Cpu(input: CpuRenderInput): Promise<CpuRenderResul
 export async function renderV3CpuRegion(
   input: CpuRenderInput,
   core: RenderRegion,
+  cache?: V3CpuPreviewCache,
 ): Promise<CpuRenderResult> {
   const preparation = await prepareV3CpuRender(input);
   if (preparation.kind !== "ready") return preparation;
@@ -2673,7 +2735,7 @@ export async function renderV3CpuRegion(
     for (let x = core.x; x < core.x + core.width; x += MAX_CPU_TILE_CORE_EDGE) {
       const tile = { x, y, width: Math.min(MAX_CPU_TILE_CORE_EDGE, core.x + core.width - x), height: Math.min(MAX_CPU_TILE_CORE_EDGE, core.y + core.height - y) };
       const region = expandedRegion(tile, dimensions, halo);
-      const executed = executeRegion(input, preparation.transfer, region);
+      const executed = executeRegion(input, preparation.transfer, region, undefined, cache);
       if (!executed || cancelled(input.cancellation)) return { kind: "cancelled" };
       for (let row = 0; row < tile.height; row += 1) {
         const offset = ((tile.y - region.y + row) * region.width + tile.x - region.x) * 4;
