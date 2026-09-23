@@ -43,6 +43,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
   const [viewport, setViewport] = useState({ width: 1, height: 1, dpr: 1 });
   const [source, setSource] = useState<{ entry: LibraryEntry; image: DevelopImage; worker: V3PreviewWorkerClient } | null>(null);
   const [renderedSource, setRenderedSource] = useState<typeof source>(null);
+  const [loadReady, setLoadReady] = useState(!passive);
   const [paintedRegion, setPaintedRegion] = useState<{
     x: number; y: number; width: number; height: number;
     dimensions: { width: number; height: number };
@@ -56,6 +57,12 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
   const displayWidth = displaySize?.width;
 
   useEffect(() => {
+    if (loadReady || !passive || panning) return;
+    const timer = setTimeout(() => setLoadReady(true), 200);
+    return () => clearTimeout(timer);
+  }, [loadReady, passive, panning, displayWidth]);
+
+  useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
     const update = () => setViewport({ width: element.clientWidth, height: element.clientHeight, dpr: window.devicePixelRatio || 1 });
@@ -67,6 +74,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
   }, []);
 
   useEffect(() => {
+    if (!loadReady) return;
     const controller = new AbortController();
     let worker: V3PreviewWorkerClient | undefined;
     let image: DevelopImage | undefined;
@@ -80,16 +88,33 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
       if (!controller.signal.aborted) setStatus(error instanceof Error ? error.message : "Full-resolution photo unavailable.");
     });
     return () => { controller.abort(); worker?.dispose(); if (image) disposeDevelopImage(image); };
-  }, [entry]);
+  }, [entry, loadReady]);
 
   useEffect(() => {
     if (!source || source.entry !== entry || viewport.width < 2 || viewport.height < 2) return;
     let active = true;
     let rendering = false;
     let animationFrame = 0;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
     let pending: { document: DevelopDocumentV3; center: LoupePosition; interactive: boolean; displayWidth: number | undefined } | null = null;
     let backend: V3PreviewBackend | null = null;
     let maskMattes: { key: string; value: ReturnType<typeof loadV3PreviewMaskMattes> } | null = null;
+
+    const scheduleRender = (): void => {
+      if (!active || !pending) return;
+      if (passive) {
+        if (quietTimer !== null) clearTimeout(quietTimer);
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        quietTimer = setTimeout(() => {
+          quietTimer = null;
+          if (!active || rendering || animationFrame || !pending) return;
+          animationFrame = requestAnimationFrame(() => { void renderLatest(); });
+        }, 120);
+      } else if (!rendering && !animationFrame) {
+        animationFrame = requestAnimationFrame(() => { void renderLatest(); });
+      }
+    };
 
     const renderLatest = async (): Promise<void> => {
       animationFrame = 0;
@@ -150,24 +175,27 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
         if (active && !pending) setStatus(error instanceof Error ? error.message : "Detail unavailable.");
       } finally {
         rendering = false;
-        if (active && pending) animationFrame = requestAnimationFrame(() => { void renderLatest(); });
+        if (active && pending) scheduleRender();
       }
     };
 
     scheduleRef.current = (document, center, interactive, displayWidth, isPanning) => {
       if (passive && isPanning) {
         pending = null;
+        if (quietTimer !== null) clearTimeout(quietTimer);
+        quietTimer = null;
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
         return;
       }
       pending = { document, center, interactive, displayWidth };
-      if (!rendering && !animationFrame) {
-        animationFrame = requestAnimationFrame(() => { void renderLatest(); });
-      }
+      scheduleRender();
     };
     return () => {
       active = false;
       pending = null;
       cancelAnimationFrame(animationFrame);
+      if (quietTimer !== null) clearTimeout(quietTimer);
       scheduleRef.current = null;
     };
   }, [source, entry, viewport, passive]);
@@ -192,7 +220,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
     ? { x: (paintedRegion.x - desiredOrigin.x) * paintedRegion.cssScale, y: (paintedRegion.y - desiredOrigin.y) * paintedRegion.cssScale }
     : { x: 0, y: 0 };
 
-  return <div ref={containerRef} className={`absolute inset-0 z-30 flex items-center justify-center overflow-hidden ${stalePassiveLoupe ? "bg-transparent" : "bg-[#131110]"} ${passive ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
+  return <div ref={containerRef} className={`absolute inset-0 z-30 flex items-center justify-center overflow-hidden ${passive || stalePassiveLoupe ? "bg-transparent" : "bg-[#131110]"} ${passive ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
     aria-label={displaySize ? "Full-resolution detail" : "100 percent detail; drag to pan"} aria-busy={!sourceReady || stalePassiveLoupe || status !== ""}
     onWheel={(event) => event.stopPropagation()}
     onDoubleClick={(event) => event.stopPropagation()}
@@ -216,7 +244,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
       onPositionChange?.(next);
     }}
     onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
-    <canvas ref={canvasRef} role="img" aria-label={`${entry.name}, full-resolution edited detail`} style={{ imageRendering: "pixelated", visibility: sourceReady && !stalePassiveLoupe ? "visible" : "hidden", transform: `translate(${translation.x}px, ${translation.y}px)` }} />
+    <canvas ref={canvasRef} role="img" aria-label={`${entry.name}, full-resolution edited detail`} className={passive ? "transition-opacity duration-[120ms] ease-out motion-reduce:transition-none" : undefined} style={{ imageRendering: "pixelated", visibility: sourceReady && !stalePassiveLoupe ? "visible" : "hidden", opacity: passive && stalePassiveLoupe ? 0 : 1, transform: `translate(${translation.x}px, ${translation.y}px)` }} />
     {visibleStatus ? <p role="status" className="absolute bottom-4 max-w-lg rounded bg-black/80 px-3 py-2 text-center text-xs text-white">{visibleStatus}</p> : null}
   </div>;
 }

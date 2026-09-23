@@ -148,6 +148,9 @@ interface PanGesture {
   readonly startY: number;
   readonly x: number;
   readonly y: number;
+  readonly scale: number;
+  readonly actualSize: boolean;
+  readonly startedAtFit: boolean;
   moved: boolean;
 }
 
@@ -294,11 +297,14 @@ export function DevelopCanvas({
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
+  const [previewRenderScale, setPreviewRenderScale] = useState(1);
 
   const activeDisplayDimensions = displayDimensions;
   const [actualSize, setActualSize] = useState(false);
   const [actualPosition, setActualPosition] = useState({ x: 0.5, y: 0.5 });
   const [detailDimensions, setDetailDimensions] = useState<DisplayDimensions | null>(null);
+  const detailDimensionsRef = useRef<DisplayDimensions | null>(null);
+  const pendingDetailDimensionsRef = useRef<DisplayDimensions | null>(null);
   const lastZoomRef = useRef<number | "actual">("actual");
   const actualScale = detailDimensions
     ? detailDimensions.width / (window.devicePixelRatio || 1) / displayDimensions.width
@@ -324,9 +330,31 @@ export function DevelopCanvas({
   const canvasInteractionActive = cropActive || canvasTool.kind !== "none" ||
     (maskingActive && maskTool !== "none");
 
-  const reportDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
-    setDetailDimensions((current) => current?.width === dimensions.width && current.height === dimensions.height ? current : dimensions);
+  const applyDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
+    const current = detailDimensionsRef.current;
+    if (current?.width === dimensions.width && current.height === dimensions.height) return;
+    detailDimensionsRef.current = dimensions;
+    setDetailDimensions(dimensions);
   }, []);
+
+  const reportDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
+    const current = pendingDetailDimensionsRef.current ?? detailDimensionsRef.current;
+    if (current?.width === dimensions.width && current.height === dimensions.height) return;
+    if (panRef.current) {
+      pendingDetailDimensionsRef.current = dimensions;
+      return;
+    }
+    applyDetailDimensions(dimensions);
+  }, [applyDetailDimensions]);
+
+  useEffect(() => {
+    if (panning) return;
+    const timeout = window.setTimeout(() => {
+      if (panRef.current) return;
+      setPreviewRenderScale((current) => current === viewTransform.scale ? current : viewTransform.scale);
+    }, 120);
+    return () => window.clearTimeout(timeout);
+  }, [panning, viewTransform.scale]);
 
   useEffect(() => {
     previewModeRef.current = previewMode;
@@ -416,7 +444,7 @@ export function DevelopCanvas({
         drawnFrame.document === document &&
         drawnFrame.viewportWidth === width &&
         drawnFrame.viewportHeight === height &&
-        drawnFrame.viewportScale === viewTransform.scale &&
+        drawnFrame.viewportScale === previewRenderScale &&
         drawnFrame.cropActive === cropActive;
       if (previewMode === "interactive") {
         lastInteractiveRevisionRef.current = renderSnapshot.documentRevision;
@@ -525,7 +553,7 @@ export function DevelopCanvas({
               mode,
               viewportHeight: height,
               viewportWidth: width,
-              viewportScale: viewTransform.scale,
+              viewportScale: previewRenderScale,
             };
             hasRenderedRef.current = true;
             setPreview((current) => current.kind === "rendered" ? current : { kind: "rendered" });
@@ -585,7 +613,7 @@ export function DevelopCanvas({
           mode,
           viewportHeight: height,
           viewportWidth: width,
-          viewportScale: viewTransform.scale,
+          viewportScale: previewRenderScale,
         };
         hasRenderedRef.current = true;
         setPreview((current) => current.kind === "rendered" ? current : { kind: "rendered" });
@@ -604,8 +632,8 @@ export function DevelopCanvas({
         if (disposed || requestId !== requestRef.current) return;
         const options = {
           viewportDimensions: {
-            width: Math.max(1, Math.round(width * viewTransform.scale)),
-            height: Math.max(1, Math.round(height * viewTransform.scale)),
+            width: Math.max(1, Math.round(width * previewRenderScale)),
+            height: Math.max(1, Math.round(height * previewRenderScale)),
           },
           devicePixelRatio: window.devicePixelRatio || 1,
           maskMattes,
@@ -715,7 +743,7 @@ export function DevelopCanvas({
       }
       observer.disconnect();
     };
-  }, [cropActive, document, documentRevision, entry, image, includePointColor, previewMode, viewTransform.scale]);
+  }, [cropActive, document, documentRevision, entry, image, includePointColor, previewMode, previewRenderScale]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -755,8 +783,8 @@ export function DevelopCanvas({
       beforeWorkerRef.current = beforeWorker;
       void beforeWorker.render(renderDocument, {
         viewportDimensions: {
-          width: Math.max(1, Math.round(width * viewTransform.scale)),
-          height: Math.max(1, Math.round(height * viewTransform.scale)),
+          width: Math.max(1, Math.round(width * previewRenderScale)),
+          height: Math.max(1, Math.round(height * previewRenderScale)),
         },
         devicePixelRatio: window.devicePixelRatio || 1,
         previewMode: "settled",
@@ -805,7 +833,7 @@ export function DevelopCanvas({
     neutralBeforeDocument,
     entry,
     image,
-    viewTransform.scale,
+    previewRenderScale,
   ]);
 
   useEffect(() => {
@@ -846,11 +874,7 @@ export function DevelopCanvas({
     setViewTransform(FIT_TRANSFORM);
   }
 
-  function toggleZoom(pointer: { x: number; y: number }): void {
-    if (zoomed) {
-      fit();
-      return;
-    }
+  function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
     const position = {
       x: (pointer.x - imageRect.x) / imageRect.width,
       y: (pointer.y - imageRect.y) / imageRect.height,
@@ -858,15 +882,28 @@ export function DevelopCanvas({
     if (lastZoomRef.current === "actual") {
       setActualPosition(position);
       setActualSize(true);
+      const next = {
+        scale: actualScale,
+        ...clampViewerOffset(viewport, imageRect, actualScale, {
+          x: viewport.width / 2 - (imageRect.x + position.x * imageRect.width) * actualScale,
+          y: viewport.height / 2 - (imageRect.y + position.y * imageRect.height) * actualScale,
+        }),
+      };
+      viewTransformRef.current = next;
+      return next;
     } else {
       const scale = Math.min(maximumScale, lastZoomRef.current);
-      setViewTransform({
+      const next = {
         scale,
         ...clampViewerOffset(viewport, imageRect, scale, {
           x: viewport.width / 2 - pointer.x * scale,
           y: viewport.height / 2 - pointer.y * scale,
         }),
-      });
+      };
+      setActualSize(false);
+      viewTransformRef.current = next;
+      setViewTransform(next);
+      return next;
     }
   }
 
@@ -910,14 +947,23 @@ export function DevelopCanvas({
     if (imageX < imageRect.x || imageX > imageRect.x + imageRect.width ||
         imageY < imageRect.y || imageY > imageRect.y + imageRect.height) return;
 
+    const startedAtFit = !zoomed;
+    const startTransform = startedAtFit ? zoomFromFit(pointer) : viewTransform;
+    const gestureActualSize = startedAtFit
+      ? lastZoomRef.current === "actual"
+      : actualSize;
     panRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      x: viewTransform.x,
-      y: viewTransform.y,
+      x: startTransform.x,
+      y: startTransform.y,
+      scale: startTransform.scale,
+      actualSize: gestureActualSize,
+      startedAtFit,
       moved: false,
     };
+    setPanning(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -926,19 +972,18 @@ export function DevelopCanvas({
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
     if (Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4) pan.moved = true;
-    if (!pan.moved || !zoomed) return;
-    setPanning(true);
-    const offset = clampViewerOffset(viewport, imageRect, viewTransform.scale, {
+    if (!pan.moved) return;
+    const offset = clampViewerOffset(viewport, imageRect, pan.scale, {
         x: pan.x + event.clientX - pan.startX,
         y: pan.y + event.clientY - pan.startY,
       });
-    if (actualSize) {
+    if (pan.actualSize) {
       setActualPosition({
-        x: ((viewport.width / 2 - offset.x) / viewTransform.scale - imageRect.x) / imageRect.width,
-        y: ((viewport.height / 2 - offset.y) / viewTransform.scale - imageRect.y) / imageRect.height,
+        x: ((viewport.width / 2 - offset.x) / pan.scale - imageRect.x) / imageRect.width,
+        y: ((viewport.height / 2 - offset.y) / pan.scale - imageRect.y) / imageRect.height,
       });
     } else {
-      setViewTransform({ scale: viewTransform.scale, ...offset });
+      setViewTransform({ scale: pan.scale, ...offset });
     }
   }
 
@@ -947,13 +992,13 @@ export function DevelopCanvas({
     if (!pan || pan.pointerId !== event.pointerId) return;
     panRef.current = null;
     setPanning(false);
+    const pendingDimensions = pendingDetailDimensionsRef.current;
+    pendingDetailDimensionsRef.current = null;
+    if (pendingDimensions) applyDetailDimensions(pendingDimensions);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (event.type === "pointerup" && !pan.moved && !canvasInteractionActive) {
-      const bounds = event.currentTarget.getBoundingClientRect();
-      toggleZoom({ x: pan.startX - bounds.left, y: pan.startY - bounds.top });
-    }
+    if (event.type === "pointerup" && !pan.startedAtFit && !pan.moved && !canvasInteractionActive) fit();
   }
 
   useEffect(() => {
@@ -966,7 +1011,7 @@ export function DevelopCanvas({
         setShowBefore(true);
         return;
       }
-      if (canvasInteractionActive) return;
+      if (canvasInteractionActive || panRef.current) return;
       if (event.key === "+" || event.key === "=") {
         event.preventDefault();
         stepZoom(1);
@@ -1125,11 +1170,11 @@ export function DevelopCanvas({
       ) : null}
       <div
         className={[
-          "absolute inset-0",
+          "absolute inset-0 will-change-transform",
           preview.kind === "rendered" ? "" : "invisible",
           panning
             ? ""
-            : "will-change-transform transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+            : "transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         ].join(" ")}
         style={{
           transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
