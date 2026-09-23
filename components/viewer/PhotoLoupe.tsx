@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { disposeDevelopImage, loadDevelopExportImage, type DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import { buildV3SourceRecord, loadV3PreviewMaskMattes, resolveV3ExportDimensions } from "@/lib/develop/v3/runtime";
@@ -20,17 +20,20 @@ function regionOrigin(center: LoupePosition, dimensions: { width: number; height
 }
 
 
-export function PhotoLoupe({ entry, document, position, onPositionChange }: {
+export function PhotoLoupe({ entry, document, position, onPositionChange, displaySize, onDimensions, passive = false }: {
   entry: LibraryEntry;
   document: DevelopDocumentV3;
   position?: LoupePosition;
   onPositionChange?: (position: LoupePosition) => void;
+  displaySize?: { width: number; height: number };
+  onDimensions?: (dimensions: { width: number; height: number }) => void;
+  passive?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; y: number; position: LoupePosition } | null>(null);
   const dimensionsRef = useRef({ width: 1, height: 1 });
-  const scheduleRef = useRef<((document: DevelopDocumentV3, center: LoupePosition, interactive: boolean) => void) | null>(null);
+  const scheduleRef = useRef<((document: DevelopDocumentV3, center: LoupePosition, interactive: boolean, displayWidth: number | undefined) => void) | null>(null);
   const interactive = useDevelopStore((state) =>
     state.activeCatalogId === entry.catalogId && Boolean(state.sessions[entry.id]?.transientEdit),
   );
@@ -44,8 +47,12 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
     dimensions: { width: number; height: number };
     viewport: typeof viewport;
     geometry: string;
+    cssScale: number;
+    displayWidth: number | undefined;
   } | null>(null);
   const [status, setStatus] = useState("Loading full-resolution photo…");
+  const reportDimensions = useEffectEvent((dimensions: { width: number; height: number }) => onDimensions?.(dimensions));
+  const displayWidth = displaySize?.width;
 
   useEffect(() => {
     const element = containerRef.current;
@@ -79,8 +86,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
     let active = true;
     let rendering = false;
     let animationFrame = 0;
-    let pending: { document: DevelopDocumentV3; center: LoupePosition; interactive: boolean } | null = null;
-    let draftCanvas: HTMLCanvasElement | null = null;
+    let pending: { document: DevelopDocumentV3; center: LoupePosition; interactive: boolean; displayWidth: number | undefined } | null = null;
     let backend: V3PreviewBackend | null = null;
     let maskMattes: { key: string; value: ReturnType<typeof loadV3PreviewMaskMattes> } | null = null;
 
@@ -91,22 +97,24 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
       if (!active || !request) return;
       rendering = true;
       try {
-        const { document, center, interactive } = request;
+        const { document, center, interactive, displayWidth: requestedDisplayWidth } = request;
         const record = buildV3SourceRecord(entry, source.image, "export");
         if (record.kind !== "source") throw new Error("Source color information is unavailable.");
         const dimensions = resolveV3ExportDimensions(document, record.source, { mode: "original" });
         if (!dimensions) throw new Error("This photo exceeds the supported full-resolution size.");
-        const width = Math.min(dimensions.width, Math.max(1, Math.round(viewport.width * viewport.dpr)));
-        const height = Math.min(dimensions.height, Math.max(1, Math.round(viewport.height * viewport.dpr)));
-        const { x, y } = regionOrigin(center, dimensions, width, height);
-        const draft = interactive && backend !== "gpu" && width * height > 64_000;
-        const size: ExportSizeOptions = draft
-          ? { mode: "long-edge", pixels: Math.max(1, Math.round(Math.max(dimensions.width, dimensions.height) * Math.sqrt(64_000 / (width * height)))) }
+        reportDimensions(dimensions);
+        const cssScale = requestedDisplayWidth === undefined ? 1 / viewport.dpr : requestedDisplayWidth / dimensions.width;
+        const pixels = viewport.width * viewport.height * viewport.dpr ** 2;
+        const draftScale = interactive && backend !== "gpu" ? Math.min(1, Math.sqrt(64_000 / pixels)) : 1;
+        const renderScale = Math.min(1, cssScale * viewport.dpr) * draftScale;
+        const size: ExportSizeOptions = renderScale < 1
+          ? { mode: "long-edge", pixels: Math.max(1, Math.round(Math.max(dimensions.width, dimensions.height) * renderScale)) }
           : { mode: "original" };
         const renderDimensions = resolveV3ExportDimensions(document, record.source, size);
         if (!renderDimensions) throw new Error("The detail preview dimensions are unavailable.");
-        const renderWidth = Math.max(1, Math.round(width * renderDimensions.width / dimensions.width));
-        const renderHeight = Math.max(1, Math.round(height * renderDimensions.height / dimensions.height));
+        const renderedCssScale = cssScale * dimensions.width / renderDimensions.width;
+        const renderWidth = Math.min(renderDimensions.width, Math.max(1, Math.round(viewport.width / renderedCssScale)));
+        const renderHeight = Math.min(renderDimensions.height, Math.max(1, Math.round(viewport.height / renderedCssScale)));
         const renderOrigin = regionOrigin(center, renderDimensions, renderWidth, renderHeight);
         const matteKey = JSON.stringify(document.local.maskAssetRefs);
         if (maskMattes?.key !== matteKey) {
@@ -123,28 +131,19 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
         const canvas = canvasRef.current;
         if (!canvas) return;
         dimensionsRef.current = dimensions;
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        canvas.style.width = `${width / viewport.dpr}px`;
-        canvas.style.height = `${height / viewport.dpr}px`;
+        if (canvas.width !== renderWidth) canvas.width = renderWidth;
+        if (canvas.height !== renderHeight) canvas.height = renderHeight;
+        canvas.style.width = `${renderWidth * renderedCssScale}px`;
+        canvas.style.height = `${renderHeight * renderedCssScale}px`;
         const context = canvas.getContext("2d");
         if (!context) throw new Error("Detail canvas rendering is unavailable.");
         const rgba = result.pixels.pixels;
-        const pixels = new ImageData(rgba.buffer instanceof ArrayBuffer
+        const imageData = new ImageData(rgba.buffer instanceof ArrayBuffer
           ? new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength)
           : new Uint8ClampedArray(rgba), renderWidth, renderHeight);
-        if (draft) {
-          draftCanvas ??= window.document.createElement("canvas");
-          if (draftCanvas.width !== renderWidth) draftCanvas.width = renderWidth;
-          if (draftCanvas.height !== renderHeight) draftCanvas.height = renderHeight;
-          draftCanvas.getContext("2d")?.putImageData(pixels, 0, 0);
-          context.clearRect(0, 0, width, height);
-          context.drawImage(draftCanvas, 0, 0, width, height);
-        } else {
-          context.putImageData(pixels, 0, 0);
-        }
+        context.putImageData(imageData, 0, 0);
         setRenderedSource(source);
-        setPaintedRegion({ x, y, width, height, dimensions, viewport, geometry: JSON.stringify([document.geometry, document.optics.manualDistortion]) });
+        setPaintedRegion({ ...renderOrigin, width: renderWidth, height: renderHeight, dimensions: renderDimensions, viewport, cssScale: renderedCssScale, displayWidth: requestedDisplayWidth, geometry: JSON.stringify([document.geometry, document.optics.manualDistortion]) });
         setStatus("");
       } catch (error: unknown) {
         if (active && !pending) setStatus(error instanceof Error ? error.message : "Detail unavailable.");
@@ -154,8 +153,8 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
       }
     };
 
-    scheduleRef.current = (document, center, interactive) => {
-      pending = { document, center, interactive };
+    scheduleRef.current = (document, center, interactive, displayWidth) => {
+      pending = { document, center, interactive, displayWidth };
       if (!rendering && !animationFrame) {
         animationFrame = requestAnimationFrame(() => { void renderLatest(); });
       }
@@ -169,22 +168,24 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
   }, [source, entry, viewport]);
 
   useEffect(() => {
-    scheduleRef.current?.(document, center, interactive);
-  }, [source, entry, document, viewport, center, interactive]);
+    scheduleRef.current?.(document, center, interactive, displayWidth);
+  }, [source, entry, document, viewport, center, interactive, displayWidth]);
 
   const sourceReady = source?.entry === entry && renderedSource === source;
   const visibleStatus = sourceReady ? status : status || "Loading full-resolution photo…";
+  const geometry = JSON.stringify([document.geometry, document.optics.manualDistortion]);
+  const stalePassiveLoupe = passive && (!sourceReady || !paintedRegion || paintedRegion.displayWidth !== displayWidth || paintedRegion.viewport !== viewport || paintedRegion.geometry !== geometry);
   const canTranslate = sourceReady && paintedRegion &&
     paintedRegion.viewport === viewport && paintedRegion.geometry === JSON.stringify([document.geometry, document.optics.manualDistortion]);
   const desiredOrigin = canTranslate
     ? regionOrigin(center, paintedRegion.dimensions, paintedRegion.width, paintedRegion.height)
     : null;
   const translation = desiredOrigin && paintedRegion
-    ? { x: (paintedRegion.x - desiredOrigin.x) / viewport.dpr, y: (paintedRegion.y - desiredOrigin.y) / viewport.dpr }
+    ? { x: (paintedRegion.x - desiredOrigin.x) * paintedRegion.cssScale, y: (paintedRegion.y - desiredOrigin.y) * paintedRegion.cssScale }
     : { x: 0, y: 0 };
 
-  return <div ref={containerRef} className="absolute inset-0 z-30 flex cursor-grab items-center justify-center overflow-hidden bg-[#131110] active:cursor-grabbing"
-    aria-label="100 percent detail; drag to pan" aria-busy={!sourceReady || status !== ""}
+  return <div ref={containerRef} className={`absolute inset-0 z-30 flex items-center justify-center overflow-hidden ${stalePassiveLoupe ? "bg-transparent" : "bg-[#131110]"} ${passive ? "pointer-events-none" : "cursor-grab active:cursor-grabbing"}`}
+    aria-label={displaySize ? "Full-resolution detail" : "100 percent detail; drag to pan"} aria-busy={!sourceReady || stalePassiveLoupe || status !== ""}
     onWheel={(event) => event.stopPropagation()}
     onDoubleClick={(event) => event.stopPropagation()}
     onPointerDown={(event) => {
@@ -207,7 +208,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
       onPositionChange?.(next);
     }}
     onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
-    <canvas ref={canvasRef} role="img" aria-label={`${entry.name}, full-resolution edited detail`} style={{ imageRendering: "pixelated", visibility: sourceReady ? "visible" : "hidden", transform: `translate(${translation.x}px, ${translation.y}px)` }} />
+    <canvas ref={canvasRef} role="img" aria-label={`${entry.name}, full-resolution edited detail`} style={{ imageRendering: "pixelated", visibility: sourceReady && !stalePassiveLoupe ? "visible" : "hidden", transform: `translate(${translation.x}px, ${translation.y}px)` }} />
     {visibleStatus ? <p role="status" className="absolute bottom-4 max-w-lg rounded bg-black/80 px-3 py-2 text-center text-xs text-white">{visibleStatus}</p> : null}
   </div>;
 }

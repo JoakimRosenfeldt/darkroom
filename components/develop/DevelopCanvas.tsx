@@ -3,13 +3,13 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   V3CanvasOverlay,
@@ -47,7 +47,6 @@ import { isEditableTarget } from "@/hooks/is-editable-target";
 import {
   anchoredViewerTransform,
   clampViewerOffset,
-  nextZoomPercent,
   type ViewerTransform,
 } from "@/lib/viewer/geometry";
 import { useDevelopStore } from "@/stores/develop-store";
@@ -149,11 +148,10 @@ interface PanGesture {
   readonly startY: number;
   readonly x: number;
   readonly y: number;
+  moved: boolean;
 }
 
 const FIT_TRANSFORM: ViewerTransform = { scale: 1, x: 0, y: 0 };
-const MIN_ZOOM_PERCENT = 100;
-const MAX_ZOOM_PERCENT = 400;
 const EMPTY_ANALYSIS: readonly CpuAnalysisTapResult[] = [];
 
 function centeredImageRect(
@@ -291,15 +289,44 @@ export function DevelopCanvas({
   );
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 1, height: 1 });
-  const [viewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
+  const [viewport, setViewport] = useState({ width: 1, height: 1 });
+  const [previewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
 
   const activeDisplayDimensions = displayDimensions;
   const [actualSize, setActualSize] = useState(false);
+  const [actualPosition, setActualPosition] = useState({ x: 0.5, y: 0.5 });
+  const [detailDimensions, setDetailDimensions] = useState<DisplayDimensions | null>(null);
+  const lastZoomRef = useRef<number | "actual">("actual");
+  const actualScale = detailDimensions
+    ? detailDimensions.width / (window.devicePixelRatio || 1) / displayDimensions.width
+    : 2;
+  const imageRect = useMemo(() => centeredImageRect(viewport, activeDisplayDimensions), [viewport, activeDisplayDimensions]);
+  const viewTransform = useMemo(() => actualSize ? {
+    scale: actualScale,
+    ...clampViewerOffset(viewport, imageRect, actualScale, {
+      x: viewport.width / 2 - (imageRect.x + actualPosition.x * imageRect.width) * actualScale,
+      y: viewport.height / 2 - (imageRect.y + actualPosition.y * imageRect.height) * actualScale,
+    }),
+  } : previewTransform, [actualSize, actualScale, imageRect, actualPosition, viewport, previewTransform]);
+  const viewTransformRef = useRef(viewTransform);
+  useLayoutEffect(() => {
+    viewTransformRef.current = viewTransform;
+  }, [viewTransform]);
+  const zoomed = actualSize || viewTransform.scale !== 1;
+  const maximumScale = Math.max(4, actualScale * 4);
+  const detailPosition = actualSize ? actualPosition : {
+    x: ((viewport.width / 2 - viewTransform.x) / viewTransform.scale - imageRect.x) / imageRect.width,
+    y: ((viewport.height / 2 - viewTransform.y) / viewTransform.scale - imageRect.y) / imageRect.height,
+  };
   const canvasInteractionActive = cropActive || canvasTool.kind !== "none" ||
     (maskingActive && maskTool !== "none");
+
+  const reportDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
+    setDetailDimensions((current) => current?.width === dimensions.width && current.height === dimensions.height ? current : dimensions);
+  }, []);
 
   useEffect(() => {
     previewModeRef.current = previewMode;
@@ -368,6 +395,7 @@ export function DevelopCanvas({
     const render = (force = false) => {
       const width = Math.max(1, Math.round(container.clientWidth));
       const height = Math.max(1, Math.round(container.clientHeight));
+      setViewport((current) => current.width === width && current.height === height ? current : { width, height });
       if (
         !force &&
         width === renderedViewportWidth &&
@@ -797,84 +825,90 @@ export function DevelopCanvas({
   }, [activeDisplayDimensions]);
 
   const applyZoom = useCallback((
-    percent: number,
-    anchor?: { readonly x: number; readonly y: number },
+    factor: number,
+    anchor = { x: viewport.width / 2, y: viewport.height / 2 },
   ) => {
-    const container = containerRef.current;
-    if (!container) return;
-    const viewport = {
-      width: container.clientWidth,
-      height: container.clientHeight,
+    const current = viewTransformRef.current;
+    const nextScale = Math.max(1, Math.min(maximumScale, current.scale * factor));
+    if (nextScale > 1) lastZoomRef.current = nextScale;
+    setActualSize(false);
+    const next = nextScale === 1 ? FIT_TRANSFORM : anchoredViewerTransform(
+      current, nextScale, anchor, viewport,
+      centeredImageRect(viewport, activeDisplayDimensions),
+    );
+    viewTransformRef.current = next;
+    setViewTransform(next);
+  }, [activeDisplayDimensions, maximumScale, viewport]);
+
+  function fit(): void {
+    if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
+    setActualSize(false);
+    setViewTransform(FIT_TRANSFORM);
+  }
+
+  function toggleZoom(pointer: { x: number; y: number }): void {
+    if (zoomed) {
+      fit();
+      return;
+    }
+    const position = {
+      x: (pointer.x - imageRect.x) / imageRect.width,
+      y: (pointer.y - imageRect.y) / imageRect.height,
     };
-    const imageRect = centeredImageRect(viewport, activeDisplayDimensions);
-    const scale = Math.max(
-      MIN_ZOOM_PERCENT,
-      Math.min(MAX_ZOOM_PERCENT, percent),
-    ) / 100;
-    setViewTransform((current) => anchoredViewerTransform(
-      current,
-      scale,
-      anchor ?? { x: viewport.width / 2, y: viewport.height / 2 },
-      viewport,
-      imageRect,
-    ));
-  }, [activeDisplayDimensions]);
+    if (lastZoomRef.current === "actual") {
+      setActualPosition(position);
+      setActualSize(true);
+    } else {
+      const scale = Math.min(maximumScale, lastZoomRef.current);
+      setViewTransform({
+        scale,
+        ...clampViewerOffset(viewport, imageRect, scale, {
+          x: viewport.width / 2 - pointer.x * scale,
+          y: viewport.height / 2 - pointer.y * scale,
+        }),
+      });
+    }
+  }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
-    const currentPercent = Math.round(viewTransform.scale * 100);
-    const nextPercent = Math.max(
-      MIN_ZOOM_PERCENT,
-      Math.min(MAX_ZOOM_PERCENT, nextZoomPercent(currentPercent, direction)),
-    );
-    applyZoom(nextPercent);
-  }, [applyZoom, viewTransform.scale]);
+    applyZoom(1.25 ** direction);
+  }, [applyZoom]);
 
-  function onWheel(event: ReactWheelEvent<HTMLDivElement>): void {
-    if (canvasInteractionActive || preview.kind !== "rendered") return;
+  const onWheel = useEffectEvent((event: WheelEvent): void => {
+    if ((maskingActive && maskTool === "brush") || previewMode === "interactive" ||
+        panRef.current || preview.kind !== "rendered" || event.deltaY === 0 ||
+        (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const currentPercent = Math.round(viewTransform.scale * 100);
-    const nextPercent = Math.max(
-      MIN_ZOOM_PERCENT,
-      Math.min(
-        MAX_ZOOM_PERCENT,
-        nextZoomPercent(currentPercent, event.deltaY < 0 ? 1 : -1),
-      ),
-    );
-    applyZoom(nextPercent, {
+    const bounds = containerRef.current!.getBoundingClientRect();
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1;
+    const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
+    applyZoom(Math.exp(-delta * 0.002), {
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
-  }
+  });
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const wheel = (event: WheelEvent) => onWheel(event);
+    container.addEventListener("wheel", wheel, { passive: false });
+    return () => container.removeEventListener("wheel", wheel);
+  }, []);
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    const interactive = event.target instanceof HTMLElement &&
-      Boolean(event.target.closest("button"));
-    if (
-      interactive ||
-      canvasInteractionActive ||
-      preview.kind !== "rendered" ||
-      viewTransform.scale <= 1 ||
-      event.button !== 0
-    ) return;
+    const interactive = event.target instanceof Element &&
+      Boolean(event.target.closest("button, input, select, [role=button]"));
+    if (interactive || canvasInteractionActive || preview.kind !== "rendered" ||
+        event.button !== 0 || !event.isPrimary) return;
 
     const bounds = event.currentTarget.getBoundingClientRect();
-    const pointer = {
-      x: event.clientX - bounds.left,
-      y: event.clientY - bounds.top,
-    };
-    const imageRect = centeredImageRect(
-      { width: bounds.width, height: bounds.height },
-      activeDisplayDimensions,
-    );
+    const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
     const imageX = (pointer.x - viewTransform.x) / viewTransform.scale;
     const imageY = (pointer.y - viewTransform.y) / viewTransform.scale;
-    if (
-      imageX < imageRect.x ||
-      imageX > imageRect.x + imageRect.width ||
-      imageY < imageRect.y ||
-      imageY > imageRect.y + imageRect.height
-    ) return;
+    if (imageX < imageRect.x || imageX > imageRect.x + imageRect.width ||
+        imageY < imageRect.y || imageY > imageRect.y + imageRect.height) return;
 
     panRef.current = {
       pointerId: event.pointerId,
@@ -882,8 +916,8 @@ export function DevelopCanvas({
       startY: event.clientY,
       x: viewTransform.x,
       y: viewTransform.y,
+      moved: false,
     };
-    setPanning(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -891,37 +925,35 @@ export function DevelopCanvas({
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    const viewport = {
-      width: event.currentTarget.clientWidth,
-      height: event.currentTarget.clientHeight,
-    };
-    const imageRect = centeredImageRect(viewport, activeDisplayDimensions);
-    const offset = clampViewerOffset(
-      viewport,
-      imageRect,
-      viewTransform.scale,
-      {
+    if (Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4) pan.moved = true;
+    if (!pan.moved || !zoomed) return;
+    setPanning(true);
+    const offset = clampViewerOffset(viewport, imageRect, viewTransform.scale, {
         x: pan.x + event.clientX - pan.startX,
         y: pan.y + event.clientY - pan.startY,
-      },
-    );
-    setViewTransform((current) => ({ ...current, ...offset }));
+      });
+    if (actualSize) {
+      setActualPosition({
+        x: ((viewport.width / 2 - offset.x) / viewTransform.scale - imageRect.x) / imageRect.width,
+        y: ((viewport.height / 2 - offset.y) / viewTransform.scale - imageRect.y) / imageRect.height,
+      });
+    } else {
+      setViewTransform({ scale: viewTransform.scale, ...offset });
+    }
   }
 
   function finishPan(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (panRef.current?.pointerId !== event.pointerId) return;
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
     panRef.current = null;
     setPanning(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-  }
-
-  function onDoubleClick(event: ReactMouseEvent<HTMLDivElement>): void {
-    const interactive = event.target instanceof HTMLElement &&
-      Boolean(event.target.closest("button"));
-    if (interactive || canvasInteractionActive || preview.kind !== "rendered") return;
-    setActualSize((value) => !value);
+    if (event.type === "pointerup" && !pan.moved && !canvasInteractionActive) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      toggleZoom({ x: pan.startX - bounds.left, y: pan.startY - bounds.top });
+    }
   }
 
   useEffect(() => {
@@ -986,7 +1018,7 @@ export function DevelopCanvas({
     <div
       ref={containerRef}
       className={[
-        "relative h-full min-h-0 w-full overflow-hidden",
+        "relative h-full min-h-0 w-full touch-none select-none overflow-hidden",
         canvasInteractionActive || preview.kind !== "rendered"
           ? ""
           : viewTransform.scale > 1
@@ -994,12 +1026,11 @@ export function DevelopCanvas({
             : "cursor-zoom-in",
       ].join(" ")}
       aria-busy={preview.kind === "loading"}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={finishPan}
       onPointerCancel={finishPan}
-      onDoubleClick={onDoubleClick}
+      onLostPointerCapture={finishPan}
     >
       {preview.kind === "rendered" && !canvasInteractionActive ? (
         <div className="absolute right-3 top-3 z-40 flex items-center gap-1 rounded-lg border border-white/10 bg-black/70 p-1 shadow-xl backdrop-blur">
@@ -1008,7 +1039,7 @@ export function DevelopCanvas({
             aria-label="Zoom out"
             aria-keyshortcuts="-"
             disabled={viewTransform.scale <= 1}
-            onClick={() => { setActualSize(false); stepZoom(-1); }}
+            onClick={() => stepZoom(-1)}
             className="rounded px-2 py-1 text-xs text-white/65 hover:text-white disabled:opacity-35"
           >
             −
@@ -1016,7 +1047,7 @@ export function DevelopCanvas({
           <button
             type="button"
             aria-pressed={!actualSize && viewTransform.scale === 1}
-            onClick={() => { setActualSize(false); setViewTransform(FIT_TRANSFORM); }}
+            onClick={fit}
             className={[
               "rounded-md px-2 py-1 text-[10px] uppercase tracking-wide",
               !actualSize && viewTransform.scale === 1
@@ -1028,22 +1059,22 @@ export function DevelopCanvas({
           </button>
           <span
             role="status"
-            aria-label={`Preview enlargement ${viewTransform.scale} times Fit`}
+            aria-label={detailDimensions ? `Zoom ${Math.round(viewTransform.scale / actualScale * 100)} percent` : `Preview enlargement ${viewTransform.scale} times Fit`}
             className="w-10 text-center font-mono text-[10px] text-white/75"
           >
-            {viewTransform.scale === 1 ? "" : `${viewTransform.scale}× Fit`}
+            {!zoomed ? "" : detailDimensions ? `${Math.round(viewTransform.scale / actualScale * 100)}%` : `${Number(viewTransform.scale.toFixed(2))}× Fit`}
           </span>
           <button
             type="button"
             aria-label="Zoom in"
             aria-keyshortcuts="+"
-            disabled={viewTransform.scale >= MAX_ZOOM_PERCENT / 100}
-            onClick={() => { setActualSize(false); stepZoom(1); }}
+            disabled={viewTransform.scale >= maximumScale}
+            onClick={() => stepZoom(1)}
             className="rounded px-2 py-1 text-xs text-white/65 hover:text-white disabled:opacity-35"
           >
             +
           </button>
-          <button type="button" aria-pressed={actualSize} onClick={() => setActualSize(true)} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
+          <button type="button" aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)} onClick={() => { setActualPosition(detailPosition); setActualSize(true); }} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
           <span className="mx-0.5 h-4 w-px bg-white/10" />
           <button
             type="button"
@@ -1080,7 +1111,17 @@ export function DevelopCanvas({
           </button>
         </div>
       ) : null}
-      {actualSize && !canvasInteractionActive && document ? <PhotoLoupe key={entry.id} entry={entry} document={showBefore ? createDefaultV3DevelopDocument() : document} /> : null}
+      {zoomed && !canvasInteractionActive && document ? (
+        <PhotoLoupe
+          key={entry.id}
+          entry={entry}
+          document={showBefore ? neutralBeforeDocument ?? document : document}
+          position={detailPosition}
+          displaySize={actualSize ? undefined : { width: displayDimensions.width * viewTransform.scale, height: displayDimensions.height * viewTransform.scale }}
+          onDimensions={reportDetailDimensions}
+          passive
+        />
+      ) : null}
       <div
         className={[
           "absolute inset-0",
