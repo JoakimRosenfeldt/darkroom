@@ -351,12 +351,15 @@ export function DevelopCanvas({
   const [beforeRasterDimensions, setBeforeRasterDimensions] = useState<DisplayDimensions | null>(null);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const [previewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
+  const [wheelZoomDirect, setWheelZoomDirect] = useState(false);
   const [zoomFocus, setZoomFocus] = useState<{ x: number; y: number } | null>(null);
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
   const [detailCanvasContainer, setDetailCanvasContainer] = useState<HTMLDivElement | null>(null);
   const [previewRenderScale, setPreviewRenderScale] = useState(1);
+  const transformElementRef = useRef<HTMLDivElement | null>(null);
+  const wheelZoomDirectRef = useRef(false);
   const beforeRasterRef = useRef<{ readonly contentKey: string; readonly dimensions: DisplayDimensions } | null>(null);
 
   const activeDisplayDimensions = displayDimensions;
@@ -997,14 +1000,22 @@ export function DevelopCanvas({
     setViewTransform(next);
   }, [activeDisplayDimensions, imageRect, maximumScale, viewport]);
 
+  const setWheelZoomDirectMode = useCallback((direct: boolean): void => {
+    wheelZoomDirectRef.current = direct;
+    setWheelZoomDirect(direct);
+  }, []);
+
   function fit(): void {
+    setWheelZoomDirectMode(false);
     if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
     setZoomFocus(null);
     setActualSize(false);
+    viewTransformRef.current = FIT_TRANSFORM;
     setViewTransform(FIT_TRANSFORM);
   }
 
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
+    setWheelZoomDirectMode(false);
     const position = {
       x: Math.max(0, Math.min(1, (pointer.x - imageRect.x) / imageRect.width)),
       y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
@@ -1039,8 +1050,9 @@ export function DevelopCanvas({
   }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
+    setWheelZoomDirectMode(false);
     applyZoom(1.25 ** direction);
-  }, [applyZoom]);
+  }, [applyZoom, setWheelZoomDirectMode]);
 
   const onWheel = useEffectEvent((event: WheelEvent): void => {
     if ((maskingActive && maskTool === "brush") || previewMode === "interactive" ||
@@ -1048,6 +1060,30 @@ export function DevelopCanvas({
         (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
     const bounds = containerRef.current!.getBoundingClientRect();
+    if (!wheelZoomDirectRef.current) {
+      // Take over from the visible point of an in-flight control zoom.
+      const transform = transformElementRef.current
+        ? window.getComputedStyle(transformElementRef.current).transform
+        : "none";
+      if (transform !== "none") {
+        try {
+          const matrix = new DOMMatrixReadOnly(transform);
+          if (matrix.is2D && Number.isFinite(matrix.a) && matrix.a > 0 &&
+              Number.isFinite(matrix.d) && Math.abs(matrix.a - matrix.d) < 1e-6 &&
+              Math.abs(matrix.b) < 1e-6 && Math.abs(matrix.c) < 1e-6 &&
+              Number.isFinite(matrix.e) && Number.isFinite(matrix.f)) {
+            viewTransformRef.current = {
+              scale: (matrix.a + matrix.d) / 2,
+              x: matrix.e,
+              y: matrix.f,
+            };
+          }
+        } catch {
+          // Keep the latest transform ref when the browser cannot parse the computed value.
+        }
+      }
+      setWheelZoomDirectMode(true);
+    }
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1;
     const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
@@ -1070,6 +1106,8 @@ export function DevelopCanvas({
       Boolean(event.target.closest("button, input, select, [role=button]"));
     if (interactive || canvasInteractionActive || preview.kind !== "rendered" ||
         event.button !== 0 || !event.isPrimary) return;
+
+    setWheelZoomDirectMode(false);
 
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -1265,7 +1303,19 @@ export function DevelopCanvas({
           >
             +
           </button>
-          <button type="button" aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)} onClick={() => { setActualPosition(detailPosition); setZoomFocus(detailPosition); setActualSize(true); }} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
+          <button
+            type="button"
+            aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)}
+            onClick={() => {
+              setWheelZoomDirectMode(false);
+              setActualPosition(detailPosition);
+              setZoomFocus(detailPosition);
+              setActualSize(true);
+            }}
+            className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}
+          >
+            100%
+          </button>
           <span className="mx-0.5 h-4 w-px bg-white/10" />
           <button
             type="button"
@@ -1323,11 +1373,12 @@ export function DevelopCanvas({
         />
       ) : null}
       <div
+        ref={transformElementRef}
         className={[
           "absolute inset-0 will-change-transform",
           preview.kind === "rendered" ? "" : "invisible",
-          panning
-            ? ""
+          panning || wheelZoomDirect
+            ? "transition-none"
             : "transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         ].join(" ")}
         style={{
