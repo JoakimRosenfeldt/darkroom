@@ -1,0 +1,244 @@
+{
+  "workload": "diagnostic backend IPC",
+  "results": [
+    {
+      "label": "baseline",
+      "binarySha256": "e01087138f586afec385072fa4a3c86d950dbbd12c30d61630b19be6c48870b6",
+      "photoCount": 400,
+      "fixtureSha256": "970a68a6cc4497b67ca44ec34cbf6e9f75f334bb39eb686cfc9d79b08abce457",
+      "catalogProjectionSha256": "83318b3a4a87a3743d5f7191a3893cbd467a3566f543bb3dad630ee23488e1df",
+      "readHeadSha256": "1bd54dcd03cfac191f2e7352e6b7281e946d44d12a96b1d35c2eb84fd5186004",
+      "scanAccepted": 400,
+      "catalogQuery": {
+        "callsPerSample": 8,
+        "samples": 5,
+        "medianBackendMs": 51.330332,
+        "medianRoundTripMs": 86.173168,
+        "backendSamplesMs": [
+          50.837158,
+          51.232453,
+          51.330332,
+          53.542365999999994,
+          51.863440999999995
+        ],
+        "roundTripSamplesMs": [
+          85.79669200000001,
+          85.41190699999999,
+          86.69456600000001,
+          90.495469,
+          86.173168
+        ]
+      },
+      "approvedReadHead": {
+        "callsPerSample": 20,
+        "samples": 5,
+        "medianBackendMs": 1.2683090000000001,
+        "medianRoundTripMs": 2.3445219999999996,
+        "backendSamplesMs": [
+          1.3135799999999997,
+          1.2683090000000001,
+          1.28275,
+          1.2539470000000001,
+          1.2555079999999998
+        ],
+        "roundTripSamplesMs": [
+          2.3445219999999996,
+          2.3633740000000003,
+          2.301652,
+          2.3518110000000005,
+          2.262593
+        ]
+      },
+      "nativePrototypeJobs": {
+        "depth": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            1
+          ],
+          "pixelSha256": "68aed3d389cac0f34a947142514e3b8fdea85f91513d8851c29252c3d077f7be",
+          "samples": 5,
+          "medianEndToEndMs": 11.366787,
+          "endToEndSamplesMs": [
+            8.625766,
+            9.713263,
+            11.366787,
+            16.872698,
+            18.38652
+          ]
+        },
+        "denoise": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            3
+          ],
+          "pixelSha256": "4e478c1f66e78a616deed34fbebd93fa79e95052974f4c3cf978f37c130c5a63",
+          "samples": 5,
+          "medianEndToEndMs": 45.324907,
+          "endToEndSamplesMs": [
+            42.075639,
+            41.042213,
+            45.324907,
+            46.767648,
+            46.739887
+          ]
+        },
+        "raw-details": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            3
+          ],
+          "pixelSha256": "7a4f03bfd653bf06d362e692b21368ec7ee77ba633ac3ce757121c716a454684",
+          "samples": 5,
+          "medianEndToEndMs": 41.752174,
+          "endToEndSamplesMs": [
+            38.966243,
+            40.17643,
+            41.752174,
+            43.725934,
+            45.120653
+          ]
+        },
+        "super-resolution": {
+          "dimensionsAndChannels": [
+            640,
+            640,
+            3
+          ],
+          "pixelSha256": "477e018f8e2d25e9f61c99ab43a9c8fc87773a13c3c7832836a6afd81cce7ff1",
+          "samples": 5,
+          "medianEndToEndMs": 112.030757,
+          "endToEndSamplesMs": [
+            109.798215,
+            110.524175,
+            112.030757,
+            114.396302,
+            116.24028
+          ]
+        }
+      }
+    },
+    {
+      "label": "candidate",
+      "binarySha256": "a34b361b4ff019036bf74a1287cd874faa17e866646ad5f1611fedc8b0f6e1c3",
+      "photoCount": 400,
+      "fixtureSha256": "970a68a6cc4497b67ca44ec34cbf6e9f75f334bb39eb686cfc9d79b08abce457",
+      "catalogProjectionSha256": "83318b3a4a87a3743d5f7191a3893cbd467a3566f543bb3dad630ee23488e1df",
+      "readHeadSha256": "1bd54dcd03cfac191f2e7352e6b7281e946d44d12a96b1d35c2eb84fd5186004",
+      "scanAccepted": 400,
+      "catalogQuery": {
+        "callsPerSample": 8,
+        "samples": 5,
+        "medianBackendMs": 51.385816,
+        "medianRoundTripMs": 86.566901,
+        "backendSamplesMs": [
+          63.498224,
+          51.711580000000005,
+          51.385816,
+          51.367875000000005,
+          51.173863
+        ],
+        "roundTripSamplesMs": [
+          99.081578,
+          86.834518,
+          86.566901,
+          86.23312,
+          86.317349
+        ]
+      },
+      "approvedReadHead": {
+        "callsPerSample": 20,
+        "samples": 5,
+        "medianBackendMs": 1.445221,
+        "medianRoundTripMs": 2.344903,
+        "backendSamplesMs": [
+          1.4624640000000004,
+          1.445221,
+          1.4195110000000002,
+          1.4044599999999998,
+          1.4454710000000002
+        ],
+        "roundTripSamplesMs": [
+          2.416956,
+          2.406017,
+          2.3185749999999996,
+          2.3174919999999997,
+          2.344903
+        ]
+      },
+      "nativePrototypeJobs": {
+        "depth": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            1
+          ],
+          "pixelSha256": "68aed3d389cac0f34a947142514e3b8fdea85f91513d8851c29252c3d077f7be",
+          "samples": 5,
+          "medianEndToEndMs": 11.845654,
+          "endToEndSamplesMs": [
+            8.647187,
+            9.851725,
+            11.845654,
+            16.94617,
+            15.173293
+          ]
+        },
+        "denoise": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            3
+          ],
+          "pixelSha256": "4e478c1f66e78a616deed34fbebd93fa79e95052974f4c3cf978f37c130c5a63",
+          "samples": 5,
+          "medianEndToEndMs": 44.234871,
+          "endToEndSamplesMs": [
+            38.630648,
+            40.568296,
+            44.836879,
+            44.234871,
+            46.85056
+          ]
+        },
+        "raw-details": {
+          "dimensionsAndChannels": [
+            320,
+            320,
+            3
+          ],
+          "pixelSha256": "7a4f03bfd653bf06d362e692b21368ec7ee77ba633ac3ce757121c716a454684",
+          "samples": 5,
+          "medianEndToEndMs": 42.396894,
+          "endToEndSamplesMs": [
+            37.608343,
+            42.396894,
+            41.559712,
+            43.550711,
+            45.887265
+          ]
+        },
+        "super-resolution": {
+          "dimensionsAndChannels": [
+            640,
+            640,
+            3
+          ],
+          "pixelSha256": "477e018f8e2d25e9f61c99ab43a9c8fc87773a13c3c7832836a6afd81cce7ff1",
+          "samples": 5,
+          "medianEndToEndMs": 115.720013,
+          "endToEndSamplesMs": [
+            110.243682,
+            113.755223,
+            115.720013,
+            117.266565,
+            131.348792
+          ]
+        }
+      }
+    }
+  ],
+  "method": "Sequential release diagnostic backend binaries on the same Linux workstation; 400 copies of public/demo/city-night.jpg in temporary profiles; one warmup then five samples per operation. Native job times include IPC, worker processing and artifact encoding."
+}

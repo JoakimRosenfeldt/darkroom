@@ -10,6 +10,25 @@ Measured on 23 September 2026 on the Linux Ryzen 9 5900X workstation described b
 
 There were two independent invalidation causes. The release script passed new temporary Nikon paths into `TAURI_CONFIG`, which Tauri's Rust build script watches. Vite also rewrote identical assets that Rust tracks through `include_bytes!`; the baseline Cargo trace identified the unchanged `out/window.svg` as stale. Compilation now uses stable configuration, with the temporary runtime configuration applied by a separate `tauri bundle` command. Vite builds into a temporary directory and copies only changed output into `out`, retaining unchanged file and directory timestamps. Rust also watches the output directory so newly added and removed assets trigger compilation. Type checking, release optimization, signing, startup checks, and decoded-output validation remain enabled.
 
+The user also measured `npm run dist` on macOS at commit `2725bc6`: **197.250 seconds first run, 34.687 seconds unchanged** (82.4% less wall time). These user-reported totals include macOS packaging; they do not isolate compilation from signing or DMG creation.
+
+### Rebuilding changed Rust code
+
+The application crate now uses 16 codegen units and incremental release compilation. Optimization level 3, thin LTO, stripping, and dependency compilation settings are retained. On the same Linux workstation, rebuilding after changing a live error-message string in `src-tauri/src/native/nef.rs` took **93.217 seconds** with the previous profile, **35.442 seconds** on the first candidate build, then **17.485 and 17.656 seconds** for two further edits with a warm incremental cache: about **81% less time** than the baseline. The source was restored after measurement.
+
+These are Cargo release executable build times, excluding renderer compilation and packaging. This measures one small native-module edit, with dependencies already built, one baseline and two warm candidate samples. It does not predict arbitrary pulls, broad source changes, changed dependencies, cold builds, or macOS results. Incremental artifacts use additional disk space under `src-tauri/target`; deleting that directory loses the benefit. [Recorded samples](changed-build-times.json) include the command and settings. Codegen partitioning can affect runtime performance even with the same optimization level; the runtime comparison below checks specific workloads, not every editing operation.
+
+Runtime checks compared the previous and revised release diagnostic backends sequentially on the same workstation: 400 synthetic catalog entries, one warmup and five samples per operation. Catalog projections, approved file reads, and decoded pixels from all four image operations matched exactly. Median native job times (including IPC and artifact encoding) were:
+
+| Operation | Previous profile | Incremental / 16 codegen units |
+| --- | ---: | ---: |
+| Depth | 11.367 ms | 11.846 ms |
+| Denoise | 45.325 ms | 44.235 ms |
+| Raw details | 41.752 ms | 42.397 ms |
+| Super resolution | 112.031 ms | 115.720 ms |
+
+The eight-query catalog batch's backend median was 51.330 → 51.386 ms. Twenty approved 32 KB reads took 2.3445 → 2.3449 ms round trip. Image-operation differences were small and mixed (2.4% faster to 4.2% slower); these samples demonstrate no runtime gain and do not establish equivalent performance for every workload. [Runtime samples and output hashes](release-profile-runtime.json) preserve the evidence. The release profile change targets build time, not editing speed.
+
 For repeated coding, `npm run desktop:dev` avoids release linking and provides live frontend updates. On macOS, `npm run dist -- --bundles app` skips DMG creation, and adding `--debug` selects a packaged local-testing build without release optimization. The first build of either profile can still take time.
 
 ## Whole desktop app

@@ -41,5 +41,12 @@
     "Single workstation; one unchanged baseline and two unchanged revised runs.",
     "Does not measure cold builds, changed-code compile time, macOS signing or DMG creation.",
     "Warmup includes recompilation after changing build inputs."
-  ]
+  ],
+  "userReportedMacOS": {
+    "commit": "2725bc6",
+    "command": "time npm run dist",
+    "firstSeconds": 197.25,
+    "unchangedSeconds": 34.687,
+    "limits": "User-reported wall times; includes packaging. Hardware and individual phase times not recorded."
+  }
 }

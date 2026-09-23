@@ -72,3 +72,7 @@ required-features = ["diagnostics"]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[profile.release.package.darkroom]
+codegen-units = 16
+incremental = true
