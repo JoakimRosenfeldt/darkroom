@@ -56,20 +56,25 @@ try {
     const helper = path.join(staged, "MacOS/nikon-nef-decoder");
     run("codesign", ["--force", "--sign", identity, ...signingOptions, helper]);
     const probe = spawnSync(helper, ["--probe"], { cwd: root, env: process.env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 });
-    if (probe.error || probe.status !== 0) {
+    const legacyHelper = !probe.error && probe.status !== null && probe.status > 0 &&
+      probe.signal === null && probe.stdout === "" && probe.stderr?.trim() === "invalid arguments";
+    if (legacyHelper) {
+      console.warn("Legacy Nikon decoder has no capability probe; startup succeeded. Verify RAW decoding in the packaged app.");
+    } else if (probe.error || probe.status !== 0) {
       const detail = probe.stderr?.trim().slice(0, 16 * 1024);
       throw new Error(`Staged Nikon decoder probe failed: ${detail || probe.error?.message || `exit ${probe.status ?? "signal"}`}`);
-    }
-    let capability;
-    try {
-      capability = JSON.parse(probe.stdout);
-    } catch {
-      throw new Error("Staged Nikon decoder probe returned invalid JSON.");
-    }
-    if (capability?.version !== 1 || capability.backend !== "nikon-sdk" ||
-        capability.pixelProtocol !== "rgb16le-v1" || typeof capability.helperVersion !== "string" ||
-        !["arm64", "x64"].includes(capability.architecture)) {
-      throw new Error("Staged Nikon decoder probe returned an unsupported protocol.");
+    } else {
+      let capability;
+      try {
+        capability = JSON.parse(probe.stdout);
+      } catch {
+        throw new Error("Staged Nikon decoder probe returned invalid JSON.");
+      }
+      if (capability?.version !== 1 || capability.backend !== "nikon-sdk" ||
+          capability.pixelProtocol !== "rgb16le-v1" || typeof capability.helperVersion !== "string" ||
+          !["arm64", "x64"].includes(capability.architecture)) {
+        throw new Error("Staged Nikon decoder probe returned an unsupported protocol.");
+      }
     }
     const checksum = createHash("sha256").update(await fs.readFile(helper)).digest("hex");
     await fs.writeFile(path.join(staged, "runtime.json"), JSON.stringify({ version: 1, checksum }));

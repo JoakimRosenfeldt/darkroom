@@ -152,7 +152,7 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
     let nikon = if let Some((path, state)) = helper(ctx) {
         match checksum(&path) {
             Ok(before) => {
-                let probe = (|| -> Result<Value, String> {
+                let probe = (|| -> Result<Option<Value>, String> {
                     let work = tempfile::tempdir().map_err(|e| e.to_string())?;
                     let stdout = work.path().join("probe.json");
                     let stderr = work.path().join("probe.err");
@@ -166,17 +166,27 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                             File::create(&stderr).map_err(|e| e.to_string())?,
                         ));
                     let status = run_with_timeout(command, Duration::from_secs(5))?;
-                    if !status.success() {
-                        return Err("Nikon probe exited unsuccessfully.".into());
-                    }
                     if fs::metadata(&stdout).map_err(|e| e.to_string())?.len() > 16 * 1024
                         || fs::metadata(&stderr).map_err(|e| e.to_string())?.len() > 16 * 1024
                     {
                         return Err("Nikon probe output is too large.".into());
                     }
-                    let response: Value =
-                        serde_json::from_slice(&fs::read(stdout).map_err(|e| e.to_string())?)
-                            .map_err(|_| "Nikon probe response is invalid.")?;
+                    let stdout_bytes = fs::read(&stdout).map_err(|e| e.to_string())?;
+                    let stderr_bytes = fs::read(&stderr).map_err(|e| e.to_string())?;
+                    if checksum(&path)? != before {
+                        return Err("Nikon decoder changed during its probe.".into());
+                    }
+                    if !status.success() {
+                        if status.code().is_some_and(|code| code > 0)
+                            && stdout_bytes.is_empty()
+                            && String::from_utf8_lossy(&stderr_bytes).trim() == "invalid arguments"
+                        {
+                            return Ok(None);
+                        }
+                        return Err("Nikon probe exited unsuccessfully.".into());
+                    }
+                    let response: Value = serde_json::from_slice(&stdout_bytes)
+                        .map_err(|_| "Nikon probe response is invalid.")?;
                     if response["version"] != 1
                         || response["pixelProtocol"] != "rgb16le-v1"
                         || response["architecture"] != architecture()
@@ -185,15 +195,22 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                     {
                         return Err("Nikon decoder probe is invalid.".into());
                     }
-                    if checksum(&path)? != before {
-                        return Err("Nikon decoder changed during its probe.".into());
-                    }
-                    Ok(response)
+                    Ok(Some(response))
                 })();
                 match probe {
-                    Ok(response) => {
+                    Ok(Some(response)) => {
                         let qualified = runtime_approved(ctx, state, &before);
                         json!({"status":if qualified {"available"} else {"misconfigured"},"kind":"native","packageState":state,"version":response["helperVersion"],"architecture":response["architecture"],"checksum":before,"backend":"nikon-sdk","pixelProtocol":"rgb16le-v1","reason":if qualified {"Qualified Nikon native runtime passed its versioned probe."} else if development_helper_allowed(state) {"Development Nikon decoder can run locally but is not release-qualified."} else {"Nikon decoder checksum does not match its approved runtime."}})
+                    }
+                    Ok(None) => {
+                        let reason = if runtime_approved(ctx, state, &before) {
+                            "Legacy Nikon decoder starts without a capability probe. Its checksum is verified; decoding can be attempted and each image output is validated."
+                        } else if development_helper_allowed(state) {
+                            "Legacy development Nikon decoder starts without a capability probe. Local decoding is test-only."
+                        } else {
+                            "Legacy Nikon decoder starts without a capability probe, but its checksum is unapproved; decoding is unavailable."
+                        };
+                        json!({"status":"misconfigured","kind":"native","packageState":state,"version":null,"architecture":null,"checksum":before,"backend":null,"pixelProtocol":null,"reason":reason})
                     }
                     Err(reason) => {
                         json!({"status":"misconfigured","kind":"native","packageState":state,"version":null,"architecture":null,"checksum":before,"backend":null,"pixelProtocol":null,"reason":reason})
