@@ -66,7 +66,11 @@ function PhotoPageContent() {
   } | null>(null);
   const restoredResultIdRef = useRef<string | null>(null);
   const resolutionKey = `${resultId ?? ""}\u0000${photoId ?? ""}`;
-  const resolvedSession = resolutionState?.key === resolutionKey
+  // Keep the viewer mounted while another photo in the same result resolves.
+  const resolvedSession = resolutionState?.key === resolutionKey || (
+    resolutionState?.value.snapshot?.id === resultId &&
+    resolutionState?.value.snapshot?.catalogId === catalogId
+  )
     ? resolutionState.value
     : null;
 
@@ -141,12 +145,13 @@ function PhotoPageContent() {
 
   useEffect(() => {
     if (
+      resolutionState?.key === resolutionKey &&
       resultId && photoId && resolvedSession?.snapshot &&
       resolvedSession.snapshot.activeEntryId !== photoId
     ) {
       navigate(viewerPhotoHref(resolvedSession.snapshot.activeEntryId, resultId), { replace: true });
     }
-  }, [photoId, resolvedSession, resultId, navigate]);
+  }, [photoId, resolvedSession, resolutionKey, resolutionState?.key, resultId, navigate]);
 
   useEffect(() => {
     if (!resolvedSession?.snapshot) return;

@@ -26,7 +26,7 @@ import type { DevelopDefaultsResolution } from "@/components/develop/useDevelopS
 import { StatusCard } from "@/components/develop/V3PanelControls";
 
 interface DevelopSidePanelsProps {
-  decoded: DevelopImage;
+  decoded: DevelopImage | null;
   entry: LibraryEntry;
   activePanel: DevelopPanelId | null;
   onSelect: (panel: DevelopPanelId) => void;
@@ -60,11 +60,11 @@ export function DevelopSidePanels({
   defaultFacts,
   defaultsResolution,
 }: DevelopSidePanelsProps) {
-  const processKind = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.processKind : undefined);
-  const projectionConflict = useDevelopStore((state) => state.activeEntryId
-    ? state.sessions[state.activeEntryId]?.ui.projection.kind === "divergent" : false);
-  const readOnly = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.readOnly : undefined);
-  const sidecarError = useDevelopStore((state) => state.activeEntryId ? state.sessions[state.activeEntryId]?.ui.sidecarError : undefined);
+  const processKind = useDevelopStore((state) => state.sessions[entry.id]?.processKind);
+  const projectionConflict = useDevelopStore((state) => state.sessions[entry.id]?.ui.projection.kind === "divergent");
+  const readOnly = useDevelopStore((state) => state.sessions[entry.id]?.readOnly);
+  const sidecarError = useDevelopStore((state) => state.sessions[entry.id]?.ui.sidecarError);
+  const entryActive = useDevelopStore((state) => state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id);
   const effectivePanel = projectionConflict ? "history" : activePanel;
   const defaultsPending = defaultsResolution.kind === "pending";
   const panel = effectivePanel === "history" ? (
@@ -76,13 +76,14 @@ export function DevelopSidePanels({
   ) : effectivePanel === "info" ? (
     <MetadataPanel
       entry={entry}
-      decodedMetadata={decoded.metadata}
+      decodedMetadata={decoded?.metadata ?? {}}
     />
-  ) : processKind === "v3" && defaultsResolution.kind !== "pending" ? (
+  ) : processKind === "v3" || processKind === undefined ? (
     <EditPanel
       key={effectivePanel ?? "edit"}
       decoded={decoded}
       entry={entry}
+      editingDisabled={defaultsPending || !entryActive}
       activePanel={effectivePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
@@ -112,7 +113,7 @@ export function DevelopSidePanels({
       <DevelopPanelRail
         activePanel={effectivePanel}
         onSelect={onSelect}
-    editingDisabled={processKind !== "v3" || projectionConflict || defaultsPending}
+        editingDisabled={!decoded || !entryActive || processKind !== "v3" || projectionConflict || defaultsPending}
       />
       <DevelopJobDrawer />
     </>

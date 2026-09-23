@@ -127,6 +127,7 @@ function saveLabel(input: {
 export function EditPanel({
   decoded,
   entry,
+  editingDisabled,
   activePanel,
   batch,
   analysis,
@@ -134,8 +135,9 @@ export function EditPanel({
   canvasTool,
   onCanvasToolChange,
 }: {
-  readonly decoded: DevelopImage;
+  readonly decoded: DevelopImage | null;
   readonly entry: LibraryEntry;
+  readonly editingDisabled: boolean;
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
   readonly analysis: readonly CpuAnalysisTapResult[];
@@ -144,8 +146,8 @@ export function EditPanel({
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
 }) {
   const session = useDevelopStore(useShallow((state) => {
-    const entryId = state.activeEntryId;
-    const current = entryId ? state.sessions[entryId] : undefined;
+    const entryId = entry.id;
+    const current = state.sessions[entryId];
     if (!current) return null;
     return {
       entryId,
@@ -169,21 +171,21 @@ export function EditPanel({
   const [batchOpen, setBatchOpen] = useState(false);
   const tabRefs = useRef(new Map<V3Tab, HTMLButtonElement>());
 
-  if (!session || session.processKind !== "v3" || session.document?.version !== 3) {
-    return null;
-  }
-  const document = session.document;
+  const document = session?.processKind === "v3" && session.document?.version === 3
+    ? session.document
+    : null;
+  const preparing = editingDisabled || !decoded || !document;
 
-  const status = saveLabel({
+  const status = session ? saveLabel({
     sidecarStatus: session.sidecarStatus,
     previewing: session.previewing,
     documentRevision: session.documentRevision,
     persistedDocumentRevision: session.persistedDocumentRevision,
     metadataRevision: session.metadataRevision,
     persistedMetadataRevision: session.persistedMetadataRevision,
-  });
+  }) : "Preparing editor…";
   const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
-  const presetTransient = session.presetTransient;
+  const presetTransient = session?.presetTransient ?? false;
   const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, tabId: V3Tab) => {
     const currentIndex = TABS.findIndex((tab) => tab.id === tabId);
     let nextIndex: number | null = null;
@@ -201,16 +203,16 @@ export function EditPanel({
 
   return (
     <>
-      <aside className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
+      <aside inert={preparing} aria-busy={preparing} className="flex w-[352px] shrink-0 flex-col border-l border-lr-border-subtle bg-lr-panel">
       <div className="flex min-h-[58px] items-center gap-2 border-b border-lr-border-subtle px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-lr-text-muted">
             {panelTitle}
           </h2>
           <p className="mt-0.5 text-xs text-lr-text-faint">
-            {status}
+            {preparing ? "Preparing editor…" : status}
           </p>
-          {session.sidecarError ? (
+          {session?.sidecarError ? (
             <p className="mt-0.5 break-words text-xs leading-4 text-lr-danger">
               XMP: {session.sidecarError}
             </p>
@@ -221,10 +223,10 @@ export function EditPanel({
         <ActionButton onClick={resetAll} disabled={presetTransient}>Reset all</ActionButton>
       </div>
 
-      {experimental ? <div className={presetTransient ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient}>
+      {experimental && decoded && document ? <div className={presetTransient ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient}>
         <PrototypeOperations decoded={decoded} document={document} entry={entry} />
       </div> : null}
-      <DevelopClipboardControls document={document} image={decoded} entry={entry} disabled={presetTransient} />
+      {decoded && document ? <DevelopClipboardControls document={document} image={decoded} entry={entry} disabled={presetTransient} /> : null}
 
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
@@ -258,6 +260,7 @@ export function EditPanel({
       ) : null}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {decoded && document ? <>
         {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
         <div className={presetTransient && activeTab !== "presets" ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient && activeTab !== "presets"}>
         {activeTab === "light" ? <>
@@ -279,9 +282,10 @@ export function EditPanel({
           {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
         </details>
         </div>
+        </> : <p role="status" className="px-4 py-3 text-xs text-lr-text-faint">Preparing editor…</p>}
       </div>
       </aside>
-      {batchOpen ? (
+      {batchOpen && !preparing ? (
         <DevelopBatchPanel
           sourceEntry={batch.sourceEntry}
           onClose={() => setBatchOpen(false)}
