@@ -52,6 +52,8 @@ Build on the target operating system. Installers are written to `src-tauri/targe
 
 The macOS package includes the private Nikon runtime from `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another location. Packaging validates the required files, signs the staged helper and frameworks, preserves framework symlinks when copying the runtime, and records the helper checksum. Missing runtime files stop packaging. `APPLE_SIGNING_IDENTITY` selects the signing identity; Tauri’s usual signing and notarization variables apply to the app.
 
+Local ad-hoc signing clears hardened-runtime flags on the Nikon helper so it can load its ad-hoc libraries. Developer ID signing retains hardened runtime and timestamping. Packaging runs the signed helper's capability probe before building the app and reports startup errors immediately.
+
 The Nikon helper also needs `prm.bin` under `Contents/Resources/Contents/Resources`; the packaging script preserves that layout.
 
 ### Existing libraries

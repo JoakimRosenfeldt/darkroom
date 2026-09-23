@@ -40,20 +40,37 @@ try {
     for (const folder of ["Frameworks", "Resources"]) await fs.cp(path.join(contents, folder), path.join(staged, folder), { recursive: true, verbatimSymlinks: true });
     await fs.copyFile(path.join(sdk, "Image SDK/Library/Mac/Doc/Third Party Legal Notices.rtf"), path.join(staged, "Third Party Legal Notices.rtf"));
     const identity = process.env.APPLE_SIGNING_IDENTITY ?? "-";
+    const signingOptions = ["--options", identity === "-" ? "0" : "runtime", ...(identity === "-" ? [] : ["--timestamp"])];
     async function sign(directory) {
       for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
         const file = path.join(directory, entry.name);
         if (entry.isDirectory()) {
           await sign(file);
-          if (entry.name.endsWith(".framework")) run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), file]);
+          if (entry.name.endsWith(".framework")) run("codesign", ["--force", "--sign", identity, ...signingOptions, file]);
         } else if (entry.isFile() && entry.name.endsWith(".dylib")) {
-          run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), file]);
+          run("codesign", ["--force", "--sign", identity, ...signingOptions, file]);
         }
       }
     }
     await sign(path.join(staged, "Frameworks"));
     const helper = path.join(staged, "MacOS/nikon-nef-decoder");
-    run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), helper]);
+    run("codesign", ["--force", "--sign", identity, ...signingOptions, helper]);
+    const probe = spawnSync(helper, ["--probe"], { cwd: root, env: process.env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 });
+    if (probe.error || probe.status !== 0) {
+      const detail = probe.stderr?.trim().slice(0, 16 * 1024);
+      throw new Error(`Staged Nikon decoder probe failed: ${detail || probe.error?.message || `exit ${probe.status ?? "signal"}`}`);
+    }
+    let capability;
+    try {
+      capability = JSON.parse(probe.stdout);
+    } catch {
+      throw new Error("Staged Nikon decoder probe returned invalid JSON.");
+    }
+    if (capability?.version !== 1 || capability.backend !== "nikon-sdk" ||
+        capability.pixelProtocol !== "rgb16le-v1" || typeof capability.helperVersion !== "string" ||
+        !["arm64", "x64"].includes(capability.architecture)) {
+      throw new Error("Staged Nikon decoder probe returned an unsupported protocol.");
+    }
     const checksum = createHash("sha256").update(await fs.readFile(helper)).digest("hex");
     await fs.writeFile(path.join(staged, "runtime.json"), JSON.stringify({ version: 1, checksum }));
     // Preserve framework symlinks and their signatures through the final bundle copy.
