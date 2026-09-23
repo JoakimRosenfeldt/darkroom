@@ -11,14 +11,76 @@ const requestedPlatforms = args.filter((arg) => ["--mac", "--win", "--linux"].in
 if (new Set(requestedPlatforms).size > 1) throw new Error("Choose one installer platform per build.");
 const requestedPlatform = requestedPlatforms[0];
 const platforms = { "--mac": "darwin", "--win": "win32", "--linux": "linux" };
-if (requestedPlatform && platforms[requestedPlatform] !== process.platform) {
-  throw new Error("Build installers on their target operating system. The native CI workflow builds all three platforms.");
-}
 const forwarded = args.filter((arg) => !["--mac", "--win", "--linux"].includes(arg));
+const cargoSeparator = forwarded.indexOf("--");
+const cliOptions = cargoSeparator < 0 ? forwarded : forwarded.slice(0, cargoSeparator);
 function run(command, commandArgs) {
   const result = spawnSync(command, commandArgs, { cwd: root, env: process.env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${path.basename(command)} exited with ${result.status ?? "a signal"}.`);
+}
+
+if (cliOptions.some((arg) => ["--help", "-h", "--version", "-V"].includes(arg))) {
+  run(process.execPath, [cli, "build", ...forwarded]);
+  process.exit(0);
+}
+if (requestedPlatform && platforms[requestedPlatform] !== process.platform) {
+  throw new Error("Build installers on their target operating system. The native CI workflow builds all three platforms.");
+}
+if (cliOptions.includes("--no-bundle")) {
+  run(process.execPath, [cli, "build", ...forwarded]);
+  process.exit(0);
+}
+
+const buildArgs = [];
+const bundleArgs = [];
+for (let index = 0; index < forwarded.length; index += 1) {
+  const argument = forwarded[index];
+  if (argument === "--") {
+    const cargoArgs = forwarded.slice(index + 1);
+    for (let cargoIndex = 0; cargoIndex < cargoArgs.length; cargoIndex += 1) {
+      const cargoArg = cargoArgs[cargoIndex];
+      if (["--locked", "--offline", "--frozen", "--quiet", "-q", "--timings", "--timings=html"].includes(cargoArg) ||
+          /^--jobs=[1-9]\d*$/.test(cargoArg) || /^-j[1-9]\d*$/.test(cargoArg)) continue;
+      if (["--jobs", "-j"].includes(cargoArg) && /^[1-9]\d*$/.test(cargoArgs[cargoIndex + 1] ?? "")) {
+        cargoIndex += 1;
+        continue;
+      }
+      throw new Error(`Unsupported Cargo argument for npm run dist: ${cargoArg}. Use Tauri --debug, --target, or --features for build selection.`);
+    }
+    buildArgs.push("--", ...cargoArgs);
+    break;
+  }
+  const equals = argument.indexOf("=");
+  const option = equals > 0 ? argument.slice(0, equals) : argument;
+  const inline = equals > 0 ? argument.slice(equals + 1) : null;
+  if (["--debug", "-d", "--ci", "--verbose"].includes(option) || /^-v+$/.test(option)) {
+    if (inline !== null) throw new Error(`Invalid value for ${option}.`);
+    buildArgs.push(argument);
+    bundleArgs.push(argument);
+  } else if (["--no-sign", "--skip-stapling"].includes(option)) {
+    if (inline !== null) throw new Error(`Invalid value for ${option}.`);
+    bundleArgs.push(argument);
+  } else if (option === "--ignore-version-mismatches") {
+    buildArgs.push(argument);
+  } else if (["--target", "-t", "--features", "-f", "--config", "-c", "--bundles", "-b", "--runner", "-r"].includes(option)) {
+    const multiple = ["--features", "-f", "--bundles", "-b"].includes(option);
+    const values = inline === null ? [] : [inline];
+    if (inline === null) {
+      while (index + 1 < forwarded.length && (!multiple || !forwarded[index + 1].startsWith("-"))) {
+        values.push(forwarded[++index]);
+        if (!multiple) break;
+      }
+    }
+    if (values.length === 0 || values.some((value) => value.length === 0)) throw new Error(`${option} requires a value.`);
+    const tokens = inline === null ? [option, ...values] : [argument];
+    if (!["--bundles", "-b"].includes(option)) buildArgs.push(...tokens);
+    if (!["--runner", "-r"].includes(option)) bundleArgs.push(...tokens);
+  } else if (option === "--profile") {
+    throw new Error("Custom Cargo profiles are not supported by npm run dist; use --debug or the default release profile.");
+  } else {
+    throw new Error(`Unsupported npm run dist option: ${argument}`);
+  }
 }
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "darkroom-release-"));
@@ -92,7 +154,8 @@ try {
   }
   const configuration = path.join(temporary, "tauri.release.json");
   await fs.writeFile(configuration, JSON.stringify(config));
-  run(process.execPath, [cli, "build", "--config", configuration, ...forwarded]);
+  run(process.execPath, [cli, "build", "--no-bundle", ...buildArgs]);
+  run(process.execPath, [cli, "bundle", "--config", configuration, ...bundleArgs]);
 } finally {
   await fs.rm(temporary, { recursive: true, force: true });
 }

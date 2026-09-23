@@ -10,7 +10,7 @@
     "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mts",
     "lint": "eslint",
     "postinstall": "node scripts/patch-libraw.mjs",
-    "build:renderer": "npm run typecheck && vite build",
+    "build:renderer": "npm run typecheck && node scripts/build-renderer.mjs",
     "typecheck": "tsc --noEmit",
     "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/package-release.mjs",

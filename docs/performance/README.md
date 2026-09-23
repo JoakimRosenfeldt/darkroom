@@ -2,6 +2,16 @@
 
 Rust speeds up catalog import and the migrated CPU kernels in these runs, and uses less idle memory. The Linux app payload is much smaller. Startup through the automation harness and loaded-library memory did not improve. These measurements do not establish an application-wide speedup.
 
+## Packaging builds
+
+An unchanged `npm run dist -- --bundles deb` fell from **97.104 seconds to 4.294 and 4.314 seconds** after fixing build invalidation (about 95.6% less time). Both repeated builds preserved the executable's SHA-256. Cargo's part fell from about 93 seconds to 0.22–0.23 seconds. The initial build after the fix still took 97.508 seconds; this is a warm-build improvement, not a claim that compiling changed Rust code became 23 times faster.
+
+Measured on 23 September 2026 on the Linux Ryzen 9 5900X workstation described below, using Node 24.21.0 and Rust 1.98.1. Dependencies were already compiled. The baseline was commit `92926f0`; it ran once to warm its cache, then once unchanged. The revised pipeline likewise ran once to warm its cache, then twice unchanged. Timings include TypeScript checks, Vite, Rust, and Debian packaging, and used a monotonic wall clock. [Recorded samples](build-times.json) contain the individual runs. These small samples do not predict macOS signing, DMG creation, Windows installers, cold builds, or changed-code builds.
+
+There were two independent invalidation causes. The release script passed new temporary Nikon paths into `TAURI_CONFIG`, which Tauri's Rust build script watches. Vite also rewrote identical assets that Rust tracks through `include_bytes!`; the baseline Cargo trace identified the unchanged `out/window.svg` as stale. Compilation now uses stable configuration, with the temporary runtime configuration applied by a separate `tauri bundle` command. Vite builds into a temporary directory and copies only changed output into `out`, retaining unchanged file and directory timestamps. Rust also watches the output directory so newly added and removed assets trigger compilation. Type checking, release optimization, signing, startup checks, and decoded-output validation remain enabled.
+
+For repeated coding, `npm run desktop:dev` avoids release linking and provides live frontend updates. On macOS, `npm run dist -- --bundles app` skips DMG creation, and adding `--debug` selects a packaged local-testing build without release optimization. The first build of either profile can still take time.
+
 ## Whole desktop app
 
 Measured on 23 September 2026 on the same Linux workstation: AMD Ryzen 9 5900X, Linux 7.2.5, Node 24.21.0 automation, WebKitGTK 2.52.6, and an isolated 1600 × 1000 Xvfb display. Both builds use their production renderer and release backend. The Tauri build enables diagnostic folder selection so the harness can use native import without a dialog. Electron is the unchanged implementation at `3917042`, with its folder dialog selecting the same fixture.
