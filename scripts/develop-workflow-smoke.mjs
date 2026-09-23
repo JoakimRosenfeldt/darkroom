@@ -342,10 +342,19 @@ try {
   await check("100% uses one source pixel per display pixel", async () => {
     await page.getByRole("button", { name: "100%", exact: true }).click();
     const start = Date.now();
-    await page.waitForFunction(() => document.querySelector('[aria-label="100 percent detail; drag to pan"]')?.getAttribute("aria-busy") === "false", null, { timeout: 90_000 });
+    await page.waitForFunction(() => {
+      const shell = document.querySelector('[aria-label="100 percent detail; drag to pan"]');
+      const canvas = document.querySelector('canvas[aria-label$=", full-resolution edited detail"]');
+      if (shell?.getAttribute("aria-busy") !== "false" || !(canvas instanceof HTMLCanvasElement)) return false;
+      for (let ancestor = canvas.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (ancestor.getAnimations().some((animation) => animation.pending || animation.playState === "running")) return false;
+      }
+      return true;
+    }, null, { timeout: 90_000 });
     report.timingsMs.actualSize = Date.now() - start;
-    const scale = await page.locator('[aria-label="100 percent detail; drag to pan"] canvas').evaluate((canvas) => ({ actual: canvas.width / canvas.getBoundingClientRect().width, expected: devicePixelRatio }));
-    assert.equal(scale.actual, scale.expected);
+    const detailCanvas = page.locator('canvas[aria-label$=", full-resolution edited detail"]');
+    const scale = await detailCanvas.evaluate((canvas) => ({ actual: canvas.width / canvas.getBoundingClientRect().width, expected: devicePixelRatio }));
+    assert.ok(Math.abs(scale.actual - scale.expected) <= 1e-6, `At 100%, each source pixel should cover one display pixel (canvas DPR ${scale.actual}, expected ${scale.expected}).`);
     await page.screenshot({ path: path.join(directory, "detail.png") });
     await page.getByRole("button", { name: "Fit", exact: true }).click();
   });
