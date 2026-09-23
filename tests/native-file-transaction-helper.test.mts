@@ -41,15 +41,20 @@ function runHelper(
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let inputError: NodeJS.ErrnoException | undefined;
     child.stdout.on("data", (chunk: Buffer | string) => stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
     child.stderr.on("data", (chunk: Buffer | string) => stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => { inputError = error; });
     child.stdin.end(input ?? undefined);
     child.once("error", reject);
-    child.once("close", (status) => resolve({
-      status,
-      stdout: Buffer.concat(stdout),
-      stderr: Buffer.concat(stderr),
-    }));
+    child.once("close", (status) => {
+      // A rejected operation can exit before reading its input.
+      if (inputError && (inputError.code !== "EPIPE" || status === null || status === 0)) {
+        reject(inputError);
+        return;
+      }
+      resolve({ status, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
+    });
   });
 }
 
