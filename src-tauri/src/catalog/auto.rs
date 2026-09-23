@@ -221,10 +221,10 @@ fn load(user_data: &Path, catalog_id: &str) -> Result<State, String> {
         options.custom_flags(libc::O_NOFOLLOW);
     }
     let file = options.open(&target).map_err(|e| e.to_string())?;
-    let opened = file.metadata().map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata().map_err(|e| e.to_string())?;
         if before.dev() != opened.dev() || before.ino() != opened.ino() {
             return Err("Auto Import state file changed while opening.".into());
         }

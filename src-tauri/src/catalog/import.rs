@@ -114,7 +114,17 @@ fn observation(path: &Path) -> Result<Value, String> {
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("Import source is not a regular file.".into());
     }
-    Ok(fingerprint::file_observation(&metadata))
+    #[cfg(windows)]
+    let mut observed = fingerprint::file_observation(&metadata);
+    #[cfg(not(windows))]
+    let observed = fingerprint::file_observation(&metadata);
+    #[cfg(windows)]
+    {
+        let (volume, index) = crate::native::windows_path_identity(path)
+            .ok_or("Import source identity is unavailable.")?;
+        observed["localFileId"] = json!(format!("{volume}:{index}"));
+    }
+    Ok(observed)
 }
 fn read_file(path: &Path) -> Result<fs::File, String> {
     let expected = observation(path)?;
@@ -128,6 +138,15 @@ fn read_file(path: &Path) -> Result<fs::File, String> {
     let file = options
         .open(path)
         .map_err(|_| "Import source could not be opened.")?;
+    #[cfg(windows)]
+    {
+        let (volume, index) = crate::native::windows_handle_identity(&file)
+            .ok_or("Import source identity is unavailable.")?;
+        let opened_id = format!("{volume}:{index}");
+        if expected["localFileId"].as_str() != Some(opened_id.as_str()) {
+            return Err("Import source changed before open.".into());
+        }
+    }
     if !fingerprint::same_stat(
         &expected,
         &fingerprint::file_observation(&file.metadata().map_err(|_| "Import source stat failed.")?),
@@ -138,6 +157,9 @@ fn read_file(path: &Path) -> Result<fs::File, String> {
 }
 fn file_hash(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
     let mut file = read_file(path)?;
+    #[cfg(windows)]
+    let opened_identity = crate::native::windows_handle_identity(&file)
+        .ok_or("Import source identity is unavailable.")?;
     let before =
         fingerprint::file_observation(&file.metadata().map_err(|_| "Import source stat failed.")?);
     let mut hash = Sha256::new();
@@ -162,6 +184,10 @@ fn file_hash(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
             ),
         )
     {
+        return Err("Import source changed while reading.".into());
+    }
+    #[cfg(windows)]
+    if crate::native::windows_path_identity(path) != Some(opened_identity) {
         return Err("Import source changed while reading.".into());
     }
     Ok(format!("{:x}", hash.finalize()))
@@ -909,6 +935,8 @@ fn staged_copy(
     result
 }
 fn sync_parent(path: &Path) -> Result<(), String> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         fs::File::open(path.parent().ok_or("Import parent is missing.")?)
@@ -928,10 +956,16 @@ fn publish(
             return Err("Import destination already exists with different contents.".into());
         }
     } else {
-        let staged = read_file(stage)?;
-        let expected = fingerprint::file_observation(
-            &staged.metadata().map_err(|_| "Import stage stat failed.")?,
-        );
+        let _staged = read_file(stage)?;
+        let expected = observation(stage)?;
+        #[cfg(windows)]
+        {
+            let opened_id = crate::native::windows_handle_identity(&_staged)
+                .ok_or("Import stage identity is unavailable.")?;
+            if crate::native::windows_path_identity(stage) != Some(opened_id) {
+                return Err("Import stage changed before publication.".into());
+            }
+        }
         if !fingerprint::same_stat(&expected, &observation(stage)?) {
             return Err("Import stage changed before publication.".into());
         }

@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{BufReader, Read},
     path::Path,
     time::UNIX_EPOCH,
@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use xmpkit::{XmpFile, XmpValue};
 
-use super::{NativeContext, assets::resolve_asset};
+use super::{
+    NativeContext,
+    assets::{check_open_regular, open_regular, resolve_asset},
+};
 
 #[derive(Clone)]
 struct Fact {
@@ -230,14 +233,7 @@ fn claims(field_name: &str, values: &[Option<Fact>], target: &mut Vec<Value>) {
     }
 }
 pub(crate) fn sha256(path: &Path) -> Result<String, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    let (mut file, opened) = open_regular(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 1024 * 1024];
     loop {
@@ -247,6 +243,7 @@ pub(crate) fn sha256(path: &Path) -> Result<String, String> {
         }
         hasher.update(&buffer[..read]);
     }
+    check_open_regular(path, &file, &opened)?;
     Ok(format!("{:x}", hasher.finalize()))
 }
 fn modified_ms(metadata: &fs::Metadata) -> Result<f64, String> {

@@ -24,9 +24,10 @@ async function decodeEmbeddedSourcePixels(
     throw new Error("The embedded RAW preview is unavailable for AI masking.");
   }
   let bitmap: ImageBitmap | null = null;
+  let canvas: HTMLCanvasElement | undefined;
   try {
     bitmap = await createImageBitmap(embedded.blob);
-    const canvas = document.createElement("canvas");
+    canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     const context = canvas.getContext("2d");
@@ -45,6 +46,7 @@ async function decodeEmbeddedSourcePixels(
     };
   } finally {
     bitmap?.close();
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
     if (embedded.objectUrl) {
       URL.revokeObjectURL(embedded.objectUrl);
     }

@@ -60,7 +60,7 @@ export function rgbDataToBlob(
 
   context.putImageData(imageData, 0, 0);
 
-  return canvasToBlob(canvas, "image/jpeg", 0.92);
+  return canvasToBlob(canvas, "image/jpeg", 0.92).finally(() => { canvas.width = 0; canvas.height = 0; });
 }
 
 export function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {

@@ -196,6 +196,13 @@ pub(super) fn hash(asset: &Value, cancelled: &AtomicBool) -> (String, Option<Str
         }
         let mut file = options.open(&path).map_err(|e| e.to_string())?;
         let opened = file.metadata().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let opened_identity = crate::native::windows_handle_identity(&file)
+            .ok_or("Fingerprint source identity is unavailable.")?;
+        #[cfg(windows)]
+        if crate::native::windows_path_identity(&path) != Some(opened_identity) {
+            return Err("Fingerprint source changed before open.".into());
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -219,10 +226,16 @@ pub(super) fn hash(asset: &Value, cancelled: &AtomicBool) -> (String, Option<Str
             bytes += count as u64;
         }
         let after = file.metadata().map_err(|e| e.to_string())?;
-        let path_after = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        if crate::native::windows_handle_identity(&file) != Some(opened_identity)
+            || crate::native::windows_path_identity(&path) != Some(opened_identity)
+        {
+            return Err("Fingerprint source changed during read.".into());
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
+            let path_after = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
             if opened.dev() != after.dev()
                 || opened.ino() != after.ino()
                 || after.dev() != path_after.dev()

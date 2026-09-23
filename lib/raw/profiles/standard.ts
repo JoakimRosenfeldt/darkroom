@@ -15,6 +15,7 @@ async function blobToDecodedImage(
 ): Promise<DecodedImage> {
   options.signal?.throwIfAborted();
   const bitmap = await createImageBitmap(blob);
+  let canvas: HTMLCanvasElement | undefined;
   try {
     options.signal?.throwIfAborted();
     const scale = options.thumbnail && options.maxEdge
@@ -29,7 +30,7 @@ async function blobToDecodedImage(
     if (!options.thumbnail && !options.sourcePixels) {
       return { ...decoded, rgb: new Uint8Array(0), blob, objectUrl: URL.createObjectURL(blob) };
     }
-    const canvas = document.createElement("canvas");
+    canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
@@ -43,6 +44,7 @@ async function blobToDecodedImage(
     return { ...decoded, rgb: new Uint8Array(0), blob: outputBlob, objectUrl: URL.createObjectURL(outputBlob) };
   } finally {
     bitmap.close();
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
   }
 }
 

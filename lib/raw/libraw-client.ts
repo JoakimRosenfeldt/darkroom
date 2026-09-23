@@ -78,6 +78,7 @@ async function buildFromEmbeddedThumbnail(
       resizeWidth: Math.max(1, Math.round(options.maxEdge)),
       resizeQuality: "high",
     });
+    let canvas: HTMLCanvasElement | undefined;
     try {
       options.signal?.throwIfAborted();
       const bitmapScale = Math.min(1, options.maxEdge / Math.max(bitmap.width, bitmap.height));
@@ -85,7 +86,7 @@ async function buildFromEmbeddedThumbnail(
         width: Math.max(1, Math.round(bitmap.width * bitmapScale)),
         height: Math.max(1, Math.round(bitmap.height * bitmapScale)),
       };
-      const canvas = document.createElement("canvas");
+      canvas = document.createElement("canvas");
       canvas.width = size.width;
       canvas.height = size.height;
       const context = canvas.getContext("2d");
@@ -94,6 +95,7 @@ async function buildFromEmbeddedThumbnail(
       blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
     } finally {
       bitmap.close();
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
     }
   }
   options.signal?.throwIfAborted();

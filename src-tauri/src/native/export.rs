@@ -38,7 +38,7 @@ struct FileIdentity {
 }
 
 #[cfg(unix)]
-fn file_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
+fn file_identity(_path: &Path, metadata: &fs::Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
     Some(FileIdentity {
         device: metadata.dev(),
@@ -46,15 +46,12 @@ fn file_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
     })
 }
 #[cfg(windows)]
-fn file_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
-    use std::os::windows::fs::MetadataExt;
-    Some(FileIdentity {
-        device: u64::from(metadata.volume_serial_number()?),
-        inode: metadata.file_index()?,
-    })
+fn file_identity(path: &Path, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    let (device, inode) = super::windows_path_identity(path)?;
+    Some(FileIdentity { device, inode })
 }
 #[cfg(not(any(unix, windows)))]
-fn file_identity(_metadata: &fs::Metadata) -> Option<FileIdentity> {
+fn file_identity(_path: &Path, _metadata: &fs::Metadata) -> Option<FileIdentity> {
     None
 }
 
@@ -111,7 +108,7 @@ fn remember_output(ctx: &NativeContext, path: &Path) {
     let Ok(metadata) = fs::metadata(path) else {
         return;
     };
-    let Some(identity) = file_identity(&metadata) else {
+    let Some(identity) = file_identity(path, &metadata) else {
         return;
     };
     let mut known = known_outputs(ctx);
@@ -271,7 +268,11 @@ async fn choose(args: &[Value]) -> Result<Value, String> {
         }
         let identity = fs::metadata(&canonical)
             .ok()
-            .and_then(|meta| file_identity(&meta));
+            .and_then(|meta| file_identity(&canonical, &meta));
+        #[cfg(windows)]
+        if identity.is_none() {
+            return Err("Export source identity is unavailable.".into());
+        }
         sources
             .entry(canonical)
             .and_modify(|entry: &mut Source| entry.selected |= is_selected)
@@ -1128,7 +1129,11 @@ fn safe_target(path: &Path, destination: &Destination, ctx: &NativeContext) -> R
             return Err("Export target is not a regular file.".into());
         }
         actual_path = Some(fs::canonicalize(path).map_err(|e| e.to_string())?);
-        identity = file_identity(&metadata);
+        identity = file_identity(path, &metadata);
+        #[cfg(windows)]
+        if identity.is_none() {
+            return Err("Export target identity is unavailable.".into());
+        }
     }
     let matches = destination
         .sources

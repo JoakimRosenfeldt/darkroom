@@ -2095,6 +2095,9 @@ export class V3GpuPreviewRenderer {
       state.gl.deleteTexture(value.texture);
     }
     for (const value of state.maskCoverage.values()) state.gl.deleteTexture(value.texture);
+    state.canvas.width = 0;
+    state.canvas.height = 0;
+    state.gl.getExtension("WEBGL_lose_context")?.loseContext();
     this.#state = null;
   }
 

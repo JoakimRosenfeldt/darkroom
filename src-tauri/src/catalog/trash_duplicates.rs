@@ -7,7 +7,9 @@ pub struct ExactDuplicateTrashPlan {
     targets: Vec<(String, Option<Value>)>,
 }
 
-fn fingerprint(location: &Value) -> Result<(u64, String, fs::Metadata), String> {
+fn fingerprint(
+    location: &Value,
+) -> Result<(u64, String, fs::Metadata, Option<(u64, u64)>), String> {
     let path = crate::native::resolve_asset_path(location)?;
     let before = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
     if !before.is_file() || before.file_type().is_symlink() {
@@ -22,6 +24,17 @@ fn fingerprint(location: &Value) -> Result<(u64, String, fs::Metadata), String> 
     }
     let mut file = options.open(&path).map_err(|e| e.to_string())?;
     let opened = file.metadata().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let identity = Some(
+        crate::native::windows_handle_identity(&file)
+            .ok_or("Fingerprint source identity is unavailable.")?,
+    );
+    #[cfg(not(windows))]
+    let identity = None;
+    #[cfg(windows)]
+    if crate::native::windows_path_identity(&path) != identity {
+        return Err("Fingerprint source changed before it was opened.".into());
+    }
     if !same_file(&before, &opened) {
         return Err("Fingerprint source changed before it was opened.".into());
     }
@@ -38,10 +51,16 @@ fn fingerprint(location: &Value) -> Result<(u64, String, fs::Metadata), String> 
     }
     let after = file.metadata().map_err(|e| e.to_string())?;
     let path_after = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    if crate::native::windows_handle_identity(&file) != identity
+        || crate::native::windows_path_identity(&path) != identity
+    {
+        return Err("Fingerprint source changed while it was read.".into());
+    }
     if bytes != opened.len() || !same_file(&opened, &after) || !same_file(&after, &path_after) {
         return Err("Fingerprint source changed while it was read.".into());
     }
-    Ok((bytes, format!("{:x}", hash.finalize()), after))
+    Ok((bytes, format!("{:x}", hash.finalize()), after, identity))
 }
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -80,6 +99,7 @@ pub fn run_exact_duplicate_trash(plan: ExactDuplicateTrashPlan) -> Result<Value,
             if keeper_now.0 != keeper.0
                 || keeper_now.1 != keeper.1
                 || !same_file(&keeper.2, &keeper_now.2)
+                || keeper_now.3 != keeper.3
             {
                 return Err("The keeper changed before trashing duplicates.".into());
             }
@@ -90,6 +110,10 @@ pub fn run_exact_duplicate_trash(plan: ExactDuplicateTrashPlan) -> Result<Value,
             let before_trash = fs::symlink_metadata(&path)
                 .map_err(|_| "Duplicate changed before it could be moved to trash.")?;
             if !same_file(&target.2, &before_trash) {
+                return Err("Duplicate changed before it could be moved to trash.".into());
+            }
+            #[cfg(windows)]
+            if crate::native::windows_path_identity(&path) != target.3 {
                 return Err("Duplicate changed before it could be moved to trash.".into());
             }
             trash::delete(&path).map_err(|_| {

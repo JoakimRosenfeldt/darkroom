@@ -35,6 +35,9 @@ pub(super) fn open_regular(path: &Path) -> Result<(File, fs::Metadata), String> 
     if !before.is_file() || before.file_type().is_symlink() {
         return Err("Asset is not a regular file.".into());
     }
+    #[cfg(windows)]
+    let before_identity =
+        super::windows_path_identity(path).ok_or("Asset changed before it was opened.")?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -42,10 +45,26 @@ pub(super) fn open_regular(path: &Path) -> Result<(File, fs::Metadata), String> 
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = options.open(path).map_err(|e| e.to_string())?;
     let opened = file.metadata().map_err(|e| e.to_string())?;
     if !same_file(&before, &opened) {
         return Err("Asset changed before it was opened.".into());
+    }
+    #[cfg(windows)]
+    {
+        let opened_identity =
+            super::windows_handle_identity(&file).ok_or("Asset changed before it was opened.")?;
+        if before_identity != opened_identity
+            || super::windows_path_identity(path) != Some(opened_identity)
+        {
+            return Err("Asset changed before it was opened.".into());
+        }
     }
     Ok((file, opened))
 }
@@ -58,6 +77,14 @@ pub(super) fn check_open_regular(
     let current = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !same_file(opened, &after) || !same_file(&after, &current) {
         return Err("Asset changed while it was read.".into());
+    }
+    #[cfg(windows)]
+    {
+        let opened_identity =
+            super::windows_handle_identity(file).ok_or("Asset changed while it was read.")?;
+        if super::windows_path_identity(path) != Some(opened_identity) {
+            return Err("Asset changed while it was read.".into());
+        }
     }
     Ok(())
 }

@@ -311,13 +311,14 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         {
             return Err("Verified decoder profile does not match source camera metadata.".into());
         }
+        let camera = json!({"kind":"known","make":profile["compatibility"]["make"],"model":profile["compatibility"]["model"]});
         let facts = json!({"camera":camera,"iso":iso,"decoder":{"kind":"known","value":"libraw-wasm"},"inputProfile":{"kind":"known","profileId":profile["id"],"profileRevision":profile["revision"],"stage":"before-develop-tone"}});
         let supplied = &request["facts"];
         for key in ["camera", "decoder", "inputProfile", "iso"] {
             if supplied[key]["kind"] != facts[key]["kind"] {
-                return Err(
-                    "Develop default facts do not match verified source provenance.".into(),
-                );
+                return Err(format!(
+                    "Develop default {key} kind does not match verified source provenance."
+                ));
             }
             if facts[key]["kind"] == "known" {
                 for field in match key {
@@ -327,13 +328,15 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
                 } {
                     let matches = if key == "camera" {
                         normalize(&supplied[key][field]) == normalize(&facts[key][field])
+                    } else if key == "iso" {
+                        numbers_equal(&supplied[key][field], &facts[key][field])
                     } else {
                         supplied[key][field] == facts[key][field]
                     };
                     if !matches {
-                        return Err(
-                            "Develop default facts do not match verified source provenance.".into(),
-                        );
+                        return Err(format!(
+                            "Develop default {key}.{field} does not match verified source provenance."
+                        ));
                     }
                 }
             }

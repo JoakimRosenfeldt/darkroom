@@ -957,7 +957,9 @@ dependencies = [
  "tokio",
  "trash",
  "uuid",
+ "webkit2gtk",
  "webp",
+ "windows-sys 0.61.2",
  "xmpkit",
  "zip",
 ]

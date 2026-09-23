@@ -40,7 +40,7 @@ npm run build
 npm start
 ```
 
-`build` checks TypeScript, writes the renderer to `out/`, and builds the release Rust executable. `npm run typecheck`, `npm run lint`, and `npm run check:rust` run focused checks.
+`build` checks TypeScript, writes the renderer to `out/`, and builds the release Rust executable. This unbundled executable does not include the private Nikon runtime on macOS; use `npm run dist` for the complete packaged app when editing NEFs that require the Nikon SDK. `npm run typecheck`, `npm run lint`, and `npm run check:rust` run focused checks.
 
 ### Packaged app
 
@@ -50,7 +50,7 @@ npm run dist
 
 Build on the target operating system. Installers are written to `src-tauri/target/release/bundle/`. Tauri uses WebKit on macOS/Linux and WebView2 on Windows; Electron and Node.js are not part of the shipped application.
 
-The macOS package includes the private Nikon runtime from `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another location. Packaging validates the required files, signs the staged helper and frameworks, and records the helper checksum. Missing runtime files stop packaging. `APPLE_SIGNING_IDENTITY` selects the signing identity; Tauri’s usual signing and notarization variables apply to the app.
+The macOS package includes the private Nikon runtime from `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another location. Packaging validates the required files, signs the staged helper and frameworks, preserves framework symlinks when copying the runtime, and records the helper checksum. Missing runtime files stop packaging. `APPLE_SIGNING_IDENTITY` selects the signing identity; Tauri’s usual signing and notarization variables apply to the app.
 
 The Nikon helper also needs `prm.bin` under `Contents/Resources/Contents/Resources`; the packaging script preserves that layout.
 
@@ -78,6 +78,8 @@ stores/                 Renderer state
 The renderer sends typed commands with catalog/session identifiers. Rust resolves file locations from the active catalog and validates paths. Photo reads and export pixels use binary IPC. Cancellable scans, import, metadata analysis, and image jobs run outside the UI thread.
 
 Interactive previews retain the WebGL2 renderer, including its CPU fallback. RAW decoding remains in the existing LibRaw worker, with the qualified Nikon helper on macOS. Rust performs independent source/profile verification for automatic Develop defaults. Prototype image operations use native Rust kernels.
+
+See the [migration and parity notes](docs/rust-migration.md) and [measured performance results](docs/performance/README.md).
 
 ### Adding a new RAW profile
 
@@ -131,7 +133,7 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 - Output is 8-bit sRGB. Full-resolution output is limited to 50 megapixels.
 - RAW qualification currently covers the bundled Nikon Z6 III files with the native Nikon decoder. Other cameras, lighting conditions, and automatic lens profiles need separate qualification.
-- Full-resolution masked views can take several seconds. Export rendering runs in a worker so the interface remains responsive.
+- Full-resolution masked views can take several seconds. WebKit uses the main-thread GPU canvas with export tiles that yield between draws; other engines can use the GPU worker. A CPU worker remains the fallback.
 - The Nikon helper is required for the bundled high-efficiency NEFs. Embedded JPEG previews support culling, but editing and export require decoded RAW pixels.
 
 ## License

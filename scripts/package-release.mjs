@@ -56,7 +56,8 @@ try {
     run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), helper]);
     const checksum = createHash("sha256").update(await fs.readFile(helper)).digest("hex");
     await fs.writeFile(path.join(staged, "runtime.json"), JSON.stringify({ version: 1, checksum }));
-    config.bundle.resources[staged + path.sep] = "nikon-nef-decoder/";
+    // Preserve framework symlinks and their signatures through the final bundle copy.
+    config.bundle.macOS = { files: { "Resources/nikon-nef-decoder": staged } };
     config.bundle.resources[path.join(contents, "Resources/prm.bin")] = "Contents/Resources/prm.bin";
   }
   const configuration = path.join(temporary, "tauri.release.json");

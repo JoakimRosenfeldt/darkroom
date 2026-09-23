@@ -20,10 +20,10 @@ fn sha_file(path: &Path) -> Result<(u64, String), String> {
         options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(path).map_err(|e| e.to_string())?;
-    let opened = file.metadata().map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata().map_err(|e| e.to_string())?;
         if before.dev() != opened.dev() || before.ino() != opened.ino() {
             return Err("Catalog package entry changed while opening.".into());
         }

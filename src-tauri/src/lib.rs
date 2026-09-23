@@ -42,10 +42,20 @@ fn trusted_url(url: &tauri::Url) -> bool {
 }
 
 fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
-    tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+    let window = tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
         .on_navigation(trusted_url)
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
         .build()?;
+    #[cfg(target_os = "linux")]
+    window.with_webview(|view| {
+        use webkit2gtk::{WebContextExt, WebViewExt};
+        if let Some(context) = view.inner().context() {
+            // Darkroom owns its bounded photo caches and never browses remote pages.
+            context.set_cache_model(webkit2gtk::CacheModel::DocumentViewer);
+        }
+    })?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
     Ok(())
 }
 
@@ -504,6 +514,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Could not start Darkroom")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } = &event
+            {
+                if label == "main" {
+                    api.prevent_close();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows: false,

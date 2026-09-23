@@ -9,6 +9,11 @@ mod libraw_profile;
 mod metadata;
 mod nef;
 mod settings;
+#[cfg(windows)]
+mod windows_file;
+
+#[cfg(windows)]
+pub(crate) use windows_file::{windows_handle_identity, windows_path_identity};
 
 pub use ai_models::verified_model_path;
 pub use assets::read_asset_bytes;

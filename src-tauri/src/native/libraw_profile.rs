@@ -1,31 +1,12 @@
-use std::{fs, io::Read};
+use std::io::Read;
 
 use libraw_rs_vendor as raw;
 use serde_json::{Value, json};
 
-use super::assets::resolve_asset;
+use super::assets::{check_open_regular, open_regular, resolve_asset};
 
 const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: u64 = 256 * 1024 * 1024;
-
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.is_file()
-        && right.is_file()
-        && left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-}
-#[cfg(not(unix))]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file()
-        && right.is_file()
-        && left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-}
 
 struct RawHandle(*mut raw::libraw_data_t);
 impl Drop for RawHandle {
@@ -90,22 +71,8 @@ pub fn verify_libraw_profile(location: &Value) -> Result<Value, String> {
     {
         return Err("LibRaw profile verification requires a Nikon NEF file.".into());
     }
-    let before = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-    if !before.is_file() || before.file_type().is_symlink() {
-        return Err("LibRaw profile input is not a regular file.".into());
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = options.open(&path).map_err(|e| e.to_string())?;
-    let opened = file.metadata().map_err(|e| e.to_string())?;
-    if !same_file(&before, &opened) {
-        return Err("LibRaw profile input changed before it was opened.".into());
-    }
+    let (mut file, opened) =
+        open_regular(&path).map_err(|_| "LibRaw profile input changed before it was opened.")?;
     let file_size = opened.len();
     if file_size == 0 || file_size > MAX_INPUT {
         return Err("LibRaw profile input is invalid or too large.".into());
@@ -115,12 +82,7 @@ pub fn verify_libraw_profile(location: &Value) -> Result<Value, String> {
         .take(MAX_INPUT + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    let after = file.metadata().map_err(|e| e.to_string())?;
-    let path_after = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 != file_size
-        || !same_file(&opened, &after)
-        || !same_file(&after, &path_after)
-    {
+    if bytes.len() as u64 != file_size || check_open_regular(&path, &file, &opened).is_err() {
         return Err("LibRaw profile input changed while reading.".into());
     }
     let handle = RawHandle(unsafe { raw::libraw_init(0) });
