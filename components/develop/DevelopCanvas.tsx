@@ -16,7 +16,10 @@ import {
   type V3CanvasTool,
 } from "@/components/develop/V3CanvasOverlay";
 import { PhotoLoupe } from "@/components/viewer/PhotoLoupe";
-import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import {
+  getCachedDevelopExportImage,
+  type DevelopImage,
+} from "@/lib/cache/develop-image-cache";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { GeometryPoint } from "@/lib/develop/v3/geometry";
 import {
@@ -27,6 +30,7 @@ import type { Rgb } from "@/lib/develop/v3/profiles";
 import {
   buildV3SourceRecord,
   loadV3PreviewMaskMattes,
+  resolveV3ExportDimensions,
   type V3PreviewMaskMatte,
   type V3PreviewRenderMode,
 } from "@/lib/develop/v3/runtime";
@@ -129,6 +133,24 @@ type PreviewState =
 interface DisplayDimensions {
   readonly width: number;
   readonly height: number;
+}
+
+function positiveDimensions(width: unknown, height: unknown): DisplayDimensions | null {
+  return typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
+    typeof height === "number" && Number.isSafeInteger(height) && height > 0
+    ? { width, height }
+    : null;
+}
+
+function initialFullSourceDimensions(
+  entry: LibraryEntry,
+  image: DevelopImage,
+): DisplayDimensions | null {
+  const cached = getCachedDevelopExportImage(entry, { rawColorMode: "libraw-camera-matrix" });
+  if (cached) return positiveDimensions(cached.width, cached.height);
+  if (image.pixelProvenance.decoderPath !== "processed-standard" &&
+      image.pixelProvenance.decoderPath !== "libraw") return null;
+  return positiveDimensions(image.metadata.originalWidth, image.metadata.originalHeight);
 }
 
 interface DrawnFrame {
@@ -302,13 +324,25 @@ export function DevelopCanvas({
   const activeDisplayDimensions = displayDimensions;
   const [actualSize, setActualSize] = useState(false);
   const [actualPosition, setActualPosition] = useState({ x: 0.5, y: 0.5 });
-  const [detailDimensions, setDetailDimensions] = useState<DisplayDimensions | null>(null);
-  const detailDimensionsRef = useRef<DisplayDimensions | null>(null);
-  const pendingDetailDimensionsRef = useRef<DisplayDimensions | null>(null);
+  const [fullSourceDimensions, setFullSourceDimensions] = useState(() => initialFullSourceDimensions(entry, image));
+  const fullSourceDimensionsRef = useRef(fullSourceDimensions);
+  const pendingFullSourceDimensionsRef = useRef<DisplayDimensions | null>(null);
+  const detailDimensions = useMemo(() => {
+    if (!fullSourceDimensions || !document) return null;
+    try {
+      return resolveV3ExportDimensions(
+        document,
+        { dimensions: fullSourceDimensions, orientation: 1 },
+        { mode: "original" },
+      );
+    } catch {
+      return null;
+    }
+  }, [document, fullSourceDimensions]);
   const lastZoomRef = useRef<number | "actual">("actual");
   const actualScale = detailDimensions
     ? detailDimensions.width / (window.devicePixelRatio || 1) / displayDimensions.width
-    : 2;
+    : 1;
   const imageRect = useMemo(() => centeredImageRect(viewport, activeDisplayDimensions), [viewport, activeDisplayDimensions]);
   const viewTransform = useMemo(() => actualSize ? {
     scale: actualScale,
@@ -330,22 +364,24 @@ export function DevelopCanvas({
   const canvasInteractionActive = cropActive || canvasTool.kind !== "none" ||
     (maskingActive && maskTool !== "none");
 
-  const applyDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
-    const current = detailDimensionsRef.current;
+  const applyFullSourceDimensions = useCallback((dimensions: DisplayDimensions) => {
+    const current = fullSourceDimensionsRef.current;
     if (current?.width === dimensions.width && current.height === dimensions.height) return;
-    detailDimensionsRef.current = dimensions;
-    setDetailDimensions(dimensions);
+    fullSourceDimensionsRef.current = dimensions;
+    setFullSourceDimensions(dimensions);
   }, []);
 
-  const reportDetailDimensions = useCallback((dimensions: DisplayDimensions) => {
-    const current = pendingDetailDimensionsRef.current ?? detailDimensionsRef.current;
-    if (current?.width === dimensions.width && current.height === dimensions.height) return;
+  const reportFullSourceDimensions = useCallback((dimensions: DisplayDimensions) => {
+    const validated = positiveDimensions(dimensions.width, dimensions.height);
+    if (!validated) return;
+    const current = pendingFullSourceDimensionsRef.current ?? fullSourceDimensionsRef.current;
+    if (current?.width === validated.width && current.height === validated.height) return;
     if (panRef.current) {
-      pendingDetailDimensionsRef.current = dimensions;
+      pendingFullSourceDimensionsRef.current = validated;
       return;
     }
-    applyDetailDimensions(dimensions);
-  }, [applyDetailDimensions]);
+    applyFullSourceDimensions(validated);
+  }, [applyFullSourceDimensions]);
 
   useEffect(() => {
     if (panning) return;
@@ -992,9 +1028,9 @@ export function DevelopCanvas({
     if (!pan || pan.pointerId !== event.pointerId) return;
     panRef.current = null;
     setPanning(false);
-    const pendingDimensions = pendingDetailDimensionsRef.current;
-    pendingDetailDimensionsRef.current = null;
-    if (pendingDimensions) applyDetailDimensions(pendingDimensions);
+    const pendingDimensions = pendingFullSourceDimensionsRef.current;
+    pendingFullSourceDimensionsRef.current = null;
+    if (pendingDimensions) applyFullSourceDimensions(pendingDimensions);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -1104,10 +1140,14 @@ export function DevelopCanvas({
           </button>
           <span
             role="status"
-            aria-label={detailDimensions ? `Zoom ${Math.round(viewTransform.scale / actualScale * 100)} percent` : `Preview enlargement ${viewTransform.scale} times Fit`}
+            aria-label={detailDimensions
+              ? `Zoom ${Math.round(viewTransform.scale / actualScale * 100)} percent`
+              : actualSize ? "Loading full-resolution dimensions" : `Preview enlargement ${viewTransform.scale} times Fit`}
             className="w-10 text-center font-mono text-[10px] text-white/75"
           >
-            {!zoomed ? "" : detailDimensions ? `${Math.round(viewTransform.scale / actualScale * 100)}%` : `${Number(viewTransform.scale.toFixed(2))}× Fit`}
+            {!zoomed ? "" : detailDimensions
+              ? `${Math.round(viewTransform.scale / actualScale * 100)}%`
+              : actualSize ? "…" : `${Number(viewTransform.scale.toFixed(2))}× Fit`}
           </span>
           <button
             type="button"
@@ -1156,14 +1196,16 @@ export function DevelopCanvas({
           </button>
         </div>
       ) : null}
-      {zoomed && !canvasInteractionActive && document ? (
+      {document ? (
         <PhotoLoupe
-          key={entry.id}
+          key={`${entry.id}:${entry.assetRevision}`}
           entry={entry}
           document={showBefore ? neutralBeforeDocument ?? document : document}
           position={detailPosition}
           displaySize={actualSize ? undefined : { width: displayDimensions.width * viewTransform.scale, height: displayDimensions.height * viewTransform.scale }}
-          onDimensions={reportDetailDimensions}
+          onSourceDimensions={reportFullSourceDimensions}
+          active={zoomed && !canvasInteractionActive}
+          preload
           passive
           panning={panning}
         />

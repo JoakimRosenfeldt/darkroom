@@ -688,7 +688,7 @@ export function PhotoViewer({
 
             {decoded && developProcessKind === "v3" ? (
                 <DevelopCanvas
-                  key={entry.id}
+                  key={`${entry.id}:${entry.assetRevision}`}
                   entry={entry}
                   image={decoded}
                   alt={entry.name}

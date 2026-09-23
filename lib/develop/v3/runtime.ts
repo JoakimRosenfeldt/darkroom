@@ -460,7 +460,9 @@ export async function loadV3PreviewMaskMattes(
   });
 }
 
-function geometrySourceDimensions(source: SourceRecord): PixelDimensions {
+type GeometrySource = Pick<SourceRecord, "dimensions" | "orientation">;
+
+function geometrySourceDimensions(source: GeometrySource): PixelDimensions {
   return source.orientation >= 5
     ? { width: source.dimensions.height, height: source.dimensions.width }
     : source.dimensions;
@@ -468,7 +470,7 @@ function geometrySourceDimensions(source: SourceRecord): PixelDimensions {
 
 function baseOutputDimensions(
   document: DevelopDocumentV3,
-  source: SourceRecord,
+  source: GeometrySource,
 ): PixelDimensions {
   const oriented = geometrySourceDimensions(source);
   const geometry: CanonicalGeometry = {
@@ -565,7 +567,7 @@ function previewQuality(
 
 export function resolveV3ExportDimensions(
   document: DevelopDocumentV3,
-  source: SourceRecord,
+  source: GeometrySource,
   size: ExportSizeOptions,
 ): PixelDimensions {
   const base = baseOutputDimensions(document, source);

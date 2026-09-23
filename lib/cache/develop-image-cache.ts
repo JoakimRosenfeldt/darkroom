@@ -33,7 +33,6 @@ export interface DevelopImageLoadOptions {
 const EDITOR_CACHE_BYTES = 160 * 1024 * 1024;
 const THUMBNAIL_CACHE_BYTES = 32 * 1024 * 1024;
 const FULL_IMAGE_CACHE_BYTES = 320 * 1024 * 1024;
-const FULL_IMAGE_IDLE_MS = 30_000;
 const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
@@ -48,13 +47,7 @@ const inFlightImages = new Map<string, ImageLoad>();
 const fullInFlightImages = new Map<string, ImageLoad>();
 const preloads = new Map<string, AbortController>();
 
-interface FullImageCacheEntry {
-  readonly key: string;
-  readonly image: DevelopImage;
-  timer: ReturnType<typeof setTimeout> | null;
-}
-
-let fullImageCache: FullImageCacheEntry | null = null;
+const fullImageCache = new Map<string, DevelopImage>();
 
 function waitForImage(load: ImageLoad, signal?: AbortSignal): Promise<DevelopImage> {
   signal?.throwIfAborted();
@@ -184,33 +177,29 @@ function getCachedImage(
   return cached;
 }
 
-function clearFullImageCache(): void {
-  if (!fullImageCache) return;
-  if (fullImageCache.timer !== null) clearTimeout(fullImageCache.timer);
-  fullImageCache = null;
-}
-
-function touchFullImageCache(entry: FullImageCacheEntry): void {
-  if (entry.timer !== null) clearTimeout(entry.timer);
-  entry.timer = setTimeout(() => {
-    if (fullImageCache === entry) fullImageCache = null;
-  }, FULL_IMAGE_IDLE_MS);
-}
-
 function getFullImage(key: string): DevelopImage | undefined {
-  if (fullImageCache?.key !== key) return undefined;
-  touchFullImageCache(fullImageCache);
-  return fullImageCache.image;
+  const cached = fullImageCache.get(key);
+  if (!cached) return undefined;
+  fullImageCache.delete(key);
+  fullImageCache.set(key, cached);
+  return cached;
 }
 
 function rememberFullImage(key: string, image: DevelopImage): void {
-  const bytes = image.rgb.byteLength + (image.blob?.size ?? 0);
-  if (bytes > FULL_IMAGE_CACHE_BYTES) return;
+  const imageBytes = image.rgb.byteLength + (image.blob?.size ?? 0);
+  if (imageBytes > FULL_IMAGE_CACHE_BYTES) return;
 
-  clearFullImageCache();
-  const entry: FullImageCacheEntry = { key, image, timer: null };
-  fullImageCache = entry;
-  touchFullImageCache(entry);
+  fullImageCache.delete(key);
+  fullImageCache.set(key, image);
+  let bytes = 0;
+  for (const cached of fullImageCache.values()) {
+    bytes += cached.rgb.byteLength + (cached.blob?.size ?? 0);
+  }
+  for (const [oldestKey, oldest] of fullImageCache) {
+    if (bytes <= FULL_IMAGE_CACHE_BYTES || fullImageCache.size === 1) break;
+    fullImageCache.delete(oldestKey);
+    bytes -= oldest.rgb.byteLength + (oldest.blob?.size ?? 0);
+  }
 }
 
 function cloneRgb(rgb: DevelopImage["rgb"]): DevelopImage["rgb"] {
@@ -310,6 +299,16 @@ export function getCachedDevelopImage(
 ): DevelopImage | null {
   const { cache, key } = previewCacheLookup(entry, options);
   return getCachedImage(cache, key);
+}
+
+export function getCachedDevelopExportImage(
+  entry: LibraryEntry,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode"> = {},
+): DevelopImage | null {
+  return getFullImage(fullImageCacheKey(
+    entry,
+    options.rawColorMode ?? "decoder-rendered",
+  )) ?? null;
 }
 
 export async function loadDevelopExportImage(
