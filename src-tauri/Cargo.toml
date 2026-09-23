@@ -53,6 +53,7 @@ webkit2gtk = "=2.0.2"
 
 [patch.crates-io]
 libraw_rs_vendor = { path = "vendor/libraw_rs_vendor" }
+iptc = { path = "vendor/iptc" }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
