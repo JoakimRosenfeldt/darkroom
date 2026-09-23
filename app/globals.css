@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   --font-geist-sans: "Geist Variable";
   --font-geist-mono: "Geist Mono Variable";
   --lr-bg: #131110;

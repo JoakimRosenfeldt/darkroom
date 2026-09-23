@@ -138,17 +138,17 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 Private project.
 
-## Check the local RAW workflow
+## Check the local desktop workflow
 
 Start the development server with `npm run dev`. In another terminal, run:
 
 ```bash
-npm run test:develop:electron
+npm run test:develop:desktop
 ```
 
-The check uses a temporary catalog and copies of the bundled photos. It checks edits, undo, redo, virtual copies, preset batches, edited previews, 100% detail, JPEG metadata, cancellation, and recovery after process interruption. It prints the location of screenshots, exported files, and timing results.
+Install `tauri-driver` and a matching native WebDriver (WebKitWebDriver on Linux). The check uses the real Tauri backend, a temporary catalog, and copies of the bundled JPEG photos. Diagnostic builds select only the temporary import and export paths through environment variables. It checks edits, undo, redo, virtual copies, preset batches, edited previews, 100% detail, JPEG metadata, cancellation, and recovery after process interruption. It prints the location of screenshots, exported files, and timing results.
 
-Set `DARKROOM_SMOKE_URL` if the server uses a different port. Set `DARKROOM_SMOKE_RAW` to test another Nikon file. The check expects a working RAW decoder; embedded previews do not qualify.
+Set `DARKROOM_SMOKE_DRIVER` or `DARKROOM_SMOKE_NATIVE_DRIVER` for driver paths outside `PATH`. Set `DARKROOM_SMOKE_DRIVER_PORT` to change port 4460. Run under a desktop display or Xvfb on Linux. Set `DARKROOM_SMOKE_RAW` to a Nikon NEF to run the same workflow with RAW decoding; embedded previews do not qualify. `DARKROOM_SMOKE_BINARY` can select an existing diagnostic development build. Set `DARKROOM_SMOKE_REQUIRE_GPU=1` to require GPU previews and export in addition to pixel checks.
 
 Development builds find the Nikon helper under `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` or `DARKROOM_NEF_HELPER_PATH` to use another installation.
 

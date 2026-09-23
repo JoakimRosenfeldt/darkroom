@@ -902,22 +902,12 @@ fn prepare_operation(
                     return Err("Batch profile source changed during verification.".into());
                 }
                 if !profile.is_null()
-                    && ["make", "model"].iter().any(|field| {
-                        profile["compatibility"][field]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim()
-                            .to_lowercase()
-                            != target[if *field == "make" {
-                                "cameraMake"
-                            } else {
-                                "cameraModel"
-                            }]
-                            .as_str()
-                            .unwrap_or("")
-                            .trim()
-                            .to_lowercase()
-                    })
+                    && !super::default_install::same_camera(
+                        &profile["compatibility"]["make"],
+                        &profile["compatibility"]["model"],
+                        &target["cameraMake"],
+                        &target["cameraModel"],
+                    )
                 {
                     Value::Null
                 } else {

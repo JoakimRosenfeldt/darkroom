@@ -36,43 +36,91 @@ fn text(value: &Value, key: &str) -> Result<String, String> {
     Ok(text.into())
 }
 
-fn bounded_json(value: &Value) -> Result<(),String> {
-    fn visit(value:&Value,depth:usize,nodes:&mut usize)->Result<(),String> {
-        *nodes+=1;
-        if depth>16 || *nodes>100_000 {return Err("Develop default rule exceeds structural limits.".into())}
+fn bounded_json(value: &Value) -> Result<(), String> {
+    fn visit(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), String> {
+        *nodes += 1;
+        if depth > 16 || *nodes > 100_000 {
+            return Err("Develop default rule exceeds structural limits.".into());
+        }
         match value {
-            Value::String(value) if value.encode_utf16().count()>4096 || value.contains('\0')=>return Err("Develop default rule contains an invalid string.".into()),
-            Value::Array(items)=>for item in items {visit(item,depth+1,nodes)?},
-            Value::Object(fields)=>for (key,item) in fields {
-                if key.is_empty()||key.encode_utf16().count()>256||key.contains('\0')||matches!(key.as_str(),"__proto__"|"prototype"|"constructor") {return Err("Develop default rule contains an invalid field.".into())}
-                visit(item,depth+1,nodes)?;
-            },
-            _=>(),
+            Value::String(value) if value.encode_utf16().count() > 4096 || value.contains('\0') => {
+                return Err("Develop default rule contains an invalid string.".into());
+            }
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, depth + 1, nodes)?
+                }
+            }
+            Value::Object(fields) => {
+                for (key, item) in fields {
+                    if key.is_empty()
+                        || key.encode_utf16().count() > 256
+                        || key.contains('\0')
+                        || matches!(key.as_str(), "__proto__" | "prototype" | "constructor")
+                    {
+                        return Err("Develop default rule contains an invalid field.".into());
+                    }
+                    visit(item, depth + 1, nodes)?;
+                }
+            }
+            _ => (),
         }
         Ok(())
     }
-    visit(value,0,&mut 0)
+    visit(value, 0, &mut 0)
 }
 
-pub(crate) fn validate_facts(facts:&Value)->Result<(),String> {
-    store_io::object_keys(facts,&["camera","decoder","inputProfile","iso"])?;
-    let fact_text=|value:&Value,key:&str|->Result<(),String>{
-        let text=store_io::text(value,key)?;
-        if text.trim().is_empty()||text.encode_utf16().count()>512 {return Err(format!("Develop default {key} fact is invalid."))}
+pub(crate) fn validate_facts(facts: &Value) -> Result<(), String> {
+    store_io::object_keys(facts, &["camera", "decoder", "inputProfile", "iso"])?;
+    let fact_text = |value: &Value, key: &str| -> Result<(), String> {
+        let text = store_io::text(value, key)?;
+        if text.trim().is_empty() || text.encode_utf16().count() > 512 {
+            return Err(format!("Develop default {key} fact is invalid."));
+        }
         Ok(())
     };
-    let camera=&facts["camera"];
-    store_io::object_keys(camera,&["kind","make","model","reason"])?;
-    match camera["kind"].as_str() {Some("known")=>{fact_text(camera,"make")?;fact_text(camera,"model")?},Some("unknown")=>fact_text(camera,"reason")?,_=>return Err("Develop default camera fact is invalid.".into())};
-    let decoder=&facts["decoder"];
-    store_io::object_keys(decoder,&["kind","value","reason"])?;
-    match decoder["kind"].as_str() {Some("known")=>fact_text(decoder,"value")?,Some("unknown")=>fact_text(decoder,"reason")?,_=>return Err("Develop default decoder fact is invalid.".into())};
-    let profile=&facts["inputProfile"];
-    store_io::object_keys(profile,&["kind","profileId","profileRevision","stage","reason"])?;
-    match profile["kind"].as_str() {Some("known")=>{fact_text(profile,"profileId")?;fact_text(profile,"profileRevision")?;if profile["stage"]!="before-develop-tone"{return Err("Develop default input profile stage is invalid.".into())}},Some("unknown")=>fact_text(profile,"reason")?,_=>return Err("Develop default input profile fact is invalid.".into())};
-    let iso=&facts["iso"];
-    store_io::object_keys(iso,&["kind","value","reason"])?;
-    match iso["kind"].as_str() {Some("known")=>{integer(iso,"value",1,9_007_199_254_740_991)?;},Some("unknown")=>fact_text(iso,"reason")?,_=>return Err("Develop default ISO fact is invalid.".into())};
+    let camera = &facts["camera"];
+    store_io::object_keys(camera, &["kind", "make", "model", "reason"])?;
+    match camera["kind"].as_str() {
+        Some("known") => {
+            fact_text(camera, "make")?;
+            fact_text(camera, "model")?
+        }
+        Some("unknown") => fact_text(camera, "reason")?,
+        _ => return Err("Develop default camera fact is invalid.".into()),
+    };
+    let decoder = &facts["decoder"];
+    store_io::object_keys(decoder, &["kind", "value", "reason"])?;
+    match decoder["kind"].as_str() {
+        Some("known") => fact_text(decoder, "value")?,
+        Some("unknown") => fact_text(decoder, "reason")?,
+        _ => return Err("Develop default decoder fact is invalid.".into()),
+    };
+    let profile = &facts["inputProfile"];
+    store_io::object_keys(
+        profile,
+        &["kind", "profileId", "profileRevision", "stage", "reason"],
+    )?;
+    match profile["kind"].as_str() {
+        Some("known") => {
+            fact_text(profile, "profileId")?;
+            fact_text(profile, "profileRevision")?;
+            if profile["stage"] != "before-develop-tone" {
+                return Err("Develop default input profile stage is invalid.".into());
+            }
+        }
+        Some("unknown") => fact_text(profile, "reason")?,
+        _ => return Err("Develop default input profile fact is invalid.".into()),
+    };
+    let iso = &facts["iso"];
+    store_io::object_keys(iso, &["kind", "value", "reason"])?;
+    match iso["kind"].as_str() {
+        Some("known") => {
+            integer(iso, "value", 1, 9_007_199_254_740_991)?;
+        }
+        Some("unknown") => fact_text(iso, "reason")?,
+        _ => return Err("Develop default ISO fact is invalid.".into()),
+    };
     Ok(())
 }
 

@@ -39,6 +39,14 @@ jobs:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-${{ runner.arch }}-
       - name: Linux native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -49,6 +57,20 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: cargo build --manifest-path src-tauri/Cargo.toml --release --features diagnostics --bin darkroom-backend --locked
+      - name: Linux desktop workflow
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CARGO_PROFILE_DEV_DEBUG: 0
+          DARKROOM_SMOKE_REQUIRE_GPU: 1
+        run: |
+          sudo apt-get install -y xvfb webkit2gtk-driver
+          cargo install tauri-driver --locked
+          cargo build --manifest-path src-tauri/Cargo.toml --features diagnostics --bin darkroom --locked
+          npm run dev > /tmp/darkroom-vite.log 2>&1 &
+          VITE_PID=$!
+          trap 'kill "$VITE_PID"' EXIT
+          xvfb-run -a -s '-screen 0 1600x1000x24' node scripts/develop-workflow-smoke.mjs
       - uses: actions/upload-artifact@v7
         with:
           name: darkroom-${{ runner.os }}-${{ runner.arch }}
@@ -56,3 +78,12 @@ jobs:
             src-tauri/target/release/darkroom
             src-tauri/target/release/darkroom.exe
           if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux' && always()
+        with:
+          name: desktop-workflow-evidence
+          path: |
+            /tmp/darkroom-develop-smoke-*/report.json
+            /tmp/darkroom-develop-smoke-*/*.png
+            /tmp/darkroom-develop-smoke-*/driver.log
+            /tmp/darkroom-vite.log

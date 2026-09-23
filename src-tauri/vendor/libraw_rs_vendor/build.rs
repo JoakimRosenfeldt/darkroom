@@ -203,6 +203,9 @@ fn build() {
     let mut libraw = cc::Build::new();
     libraw.cpp(true);
     libraw.include(LIBRAW_DIR);
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        libraw.define("LIBRAW_NODLL", None);
+    }
 
     // add LIBRAW_FILES to libraw
     for file in LIBRAW_FILES.iter() {

@@ -1,9 +1,9 @@
 pub(crate) mod apply;
+pub(crate) mod assets;
 pub(crate) mod batch;
 pub(crate) mod clipboard;
-pub(crate) mod assets;
-mod defaults;
 pub(crate) mod default_install;
+mod defaults;
 pub(crate) mod jobs;
 pub(crate) mod presets;
 pub(crate) mod profiles;

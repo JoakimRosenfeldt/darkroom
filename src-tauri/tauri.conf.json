@@ -44,7 +44,8 @@
     "resources": {
       "THIRD_PARTY.md": "licenses/THIRD_PARTY.md",
       "vendor/libraw_rs_vendor/libraw/LICENSE.CDDL": "licenses/LibRaw-LICENSE.CDDL",
-      "vendor/libraw_rs_vendor/libraw/LICENSE.LGPL": "licenses/LibRaw-LICENSE.LGPL"
+      "vendor/libraw_rs_vendor/libraw/LICENSE.LGPL": "licenses/LibRaw-LICENSE.LGPL",
+      "vendor/libraw_rs_vendor/libraw/COPYRIGHT": "licenses/LibRaw-COPYRIGHT"
     }
   }
 }

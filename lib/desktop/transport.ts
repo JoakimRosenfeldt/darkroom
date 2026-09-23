@@ -68,8 +68,7 @@ export const desktopTransport = {
         // Subscribe before exposing the API so immediate native events cannot race setup.
         for (const channel of channels) {
           subscriptions.push(await listen(channel, ({ payload }) => {
-            const decoded = decode(payload);
-            for (const listener of listeners.get(channel) ?? []) listener(undefined, decoded);
+            for (const listener of listeners.get(channel) ?? []) listener(undefined, payload);
           }));
         }
       } catch (error) {
@@ -81,30 +80,36 @@ export const desktopTransport = {
   },
 
   async invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-    if (channel === "darkroom:catalog-read-asset" || channel === "darkroom:catalog-read-asset-head") {
-      return await invoke<ArrayBuffer>("darkroom_read", { channel, args }) as T;
+    try {
+      if (channel === "darkroom:catalog-read-asset" || channel === "darkroom:catalog-read-asset-head") {
+        return await invoke<ArrayBuffer>("darkroom_read", { channel, args }) as T;
+      }
+      if (channel === "darkroom:encode-and-save-export") {
+        const payload = args[2];
+        const wrapped = payload !== null && typeof payload === "object" && "pixels" in payload;
+        const pixels = wrapped ? payload.pixels : payload;
+        const bytes = pixels instanceof ArrayBuffer
+          ? new Uint8Array(pixels)
+          : ArrayBuffer.isView(pixels)
+            ? new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
+            : null;
+        if (!bytes) throw new Error("Export pixels are not a binary buffer.");
+        const metadata = new TextEncoder().encode(JSON.stringify([
+          args[0], args[1], wrapped ? { ...payload, pixels: null } : null, args[3],
+        ]));
+        const request = new Uint8Array(4 + metadata.length + bytes.length);
+        new DataView(request.buffer).setUint32(0, metadata.length, true);
+        request.set(metadata, 4);
+        request.set(bytes, 4 + metadata.length);
+        return await invoke<T>("darkroom_export", request);
+      }
+      const result = await invoke<unknown>("darkroom_invoke", { channel, args: encode(args) });
+      return (channel === "darkroom:catalog-decode-asset" || channel === "darkroom:develop-asset-read"
+        ? decode(result)
+        : result) as T;
+    } catch (error) {
+      throw error instanceof Error ? error : new Error(typeof error === "string" ? error : "The desktop command failed.");
     }
-    if (channel === "darkroom:encode-and-save-export") {
-      const payload = args[2];
-      const wrapped = payload !== null && typeof payload === "object" && "pixels" in payload;
-      const pixels = wrapped ? payload.pixels : payload;
-      const bytes = pixels instanceof ArrayBuffer
-        ? new Uint8Array(pixels)
-        : ArrayBuffer.isView(pixels)
-          ? new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
-          : null;
-      if (!bytes) throw new Error("Export pixels are not a binary buffer.");
-      const metadata = new TextEncoder().encode(JSON.stringify([
-        args[0], args[1], wrapped ? { ...payload, pixels: null } : null, args[3],
-      ]));
-      const request = new Uint8Array(4 + metadata.length + bytes.length);
-      new DataView(request.buffer).setUint32(0, metadata.length, true);
-      request.set(metadata, 4);
-      request.set(bytes, 4 + metadata.length);
-      return await invoke<T>("darkroom_export", request);
-    }
-    const result = await invoke<unknown>("darkroom_invoke", { channel, args: encode(args) });
-    return decode(result) as T;
   },
 
   on(channel: string, listener: Listener): void {

@@ -11,6 +11,7 @@ import type {
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { ExportSizeOptions } from "@/lib/export/types";
+import type { MainThreadGpuPreview } from "./main-thread-preview";
 import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
 
 interface PreviewWorkerRenderOptions {
@@ -61,7 +62,10 @@ function sourceImage(image: DevelopImage): V3PreviewWorkerImage {
 }
 
 export class V3PreviewWorkerClient {
-  readonly #worker: Worker;
+  #worker: Worker | null = null;
+  readonly #mainGpu: Promise<MainThreadGpuPreview> | null;
+  readonly #entry: LibraryEntry;
+  readonly #image: DevelopImage;
   readonly #pending = new Map<number, PendingRender>();
   #nextRequestId = 0;
   #disposed = false;
@@ -70,50 +74,63 @@ export class V3PreviewWorkerClient {
   #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
 
   constructor(entry: LibraryEntry, image: DevelopImage) {
-    this.#worker = workerFactory();
-    this.#worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse>): void => {
-      const response = event.data;
-      const pending = this.#pending.get(response.requestId);
-      if (!pending) {
-        if (
-          response.kind === "result" &&
-          response.result.kind === "rendered" &&
-          "bitmap" in response.result
-        ) response.result.bitmap.close();
-        return;
-      }
-      this.#pending.delete(response.requestId);
-      if (this.#activePreview === response.requestId) {
-        this.#activePreview = null;
-        const queued = this.#queuedPreview;
-        this.#queuedPreview = null;
-        if (queued) this.#sendPreview(queued);
-      }
-      if (response.kind === "result") {
-        pending.resolve({ backend: response.backend, result: response.result });
-      } else {
-        pending.reject(new Error(response.message));
-      }
-    };
-    this.#worker.onerror = (): void => {
+    this.#entry = entry;
+    this.#image = image;
+    const webkit = typeof navigator !== "undefined" && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
+    this.#mainGpu = webkit ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+    if (!this.#mainGpu) this.#ensureWorker();
+  }
+
+  #receive(response: V3PreviewWorkerResponse): void {
+    const pending = this.#pending.get(response.requestId);
+    if (!pending) {
+      if (response.kind === "result" && response.result.kind === "rendered" && "bitmap" in response.result) response.result.bitmap.close();
+      return;
+    }
+    this.#pending.delete(response.requestId);
+    if (this.#activePreview === response.requestId) {
+      this.#activePreview = null;
+      const queued = this.#queuedPreview;
+      this.#queuedPreview = null;
+      if (queued) this.#sendPreview(queued);
+    }
+    if (response.kind === "result") pending.resolve({ backend: response.backend, result: response.result });
+    else pending.reject(new Error(response.message));
+  }
+
+  #ensureWorker(): Worker {
+    if (this.#worker) return this.#worker;
+    const worker = this.#worker = workerFactory();
+    worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse>) => this.#receive(event.data);
+    worker.onerror = (): void => {
       const error = new Error("The preview worker stopped unexpectedly.");
       for (const pending of this.#pending.values()) pending.reject(error);
       this.#pending.clear();
       this.#queuedPreview?.reject(error);
       this.#queuedPreview = null;
       this.#disposed = true;
-      this.#worker.terminate();
+      worker.terminate();
+      void this.#mainGpu?.then((renderer) => renderer.dispose());
     };
+    const image = sourceImage(this.#image);
+    const buffer = image.rgb.buffer;
+    if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
+    worker.postMessage({ kind: "initialize", entry: this.#entry, image }, [buffer]);
+    return worker;
+  }
 
-    const workerImage = sourceImage(image);
-    const buffer = workerImage.rgb.buffer;
-    if (!(buffer instanceof ArrayBuffer)) {
-      throw new Error("The preview source pixels cannot be transferred to a worker.");
+  async #dispatch(message: Exclude<V3PreviewWorkerRequest, { kind: "initialize" }>): Promise<void> {
+    try {
+      if (this.#mainGpu) {
+        const result = await (await this.#mainGpu).render(message);
+        if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
+      }
+      if (this.#disposed) return;
+      this.#ensureWorker().postMessage({ ...message, maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes });
+      this.#maskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
+    } catch (error) {
+      this.#receive({ kind: "error", requestId: message.requestId, message: error instanceof Error ? error.message : "Could not render preview." });
     }
-    this.#worker.postMessage(
-      { kind: "initialize", entry, image: workerImage },
-      [buffer],
-    );
   }
 
   render(
@@ -149,23 +166,14 @@ export class V3PreviewWorkerClient {
     const { message } = preview;
     this.#activePreview = message.requestId;
     this.#pending.set(message.requestId, preview);
-    try {
-      this.#worker.postMessage({
-        ...message,
-        maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes,
-      });
-      this.#maskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
-    } catch (error) {
-      this.#pending.delete(message.requestId);
-      this.#activePreview = null;
-      preview.reject(error instanceof Error ? error : new Error("Could not send the preview request."));
-    }
+    void this.#dispatch(message);
   }
 
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    this.#worker.terminate();
+    this.#worker?.terminate();
+    void this.#mainGpu?.then((renderer) => renderer.dispose());
     for (const pending of this.#pending.values()) {
       pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     }
@@ -184,11 +192,7 @@ export class V3PreviewWorkerClient {
     const requestId = ++this.#nextRequestId;
     return new Promise((resolve, reject) => {
       this.#pending.set(requestId, { resolve, reject });
-      this.#worker.postMessage({
-        kind: "export", requestId, document, size, region,
-        maskMattes: maskMattes === this.#maskMattes ? undefined : maskMattes,
-      });
-      this.#maskMattes = maskMattes;
+      void this.#dispatch({ kind: "export", requestId, document, size, region, maskMattes });
     });
   }
 }

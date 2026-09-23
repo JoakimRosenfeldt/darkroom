@@ -781,7 +781,7 @@ interface GeometryMap {
 }
 
 interface GpuState {
-  readonly canvas: OffscreenCanvas;
+  readonly canvas: OffscreenCanvas | HTMLCanvasElement;
   readonly gl: WebGL2RenderingContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
@@ -867,7 +867,7 @@ function localMaskSourcesGpuSupported(document: DevelopDocumentV3): boolean {
 }
 
 export function v3GpuPreviewSupport(input: CpuRenderInput): GpuSupport {
-  if (typeof OffscreenCanvas === "undefined") {
+  if (typeof OffscreenCanvas === "undefined" && typeof document === "undefined") {
     return { kind: "unsupported", reason: "OffscreenCanvas is unavailable." };
   }
   if (input.image.bits < 8 || input.image.bits > 16) {
@@ -2113,13 +2113,15 @@ export class V3GpuPreviewRenderer {
         "half",
         false,
       );
-      if (!frame.bitmap) throw new Error("The GPU preview bitmap is unavailable.");
+      const bitmap = frame.bitmap ?? (this.#state && typeof HTMLCanvasElement !== "undefined" && this.#state.canvas instanceof HTMLCanvasElement
+        ? await createImageBitmap(this.#state.canvas) : null);
+      if (!bitmap) throw new Error("The GPU preview bitmap is unavailable.");
       return {
         kind: "rendered",
         planFingerprint: preparation.planFingerprint,
         frameIdentity: preparation.frameIdentity,
         dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
-        bitmap: frame.bitmap,
+        bitmap,
         renderDurationMs: frame.renderDurationMs,
         pointColorInput: frame.pointColorInput,
         diagnostics: preparation.diagnostics,
@@ -2146,7 +2148,8 @@ export class V3GpuPreviewRenderer {
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     if (!validRenderRegion(core, dimensions)) return null;
     try {
-      const pixels = this.#renderCore(input, core, "float");
+      const pixels = await this.#renderCore(input, core, "float");
+      if (!pixels) return { kind: "cancelled" };
       return {
         kind: "rendered",
         planFingerprint: preparation.planFingerprint,
@@ -2179,7 +2182,8 @@ export class V3GpuPreviewRenderer {
     if (preparation.kind !== "ready") return null;
     const core = fullOutputRegion(input);
     try {
-      const pixels = this.#renderCore(input, core, "float");
+      const pixels = await this.#renderCore(input, core, "float");
+      if (!pixels) return { kind: "cancelled" };
       return {
         kind: "rendered",
         planFingerprint: preparation.planFingerprint,
@@ -2201,16 +2205,17 @@ export class V3GpuPreviewRenderer {
     }
   }
 
-  #renderCore(
+  async #renderCore(
     input: CpuRenderInput,
     core: RenderRegion,
     precision: "half" | "float",
-  ): Uint8Array {
+  ): Promise<Uint8Array | null> {
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     const pixels = new Uint8Array(core.width * core.height * 4);
     const halo = activeStageHalo(input);
     for (let y = core.y; y < core.y + core.height; y += GPU_TILE_EDGE) {
       for (let x = core.x; x < core.x + core.width; x += GPU_TILE_EDGE) {
+        if (input.cancellation?.isCancelled()) return null;
         const tileCore = {
           x,
           y,
@@ -2236,20 +2241,21 @@ export class V3GpuPreviewRenderer {
           core.width,
           { x: tileCore.x - core.x, y: tileCore.y - core.y },
         );
+        if (typeof document !== "undefined") await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
     return pixels;
   }
 
   #initialize(input: CpuRenderInput): GpuState {
-    const canvas = new OffscreenCanvas(1, 1);
+    const canvas = typeof document === "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
     const gl = canvas.getContext("webgl2", {
       alpha: true,
       antialias: false,
       depth: false,
       preserveDrawingBuffer: false,
       premultipliedAlpha: false,
-    });
+    }) as WebGL2RenderingContext | null;
     if (!gl || !gl.getExtension("EXT_color_buffer_float")) {
       throw new Error("Float WebGL rendering is unavailable.");
     }
@@ -2399,7 +2405,7 @@ export class V3GpuPreviewRenderer {
       const pointInput = wantsPointColor
         ? readFloatTexture(state.gl, targets, targets.pointColorInput)
         : null;
-      const bitmap = readPixels ? null : state.canvas.transferToImageBitmap();
+      const bitmap = !readPixels && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
       return {
         bitmap,
         renderDurationMs: performance.now() - started,
@@ -2428,7 +2434,7 @@ export class V3GpuPreviewRenderer {
       ? null
       : readFloatTexture(state.gl, targets, targets.pointColorInput);
     const analysis = requestedAnalysis(input, toneInput, scene, pixels);
-    const bitmap = readPixels ? null : state.canvas.transferToImageBitmap();
+    const bitmap = !readPixels && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
     return {
       bitmap,
       renderDurationMs: performance.now() - started,

@@ -648,7 +648,21 @@ impl DevelopAssets {
     pub fn handle(&mut self, channel: &str, args: &[Value]) -> Result<Value, String> {
         let v = args.first().ok_or("Asset request is missing.")?;
         match channel {
-            "darkroom:develop-asset-put" => self.put(v, &crate::native::parse_binary(&v["bytes"])?),
+            "darkroom:develop-asset-put" => {
+                validate_candidate(&v["candidate"])?;
+                let length = v["candidate"]["descriptor"]["byteLength"]
+                    .as_u64()
+                    .ok_or("Asset byte length is invalid.")?;
+                let maximum = ((length + 2) / 3) * 4;
+                let encoded = v["bytes"]
+                    .get("__darkroomBinary")
+                    .and_then(Value::as_str)
+                    .ok_or("Binary payload is missing.")?;
+                if encoded.len() as u64 > maximum {
+                    return Err("Asset binary payload exceeds its declared byte length.".into());
+                }
+                self.put(v, &crate::native::parse_binary(&v["bytes"])?)
+            }
             "darkroom:develop-asset-transition" => self.transition(v),
             "darkroom:develop-asset-read" => self.read(v),
             "darkroom:develop-asset-gc" => self.collect(v),

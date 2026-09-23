@@ -1,7 +1,16 @@
-use std::{collections::HashMap, fs, io::{Read, Write}, path::{Path, PathBuf}, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex, OnceLock}};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
 
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::NativeContext;
@@ -9,13 +18,25 @@ use super::NativeContext;
 const CACHE_BEHAVIOR: &str = "Darkroom downloads this model once, verifies it, and keeps it in private app storage for offline use until you remove it.";
 
 struct Model {
-    id: &'static str, bytes: u64, revision: &'static str, width: u32, height: u32,
-    purpose: &'static str, source: &'static str, license: &'static str,
-    artifact: &'static str, filename: &'static str, sha256: &'static str,
+    id: &'static str,
+    bytes: u64,
+    revision: &'static str,
+    width: u32,
+    height: u32,
+    purpose: &'static str,
+    source: &'static str,
+    license: &'static str,
+    artifact: &'static str,
+    filename: &'static str,
+    sha256: &'static str,
 }
 
 const SUBJECT: Model = Model {
-    id: "subject", bytes: 98_484_532, revision: "4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7", width: 512, height: 512,
+    id: "subject",
+    bytes: 98_484_532,
+    revision: "4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7",
+    width: 512,
+    height: 512,
     purpose: "Select salient foreground subjects on this device.",
     source: "https://huggingface.co/studioludens/birefnet-lite-512/tree/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7",
     license: "https://huggingface.co/studioludens/birefnet-lite-512/blob/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7/README.md",
@@ -24,7 +45,11 @@ const SUBJECT: Model = Model {
     sha256: "eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516",
 };
 const SKY: Model = Model {
-    id: "sky", bytes: 99_310_780, revision: "dac255883ec5faf508561a47172096bfd8708db0", width: 384, height: 384,
+    id: "sky",
+    bytes: 99_310_780,
+    revision: "dac255883ec5faf508561a47172096bfd8708db0",
+    width: 384,
+    height: 384,
     purpose: "Select sky pixels on this device.",
     source: "https://huggingface.co/Realcat/skywater_seg/tree/dac255883ec5faf508561a47172096bfd8708db0",
     license: "https://huggingface.co/Realcat/skywater_seg/blob/dac255883ec5faf508561a47172096bfd8708db0/README.md",
@@ -34,7 +59,11 @@ const SKY: Model = Model {
 };
 
 fn model(id: &str) -> Result<&'static Model, String> {
-    match id { "subject" => Ok(&SUBJECT), "sky" => Ok(&SKY), _ => Err("Unknown AI model.".into()) }
+    match id {
+        "subject" => Ok(&SUBJECT),
+        "sky" => Ok(&SKY),
+        _ => Err("Unknown AI model.".into()),
+    }
 }
 
 fn disclosure(model: &Model) -> Value {
@@ -46,7 +75,14 @@ fn directory(root: &Path) -> Result<PathBuf, String> {
     let path = root.join("models");
     fs::create_dir_all(&path).map_err(|_| "The private model cache is unavailable.")?;
     let actual = fs::canonicalize(&path).map_err(|_| "The private model cache is unavailable.")?;
-    if actual != path || !actual.starts_with(&root) || !fs::symlink_metadata(&path).map_err(|e| e.to_string())?.is_dir() { return Err("The private model cache is outside app storage.".into()); }
+    if actual != path
+        || !actual.starts_with(&root)
+        || !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .is_dir()
+    {
+        return Err("The private model cache is outside app storage.".into());
+    }
     Ok(path)
 }
 
@@ -57,16 +93,24 @@ fn verified_path(root: &Path, model: &Model) -> Result<Option<PathBuf>, String> 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("The cached model is unavailable.".into()),
     };
-    if !metadata.is_file() || metadata.len() != model.bytes { return Err("The cached model failed verification.".into()); }
+    if !metadata.is_file() || metadata.len() != model.bytes {
+        return Err("The cached model failed verification.".into());
+    }
     let mut file = fs::File::open(&path).map_err(|_| "The cached model is unavailable.")?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 1024 * 1024];
     loop {
-        let count = file.read(&mut buffer).map_err(|_| "The cached model is unavailable.")?;
-        if count == 0 { break; }
+        let count = file
+            .read(&mut buffer)
+            .map_err(|_| "The cached model is unavailable.")?;
+        if count == 0 {
+            break;
+        }
         hasher.update(&buffer[..count]);
     }
-    if format!("{:x}", hasher.finalize()) != model.sha256 { return Err("The cached model failed verification.".into()); }
+    if format!("{:x}", hasher.finalize()) != model.sha256 {
+        return Err("The cached model failed verification.".into());
+    }
     Ok(Some(path))
 }
 
@@ -74,19 +118,41 @@ pub fn verified_model_path(root: &Path, model_id: &str) -> Result<PathBuf, Strin
     verified_path(root, model(model_id)?)?.ok_or_else(|| "Model is not downloaded.".into())
 }
 
-struct Download { cancelled: AtomicBool, received: AtomicU64, finished: AtomicBool, cancel_notify: tokio::sync::Notify, finish_notify: tokio::sync::Notify }
+struct Download {
+    cancelled: AtomicBool,
+    received: AtomicU64,
+    finished: AtomicBool,
+    cancel_notify: tokio::sync::Notify,
+    finish_notify: tokio::sync::Notify,
+}
 static ACTIVE: OnceLock<Mutex<HashMap<String, Arc<Download>>>> = OnceLock::new();
 static ERRORS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-fn active() -> &'static Mutex<HashMap<String, Arc<Download>>> { ACTIVE.get_or_init(|| Mutex::new(HashMap::new())) }
-fn errors() -> &'static Mutex<HashMap<String, String>> { ERRORS.get_or_init(|| Mutex::new(HashMap::new())) }
-
-fn progress(ctx: &NativeContext, model: &Model, received: u64) {
-    (ctx.emit)("darkroom:ai-model-progress", json!({"modelId":model.id,"receivedBytes":received,"totalBytes":model.bytes}));
+fn active() -> &'static Mutex<HashMap<String, Arc<Download>>> {
+    ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn errors() -> &'static Mutex<HashMap<String, String>> {
+    ERRORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-async fn download(root: &Path, model: &Model, ctx: &NativeContext, state: &Download) -> Result<(), String> {
-    if state.cancelled.load(Ordering::Relaxed) { return Err("Model download was cancelled.".into()); }
-    if verified_path(root, model)?.is_some() { return Ok(()); }
+fn progress(ctx: &NativeContext, model: &Model, received: u64) {
+    (ctx.emit)(
+        "darkroom:ai-model-progress",
+        json!({"modelId":model.id,"receivedBytes":received,"totalBytes":model.bytes}),
+    );
+}
+
+async fn download(
+    root: &Path,
+    model: &Model,
+    ctx: &NativeContext,
+    state: &Download,
+) -> Result<(), String> {
+    if state.cancelled.load(Ordering::Relaxed) {
+        return Err("Model download was cancelled.".into());
+    }
+    if verified_path(root, model)?.is_some() {
+        return Ok(());
+    }
     let directory = directory(root)?;
     let temporary = directory.join(format!(".{}.{}.tmp", model.filename, uuid::Uuid::new_v4()));
     let result = async {
@@ -153,14 +219,16 @@ async fn download(root: &Path, model: &Model, ctx: &NativeContext, state: &Downl
     result
 }
 
-async fn cancel(id: &str) -> Result<(),String> {
+async fn cancel(id: &str) -> Result<(), String> {
     let state = active().lock().map_err(|e| e.to_string())?.get(id).cloned();
     if let Some(state) = state {
         state.cancelled.store(true, Ordering::Relaxed);
         state.cancel_notify.notify_waiters();
         loop {
             let notified = state.finish_notify.notified();
-            if state.finished.load(Ordering::Acquire) { break; }
+            if state.finished.load(Ordering::Acquire) {
+                break;
+            }
             notified.await;
         }
     }
@@ -168,27 +236,44 @@ async fn cancel(id: &str) -> Result<(),String> {
 }
 
 pub async fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
-    let id = args.first().and_then(Value::as_str).ok_or("Unknown AI model.")?;
+    let id = args
+        .first()
+        .and_then(Value::as_str)
+        .ok_or("Unknown AI model.")?;
     let model = model(id)?;
     match command {
         "darkroom:get-ai-model-state" => {
             if let Some(state) = active().lock().map_err(|e| e.to_string())?.get(id) {
-                return Ok(json!({"status":"downloading","model":disclosure(model),"receivedBytes":state.received.load(Ordering::Relaxed),"totalBytes":model.bytes}));
+                return Ok(
+                    json!({"status":"downloading","model":disclosure(model),"receivedBytes":state.received.load(Ordering::Relaxed),"totalBytes":model.bytes}),
+                );
             }
             match verified_path(&ctx.app_data, model) {
                 Ok(Some(_)) => Ok(json!({"status":"ready","model":disclosure(model)})),
                 Ok(None) => match errors().lock().map_err(|e| e.to_string())?.get(id) {
-                    Some(message) => Ok(json!({"status":"error","model":disclosure(model),"message":message})),
+                    Some(message) => {
+                        Ok(json!({"status":"error","model":disclosure(model),"message":message}))
+                    }
                     None => Ok(json!({"status":"missing","model":disclosure(model)})),
                 },
-                Err(message) => Ok(json!({"status":"error","model":disclosure(model),"message":message})),
+                Err(message) => {
+                    Ok(json!({"status":"error","model":disclosure(model),"message":message}))
+                }
             }
         }
         "darkroom:download-ai-model" => {
             let state = {
                 let mut active = active().lock().map_err(|e| e.to_string())?;
-                if active.contains_key(id) { return Ok(Value::Null); }
-                let state = Arc::new(Download { cancelled: AtomicBool::new(false), received: AtomicU64::new(0), finished: AtomicBool::new(false), cancel_notify: tokio::sync::Notify::new(), finish_notify: tokio::sync::Notify::new() });
+                if active.contains_key(id) {
+                    return Ok(Value::Null);
+                }
+                let state = Arc::new(Download {
+                    cancelled: AtomicBool::new(false),
+                    received: AtomicU64::new(0),
+                    finished: AtomicBool::new(false),
+                    cancel_notify: tokio::sync::Notify::new(),
+                    finish_notify: tokio::sync::Notify::new(),
+                });
                 active.insert(id.to_owned(), state.clone());
                 state
             };
@@ -197,8 +282,15 @@ pub async fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Resul
             state.finish_notify.notify_waiters();
             active().lock().map_err(|e| e.to_string())?.remove(id);
             match &result {
-                Ok(()) => { errors().lock().map_err(|e| e.to_string())?.remove(id); }
-                Err(message) if !state.cancelled.load(Ordering::Relaxed) => { errors().lock().map_err(|e| e.to_string())?.insert(id.to_owned(), message.clone()); }
+                Ok(()) => {
+                    errors().lock().map_err(|e| e.to_string())?.remove(id);
+                }
+                Err(message) if !state.cancelled.load(Ordering::Relaxed) => {
+                    errors()
+                        .lock()
+                        .map_err(|e| e.to_string())?
+                        .insert(id.to_owned(), message.clone());
+                }
                 _ => (),
             }
             result.map(|_| Value::Null)
@@ -210,17 +302,30 @@ pub async fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Resul
         "darkroom:remove-ai-model" => {
             cancel(id).await?;
             let directory = directory(&ctx.app_data)?;
-            for path in [directory.join(model.filename), directory.join(format!(".{}.previous", model.filename))] {
+            for path in [
+                directory.join(model.filename),
+                directory.join(format!(".{}.previous", model.filename)),
+            ] {
                 if path.exists() {
-                    if !fs::symlink_metadata(&path).map_err(|e| e.to_string())?.is_file() { return Err("The cached model is not a regular file.".into()); }
-                    fs::remove_file(path).map_err(|_| "Darkroom could not remove the cached model.")?;
+                    if !fs::symlink_metadata(&path)
+                        .map_err(|e| e.to_string())?
+                        .is_file()
+                    {
+                        return Err("The cached model is not a regular file.".into());
+                    }
+                    fs::remove_file(path)
+                        .map_err(|_| "Darkroom could not remove the cached model.")?;
                 }
             }
             errors().lock().map_err(|e| e.to_string())?.remove(id);
             Ok(Value::Null)
         }
         "darkroom:open-ai-model-link" => {
-            let url = match args.get(1).and_then(Value::as_str) { Some("source") => model.source, Some("license") => model.license, _ => return Err("Unknown AI model link.".into()) };
+            let url = match args.get(1).and_then(Value::as_str) {
+                Some("source") => model.source,
+                Some("license") => model.license,
+                _ => return Err("Unknown AI model link.".into()),
+            };
             open::that(url).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
