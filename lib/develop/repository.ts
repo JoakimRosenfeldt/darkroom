@@ -23,7 +23,7 @@ import {
   type DevelopRevisionId,
 } from "@/lib/develop/history";
 import { parseOperationId, type OperationId } from "@/lib/catalog/ids";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import {
   decodePersistedDevelopDocument,
   MAX_V3_PAYLOAD_BYTES,
@@ -366,7 +366,7 @@ export class DevelopRepository {
       try {
         const adapters = this.#requireAdapters();
         const session = this.#requireSession();
-        if (!isElectronApp()) {
+        if (!isDesktopApp()) {
           this.#setProjectionState({ kind: "unavailable", reason: "Persistent Develop history needs the desktop app." });
           this.#adapters?.setStatus("saved");
           return;
@@ -436,7 +436,7 @@ export class DevelopRepository {
   installDefault(facts: DevelopDefaultFacts, requestId: OperationId): Promise<DevelopDefaultsProductionResult> {
     const execute = async (): Promise<DevelopDefaultsProductionResult> => {
       await this.#hydration;
-      if (!isElectronApp() || this.#projectionState.kind === "divergent") {
+      if (!isDesktopApp() || this.#projectionState.kind === "divergent") {
         throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
       }
       const result = await getDarkroomAPI().developDefaultsInstall({
@@ -466,7 +466,7 @@ export class DevelopRepository {
   }
 
   async cancelDefault(requestId: OperationId): Promise<void> {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     await getDarkroomAPI().developDefaultsCancel({
       catalogId: this.#entry.catalogId,
       sessionId: this.#entry.sessionId,
@@ -536,7 +536,7 @@ export class DevelopRepository {
     const execute = async (): Promise<void> => {
       await this.#hydration;
       const head = this.#head;
-      if (!head || !isElectronApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
+      if (!head || !isDesktopApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
       if (this.#projectionState.kind === "divergent") {
         throw new DevelopRepositoryError("recovery-conflict", "Resolve the Darkroom and XMP conflict before upgrading this photo.");
       }
@@ -581,7 +581,7 @@ export class DevelopRepository {
     }
     const execute = async (): Promise<void> => {
       await this.#hydration;
-      if (!isElectronApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Persistent Develop history needs the desktop app.");
+      if (!isDesktopApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Persistent Develop history needs the desktop app.");
       const head = this.#head;
       if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
       const acceptedImport = this.#acceptedExternalImport?.operationId === command.operationId
@@ -1102,7 +1102,7 @@ export class DevelopRepository {
 
   async resolveDocument(metadata: EntryMetadata): Promise<DevelopSessionOpenDocument> {
     await this.flush();
-    if (!isElectronApp()) return this.catalogDocument(metadata);
+    if (!isDesktopApp()) return this.catalogDocument(metadata);
     const loaded = await getDarkroomAPI().developHistoryLoad({
       catalogId: this.#entry.catalogId,
       entryId: this.#entry.id,

@@ -21,6 +21,8 @@
 /build
 /electron-dist
 /release
+/src-tauri/target
+/src-tauri/gen
 
 # misc
 .DS_Store

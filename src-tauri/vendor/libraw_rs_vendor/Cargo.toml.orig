@@ -1,0 +1,19 @@
+[package]
+name = "libraw_rs_vendor"
+version = "1.0.0"
+edition = "2021"
+license = "LGPL-2.1-only OR CDDL-1.0"
+description = "Vendored libraw @version 0.21.1"
+keywords = ["libraw", "image"]
+categories = ["api-bindings"]
+repository = "https://github.com/mgolub2/libraw_rs_vendor.git"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.66.1"
+cc = { version = "1.0.82", features = ["parallel"] }
+glob = "0.3.1"

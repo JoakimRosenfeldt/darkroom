@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Darkroom",
+  "version": "0.1.0",
+  "identifier": "com.darkroom.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm run build:renderer",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "title": "Darkroom",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "backgroundColor": "#1a1a1a",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost darkroom-model: http://darkroom-model.localhost blob: data:; object-src 'none'; base-uri 'self'; frame-src 'none'",
+      "devCsp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Photography",
+    "shortDescription": "Local photo library and editor",
+    "icon": [
+      "../resources/icon/darkroom.png",
+      "../resources/icon/darkroom.icns",
+      "../resources/icon/darkroom.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "resources": {
+      "THIRD_PARTY.md": "licenses/THIRD_PARTY.md",
+      "vendor/libraw_rs_vendor/libraw/LICENSE.CDDL": "licenses/LibRaw-LICENSE.CDDL",
+      "vendor/libraw_rs_vendor/libraw/LICENSE.LGPL": "licenses/LibRaw-LICENSE.LGPL"
+    }
+  }
+}

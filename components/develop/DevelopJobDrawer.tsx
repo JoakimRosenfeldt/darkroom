@@ -4,7 +4,7 @@ import { useExperimentalTools } from "@/hooks/useExperimentalTools";
 
 import { useEffect, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import type { DevelopJobSnapshot } from "@/lib/develop/v3/jobs";
 import { useDevelopJobStore } from "@/stores/develop-job-store";
 import { useLibraryStore } from "@/stores/library-store";
@@ -30,7 +30,7 @@ export function DevelopJobDrawer() {
   const initialize = useDevelopJobStore((state) => state.initialize);
   const refresh = useDevelopJobStore((state) => state.refresh);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
-  const available = useSyncExternalStore(subscribeRuntime, isElectronApp, () => false);
+  const available = useSyncExternalStore(subscribeRuntime, isDesktopApp, () => false);
   useEffect(() => {
     return available ? initialize() : undefined;
   }, [available, initialize]);

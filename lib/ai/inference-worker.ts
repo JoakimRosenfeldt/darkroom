@@ -135,7 +135,7 @@ async function getInferenceSession(
   request: AiInferenceWorkerRunRequest,
   backend: "webgpu" | "wasm",
 ): Promise<ort.InferenceSession> {
-  const model = modelUri(request.modelId);
+  const model = modelUri(request);
   if (
     webGpuFailure !== null &&
     (webGpuFailure.modelId !== request.modelId || webGpuFailure.model !== model)
@@ -172,7 +172,7 @@ async function getInferenceSession(
 }
 
 function hasWebGpuFailure(request: AiInferenceWorkerRunRequest): boolean {
-  const model = modelUri(request.modelId);
+  const model = modelUri(request);
   return webGpuFailure !== null &&
     webGpuFailure.modelId === request.modelId &&
     webGpuFailure.model === model;
@@ -181,17 +181,12 @@ function hasWebGpuFailure(request: AiInferenceWorkerRunRequest): boolean {
 function rememberWebGpuFailure(request: AiInferenceWorkerRunRequest): void {
   webGpuFailure = {
     modelId: request.modelId,
-    model: modelUri(request.modelId),
+    model: modelUri(request),
   };
 }
 
-function modelUri(modelId: AiInferenceWorkerRunRequest["modelId"]): string {
-  switch (modelId) {
-    case "subject":
-      return "darkroom-model://model/subject";
-    case "sky":
-      return "darkroom-model://model/sky";
-  }
+function modelUri(request: AiInferenceWorkerRunRequest): string {
+  return request.modelUrl ?? `darkroom-model://localhost/${request.modelId}`;
 }
 
 function inputSpec(modelId: AiInferenceWorkerRunRequest["modelId"]): {
@@ -728,6 +723,14 @@ function isRunRequest(value: unknown): value is AiInferenceWorkerRunRequest {
   }
   if (!("modelId" in value) || !isAiModelId(value.modelId)) {
     return false;
+  }
+  if ("modelUrl" in value && value.modelUrl !== undefined) {
+    const urls = [
+      `darkroom-model://localhost/${value.modelId}`,
+      `http://darkroom-model.localhost/${value.modelId}`,
+      `https://darkroom-model.localhost/${value.modelId}`,
+    ];
+    if (typeof value.modelUrl !== "string" || !urls.includes(value.modelUrl)) return false;
   }
   if (!("backend" in value) || (value.backend !== "auto" && value.backend !== "wasm")) {
     return false;

@@ -11,7 +11,7 @@ import {
 import type { InstalledDevelopDefault } from "@/lib/develop/defaults/installed";
 import { DEVELOP_PRESET_FIELDS, type DevelopPresetField, type DevelopPresetRecord } from "@/lib/develop/presets/schema";
 import { getDevelopRepository } from "@/lib/develop/repository";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isDevelopDefaultResolutionPending, useDevelopStore } from "@/stores/develop-store";
 
@@ -159,7 +159,7 @@ export function DevelopDefaultsPanel({
     : "Rule controls unlock after the initial Develop Head is durable.";
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     const current = ++generation.current;
     const api = getDarkroomAPI();
     const [nextRules, latestPresets, retainedPresets, nextInstalled, nextPreview] = await Promise.all([
@@ -248,7 +248,7 @@ export function DevelopDefaultsPanel({
     (preset) => preset.presetId === selected.preset.presetId && preset.revision === selected.preset.presetRevision,
   );
 
-  if (!isElectronApp()) {
+  if (!isDesktopApp()) {
     return <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="Defaults unavailable">Camera defaults require the Darkroom desktop app.</StatusCard></aside>;
   }
 

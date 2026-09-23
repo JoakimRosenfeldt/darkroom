@@ -42,11 +42,11 @@ import type {
   ExportFormatDescriptor,
   ExportPixelPayload,
   ExportResult,
-} from "../electron/export-service";
+} from "../lib/export/desktop-types";
 import type {
   ExportOptionsSettings,
   ExportOptionsSettingsInput,
-} from "../electron/settings";
+} from "../lib/export/desktop-types";
 import type { FormatCapabilityReport } from "../lib/formats/types";
 import type {
   CatalogAdminBackupResult,
@@ -166,7 +166,7 @@ import type {
 import type { DevelopBatchAutoSyncState, DevelopBatchReceipt } from "../lib/develop/batch/domain";
 
 export interface DarkroomAPI {
-  isElectron: true;
+  isDesktop: true;
   catalogBootstrap(): Promise<CatalogBootstrapResult>;
   catalogCreate(request: CatalogCreateRequest): Promise<CatalogActivationResult>;
   catalogOpen(request: CatalogSelectionRequest): Promise<CatalogActivationResult>;

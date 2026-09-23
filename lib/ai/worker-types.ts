@@ -39,6 +39,7 @@ export interface AiInferenceWorkerRunRequest {
   readonly kind: "run";
   readonly requestId: string;
   readonly modelId: AiModelId;
+  readonly modelUrl?: string;
   readonly image: AiInferenceSourceImage;
   readonly sourceSignature: SourceSignature;
   readonly backend: "auto" | "wasm";

@@ -1,7 +1,7 @@
 import type { LibRawSettings } from "libraw-wasm";
 import type { DecodeOptions, DecodedImage } from "./types";
 import { matrixCameraProfileFromLibRawMetadata } from "../camera-profiles/matrix";
-import { orientedImageSize, rgbDataToBlob } from "./utils";
+import { canvasToBlob, orientedImageSize, rgbDataToBlob } from "./utils";
 import { runWithRawLimit } from "@/lib/cache/concurrency";
 
 type LibRawInstance = InstanceType<
@@ -85,11 +85,13 @@ async function buildFromEmbeddedThumbnail(
         width: Math.max(1, Math.round(bitmap.width * bitmapScale)),
         height: Math.max(1, Math.round(bitmap.height * bitmapScale)),
       };
-      const canvas = new OffscreenCanvas(size.width, size.height);
+      const canvas = document.createElement("canvas");
+      canvas.width = size.width;
+      canvas.height = size.height;
       const context = canvas.getContext("2d");
       if (!context) throw new Error("Could not resize the embedded RAW preview.");
       context.drawImage(bitmap, 0, 0, size.width, size.height);
-      blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+      blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
     } finally {
       bitmap.close();
     }

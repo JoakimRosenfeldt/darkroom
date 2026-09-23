@@ -37,7 +37,7 @@ import {
   persistedInputProfileFromMatrix,
 } from "@/lib/develop/v3/profiles";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
 import { ActionButton, StatusCard } from "./V3PanelControls";
 
@@ -157,7 +157,7 @@ export function DevelopPresetPanel({
     () => [...new Set(presets.map((preset) => preset.category))].sort(),
     [presets],
   );
-  const desktopAvailable = isElectronApp();
+  const desktopAvailable = isDesktopApp();
 
   const publishCameraProfile = useCallback((binding: PresetCameraProfileBinding) => {
     cameraProfileBindingRef.current = binding;
@@ -193,7 +193,7 @@ export function DevelopPresetPanel({
   };
 
   useEffect(() => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     let active = true;
     void getDarkroomAPI().developPresetsList({ query, category, favoriteOnly }).then((next) => {
       if (!active) return;
@@ -219,7 +219,7 @@ export function DevelopPresetPanel({
   }, [category, favoriteOnly, query]);
 
   useEffect(() => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     const request = cameraProfileRequestRef.current + 1;
     cameraProfileRequestRef.current = request;
     let active = true;
@@ -375,7 +375,7 @@ export function DevelopPresetPanel({
   };
 
   const toggleFavorite = async () => {
-    if (!selected || !isElectronApp()) return;
+    if (!selected || !isDesktopApp()) return;
     setBusy(true);
     try {
       const updated = await getDarkroomAPI().developPresetsFavorite({
@@ -413,7 +413,7 @@ export function DevelopPresetPanel({
   };
 
   const createPreset = async () => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     setBusy(true);
     try {
       const created = await getDarkroomAPI().developPresetsCreate(recordFromCurrent());
@@ -428,7 +428,7 @@ export function DevelopPresetPanel({
   };
 
   const updatePreset = async () => {
-    if (!selected || selected.source === "built-in" || !isElectronApp()) return;
+    if (!selected || selected.source === "built-in" || !isDesktopApp()) return;
     cancelPreview();
     setBusy(true);
     try {
@@ -443,7 +443,7 @@ export function DevelopPresetPanel({
   };
 
   const duplicatePreset = async () => {
-    if (!selected || !isElectronApp()) return;
+    if (!selected || !isDesktopApp()) return;
     setBusy(true);
     try {
       const duplicate = parseDevelopPresetRecord({
@@ -465,7 +465,7 @@ export function DevelopPresetPanel({
   };
 
   const deletePreset = async () => {
-    if (!selected || selected.source === "built-in" || !isElectronApp()) return;
+    if (!selected || selected.source === "built-in" || !isDesktopApp()) return;
     if (document.appliedPreset?.presetId === selected.presetId) return;
     if (!window.confirm(`Delete ${selected.name}? Existing applied documents keep their recorded state.`)) return;
     setBusy(true);
@@ -481,7 +481,7 @@ export function DevelopPresetPanel({
   };
 
   const importPreset = async () => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       setMessage("Import is available in the desktop app.");
       return;
     }
@@ -501,7 +501,7 @@ export function DevelopPresetPanel({
   };
 
   const resolveConflict = async (action: "replace" | "import-copy" | "cancel") => {
-    if (!conflict || !isElectronApp()) return;
+    if (!conflict || !isDesktopApp()) return;
     setBusy(true);
     try {
       const result = await getDarkroomAPI().developPresetsResolveConflict({ token: conflict.token, action });

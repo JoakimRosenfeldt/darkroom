@@ -1,0 +1,58 @@
+name: Native app
+
+on:
+  push:
+    branches: [main, 't3code/**']
+  pull_request:
+
+concurrency:
+  group: native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  renderer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build:renderer
+      - run: npm test
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Windows libclang
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append'
+      - run: npm ci
+      - run: npm run build
+      - run: cargo build --manifest-path src-tauri/Cargo.toml --release --features diagnostics --bin darkroom-backend --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: darkroom-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            src-tauri/target/release/darkroom
+            src-tauri/target/release/darkroom.exe
+          if-no-files-found: error

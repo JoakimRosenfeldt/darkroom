@@ -1,220 +1,67 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
-const rootDir = process.cwd();
-const sharpPackagePath = path.join(rootDir, "node_modules/sharp/package.json");
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const builder = path.join(
-  rootDir,
-  "node_modules/.bin",
-  process.platform === "win32" ? "electron-builder.cmd" : "electron-builder",
-);
-
-const targetSpecs = [
-  {
-    id: "mac-arm64",
-    platform: "darwin",
-    arch: "arm64",
-    args: ["--mac", "--arm64"],
-    packages: ["@img/sharp-darwin-arm64", "@img/sharp-libvips-darwin-arm64"],
-  },
-  {
-    id: "win-x64",
-    platform: "win32",
-    arch: "x64",
-    args: ["--win", "--x64"],
-    packages: ["@img/sharp-win32-x64"],
-  },
-  {
-    id: "linux-x64",
-    platform: "linux",
-    arch: "x64",
-    args: ["--linux", "--x64"],
-    packages: ["@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64"],
-  },
-];
-
-const platformFlags = new Set([
-  "--mac",
-  "--macos",
-  "-m",
-  "--win",
-  "--windows",
-  "-w",
-  "--linux",
-  "-l",
-  "--arm64",
-  "--x64",
-  "--ia32",
-  "--armv7l",
-  "--universal",
-]);
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: rootDir,
-    env: process.env,
-    stdio: "inherit",
-    ...options,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if ((result.status ?? 1) !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status ?? 1}.`);
-  }
+const root = process.cwd();
+const cli = path.join(root, "node_modules/@tauri-apps/cli/tauri.js");
+const args = process.argv.slice(2);
+const requestedPlatforms = args.filter((arg) => ["--mac", "--win", "--linux"].includes(arg));
+if (new Set(requestedPlatforms).size > 1) throw new Error("Choose one installer platform per build.");
+const requestedPlatform = requestedPlatforms[0];
+const platforms = { "--mac": "darwin", "--win": "win32", "--linux": "linux" };
+if (requestedPlatform && platforms[requestedPlatform] !== process.platform) {
+  throw new Error("Build installers on their target operating system. The native CI workflow builds all three platforms.");
+}
+const forwarded = args.filter((arg) => !["--mac", "--win", "--linux"].includes(arg));
+function run(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, { cwd: root, env: process.env, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${path.basename(command)} exited with ${result.status ?? "a signal"}.`);
 }
 
-function readJson(filePath) {
-  return fs.readFile(filePath, "utf8").then((raw) => JSON.parse(raw));
-}
-
-function packagePath(packageName) {
-  return path.join(rootDir, "node_modules", ...packageName.split("/"));
-}
-
-async function packageVersion(packageName) {
-  try {
-    const packageJson = await readJson(path.join(packagePath(packageName), "package.json"));
-    return typeof packageJson.version === "string" ? packageJson.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function packInto(packageName, version, stagingRoot) {
-  const destination = path.join(stagingRoot, "npm-pack");
-  await fs.mkdir(destination, { recursive: true });
-  const result = spawnSync(npmCommand, [
-    "pack",
-    "--silent",
-    "--pack-destination",
-    destination,
-    `${packageName}@${version}`,
-  ], {
-    cwd: rootDir,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if ((result.status ?? 1) !== 0) {
-    throw new Error(`npm pack failed for ${packageName}@${version}.`);
-  }
-  const archiveName = result.stdout.trim().split(/\r?\n/).at(-1);
-  if (!archiveName) {
-    throw new Error(`npm pack returned no archive for ${packageName}@${version}.`);
-  }
-  const archivePath = path.isAbsolute(archiveName)
-    ? archiveName
-    : path.join(destination, archiveName);
-  const unpacked = path.join(stagingRoot, packageName.replaceAll("/", "-"));
-  await fs.mkdir(unpacked, { recursive: true });
-  run("tar", ["-xzf", archivePath, "-C", unpacked]);
-  return path.join(unpacked, "package");
-}
-
-async function ensureTargetPackages(spec, sharpPackage, stagingRoot) {
-  const copied = [];
-  try {
-    for (const packageName of spec.packages) {
-      const version = sharpPackage.optionalDependencies?.[packageName];
-      if (typeof version !== "string") {
-        throw new Error(`Sharp does not declare ${packageName} as an optional dependency.`);
-      }
-      if (await packageVersion(packageName) === version) {
-        continue;
-      }
-      if (await packageVersion(packageName) !== null) {
-        throw new Error(
-          `${packageName} is installed at an unexpected version; refusing to overwrite it during release staging.`,
-        );
-      }
-      const source = await packInto(packageName, version, stagingRoot);
-      const destination = packagePath(packageName);
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      await fs.cp(source, destination, { recursive: true });
-      copied.push(destination);
-    }
-  } catch (error) {
-    await restoreCopiedPackages(copied);
-    throw error;
-  }
-  return copied;
-}
-
-async function restoreCopiedPackages(copied) {
-  for (const packagePathToRemove of copied.reverse()) {
-    await fs.rm(packagePathToRemove, { recursive: true, force: true });
-  }
-}
-
-function selectedTargets(args) {
-  const requested = new Set();
-  if (args.some((arg) => arg === "--mac" || arg === "--macos" || arg === "-m")) {
-    requested.add("mac-arm64");
-  }
-  if (args.some((arg) => arg === "--win" || arg === "--windows" || arg === "-w")) {
-    requested.add("win-x64");
-  }
-  if (args.some((arg) => arg === "--linux" || arg === "-l")) {
-    requested.add("linux-x64");
-  }
-  return requested.size === 0
-    ? targetSpecs
-    : targetSpecs.filter((spec) => requested.has(spec.id));
-}
-
-function forwardedArgs(args) {
-  return args.filter((arg) => !platformFlags.has(arg));
-}
-
-if (process.platform === "darwin") {
-  const sdkRoot = path.resolve(
-    process.env.DARKROOM_NEF_SDK_ROOT ?? path.join(os.homedir(), ".darkroom-sdk/nikon-nef"),
-  );
-  const required = [
-    "spike/DarkroomNefSpike.app/Contents/MacOS/nikon-nef-decoder",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libImgSDK.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libRCSigProc.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_atomic-clang-darwin150-mt-1_82.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_filesystem-clang-darwin150-mt-1_82.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_system-clang-darwin150-mt-1_82.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libboost_thread-clang-darwin150-mt-1_82.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libtbb.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/libtbbmalloc.dylib",
-    "spike/DarkroomNefSpike.app/Contents/Frameworks/Elm.framework/Versions/A/Elm",
-    "spike/DarkroomNefSpike.app/Contents/Resources/NKsRGB.icm",
-    "spike/DarkroomNefSpike.app/Contents/Resources/prm.bin",
-    "Image SDK/Library/Mac/Doc/Third Party Legal Notices.rtf",
-  ];
-  const missing = required.filter((file) => !existsSync(path.join(sdkRoot, file)));
-  if (missing.length) {
-    throw new Error(`Nikon NEF release runtime is incomplete:\n${missing.join("\n")}`);
-  }
-  process.env.DARKROOM_NEF_SDK_FROM = path.relative(rootDir, sdkRoot);
-}
-
-const releaseArgs = process.argv.slice(2);
-const targets = selectedTargets(releaseArgs);
-const sharpPackage = await readJson(sharpPackagePath);
-const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "darkroom-sharp-"));
-const commonArgs = forwardedArgs(releaseArgs);
-
+const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "darkroom-release-"));
 try {
-  for (const target of targets) {
-    const copied = await ensureTargetPackages(target, sharpPackage, stagingRoot);
-    try {
-      console.log(`Packaging ${target.id} with matching Sharp optional dependencies.`);
-      run(builder, [...commonArgs, ...target.args]);
-    } finally {
-      await restoreCopiedPackages(copied);
+  const config = { bundle: { resources: {} } };
+  if (process.platform === "darwin") {
+    const sdk = path.resolve(process.env.DARKROOM_NEF_SDK_ROOT ?? path.join(os.homedir(), ".darkroom-sdk/nikon-nef"));
+    const contents = path.join(sdk, "spike/DarkroomNefSpike.app/Contents");
+    const required = [
+      "MacOS/nikon-nef-decoder", "Frameworks/libImgSDK.dylib", "Frameworks/libRCSigProc.dylib",
+      ...["atomic", "filesystem", "system", "thread"].map((name) => `Frameworks/libboost_${name}-clang-darwin150-mt-1_82.dylib`),
+      "Frameworks/libtbb.dylib", "Frameworks/libtbbmalloc.dylib", "Frameworks/Elm.framework/Versions/A/Elm",
+      "Resources/NKsRGB.icm", "Resources/prm.bin",
+    ];
+    for (const file of required) await fs.access(path.join(contents, file)).catch(() => { throw new Error(`Nikon release runtime is incomplete: ${file}`); });
+    const staged = path.join(temporary, "nikon-nef-decoder");
+    await fs.mkdir(path.join(staged, "MacOS"), { recursive: true });
+    await fs.copyFile(path.join(contents, "MacOS/nikon-nef-decoder"), path.join(staged, "MacOS/nikon-nef-decoder"));
+    for (const folder of ["Frameworks", "Resources"]) await fs.cp(path.join(contents, folder), path.join(staged, folder), { recursive: true, verbatimSymlinks: true });
+    await fs.copyFile(path.join(sdk, "Image SDK/Library/Mac/Doc/Third Party Legal Notices.rtf"), path.join(staged, "Third Party Legal Notices.rtf"));
+    const identity = process.env.APPLE_SIGNING_IDENTITY ?? "-";
+    async function sign(directory) {
+      for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await sign(file);
+          if (entry.name.endsWith(".framework")) run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), file]);
+        } else if (entry.isFile() && entry.name.endsWith(".dylib")) {
+          run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), file]);
+        }
+      }
     }
+    await sign(path.join(staged, "Frameworks"));
+    const helper = path.join(staged, "MacOS/nikon-nef-decoder");
+    run("codesign", ["--force", "--sign", identity, "--options", "runtime", ...(identity === "-" ? [] : ["--timestamp"]), helper]);
+    const checksum = createHash("sha256").update(await fs.readFile(helper)).digest("hex");
+    await fs.writeFile(path.join(staged, "runtime.json"), JSON.stringify({ version: 1, checksum }));
+    config.bundle.resources[staged + path.sep] = "nikon-nef-decoder/";
+    config.bundle.resources[path.join(contents, "Resources/prm.bin")] = "Contents/Resources/prm.bin";
   }
+  const configuration = path.join(temporary, "tauri.release.json");
+  await fs.writeFile(configuration, JSON.stringify(config));
+  run(process.execPath, [cli, "build", "--config", configuration, ...forwarded]);
 } finally {
-  await fs.rm(stagingRoot, { recursive: true, force: true });
+  await fs.rm(temporary, { recursive: true, force: true });
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { parseEntryId } from "@/lib/catalog/ids";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { refreshActiveCatalog } from "@/lib/fs/session-catalog";
 import { DEVELOP_PRESET_FIELDS, type DevelopPresetField } from "@/lib/develop/presets/policy";
 import type { DevelopPresetRecord } from "@/lib/develop/presets/schema";
@@ -83,7 +83,7 @@ export function DevelopBatchPanel({ sourceEntry, onClose }: { readonly sourceEnt
   const [preparingBatchId, setPreparingBatchId] = useState<DevelopBatchId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const panelRef = useRef<HTMLElement>(null);
-  const available = isElectronApp();
+  const available = isDesktopApp();
   const frozenTargets = useMemo(() => selection.filter((entryId) => entryId !== sourceEntry.id), [selection, sourceEntry.id]);
   const selectedFields = useMemo(() => DEVELOP_PRESET_FIELDS.filter((field) => fields.has(field)), [fields]);
   const fieldsRequired = mode !== "batch" || batchAction !== "selected-control";

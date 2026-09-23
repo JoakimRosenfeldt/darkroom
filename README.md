@@ -2,7 +2,7 @@
 
 A desktop photo library inspired by Lightroom. Darkroom reads photos directly from local folders on your machine — nothing is uploaded or copied to a server.
 
-Darkroom uses **Electron**, React, and Vite, with native folder access and automatic restoration of your last library on launch.
+Darkroom uses a Rust backend with Tauri 2, React, and Vite. Catalogs, file operations, metadata, history, exports, and background jobs run in Rust. The interface uses the operating system’s webview.
 
 ## Features
 
@@ -15,27 +15,32 @@ Darkroom uses **Electron**, React, and Vite, with native folder access and autom
 - **Edited previews** — Library, filmstrip, and Compare render saved edits, with separate cache entries for each virtual copy and preview size
 - **Photo editing** — crop, white balance, tone, masks, detail, presets, and persistent undo history
 - **Actual-size viewing** — full-resolution 100% detail in Develop and linked Compare, including Retina displays
-- **JPEG export** — quality and size controls, embedded sRGB profile, metadata and GPS choices, collision handling, and cancellation
+- **JPEG, PNG, WebP, AVIF, and TIFF export** — quality and size controls, embedded sRGB color information, metadata and GPS choices, collision handling, and cancellation
 
 ## Getting started
 
+Install Node.js 24, stable Rust, and a C/C++ toolchain with libclang. Linux also needs GTK 3 and WebKitGTK 4.1 development libraries. See [Tauri’s platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+On Ubuntu 24.04:
+
 ```bash
-npm install
-npm run electron:dev
+sudo apt install build-essential libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+npm ci
+npm run desktop:dev
 ```
 
-This starts the Vite dev server on port 3000 and opens the Electron window. Click **Import folder**, create a catalog, and select a photo folder.
+On macOS, install Xcode Command Line Tools. On Windows, install Visual Studio C++ Build Tools, LLVM, and WebView2. Set `LIBCLANG_PATH` if LLVM is outside the default installation path.
 
-Use Node.js 24 for development.
-
-`npm run typecheck` checks TypeScript. `npm run build` checks types and writes the renderer to `out/` before building Electron.
+`desktop:dev` starts Vite on port 3000 and opens the desktop app. Click **Import folder**, create a catalog, and select a photo folder. `npm run dev` serves only the renderer; native access requires the desktop app.
 
 ### Production build
 
 ```bash
 npm run build
-npm run electron:start
+npm start
 ```
+
+`build` checks TypeScript, writes the renderer to `out/`, and builds the release Rust executable. `npm run typecheck`, `npm run lint`, and `npm run check:rust` run focused checks.
 
 ### Packaged app
 
@@ -43,33 +48,36 @@ npm run electron:start
 npm run dist
 ```
 
-Installers are written to `release/`.
+Build on the target operating system. Installers are written to `src-tauri/target/release/bundle/`. Tauri uses WebKit on macOS/Linux and WebView2 on Windows; Electron and Node.js are not part of the shipped application.
 
-The macOS arm64 package injects the approved Nikon runtime from
-`~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another private
-location. Packaging fails when a required runtime file is missing.
+The macOS package includes the private Nikon runtime from `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another location. Packaging validates the required files, signs the staged helper and frameworks, and records the helper checksum. Missing runtime files stop packaging. `APPLE_SIGNING_IDENTITY` selects the signing identity; Tauri’s usual signing and notarization variables apply to the app.
 
-The Nikon helper expects `prm.bin` under `Contents/Resources/Contents/Resources` in the packaged app. The release configuration copies it there.
+The Nikon helper also needs `prm.bin` under `Contents/Resources/Contents/Resources`; the packaging script preserves that layout.
+
+### Existing libraries
+
+Darkroom keeps the existing `darkroom` application data directory, SQLite catalog format, settings, presets, camera profiles, Develop assets, history, and recovery journals. Earlier catalog versions migrate through a validated staging database. Catalog backup and package import remain available in the Library controls.
+
+Set `DARKROOM_USER_DATA` to a separate directory for development or measurement without touching your normal libraries.
 
 ## Architecture
 
 ```
 app/                    React entry point, routes, and styles
-components/             UI: folder picker, grid, viewer
-electron/               Main process, preload, native file I/O
-lib/fs/                 Folder scanning, file reads, persistence
-lib/raw/                Extensible decoder profile system
-lib/cache/              Thumbnail cache
-stores/                 Zustand library state
+components/             Library, Develop, Compare, and export controls
+src-tauri/src/catalog/  SQLite catalogs, scans, import, migration, backups
+src-tauri/src/develop/  History-linked batches, stores, assets, image jobs
+src-tauri/src/native/   Native files, metadata, codecs, models, Nikon runtime
+lib/desktop/            Typed Tauri transport and event subscriptions
+lib/raw/                RAW decoding workers and profiles
+lib/develop/            Develop documents and WebGL preview renderer
+lib/cache/              Thumbnail and edited-image caches
+stores/                 Renderer state
 ```
 
-### Data flow
+The renderer sends typed commands with catalog/session identifiers. Rust resolves file locations from the active catalog and validates paths. Photo reads and export pixels use binary IPC. Cancellable scans, import, metadata analysis, and image jobs run outside the UI thread.
 
-1. User picks a folder via the native OS dialog (Electron `dialog.showOpenDialog`)
-2. Main process scans recursively for supported extensions
-3. Library index snapshot saved to IndexedDB; folder path saved in app settings
-4. Thumbnails decode in the background (libraw-wasm worker for RAW, canvas for standard)
-5. Full decode runs only on the photo detail page
+Interactive previews retain the WebGL2 renderer, including its CPU fallback. RAW decoding remains in the existing LibRaw worker, with the qualified Nikon helper on macOS. Rust performs independent source/profile verification for automatic Develop defaults. Prototype image operations use native Rust kernels.
 
 ### Adding a new RAW profile
 
@@ -109,7 +117,8 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 ## Tech stack
 
-- [Electron](https://www.electronjs.org/) — desktop shell and native file access
+- [Tauri 2](https://tauri.app/) and Rust — desktop host and backend
+- SQLite through `rusqlite` — catalog and edit history
 - [Vite](https://vite.dev/) for renderer development and builds
 - [React Router](https://reactrouter.com/) for client navigation
 - [React 19](https://react.dev/)
