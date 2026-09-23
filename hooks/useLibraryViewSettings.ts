@@ -207,8 +207,12 @@ export function useLibraryViewSettings() {
     () => DEFAULT_SETTINGS,
   );
   const updateSettings = useCallback((patch: Partial<LibraryViewSettings>) => {
-    const next = { ...getSnapshot(), ...patch };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const current = getSnapshot();
+    const next = { ...current, ...patch };
+    const serializedCurrent = JSON.stringify(current);
+    const serializedNext = JSON.stringify(next);
+    if (serializedNext === serializedCurrent) return;
+    window.localStorage.setItem(STORAGE_KEY, serializedNext);
     window.dispatchEvent(new Event(CHANGE_EVENT));
   }, []);
   return [settings, updateSettings] as const;

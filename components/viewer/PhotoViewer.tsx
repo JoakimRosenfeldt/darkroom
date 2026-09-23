@@ -322,11 +322,6 @@ export function PhotoViewer({
       includeBlob,
       rawColorMode,
     };
-    const prefetchOptions = {
-      includeBlob,
-      rawColorMode,
-      ...(progressiveRaw ? { maxEdge: 720 } : {}),
-    };
 
     async function loadImage() {
       let hasImage = false;
@@ -356,14 +351,12 @@ export function PhotoViewer({
           hasImage = true;
           setDecoded(fullPreview);
           setLoading(false);
-          preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
           return;
         }
 
         const loadingImage = loadDevelopImage(entry, progressiveRaw
           ? { ...foregroundOptions, maxEdge: 720 }
           : foregroundOptions);
-        preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
         const result = await loadingImage;
         if (!active) return;
         hasImage = true;
@@ -400,7 +393,22 @@ export function PhotoViewer({
       active = false;
       controller.abort();
     };
-  }, [entry, entries, availableActiveIndex, developProcessKind]);
+  }, [entry, developProcessKind]);
+
+  useEffect(() => {
+    const activeEntry = entries[availableActiveIndex];
+    if (!activeEntry || activeEntry.formatAvailability.status !== "supported") return;
+    const progressiveRaw = activeEntry.formatId === "nef" && developProcessKind === "v3";
+    const includeBlob = developProcessKind === "v2";
+    const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
+      ? "libraw-camera-matrix"
+      : "decoder-rendered";
+    preloadDevelopImages(entries, availableActiveIndex, {
+      includeBlob,
+      rawColorMode,
+      ...(progressiveRaw ? { maxEdge: 720 } : {}),
+    });
+  }, [entries, availableActiveIndex, developProcessKind]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
