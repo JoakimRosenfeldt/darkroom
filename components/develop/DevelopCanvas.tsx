@@ -1120,6 +1120,7 @@ export function DevelopCanvas({
           displaySize={actualSize ? undefined : { width: displayDimensions.width * viewTransform.scale, height: displayDimensions.height * viewTransform.scale }}
           onDimensions={reportDetailDimensions}
           passive
+          panning={panning}
         />
       ) : null}
       <div

@@ -20,7 +20,7 @@ function regionOrigin(center: LoupePosition, dimensions: { width: number; height
 }
 
 
-export function PhotoLoupe({ entry, document, position, onPositionChange, displaySize, onDimensions, passive = false }: {
+export function PhotoLoupe({ entry, document, position, onPositionChange, displaySize, onDimensions, passive = false, panning = false }: {
   entry: LibraryEntry;
   document: DevelopDocumentV3;
   position?: LoupePosition;
@@ -28,12 +28,13 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
   displaySize?: { width: number; height: number };
   onDimensions?: (dimensions: { width: number; height: number }) => void;
   passive?: boolean;
+  panning?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; y: number; position: LoupePosition } | null>(null);
   const dimensionsRef = useRef({ width: 1, height: 1 });
-  const scheduleRef = useRef<((document: DevelopDocumentV3, center: LoupePosition, interactive: boolean, displayWidth: number | undefined) => void) | null>(null);
+  const scheduleRef = useRef<((document: DevelopDocumentV3, center: LoupePosition, interactive: boolean, displayWidth: number | undefined, panning: boolean) => void) | null>(null);
   const interactive = useDevelopStore((state) =>
     state.activeCatalogId === entry.catalogId && Boolean(state.sessions[entry.id]?.transientEdit),
   );
@@ -153,7 +154,11 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
       }
     };
 
-    scheduleRef.current = (document, center, interactive, displayWidth) => {
+    scheduleRef.current = (document, center, interactive, displayWidth, isPanning) => {
+      if (passive && isPanning) {
+        pending = null;
+        return;
+      }
       pending = { document, center, interactive, displayWidth };
       if (!rendering && !animationFrame) {
         animationFrame = requestAnimationFrame(() => { void renderLatest(); });
@@ -165,22 +170,25 @@ export function PhotoLoupe({ entry, document, position, onPositionChange, displa
       cancelAnimationFrame(animationFrame);
       scheduleRef.current = null;
     };
-  }, [source, entry, viewport]);
+  }, [source, entry, viewport, passive]);
 
   useEffect(() => {
-    scheduleRef.current?.(document, center, interactive, displayWidth);
-  }, [source, entry, document, viewport, center, interactive, displayWidth]);
+    scheduleRef.current?.(document, center, interactive, displayWidth, panning);
+  }, [source, entry, document, viewport, center, interactive, displayWidth, panning]);
 
   const sourceReady = source?.entry === entry && renderedSource === source;
   const visibleStatus = sourceReady ? status : status || "Loading full-resolution photo…";
   const geometry = JSON.stringify([document.geometry, document.optics.manualDistortion]);
-  const stalePassiveLoupe = passive && (!sourceReady || !paintedRegion || paintedRegion.displayWidth !== displayWidth || paintedRegion.viewport !== viewport || paintedRegion.geometry !== geometry);
+  const desiredPassiveOrigin = paintedRegion
+    ? regionOrigin(center, paintedRegion.dimensions, paintedRegion.width, paintedRegion.height)
+    : null;
+  const stalePassiveLoupe = passive && (panning || !sourceReady || !paintedRegion || paintedRegion.displayWidth !== displayWidth || paintedRegion.viewport !== viewport || paintedRegion.geometry !== geometry || !desiredPassiveOrigin || paintedRegion.x !== desiredPassiveOrigin.x || paintedRegion.y !== desiredPassiveOrigin.y);
   const canTranslate = sourceReady && paintedRegion &&
     paintedRegion.viewport === viewport && paintedRegion.geometry === JSON.stringify([document.geometry, document.optics.manualDistortion]);
   const desiredOrigin = canTranslate
     ? regionOrigin(center, paintedRegion.dimensions, paintedRegion.width, paintedRegion.height)
     : null;
-  const translation = desiredOrigin && paintedRegion
+  const translation = !passive && desiredOrigin && paintedRegion
     ? { x: (paintedRegion.x - desiredOrigin.x) * paintedRegion.cssScale, y: (paintedRegion.y - desiredOrigin.y) * paintedRegion.cssScale }
     : { x: 0, y: 0 };
 
