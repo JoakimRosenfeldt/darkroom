@@ -1,3 +1,4 @@
+import { initializeDesktopBridge } from "@/lib/desktop/bridge";
 import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, Route, Routes } from "react-router";
@@ -12,6 +13,8 @@ const ComparePage = lazy(() => import("./compare/page"));
 
 const root = document.getElementById("root");
 if (!root) throw new Error("The app root is missing.");
+
+await initializeDesktopBridge();
 
 createRoot(root).render(
   <StrictMode>

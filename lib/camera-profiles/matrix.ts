@@ -179,8 +179,14 @@ export function cameraProfileIsCompatible(
   profile: MatrixCameraProfile,
   camera: CameraProfileCompatibility,
 ): boolean {
-  return normalizedCameraText(profile.compatibility.make) === normalizedCameraText(camera.make) &&
-    normalizedCameraText(profile.compatibility.model) === normalizedCameraText(camera.model);
+  const identity = (value: CameraProfileCompatibility) => {
+    const make = normalizedCameraText(value.make).replace(/^nikon corporation$/, "nikon");
+    const model = normalizedCameraText(value.model);
+    return [make, make === "nikon" ? model.replace(/^nikon\s+/, "") : model];
+  };
+  const expected = identity(profile.compatibility);
+  const actual = identity(camera);
+  return expected[0] === actual[0] && expected[1] === actual[1];
 }
 
 function profileIdPart(value: string): string {

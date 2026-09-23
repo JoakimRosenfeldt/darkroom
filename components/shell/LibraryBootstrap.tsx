@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { isElectronApp } from "@/lib/fs/platform";
+import { isDesktopApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 export function LibraryBootstrap() {
@@ -22,10 +22,10 @@ export function LibraryBootstrap() {
   }, [importError]);
 
   useEffect(() => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       useLibraryStore.setState({
         importError:
-          "Darkroom must be run as a desktop app. Use npm run electron:dev.",
+          "Darkroom must be run as a desktop app. Use npm run desktop:dev.",
       });
       return;
     }

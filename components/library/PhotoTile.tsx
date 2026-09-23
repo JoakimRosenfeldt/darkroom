@@ -52,6 +52,7 @@ export const PhotoTile = memo(function PhotoTile({
   const tileRef = useRef<HTMLDivElement>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
@@ -102,6 +103,7 @@ export const PhotoTile = memo(function PhotoTile({
       objectUrlRef.current = null;
     }
     setThumbnailUrl(null);
+    setLoadError(null);
     setStatus(entry.formatAvailability.status === "supported" ? "loading" : "error");
   }, [entry.assetRevision, entry.catalogId, entry.formatAvailability.status, entry.id, decodeEdge, developDocument]);
 
@@ -148,6 +150,8 @@ export const PhotoTile = memo(function PhotoTile({
     const controller = new AbortController();
 
     async function loadThumbnail() {
+      setLoadError(null);
+      setStatus("loading");
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
           document: developDocument,
@@ -163,12 +167,18 @@ export const PhotoTile = memo(function PhotoTile({
         }
         objectUrlRef.current = URL.createObjectURL(blob);
         setThumbnailUrl(objectUrlRef.current);
+        setLoadError(null);
         setStatus("ready");
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
         }
         if (active) {
+          setLoadError(error instanceof Error && error.message.trim()
+            ? error.message
+            : typeof error === "string" && error.trim()
+              ? error
+              : "Could not load the photo preview.");
           setStatus("error");
         }
       }
@@ -185,6 +195,10 @@ export const PhotoTile = memo(function PhotoTile({
   const imageFit = compact ? "object-cover" : `object-${fit}`;
   const isRejected = metadata?.pick === "reject";
   const formatLabel = getFormatLabelForEntry(entry.name, entry.profileId);
+  const previewError = entry.formatAvailability.status !== "supported"
+    ? entry.formatAvailability.reason ?? `Preview is unavailable for ${entry.name}.`
+    : status === "error" ? loadError ?? "Could not load the photo preview." : null;
+  const errorLabel = previewError ? `${entry.name}: ${previewError}` : undefined;
   const showFormatLabel =
     entry.formatAvailability.status !== "supported" ||
     (entry.profileId !== null && entry.profileId !== "standard");
@@ -213,6 +227,7 @@ export const PhotoTile = memo(function PhotoTile({
         compact ? "" : "transition-[box-shadow,transform] duration-150 ease-out",
       ].join(" ")}
       style={{ width, height }}
+      title={previewError ?? undefined}
     >
       {thumbnailUrl ? (
         <img
@@ -224,14 +239,18 @@ export const PhotoTile = memo(function PhotoTile({
         />
       ) : (
         <div
-          className="flex h-full items-center justify-center px-2 text-center text-[10px] uppercase tracking-wider text-lr-text-dim"
-          title={entry.formatAvailability.reason ?? undefined}
+          className="flex h-full flex-col items-center justify-center gap-1 px-2 text-center text-[10px] text-lr-text-dim"
+          role={previewError ? "img" : undefined}
+          aria-label={errorLabel}
         >
-          {entry.formatAvailability.status !== "supported"
-            ? `${formatLabel}: unavailable`
-            : status === "error"
-              ? "Error"
-              : "···"}
+          <span className="uppercase tracking-wider">
+            {entry.formatAvailability.status !== "supported"
+              ? `${formatLabel}: unavailable`
+              : status === "error"
+                ? "Preview unavailable"
+                : "···"}
+          </span>
+          {previewError && !compact ? <span className="line-clamp-2 break-words">{previewError}</span> : null}
         </div>
       )}
 
@@ -299,6 +318,7 @@ export const PhotoTile = memo(function PhotoTile({
       <button
         type="button"
         aria-pressed={selected}
+        aria-label={errorLabel}
         className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
         style={caption ? { width } : undefined}
         onClick={(event) =>
@@ -335,6 +355,7 @@ export const PhotoTile = memo(function PhotoTile({
   return (
     <button
       type="button"
+      aria-label={errorLabel}
       className="block shrink-0 cursor-pointer border-0 bg-transparent p-0 text-left"
       onClick={() => openRecordedResult([entry.id])}
     >

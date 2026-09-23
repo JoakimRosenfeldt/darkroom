@@ -2,7 +2,7 @@
 
 A desktop photo library inspired by Lightroom. Darkroom reads photos directly from local folders on your machine — nothing is uploaded or copied to a server.
 
-Darkroom uses **Electron**, React, and Vite, with native folder access and automatic restoration of your last library on launch.
+Darkroom uses a Rust backend with Tauri 2, React, and Vite. Catalogs, file operations, metadata, history, exports, and background jobs run in Rust. The interface uses the operating system’s webview.
 
 ## Features
 
@@ -15,27 +15,32 @@ Darkroom uses **Electron**, React, and Vite, with native folder access and autom
 - **Edited previews** — Library, filmstrip, and Compare render saved edits, with separate cache entries for each virtual copy and preview size
 - **Photo editing** — crop, white balance, tone, masks, detail, presets, and persistent undo history
 - **Actual-size viewing** — full-resolution 100% detail in Develop and linked Compare, including Retina displays
-- **JPEG export** — quality and size controls, embedded sRGB profile, metadata and GPS choices, collision handling, and cancellation
+- **JPEG, PNG, WebP, AVIF, and TIFF export** — quality and size controls, embedded sRGB color information, metadata and GPS choices, collision handling, and cancellation
 
 ## Getting started
 
+Install Node.js 24, stable Rust, and a C/C++ toolchain with libclang. Linux also needs GTK 3 and WebKitGTK 4.1 development libraries. See [Tauri’s platform prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+On Ubuntu 24.04:
+
 ```bash
-npm install
-npm run electron:dev
+sudo apt install build-essential libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+npm ci
+npm run desktop:dev
 ```
 
-This starts the Vite dev server on port 3000 and opens the Electron window. Click **Import folder**, create a catalog, and select a photo folder.
+On macOS, install Xcode Command Line Tools. On Windows, install Visual Studio C++ Build Tools, LLVM, and WebView2. Set `LIBCLANG_PATH` if LLVM is outside the default installation path.
 
-Use Node.js 24 for development.
-
-`npm run typecheck` checks TypeScript. `npm run build` checks types and writes the renderer to `out/` before building Electron.
+`desktop:dev` starts Vite on port 3000 and opens the desktop app. Click **Import folder**, create a catalog, and select a photo folder. `npm run dev` serves only the renderer; native access requires the desktop app.
 
 ### Production build
 
 ```bash
 npm run build
-npm run electron:start
+npm start
 ```
+
+`build` checks TypeScript, writes the renderer to `out/`, and builds the release Rust executable. This unbundled executable does not include the private Nikon runtime on macOS; use `npm run dist` for the complete packaged app when editing NEFs that require the Nikon SDK. `npm run typecheck`, `npm run lint`, and `npm run check:rust` run focused checks.
 
 ### Packaged app
 
@@ -43,33 +48,46 @@ npm run electron:start
 npm run dist
 ```
 
-Installers are written to `release/`.
+Build on the target operating system. Installers are written to `src-tauri/target/release/bundle/`. Tauri uses WebKit on macOS/Linux and WebView2 on Windows; Electron and Node.js are not part of the shipped application.
 
-The macOS arm64 package injects the approved Nikon runtime from
-`~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another private
-location. Packaging fails when a required runtime file is missing.
+Repeated builds reuse unchanged Rust artifacts. The renderer still runs type checking and Vite, but preserves identical output files and timestamps; temporary Nikon bundle paths are applied only after compilation. Release builds use incremental compilation and 16 codegen units for the application crate, retaining optimization level 3 and thin LTO; dependency settings stay unchanged. This speeds up small code changes after the first build. Larger changes, dependency or toolchain updates, and an empty cache still take longer. [Build measurements](docs/performance/README.md#packaging-builds) include the measured improvement and its limits.
 
-The Nikon helper expects `prm.bin` under `Contents/Resources/Contents/Resources` in the packaged app. The release configuration copies it there.
+For local macOS use, `npm run dist -- --bundles app` builds `Darkroom.app` without spending time creating a DMG. For frequent code changes, `npm run desktop:dev` uses incremental debug compilation and Vite live updates. A packaged debug app is also available with `npm run dist -- --debug --bundles app`, under `src-tauri/target/debug/bundle/macos/`; it is intended for local testing and does not have release optimization.
+
+The packaging command accepts Tauri's target, feature, configuration, signing, and bundle options. Raw Cargo arguments after `--` are limited to locking, offline operation, quiet output, timings, and job counts; artifact or profile selectors are rejected to prevent packaging a stale executable. Use Tauri's `--debug`, `--target`, and `--features` options for build selection.
+
+The macOS package includes the private Nikon runtime from `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` to use another location. Packaging validates the required files, signs the staged helper and frameworks, preserves framework symlinks when copying the runtime, and records the helper checksum. Missing runtime files stop packaging. `APPLE_SIGNING_IDENTITY` selects the signing identity; Tauri’s usual signing and notarization variables apply to the app.
+
+Local ad-hoc signing clears hardened-runtime flags on the Nikon helper so it can load its ad-hoc libraries. Developer ID signing retains hardened runtime and timestamping. Packaging checks helper startup before building the app and reports errors immediately. Older helpers that reject `--probe` with exactly `invalid arguments` can still be packaged when stdout is empty or contains only the known `enum_string.csv` / `uuid_string.csv` lookup warnings at the expected SDK resource path. Those warnings remain visible; capability diagnostics remain unverified, and decoded image output is validated separately.
+
+The Nikon helper also needs `prm.bin` under `Contents/Resources/Contents/Resources`; the packaging script preserves that layout and provides the same relative resource path during its startup check. Failed checks report stdout, stderr, and process exit details.
+
+### Existing libraries
+
+Darkroom keeps the existing `darkroom` application data directory, SQLite catalog format, settings, presets, camera profiles, Develop assets, history, and recovery journals. Earlier catalog versions migrate through a validated staging database. Catalog backup and package import remain available in the Library controls.
+
+Set `DARKROOM_USER_DATA` to a separate directory for development or measurement without touching your normal libraries.
 
 ## Architecture
 
 ```
 app/                    React entry point, routes, and styles
-components/             UI: folder picker, grid, viewer
-electron/               Main process, preload, native file I/O
-lib/fs/                 Folder scanning, file reads, persistence
-lib/raw/                Extensible decoder profile system
-lib/cache/              Thumbnail cache
-stores/                 Zustand library state
+components/             Library, Develop, Compare, and export controls
+src-tauri/src/catalog/  SQLite catalogs, scans, import, migration, backups
+src-tauri/src/develop/  History-linked batches, stores, assets, image jobs
+src-tauri/src/native/   Native files, metadata, codecs, models, Nikon runtime
+lib/desktop/            Typed Tauri transport and event subscriptions
+lib/raw/                RAW decoding workers and profiles
+lib/develop/            Develop documents and WebGL preview renderer
+lib/cache/              Thumbnail and edited-image caches
+stores/                 Renderer state
 ```
 
-### Data flow
+The renderer sends typed commands with catalog/session identifiers. Rust resolves file locations from the active catalog and validates paths. Photo reads and export pixels use binary IPC. Cancellable scans, import, metadata analysis, and image jobs run outside the UI thread.
 
-1. User picks a folder via the native OS dialog (Electron `dialog.showOpenDialog`)
-2. Main process scans recursively for supported extensions
-3. Library index snapshot saved to IndexedDB; folder path saved in app settings
-4. Thumbnails decode in the background (libraw-wasm worker for RAW, canvas for standard)
-5. Full decode runs only on the photo detail page
+Interactive previews retain the WebGL2 renderer, including its CPU fallback. RAW decoding remains in the existing LibRaw worker, with the qualified Nikon helper on macOS. Rust performs independent source/profile verification for automatic Develop defaults. Prototype image operations use native Rust kernels.
+
+See the [migration and parity notes](docs/rust-migration.md) and [measured performance results](docs/performance/README.md).
 
 ### Adding a new RAW profile
 
@@ -109,7 +127,8 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 ## Tech stack
 
-- [Electron](https://www.electronjs.org/) — desktop shell and native file access
+- [Tauri 2](https://tauri.app/) and Rust — desktop host and backend
+- SQLite through `rusqlite` — catalog and edit history
 - [Vite](https://vite.dev/) for renderer development and builds
 - [React Router](https://reactrouter.com/) for client navigation
 - [React 19](https://react.dev/)
@@ -122,25 +141,29 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 - Output is 8-bit sRGB. Full-resolution output is limited to 50 megapixels.
 - RAW qualification currently covers the bundled Nikon Z6 III files with the native Nikon decoder. Other cameras, lighting conditions, and automatic lens profiles need separate qualification.
-- Full-resolution masked views can take several seconds. Export rendering runs in a worker so the interface remains responsive.
+- Full-resolution masked views can take several seconds. WebKit uses the main-thread GPU canvas with export tiles that yield between draws; other engines can use the GPU worker. A CPU worker remains the fallback.
 - The Nikon helper is required for the bundled high-efficiency NEFs. Embedded JPEG previews support culling, but editing and export require decoded RAW pixels.
 
 ## License
 
 Private project.
 
-## Check the local RAW workflow
+## Check the local desktop workflow
 
 Start the development server with `npm run dev`. In another terminal, run:
 
 ```bash
-npm run test:develop:electron
+npm run test:develop:desktop
 ```
 
-The check uses a temporary catalog and copies of the bundled photos. It checks edits, undo, redo, virtual copies, preset batches, edited previews, 100% detail, JPEG metadata, cancellation, and recovery after process interruption. It prints the location of screenshots, exported files, and timing results.
+Install `tauri-driver` and a matching native WebDriver (WebKitWebDriver on Linux). The check uses the real Tauri backend, a temporary catalog, and copies of the bundled JPEG photos. Diagnostic builds select only the temporary import and export paths through environment variables. It checks edits, undo, redo, virtual copies, preset batches, edited previews, 100% detail, JPEG metadata, cancellation, and recovery after process interruption. It prints the location of screenshots, exported files, and timing results.
 
-Set `DARKROOM_SMOKE_URL` if the server uses a different port. Set `DARKROOM_SMOKE_RAW` to test another Nikon file. The check expects a working RAW decoder; embedded previews do not qualify.
+Set `DARKROOM_SMOKE_DRIVER` or `DARKROOM_SMOKE_NATIVE_DRIVER` for driver paths outside `PATH`. Set `DARKROOM_SMOKE_DRIVER_PORT` to change port 4460. Run under a desktop display or Xvfb on Linux. Set `DARKROOM_SMOKE_RAW` to a Nikon NEF to run the same workflow with RAW decoding; embedded previews do not qualify. `DARKROOM_SMOKE_BINARY` can select an existing diagnostic development build. Set `DARKROOM_SMOKE_REQUIRE_GPU=1` to require GPU previews and export in addition to pixel checks.
 
 Development builds find the Nikon helper under `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` or `DARKROOM_NEF_HELPER_PATH` to use another installation.
+
+Local development helpers can decode NEFs but retain `nikon-test-only` provenance; their use does not qualify a release. `DARKROOM_NEF_APPROVED_CHECKSUM` optionally pins the development helper's SHA-256 and rejects a mismatch. Packaged builds require their bundled checksum manifest and ignore development helper overrides.
+
+Nikon High Efficiency and High Efficiency* NEFs require this separate Nikon decoder. The bundled LibRaw build supports Z6 III lossless compression, but not HE/HE*. If a photo fails, click **Manage** at the bottom of the left sidebar, then expand **Support / Formats** in the Catalogs dialog. **Nikon runtime** reports whether the decoder is missing or misconfigured. An embedded JPEG alone is insufficient for editing or export.
 
 Experimental tools are available under **Develop > Edit > Advanced**. The normal editor keeps histogram, white balance, and tone in **Basic**.

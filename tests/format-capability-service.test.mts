@@ -114,8 +114,8 @@ test("a qualified versioned native probe records backend, architecture, and chec
   assert.equal(development.status, "misconfigured");
   assert.equal(development.packageState, "development");
   const packagedHelper = { ...helper, packageState: "packaged" as const, expectedChecksum: development.checksum ?? "" };
-  const first = await probeNikonRuntime({ helper: packagedHelper, packageState: "packaged", approvedChecksum: development.checksum ?? "" });
-  const second = await probeNikonRuntime({ helper: packagedHelper, packageState: "packaged", approvedChecksum: development.checksum ?? "" });
+  const first = await probeNikonRuntime({ helper: packagedHelper, packageState: "packaged", platform: "darwin", approvedChecksum: development.checksum ?? "" });
+  const second = await probeNikonRuntime({ helper: packagedHelper, packageState: "packaged", platform: "darwin", approvedChecksum: development.checksum ?? "" });
   assert.equal(first.status, "available");
   assert.equal(first.kind, "native");
   assert.equal(first.backend, "nikon-sdk");
@@ -143,6 +143,7 @@ test("packaged probes require an approved checksum and reject replacement during
   const mismatch = await probeNikonRuntime({
     helper: { ...stableHelper, packageState: "packaged" },
     packageState: "packaged",
+    platform: "darwin",
     approvedChecksum: "0".repeat(64),
   });
   assert.equal(mismatch.status, "misconfigured");

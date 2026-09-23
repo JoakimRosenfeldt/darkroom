@@ -1247,7 +1247,7 @@ async function syncCatalogStateForBinding(
   const nextView = await getDarkroomAPI().catalogQuery({
     catalogId: binding.catalogId,
     sessionId: binding.sessionId,
-    expectedRevision: revision,
+    expectedRevision: null,
   });
   if (!isCurrentCatalogSync(binding)) return revision;
   activeView = nextView;
@@ -1290,11 +1290,13 @@ export function scheduleCatalogStateSync(
   return task;
 }
 
+type EditEntryLifecycleMutation = Extract<
+  CatalogApplyMutation,
+  { readonly kind: "edit-entry-create" | "edit-entry-rename" | "edit-entry-delete" }
+>;
+
 async function applyEditEntryLifecycle(
-  mutation: Extract<
-    CatalogApplyMutation,
-    { readonly kind: "edit-entry-create" | "edit-entry-rename" | "edit-entry-delete" }
-  >,
+  mutation: EditEntryLifecycleMutation | ((view: CatalogLiveStateView) => EditEntryLifecycleMutation),
   expectedBinding?: Pick<CatalogSyncBinding, "catalogId" | "sessionId">,
 ): Promise<HydratedCatalogState> {
   const binding = captureCatalogSyncBinding();
@@ -1314,16 +1316,16 @@ async function applyEditEntryLifecycle(
       expectedRevision: null,
     });
     if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed during the edit entry update.");
-    const result = await api.catalogApply({
+    await api.catalogApply({
       catalogId: binding.catalogId,
       sessionId: binding.sessionId,
       expectedRevision: view.catalog.revision,
-      mutations: [mutation],
+      mutations: [typeof mutation === "function" ? mutation(view) : mutation],
     });
     const nextView = await api.catalogQuery({
       catalogId: binding.catalogId,
       sessionId: binding.sessionId,
-      expectedRevision: result.revision,
+      expectedRevision: null,
     });
     if (!isCurrentCatalogSync(binding)) throw new Error("Catalog session changed after the edit entry update.");
     const session = requireSession();
@@ -1341,19 +1343,22 @@ export async function createVirtualCopy(
   input: {
     readonly catalogId: CatalogId;
     readonly sessionId: SessionId;
-    readonly developJson: string | null;
-    readonly expectedSourceMetadataUpdatedAt: number;
   },
 ): Promise<{ readonly state: HydratedCatalogState; readonly entryId: EntryId }> {
   const entryId = createEntryId();
-  const state = await applyEditEntryLifecycle({
-    kind: "edit-entry-create",
-    sourceEntryId,
-    entryId,
-    displayName,
-    developJson: input.developJson,
-    expectedSourceMetadataUpdatedAt: input.expectedSourceMetadataUpdatedAt,
-    createdAt: Date.now(),
+  const state = await applyEditEntryLifecycle((view) => {
+    const source = view.assets.find((asset) => (asset.entryId ?? asset.assetId) === sourceEntryId);
+    if (!source) throw new Error("Source edit entry is unavailable.");
+    // Capture settings and the conflict token together after pending writes have drained.
+    return {
+      kind: "edit-entry-create",
+      sourceEntryId,
+      entryId,
+      displayName,
+      developJson: source.metadata.developJson,
+      expectedSourceMetadataUpdatedAt: source.metadata.updatedAt,
+      createdAt: Date.now(),
+    };
   }, input);
   return { state, entryId };
 }

@@ -1,3 +1,4 @@
+import { canvasToBlob } from "../utils";
 import type { DecodeOptions, DecodedImage, ImageProfile } from "../types";
 import {
   getFormatExtensionsForProfile,
@@ -14,6 +15,7 @@ async function blobToDecodedImage(
 ): Promise<DecodedImage> {
   options.signal?.throwIfAborted();
   const bitmap = await createImageBitmap(blob);
+  let canvas: HTMLCanvasElement | undefined;
   try {
     options.signal?.throwIfAborted();
     const scale = options.thumbnail && options.maxEdge
@@ -28,18 +30,21 @@ async function blobToDecodedImage(
     if (!options.thumbnail && !options.sourcePixels) {
       return { ...decoded, rgb: new Uint8Array(0), blob, objectUrl: URL.createObjectURL(blob) };
     }
-    const canvas = new OffscreenCanvas(width, height);
+    canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Could not create canvas context");
     context.drawImage(bitmap, 0, 0, width, height);
     if (options.sourcePixels) {
       return { ...decoded, rgb: context.getImageData(0, 0, width, height).data };
     }
-    const outputBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    const outputBlob = await canvasToBlob(canvas, "image/jpeg", 0.92);
     options.signal?.throwIfAborted();
     return { ...decoded, rgb: new Uint8Array(0), blob: outputBlob, objectUrl: URL.createObjectURL(outputBlob) };
   } finally {
     bitmap.close();
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
   }
 }
 

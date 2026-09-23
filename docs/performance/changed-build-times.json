@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-23",
+  "baselineCommit": "2725bc6a1265592c30993193cc42628d457126c5",
+  "platform": "Linux 7.2.5-3-omarchy x86_64",
+  "cpu": "AMD Ryzen 9 5900X",
+  "rust": "1.98.1",
+  "command": "cargo build --manifest-path src-tauri/Cargo.toml --release --bin darkroom --features tauri/custom-protocol --locked",
+  "candidateOverrides": {
+    "profile.release.package.darkroom.codegen-units": 16,
+    "profile.release.package.darkroom.incremental": true
+  },
+  "edit": "Different literal in Nikon probe response error in src-tauri/src/native/nef.rs for each run; source restored afterwards.",
+  "dependenciesAlreadyBuilt": true,
+  "runs": [
+    {
+      "variant": "baseline",
+      "case": "changed",
+      "seconds": 93.217,
+      "exit": 0
+    },
+    {
+      "variant": "parallel-incremental",
+      "case": "warmup",
+      "seconds": 35.442,
+      "exit": 0
+    },
+    {
+      "variant": "parallel-incremental",
+      "case": "changed-1",
+      "seconds": 17.485,
+      "exit": 0
+    },
+    {
+      "variant": "parallel-incremental",
+      "case": "changed-2",
+      "seconds": 17.656,
+      "exit": 0
+    }
+  ]
+}

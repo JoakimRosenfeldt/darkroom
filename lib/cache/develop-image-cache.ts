@@ -283,7 +283,9 @@ export async function loadDevelopImage(
       controller.signal.throwIfAborted();
       if (decoded.pixelProvenance.decoderPath === "embedded-preview") {
         if (decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
-        throw new Error("Full RAW decoding failed. Only an embedded JPEG preview is available. Check the Nikon decoder in Support / Formats before editing.");
+        const reasons = [decoded.metadata.rawDecodeError, decoded.metadata.fallbackMessage]
+          .filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0);
+        throw new Error(`${reasons.join(" ") || "Full RAW decoding failed."} Only an embedded JPEG preview is available. Check Manage > Support / Formats > Nikon runtime before editing.`);
       }
       return toDevelopImage(decoded);
     });

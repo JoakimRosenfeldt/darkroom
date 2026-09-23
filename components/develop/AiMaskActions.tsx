@@ -41,7 +41,7 @@ import {
   type MaskSourceNode,
 } from "@/lib/develop/v3/masking";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
 import { useDevelopStore } from "@/stores/develop-store";
 import { useLibraryStore } from "@/stores/library-store";
@@ -425,7 +425,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
     : null;
 
   const refreshModels = useCallback(async (): Promise<void> => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     try {
       const api = getDarkroomAPI();
       const states = await Promise.all(MODEL_IDS.map(async (modelId) => (
@@ -450,7 +450,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
       const active = activeJobRef.current;
       activeJobRef.current = null;
       active?.controller.abort();
-      if (active?.downloading && isElectronApp()) {
+      if (active?.downloading && isDesktopApp()) {
         void getDarkroomAPI().cancelAiModelDownload(active.modelId).catch(() => undefined);
       }
     };
@@ -461,7 +461,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
     if (!active) return;
     activeJobRef.current = null;
     active.controller.abort();
-    if (active.downloading && isElectronApp()) {
+    if (active.downloading && isDesktopApp()) {
       await getDarkroomAPI().cancelAiModelDownload(active.modelId).catch(() => undefined);
     }
     if (mountedRef.current) {
@@ -626,7 +626,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
   }, [completeResult, currentJob, entry, sourceSignature]);
 
   const downloadAndInfer = useCallback(async (request: AiRequest): Promise<void> => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       setError("AI masking is available in the Darkroom desktop app.");
       return;
     }
@@ -691,7 +691,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
 
   const startRequest = useCallback(async (request: AiRequest): Promise<void> => {
     if (job || consentRequest) return;
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       setError("AI masking is available in the Darkroom desktop app.");
       return;
     }
@@ -727,7 +727,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
   }, [lastRequest, startRequest]);
 
   const removeModel = useCallback(async (modelId: AiModelId): Promise<void> => {
-    if (job?.modelId === modelId || !isElectronApp()) return;
+    if (job?.modelId === modelId || !isDesktopApp()) return;
     try {
       await getDarkroomAPI().removeAiModel(modelId);
       setSuccess(`${MODEL_LABELS[modelId]} model removed from this device.`);
@@ -739,7 +739,7 @@ export function AiMaskActions({ entry, document }: AiMaskActionsProps) {
     }
   }, [job?.modelId, refreshModels]);
 
-  if (!isElectronApp()) {
+  if (!isDesktopApp()) {
     return (
       <div className="space-y-2">
         <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-muted">AI selection</h3>

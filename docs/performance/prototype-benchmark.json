@@ -1,0 +1,138 @@
+{
+  "measuredAt": "2026-09-23",
+  "environment": {
+    "os": "Linux 7.2.5-3-omarchy x86_64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor (24 logical CPUs)",
+    "node": "v24.21.0",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "rustProfile": "release, thin LTO, codegen-units=1"
+  },
+  "method": {
+    "dimensions": [
+      512,
+      512
+    ],
+    "channels": 4,
+    "pixels": "i % 4 === 3 ? 255 : (i * 23 + 41) % 256",
+    "warmups": 1,
+    "samples": 5,
+    "unit": "milliseconds",
+    "includes": "CPU kernel only",
+    "excludes": [
+      "IPC",
+      "image decode",
+      "PNG encoding",
+      "disk I/O",
+      "UI rendering"
+    ],
+    "limitations": [
+      "Synthetic input, not a representative photo collection.",
+      "Run on a development workstation; no CPU isolation.",
+      "Microbenchmark results do not measure whole-application speed."
+    ]
+  },
+  "node": [
+    {
+      "operation": "depth",
+      "milliseconds": [
+        11.697477000000617,
+        7.274081999999908,
+        17.81267899999966,
+        17.98912300000029,
+        6.0175609999996595
+      ]
+    },
+    {
+      "operation": "denoise",
+      "milliseconds": [
+        471.265273,
+        472.4901030000001,
+        472.7007960000001,
+        471.6103669999993,
+        471.453974
+      ]
+    },
+    {
+      "operation": "raw-details",
+      "milliseconds": [
+        14.483472999999321,
+        14.45092300000033,
+        14.470602999999755,
+        14.461293000000296,
+        14.49343399999998
+      ]
+    },
+    {
+      "operation": "super-resolution",
+      "milliseconds": [
+        1444.020770000001,
+        1449.476435999999,
+        1445.220788999999,
+        1447.615554,
+        1445.350739999998
+      ]
+    },
+    {
+      "operation": "generative-remove",
+      "milliseconds": [
+        6.383836999997584,
+        5.971850000001723,
+        6.298166000000492,
+        6.061690999998973,
+        5.577553999999509
+      ]
+    }
+  ],
+  "rust": [
+    {
+      "milliseconds": [
+        2.162327,
+        2.124606,
+        2.093375,
+        2.142866,
+        2.1452060000000004
+      ],
+      "operation": "depth"
+    },
+    {
+      "milliseconds": [
+        42.460794,
+        42.282551,
+        42.337502,
+        42.333812,
+        42.298640999999996
+      ],
+      "operation": "denoise"
+    },
+    {
+      "milliseconds": [
+        9.816464999999999,
+        9.848595,
+        9.802835,
+        9.794575,
+        9.759814
+      ],
+      "operation": "raw-details"
+    },
+    {
+      "milliseconds": [
+        153.175166,
+        153.297297,
+        153.51104199999997,
+        152.85808,
+        152.127138
+      ],
+      "operation": "super-resolution"
+    },
+    {
+      "milliseconds": [
+        4.110728999999999,
+        4.113099999999999,
+        4.102239,
+        4.098878,
+        4.100289
+      ],
+      "operation": "generative-remove"
+    }
+  ]
+}

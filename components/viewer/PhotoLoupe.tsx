@@ -80,7 +80,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
     let rendering = false;
     let animationFrame = 0;
     let pending: { document: DevelopDocumentV3; center: LoupePosition; interactive: boolean } | null = null;
-    let draftCanvas: OffscreenCanvas | null = null;
+    let draftCanvas: HTMLCanvasElement | null = null;
     let backend: V3PreviewBackend | null = null;
     let maskMattes: { key: string; value: ReturnType<typeof loadV3PreviewMaskMattes> } | null = null;
 
@@ -134,7 +134,7 @@ export function PhotoLoupe({ entry, document, position, onPositionChange }: {
           ? new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength)
           : new Uint8ClampedArray(rgba), renderWidth, renderHeight);
         if (draft) {
-          draftCanvas ??= new OffscreenCanvas(renderWidth, renderHeight);
+          draftCanvas ??= window.document.createElement("canvas");
           if (draftCanvas.width !== renderWidth) draftCanvas.width = renderWidth;
           if (draftCanvas.height !== renderHeight) draftCanvas.height = renderHeight;
           draftCanvas.getContext("2d")?.putImageData(pixels, 0, 0);

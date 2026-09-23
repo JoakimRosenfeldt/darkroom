@@ -1,0 +1,78 @@
+[package]
+name = "darkroom"
+version = "0.1.0"
+description = "A local desktop photo library"
+edition = "2024"
+rust-version = "1.88"
+default-run = "darkroom"
+autobins = false
+
+[lib]
+name = "darkroom_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.6", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "blocking"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "fs", "io-util", "macros"] }
+futures-util = "0.3"
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff", "avif"] }
+trash = "5"
+notify = "8"
+tempfile = "3"
+directories = "6"
+open = "5"
+arboard = "3"
+kamadak-exif = "0.6"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+libc = "0.2"
+webp = "0.3"
+little_exif = "0.6.23"
+xmpkit = { version = "0.1.6", default-features = false, features = ["jpeg", "png", "webp", "tiff", "heif"] }
+iptc = "0.3"
+tiff = { version = "0.10", default-features = false, features = ["lzw"] }
+libraw_rs_vendor = "1.0.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+ryu-js = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "=2.0.2"
+
+[patch.crates-io]
+libraw_rs_vendor = { path = "vendor/libraw_rs_vendor" }
+iptc = { path = "vendor/iptc" }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+diagnostics = []
+
+[[bin]]
+name = "darkroom"
+path = "src/main.rs"
+
+[[bin]]
+name = "darkroom-backend"
+path = "src/bin/backend.rs"
+required-features = ["diagnostics"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.release.package.darkroom]
+codegen-units = 16
+incremental = true

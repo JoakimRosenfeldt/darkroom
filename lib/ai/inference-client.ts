@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { AiModelId } from "@/lib/ai/types";
 import {
   disposeDevelopImage,
@@ -300,6 +301,7 @@ export async function runAiMaskInference(
             kind: "run",
             requestId: id,
             modelId: options.modelId,
+            modelUrl: convertFileSrc(options.modelId, "darkroom-model"),
             image,
             sourceSignature: options.sourceSignature,
             backend,

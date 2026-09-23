@@ -1,0 +1,260 @@
+{
+  "backend": "Rust/Tauri",
+  "measuredAt": "2026-09-23T01:26:24.318Z",
+  "environment": {
+    "os": "Linux 7.2.5-3-omarchy x64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "node": "v24.21.0",
+    "display": ":99",
+    "wayland": null,
+    "gdkScale": "1",
+    "gdkDpiScale": "1"
+  },
+  "method": {
+    "photos": 1000,
+    "iterations": 5,
+    "viewport": "1440 x 900 content pixels at DPR 1; asserted and recorded for each run",
+    "startup": "automation launch to desktop bridge, first button and viewport validation; includes Electron content resize and different driver overheads",
+    "memory": "sum of process-tree /proc/smaps_rollup PSS; 1 s idle, 2 s and 10 s after import/query",
+    "import": "click Import folder until library count is visible",
+    "queries": "20 complete catalog snapshots including IPC; no revision cache",
+    "temporary": "/tmp/darkroom-desktop-benchmark-5VKuOl"
+  },
+  "runs": [
+    {
+      "viewport": {
+        "devicePixelRatio": 1,
+        "height": 900,
+        "width": 1440
+      },
+      "startupMs": 1225.599506,
+      "idleMemory": {
+        "pssKiB": 330384,
+        "rssKiB": 600496,
+        "processCount": 3
+      },
+      "importMs": 457.0000000000002,
+      "assets": 1000,
+      "queryTimes": [
+        262,
+        491,
+        38,
+        47,
+        34,
+        45,
+        56,
+        29,
+        36,
+        29,
+        37,
+        57,
+        38,
+        27.000000000000455,
+        26.999999999999545,
+        32,
+        40,
+        28,
+        28,
+        26.000000000000455
+      ],
+      "libraryMemory": {
+        "pssKiB": 1045038,
+        "rssKiB": 1326128,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 731286,
+        "rssKiB": 1012364,
+        "processCount": 3
+      }
+    },
+    {
+      "viewport": {
+        "devicePixelRatio": 1,
+        "height": 900,
+        "width": 1440
+      },
+      "startupMs": 1277.2002219999995,
+      "idleMemory": {
+        "pssKiB": 354228,
+        "rssKiB": 665780,
+        "processCount": 3
+      },
+      "importMs": 557.0000000000002,
+      "assets": 1000,
+      "queryTimes": [
+        743,
+        43,
+        42,
+        46,
+        55,
+        47,
+        38,
+        35,
+        31,
+        33,
+        45,
+        38.000000000000455,
+        35.999999999999545,
+        38,
+        30,
+        29.000000000000455,
+        28.999999999999545,
+        27,
+        36,
+        36
+      ],
+      "libraryMemory": {
+        "pssKiB": 693088,
+        "rssKiB": 1014360,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 736272,
+        "rssKiB": 1017304,
+        "processCount": 3
+      }
+    },
+    {
+      "viewport": {
+        "devicePixelRatio": 1,
+        "height": 900,
+        "width": 1440
+      },
+      "startupMs": 1271.337012,
+      "idleMemory": {
+        "pssKiB": 295421,
+        "rssKiB": 601004,
+        "processCount": 3
+      },
+      "importMs": 536,
+      "assets": 1000,
+      "queryTimes": [
+        661,
+        58,
+        42,
+        47,
+        32,
+        68.00000000000045,
+        44.999999999999545,
+        35,
+        37.000000000000455,
+        46.999999999999545,
+        34,
+        35,
+        32,
+        28,
+        28,
+        30,
+        30,
+        28,
+        30,
+        27
+      ],
+      "libraryMemory": {
+        "pssKiB": 616764,
+        "rssKiB": 931844,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 656349,
+        "rssKiB": 931948,
+        "processCount": 3
+      }
+    },
+    {
+      "viewport": {
+        "devicePixelRatio": 1,
+        "height": 900,
+        "width": 1440
+      },
+      "startupMs": 1276.4688709999973,
+      "idleMemory": {
+        "pssKiB": 293727,
+        "rssKiB": 598732,
+        "processCount": 3
+      },
+      "importMs": 526,
+      "assets": 1000,
+      "queryTimes": [
+        239.99999999999977,
+        550.0000000000005,
+        51.999999999999545,
+        49.000000000000455,
+        45.999999999999545,
+        30,
+        58,
+        39,
+        50,
+        42,
+        30,
+        26,
+        30,
+        29,
+        29,
+        32,
+        28,
+        28,
+        39.000000000000455,
+        27.999999999999545
+      ],
+      "libraryMemory": {
+        "pssKiB": 706522,
+        "rssKiB": 1021024,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 741748,
+        "rssKiB": 1016680,
+        "processCount": 3
+      }
+    },
+    {
+      "viewport": {
+        "devicePixelRatio": 1,
+        "height": 900,
+        "width": 1440
+      },
+      "startupMs": 1272.944217999997,
+      "idleMemory": {
+        "pssKiB": 294012,
+        "rssKiB": 599220,
+        "processCount": 3
+      },
+      "importMs": 540,
+      "assets": 1000,
+      "queryTimes": [
+        699,
+        59,
+        40,
+        48,
+        28.000000000000455,
+        68.99999999999955,
+        43,
+        31,
+        58,
+        37,
+        45,
+        42,
+        30,
+        28,
+        37,
+        26,
+        27,
+        26.000000000000455,
+        26.999999999999545,
+        27
+      ],
+      "libraryMemory": {
+        "pssKiB": 631446,
+        "rssKiB": 946172,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 661967,
+        "rssKiB": 937080,
+        "processCount": 3
+      }
+    }
+  ]
+}

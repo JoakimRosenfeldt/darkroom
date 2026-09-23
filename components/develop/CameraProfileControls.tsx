@@ -16,7 +16,7 @@ import {
   persistedInputProfileFromMatrix,
 } from "@/lib/develop/v3/profiles";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { useDevelopStore } from "@/stores/develop-store";
 import { ActionButton, StatusCard } from "./V3PanelControls";
 
@@ -70,7 +70,7 @@ export function CameraProfileControls({
   );
 
   useEffect(() => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     let active = true;
     void getDarkroomAPI().cameraProfilesList().then((next) => {
       if (active) setRegistry(next);
@@ -135,7 +135,7 @@ export function CameraProfileControls({
   };
 
   const importProfile = async () => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       setMessage("Camera profile import is available in the desktop app.");
       return;
     }
@@ -155,7 +155,7 @@ export function CameraProfileControls({
   };
 
   const resolveConflict = async (action: "replace" | "import-copy" | "cancel") => {
-    if (!conflict || !isElectronApp()) return;
+    if (!conflict || !isDesktopApp()) return;
     setBusy(true);
     try {
       const result = await getDarkroomAPI().cameraProfilesResolveConflict({
@@ -174,7 +174,7 @@ export function CameraProfileControls({
   };
 
   const rescan = async () => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     setBusy(true);
     try {
       setRegistry(await getDarkroomAPI().cameraProfilesRescan());
@@ -190,7 +190,7 @@ export function CameraProfileControls({
     removed: ReadyCameraProfileRecord,
     replacement: ReadyCameraProfileRecord,
   ) => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     if (!window.confirm(`Remove ${removed.profile.label} and use ${replacement.profile.label} for stored references?`)) {
       return;
     }
@@ -222,7 +222,7 @@ export function CameraProfileControls({
       </StatusCard>
       <div className="flex gap-1.5">
         <ActionButton onClick={() => void importProfile()} disabled={busy}>Import</ActionButton>
-        <ActionButton onClick={() => void rescan()} disabled={busy || !isElectronApp()}>Rescan</ActionButton>
+        <ActionButton onClick={() => void rescan()} disabled={busy || !isDesktopApp()}>Rescan</ActionButton>
         <ActionButton onClick={useDecoderProfile} disabled={busy || profileStage.kind !== "available"}>Use decoder</ActionButton>
       </div>
       {profileStage.kind === "unavailable" ? (

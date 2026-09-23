@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-23",
+  "baselineCommit": "92926f0a4c3c56e3a1314953cd12e5dac48d7b44",
+  "command": "npm run dist -- --bundles deb",
+  "platform": "Linux 7.2.5-3-omarchy x86_64",
+  "cpu": "AMD Ryzen 9 5900X",
+  "node": "24.21.0",
+  "rust": "1.98.1",
+  "dependenciesAlreadyBuilt": true,
+  "releaseProfileChanged": false,
+  "runs": [
+    {
+      "seconds": 97.535,
+      "exit": 0,
+      "name": "baseline-warmup"
+    },
+    {
+      "seconds": 97.104,
+      "exit": 0,
+      "name": "baseline-unchanged"
+    },
+    {
+      "seconds": 97.508,
+      "exit": 0,
+      "name": "fixed-warmup"
+    },
+    {
+      "seconds": 4.294,
+      "exit": 0,
+      "binaryUnchanged": true,
+      "name": "fixed-unchanged-1"
+    },
+    {
+      "seconds": 4.314,
+      "exit": 0,
+      "binaryUnchanged": true,
+      "name": "fixed-unchanged-2"
+    }
+  ],
+  "limits": [
+    "Single workstation; one unchanged baseline and two unchanged revised runs.",
+    "Does not measure cold builds, changed-code compile time, macOS signing or DMG creation.",
+    "Warmup includes recompilation after changing build inputs."
+  ],
+  "userReportedMacOS": {
+    "commit": "2725bc6",
+    "command": "time npm run dist",
+    "firstSeconds": 197.25,
+    "unchangedSeconds": 34.687,
+    "limits": "User-reported wall times; includes packaging. Hardware and individual phase times not recorded."
+  }
+}

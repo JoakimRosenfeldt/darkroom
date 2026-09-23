@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { formatPickerError } from "@/lib/fs/access";
-import { isElectronApp } from "@/lib/fs/platform";
+import { isDesktopApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface FolderPickerButtonProps {
@@ -59,7 +59,7 @@ function subscribeToDesktopApp(): () => void {
 }
 
 function getDesktopAppSnapshot(): boolean {
-  return isElectronApp();
+  return isDesktopApp();
 }
 
 function getServerDesktopAppSnapshot(): boolean {

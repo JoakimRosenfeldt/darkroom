@@ -1,0 +1,81 @@
+{
+  "method": "Single functional smoke run per fixture, diagnostic debug backend, Xvfb software rendering. Timings are observations, not a comparative benchmark. Original source SHA256 hashes checked before and after; screenshots are retained beside this file.",
+  "runs": [
+    {
+      "fixture": "jpeg",
+      "checks": [
+        "new photo, edit, undo, redo and delayed catalog save",
+        "edited thumbnail size and virtual-copy identity",
+        "preset batch and undo",
+        "batch cancellation keeps completed edits and stops remaining items",
+        "detail regions match full output, and cached slider timing",
+        "100% uses one source pixel per display pixel",
+        "JPEG metadata, ICC, resize, collision and cancellation",
+        "process interruption preserves the masked crop and virtual copy",
+        "source files unchanged"
+      ],
+      "renderBackends": {
+        "preview": [
+          "gpu",
+          "gpu",
+          "gpu",
+          "gpu"
+        ],
+        "export": "gpu"
+      },
+      "fullRegionMaxChannelDelta": 0,
+      "timingsMs": {
+        "openPhoto": 383,
+        "cachedDecode": 0,
+        "interactiveWorker": 2,
+        "actualSize": 582,
+        "export-all": 413.9999999999991,
+        "export-copyright": 407.9999999999991,
+        "export-none": 399
+      }
+    },
+    {
+      "fixture": "nikon-d500-nef",
+      "checks": [
+        "new photo, edit, undo, redo and delayed catalog save",
+        "edited thumbnail size and virtual-copy identity",
+        "preset batch and undo",
+        "batch cancellation keeps completed edits and stops remaining items",
+        "detail regions match full output, and cached slider timing",
+        "100% uses one source pixel per display pixel",
+        "JPEG metadata, ICC, resize, collision and cancellation",
+        "process interruption preserves the masked crop and virtual copy",
+        "source files unchanged"
+      ],
+      "renderBackends": {
+        "preview": [
+          "gpu",
+          "gpu",
+          "gpu",
+          "gpu"
+        ],
+        "export": "gpu"
+      },
+      "fullRegionMaxChannelDelta": 0,
+      "timingsMs": {
+        "openPhoto": 5196,
+        "cachedDecode": 0,
+        "interactiveWorker": 7.999999999998181,
+        "actualSize": 3140,
+        "export-all": 1466,
+        "export-copyright": 1428.0000000000036,
+        "export-none": 1009
+      }
+    }
+  ],
+  "productionCspCheck": {
+    "fixture": "nikon-d500-nef",
+    "origin": "tauri://localhost",
+    "imageDimensions": [
+      1704,
+      2560
+    ],
+    "state": "Saved",
+    "result": "Nonblank RAW editor image; no page errors or CSP violations observed."
+  }
+}

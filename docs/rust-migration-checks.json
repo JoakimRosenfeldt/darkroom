@@ -1,0 +1,53 @@
+{
+  "method": "Temporary synthetic legacy catalogs opened through the real Rust diagnostic backend; no source catalog was modified.",
+  "legacyCatalogs": [
+    {
+      "version": 1,
+      "migration": [
+        1,
+        "validated"
+      ],
+      "assets": [
+        [
+          "missing.jpg",
+          "missing"
+        ],
+        [
+          "present.jpg",
+          "present"
+        ]
+      ],
+      "albums": [
+        "Album"
+      ],
+      "aliases": 2,
+      "integrity": "ok",
+      "legacyCatalogUnchanged": true,
+      "settingsFolderPreserved": true,
+      "settingsRecoverySnapshotMatches": true,
+      "recoverySnapshotMatches": true
+    },
+    {
+      "version": 2,
+      "migration": [
+        2,
+        "validated"
+      ],
+      "assets": [
+        [
+          "missing.jpg",
+          "missing"
+        ]
+      ],
+      "albums": [
+        "Offline"
+      ],
+      "aliases": 1,
+      "integrity": "ok",
+      "legacyCatalogUnchanged": true,
+      "settingsFolderPreserved": true,
+      "settingsRecoverySnapshotMatches": true,
+      "recoverySnapshotMatches": true
+    }
+  ]
+}

@@ -28,7 +28,7 @@ import {
   persistedInputProfileFromMatrix,
 } from "@/lib/develop/v3/profiles";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { ActionButton } from "./V3PanelControls";
@@ -157,7 +157,7 @@ export function DevelopClipboardControls({
   const [lastReport, setLastReport] = useState<DevelopPresetApplyReport | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const desktopAvailable = isElectronApp();
+  const desktopAvailable = isDesktopApp();
   const cameraProfile = cameraProfileBinding.entryId === entry.id &&
       cameraProfileBinding.image === image
     ? cameraProfileBinding.context
@@ -177,7 +177,7 @@ export function DevelopClipboardControls({
   );
 
   const refreshClipboard = useCallback(async () => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       setClipboardState({ kind: "invalid", reason: "Paste is available in the desktop app." });
       return;
     }
@@ -201,7 +201,7 @@ export function DevelopClipboardControls({
   }, [preferences]);
 
   useEffect(() => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     let active = true;
     void Promise.all([
       getDarkroomAPI().developClipboardGroupsGet(),
@@ -229,7 +229,7 @@ export function DevelopClipboardControls({
   }, [refreshClipboard]);
 
   useEffect(() => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     const request = cameraProfileRequestRef.current + 1;
     cameraProfileRequestRef.current = request;
     let active = true;
@@ -313,7 +313,7 @@ export function DevelopClipboardControls({
       );
 
   const copy = async () => {
-    if (!isElectronApp() || copyGroups.length === 0) return;
+    if (!isDesktopApp() || copyGroups.length === 0) return;
     const committed = currentCommittedDocument(entry.id);
     if (!committed) {
       setMessage("Copy requires an editable Develop document.");
@@ -399,7 +399,7 @@ export function DevelopClipboardControls({
       throw new Error("Clipboard source changed or is no longer available.");
     }
     if (!groups.includes("ai-masks")) return;
-    if (!isElectronApp()) throw new Error("AI mask assets require the desktop app.");
+    if (!isDesktopApp()) throw new Error("AI mask assets require the desktop app.");
     const sourceSignature = sourceSignatureForEntry(source);
     if (sourceSignature.catalogId === undefined || sourceSignature.assetRevision === undefined) {
       throw new Error("Clipboard source signature is incomplete.");

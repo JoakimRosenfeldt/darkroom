@@ -29,6 +29,8 @@
     ".next",
     "out",
     "electron-dist",
+    "src-tauri/target",
+    "src-tauri/gen",
     "next-env.d.ts"
   ]
 }

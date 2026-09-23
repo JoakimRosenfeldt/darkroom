@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createDevelopRefId, type DevelopHistoryLoadResult, type DevelopHistoryRef, type DevelopHistoryRevision } from "@/lib/develop/history";
 import { getDevelopRepository } from "@/lib/develop/repository";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isDevelopDefaultResolutionPending, useDevelopStore } from "@/stores/develop-store";
 import { openDevelopSessionDocument } from "@/lib/develop/session";
@@ -48,7 +48,7 @@ export function DevelopHistoryPanel({
   const busyRef = useRef(false);
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     const request = ++loadGeneration.current;
     const api = getDarkroomAPI();
     const [load, revisions, refs] = await Promise.all([
@@ -62,7 +62,7 @@ export function DevelopHistoryPanel({
   useEffect(() => {
     let current = true;
     mounted.current = true;
-    if (!isElectronApp()) return () => { current = false; mounted.current = false; loadGeneration.current += 1; };
+    if (!isDesktopApp()) return () => { current = false; mounted.current = false; loadGeneration.current += 1; };
     void refresh().catch((reason: unknown) => {
       if (current) setError(reason instanceof Error ? reason.message : "History could not be loaded.");
     });
@@ -149,7 +149,7 @@ export function DevelopHistoryPanel({
   const refs = (kind: DevelopHistoryRef["kind"]): readonly DevelopHistoryRef[] =>
     view?.refs.filter((item) => item.kind === kind) ?? [];
 
-  if (!isElectronApp()) {
+  if (!isDesktopApp()) {
     return <aside className="w-[352px] shrink-0 border-l border-lr-border-subtle bg-lr-panel p-4"><StatusCard title="History unavailable">Persistent Head and XMP recovery require the Darkroom desktop app.</StatusCard></aside>;
   }
 

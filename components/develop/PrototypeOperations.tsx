@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { COORDINATE_FRAME_REVISION, type V3SourceSignature } from "@/lib/develop/process";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { DevelopJobIntent } from "@/lib/develop/v3/job-api";
@@ -179,7 +179,7 @@ export function PrototypeOperations({ decoded, document, entry }: Props) {
   };
 
   const run = async (operation: Operation, retry?: DevelopJobSnapshot): Promise<void> => {
-    if (!isElectronApp()) return;
+    if (!isDesktopApp()) return;
     setBusy(retry ? retry.id.value : operation);
     setMessage(null);
     try {

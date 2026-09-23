@@ -60,14 +60,15 @@ export function rgbDataToBlob(
 
   context.putImageData(imageData, 0, 0);
 
+  return canvasToBlob(canvas, "image/jpeg", 0.92).finally(() => { canvas.width = 0; canvas.height = 0; });
+}
+
+export function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("Failed to encode image"));
-        return;
-      }
-      resolve(blob);
-    }, "image/jpeg", 0.92);
+      if (blob) resolve(blob);
+      else reject(new Error("Failed to encode image"));
+    }, type, quality);
   });
 }
 

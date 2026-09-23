@@ -5,7 +5,7 @@ import styles from "./ExportDialog.module.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LibraryEntry } from "@/lib/fs/types";
-import { getDarkroomAPI, isElectronApp } from "@/lib/fs/platform";
+import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
 import { useLibraryStore } from "@/stores/library-store";
 import {
   DEFAULT_EXPORT_PREFERENCES as DEFAULT_PREFERENCES,
@@ -283,7 +283,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
   }, [initializeJobs]);
 
   useEffect(() => {
-    if (!isElectronApp()) {
+    if (!isDesktopApp()) {
       return;
     }
 
@@ -589,7 +589,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
         {dialogState === "idle" ? (
           <div>
             <div className="grid grid-cols-2 gap-x-3.5 gap-y-3 p-[18px]">
-              {!isElectronApp() ? (
+              {!isDesktopApp() ? (
                 <p className="col-span-2 rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
                   Export is available in the Darkroom desktop app only.
                 </p>
