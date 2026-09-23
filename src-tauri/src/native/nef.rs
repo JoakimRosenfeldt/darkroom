@@ -152,6 +152,7 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
     let nikon = if let Some((path, state)) = helper(ctx) {
         match checksum(&path) {
             Ok(before) => {
+                let mut legacy_lookup_warnings = false;
                 let probe = (|| -> Result<Option<Value>, String> {
                     let work = tempfile::tempdir().map_err(|e| e.to_string())?;
                     let stdout = work.path().join("probe.json");
@@ -177,10 +178,26 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                         return Err("Nikon decoder changed during its probe.".into());
                     }
                     if !status.success() {
+                        let stdout = String::from_utf8_lossy(&stdout_bytes);
+                        let lookup_messages = path.ancestors().nth(3).map(|root| {
+                            ["enum_string.csv", "uuid_string.csv"].map(|name| {
+                                format!(
+                                    "NOT FOUND \"{}\"",
+                                    root.join("Contents/Resources").join(name).display()
+                                )
+                            })
+                        });
+                        let known_stdout = stdout.lines().all(|line| {
+                            line.trim().is_empty()
+                                || lookup_messages.as_ref().is_some_and(|messages| {
+                                    messages.iter().any(|message| message == line)
+                                })
+                        });
                         if status.code().is_some_and(|code| code > 0)
-                            && stdout_bytes.is_empty()
+                            && known_stdout
                             && String::from_utf8_lossy(&stderr_bytes).trim() == "invalid arguments"
                         {
+                            legacy_lookup_warnings = !stdout.trim().is_empty();
                             return Ok(None);
                         }
                         return Err("Nikon probe exited unsuccessfully.".into());
@@ -209,6 +226,13 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                             "Legacy development Nikon decoder starts without a capability probe. Local decoding is test-only."
                         } else {
                             "Legacy Nikon decoder starts without a capability probe, but its checksum is unapproved; decoding is unavailable."
+                        };
+                        let reason = if legacy_lookup_warnings {
+                            format!(
+                                "{reason} The SDK also reported missing enum/UUID lookup tables."
+                            )
+                        } else {
+                            reason.to_owned()
                         };
                         json!({"status":"misconfigured","kind":"native","packageState":state,"version":null,"architecture":null,"checksum":before,"backend":null,"pixelProtocol":null,"reason":reason})
                     }

@@ -38,6 +38,10 @@ try {
     await fs.mkdir(path.join(staged, "MacOS"), { recursive: true });
     await fs.copyFile(path.join(contents, "MacOS/nikon-nef-decoder"), path.join(staged, "MacOS/nikon-nef-decoder"));
     for (const folder of ["Frameworks", "Resources"]) await fs.cp(path.join(contents, folder), path.join(staged, folder), { recursive: true, verbatimSymlinks: true });
+    const stagedResources = path.join(temporary, "Contents", "Resources");
+    await fs.mkdir(stagedResources, { recursive: true });
+    const stagedParameters = path.join(stagedResources, "prm.bin");
+    await fs.copyFile(path.join(contents, "Resources/prm.bin"), stagedParameters);
     await fs.copyFile(path.join(sdk, "Image SDK/Library/Mac/Doc/Third Party Legal Notices.rtf"), path.join(staged, "Third Party Legal Notices.rtf"));
     const identity = process.env.APPLE_SIGNING_IDENTITY ?? "-";
     const signingOptions = ["--options", identity === "-" ? "0" : "runtime", ...(identity === "-" ? [] : ["--timestamp"])];
@@ -56,31 +60,35 @@ try {
     const helper = path.join(staged, "MacOS/nikon-nef-decoder");
     run("codesign", ["--force", "--sign", identity, ...signingOptions, helper]);
     const probe = spawnSync(helper, ["--probe"], { cwd: root, env: process.env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 16 * 1024 });
+    const probeDiagnostics = `status=${probe.status ?? "null"} signal=${probe.signal ?? "none"} error=${probe.error?.message?.slice(0, 1_024) ?? "none"} stderr=${JSON.stringify((probe.stderr ?? "").slice(0, 16 * 1024))} stdout=${JSON.stringify((probe.stdout ?? "").slice(0, 16 * 1024))}`;
+    const knownLookups = new Set(["enum_string.csv", "uuid_string.csv"].map((name) => `NOT FOUND "${path.join(stagedResources, name)}"`));
+    const probeLines = typeof probe.stdout === "string" ? probe.stdout.split(/\r?\n/) : [];
+    const legacyOutput = typeof probe.stdout === "string" && probeLines.every((line) => line.trim() === "" || knownLookups.has(line));
     const legacyHelper = !probe.error && probe.status !== null && probe.status > 0 &&
-      probe.signal === null && probe.stdout === "" && probe.stderr?.trim() === "invalid arguments";
+      probe.signal === null && legacyOutput && probe.stderr?.trim() === "invalid arguments";
     if (legacyHelper) {
+      for (const line of probeLines) if (knownLookups.has(line)) console.warn(`Nikon decoder probe: ${line}`);
       console.warn("Legacy Nikon decoder has no capability probe; startup succeeded. Verify RAW decoding in the packaged app.");
     } else if (probe.error || probe.status !== 0) {
-      const detail = probe.stderr?.trim().slice(0, 16 * 1024);
-      throw new Error(`Staged Nikon decoder probe failed: ${detail || probe.error?.message || `exit ${probe.status ?? "signal"}`}`);
+      throw new Error(`Staged Nikon decoder probe failed: ${probeDiagnostics}`);
     } else {
       let capability;
       try {
         capability = JSON.parse(probe.stdout);
       } catch {
-        throw new Error("Staged Nikon decoder probe returned invalid JSON.");
+        throw new Error(`Staged Nikon decoder probe returned invalid JSON: ${probeDiagnostics}`);
       }
       if (capability?.version !== 1 || capability.backend !== "nikon-sdk" ||
           capability.pixelProtocol !== "rgb16le-v1" || typeof capability.helperVersion !== "string" ||
           !["arm64", "x64"].includes(capability.architecture)) {
-        throw new Error("Staged Nikon decoder probe returned an unsupported protocol.");
+        throw new Error(`Staged Nikon decoder probe returned an unsupported protocol: ${probeDiagnostics}`);
       }
     }
     const checksum = createHash("sha256").update(await fs.readFile(helper)).digest("hex");
     await fs.writeFile(path.join(staged, "runtime.json"), JSON.stringify({ version: 1, checksum }));
     // Preserve framework symlinks and their signatures through the final bundle copy.
     config.bundle.macOS = { files: { "Resources/nikon-nef-decoder": staged } };
-    config.bundle.resources[path.join(contents, "Resources/prm.bin")] = "Contents/Resources/prm.bin";
+    config.bundle.resources[stagedParameters] = "Contents/Resources/prm.bin";
   }
   const configuration = path.join(temporary, "tauri.release.json");
   await fs.writeFile(configuration, JSON.stringify(config));
