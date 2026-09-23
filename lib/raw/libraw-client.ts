@@ -221,6 +221,23 @@ function resizeRgbData(
   return output;
 }
 
+class UnsupportedNikonCompressionError extends Error {}
+
+function unsupportedNikonCompression(metadata: Record<string, unknown>): UnsupportedNikonCompressionError | null {
+  const nikon = metadata.nikon;
+  const compression = nikon && typeof nikon === "object"
+    ? (nikon as Record<string, unknown>).NEFCompression
+    : undefined;
+  if (typeof metadata.camera_make !== "string" || !/nikon/i.test(metadata.camera_make)) return null;
+  if (compression === 13) {
+    return new UnsupportedNikonCompressionError("Nikon High Efficiency RAW compression is not supported by this LibRaw build.");
+  }
+  if (compression === 14) {
+    return new UnsupportedNikonCompressionError("Nikon High Efficiency* RAW compression is not supported by this LibRaw build.");
+  }
+  return null;
+}
+
 async function decodeOpenedRaw(
   input: Uint8Array,
   options: DecodeOptions,
@@ -237,9 +254,17 @@ async function decodeOpenedRaw(
     const metadataRecord = structuredClone(
       metadata as Record<string, unknown>,
     );
-    const image = await raw.imageData();
+    let image: Awaited<ReturnType<typeof raw.imageData>>;
+    try {
+      image = await raw.imageData();
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      throw unsupportedNikonCompression(metadataRecord) ?? error;
+    }
     options.signal?.throwIfAborted();
     if (!image?.data?.length || image.width <= 0 || image.height <= 0) {
+      const compressionError = unsupportedNikonCompression(metadataRecord);
+      if (compressionError) throw compressionError;
       return null;
     }
 
@@ -342,7 +367,15 @@ export async function decodeWithLibRaw(
     throw new Error("Could not decode RAW thumbnail");
   }
 
-  const preview = await decodeOpenedRaw(input, options, true);
+  let preview: DecodedImage | null;
+  let compressionError: UnsupportedNikonCompressionError | null = null;
+  try {
+    preview = await decodeOpenedRaw(input, options, true);
+  } catch (error) {
+    if (!(error instanceof UnsupportedNikonCompressionError)) throw error;
+    compressionError = error;
+    preview = null;
+  }
   if (preview) {
     return preview;
   }
@@ -351,6 +384,7 @@ export async function decodeWithLibRaw(
   if (embeddedPreview) {
     return embeddedPreview;
   }
+  if (compressionError) throw compressionError;
 
   const fullResolution = await decodeOpenedRaw(input, options, false);
   if (fullResolution) {

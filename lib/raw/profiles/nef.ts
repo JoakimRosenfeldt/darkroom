@@ -3,7 +3,7 @@ import { getFormatExtensionsForProfile, getFormatCapabilityForFileName } from "@
 import { decodeEmbeddedThumbnail, decodeWithLibRaw } from "../libraw-client";
 
 const PREVIEW_MAX_EDGE = 2_560;
-const unsupportedSources = new Set<string>();
+const unsupportedSources = new Map<string, string>();
 
 function sourceKey(options: DecodeOptions): string | null {
   const request = options.assetRequest;
@@ -57,22 +57,27 @@ async function decodeDevelopedNef(
   input: Uint8Array,
   options: DecodeOptions,
   skipLibRaw = false,
+  previousLibRawError?: unknown,
 ): Promise<DecodedImage> {
   options.signal?.throwIfAborted();
   const key = sourceKey(options);
   let unsupported = skipLibRaw || (key !== null && unsupportedSources.has(key));
+  let rawDecodeError = previousLibRawError instanceof Error
+    ? previousLibRawError.message
+    : key !== null ? unsupportedSources.get(key) : undefined;
   if (!unsupported) {
     try {
       return await decodeWithLibRaw(input, options);
     } catch (error) {
       options.signal?.throwIfAborted();
       unsupported = unsupportedByLibRaw(error);
+      rawDecodeError = error instanceof Error ? error.message : undefined;
     }
   }
 
   if (unsupported && key !== null) {
-    unsupportedSources.add(key);
-    const oldest = unsupportedSources.values().next().value;
+    unsupportedSources.set(key, rawDecodeError ?? "");
+    const oldest = unsupportedSources.keys().next().value;
     if (unsupportedSources.size > 256 && oldest !== undefined) unsupportedSources.delete(oldest);
   }
   let fallbackCode = "SDK_UNAVAILABLE";
@@ -136,11 +141,12 @@ async function decodeDevelopedNef(
 
   const embedded = await decodeEmbeddedThumbnail(input, options);
   if (!embedded) {
-    throw new Error(fallbackMessage);
+    throw new Error(rawDecodeError ? `${rawDecodeError} ${fallbackMessage}` : fallbackMessage);
   }
   embedded.metadata.developSource = "embedded";
   embedded.metadata.fallbackCode = fallbackCode;
   embedded.metadata.fallbackMessage = fallbackMessage;
+  if (rawDecodeError) embedded.metadata.rawDecodeError = rawDecodeError;
   return options.sourcePixels
     ? decodeEmbeddedSourcePixels(embedded)
     : embedded;
@@ -168,7 +174,7 @@ async function decodeWithCameraProfileFallback(
     const fallback = await decodeDevelopedNef(input, {
       ...options,
       cameraProfile: { kind: "none" },
-    }, unsupportedByLibRaw(error));
+    }, unsupportedByLibRaw(error), error);
     return {
       ...fallback,
       pixelProvenance: {

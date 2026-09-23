@@ -140,6 +140,12 @@ fn runtime_approved(ctx: &NativeContext, state: &str, digest: &str) -> bool {
             == Some(digest)
 }
 
+fn development_helper_allowed(state: &str) -> bool {
+    cfg!(debug_assertions)
+        && state == "development"
+        && std::env::var_os("DARKROOM_NEF_APPROVED_CHECKSUM").is_none()
+}
+
 fn report(ctx: &NativeContext) -> Result<Value, String> {
     let mut report: Value =
         serde_json::from_str(include_str!("formats.json")).map_err(|e| e.to_string())?;
@@ -187,7 +193,7 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                 match probe {
                     Ok(response) => {
                         let qualified = runtime_approved(ctx, state, &before);
-                        json!({"status":if qualified {"available"} else {"misconfigured"},"kind":"native","packageState":state,"version":response["helperVersion"],"architecture":response["architecture"],"checksum":before,"backend":"nikon-sdk","pixelProtocol":"rgb16le-v1","reason":if qualified {"Qualified Nikon native runtime passed its versioned probe."} else {"Development Nikon runtime is not release-qualified."}})
+                        json!({"status":if qualified {"available"} else {"misconfigured"},"kind":"native","packageState":state,"version":response["helperVersion"],"architecture":response["architecture"],"checksum":before,"backend":"nikon-sdk","pixelProtocol":"rgb16le-v1","reason":if qualified {"Qualified Nikon native runtime passed its versioned probe."} else if development_helper_allowed(state) {"Development Nikon decoder can run locally but is not release-qualified."} else {"Nikon decoder checksum does not match its approved runtime."}})
                     }
                     Err(reason) => {
                         json!({"status":"misconfigured","kind":"native","packageState":state,"version":null,"architecture":null,"checksum":before,"backend":null,"pixelProtocol":null,"reason":reason})
@@ -249,10 +255,15 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
         ));
     }
     let digest = checksum(&helper)?;
-    if !runtime_approved(ctx, state, &digest) {
+    // Local development helpers retain test-only provenance, as in Electron.
+    if !development_helper_allowed(state) && !runtime_approved(ctx, state, &digest) {
         return Ok(failure(
             "SDK_UNAVAILABLE",
-            "Nikon decoder is not release-qualified.",
+            if state == "development" {
+                "Nikon decoder checksum does not match DARKROOM_NEF_APPROVED_CHECKSUM."
+            } else {
+                "Nikon decoder is not release-qualified."
+            },
         ));
     }
     let work = tempfile::tempdir().map_err(|e| e.to_string())?;

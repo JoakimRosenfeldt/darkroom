@@ -154,4 +154,8 @@ Set `DARKROOM_SMOKE_DRIVER` or `DARKROOM_SMOKE_NATIVE_DRIVER` for driver paths o
 
 Development builds find the Nikon helper under `~/.darkroom-sdk/nikon-nef`. Set `DARKROOM_NEF_SDK_ROOT` or `DARKROOM_NEF_HELPER_PATH` to use another installation.
 
+Local development helpers can decode NEFs but retain `nikon-test-only` provenance; their use does not qualify a release. `DARKROOM_NEF_APPROVED_CHECKSUM` optionally pins the development helper's SHA-256 and rejects a mismatch. Packaged builds require their bundled checksum manifest and ignore development helper overrides.
+
+Nikon High Efficiency and High Efficiency* NEFs require this separate Nikon decoder. The bundled LibRaw build supports Z6 III lossless compression, but not HE/HE*. If a photo fails, click **Manage** at the bottom of the left sidebar, then expand **Support / Formats** in the Catalogs dialog. **Nikon runtime** reports whether the decoder is missing or misconfigured. An embedded JPEG alone is insufficient for editing or export.
+
 Experimental tools are available under **Develop > Edit > Advanced**. The normal editor keeps histogram, white balance, and tone in **Basic**.
