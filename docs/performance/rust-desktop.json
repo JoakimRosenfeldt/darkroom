@@ -1,0 +1,233 @@
+{
+  "backend": "Rust/Tauri",
+  "measuredAt": "2026-09-23T00:51:13.353Z",
+  "environment": {
+    "os": "Linux 7.2.5-3-omarchy x64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "node": "v24.21.0",
+    "display": ":99",
+    "wayland": null
+  },
+  "method": {
+    "photos": 1000,
+    "iterations": 5,
+    "viewport": "default 1440 x 900 window",
+    "startup": "automation launch to desktop bridge and first button; different driver overheads",
+    "memory": "sum of process-tree /proc/smaps_rollup PSS; 1 s idle, 2 s and 10 s after import/query",
+    "import": "click Import folder until library count is visible",
+    "queries": "20 complete catalog snapshots including IPC; no revision cache",
+    "temporary": "/tmp/darkroom-desktop-benchmark-aKGoBJ"
+  },
+  "runs": [
+    {
+      "startupMs": 1237.3377970000001,
+      "idleMemory": {
+        "pssKiB": 375532,
+        "rssKiB": 681080,
+        "processCount": 3
+      },
+      "importMs": 518,
+      "assets": 1000,
+      "queryTimes": [
+        518,
+        45,
+        55,
+        49,
+        60,
+        31,
+        41,
+        57,
+        62,
+        29.000000000000455,
+        45.999999999999545,
+        49,
+        25,
+        25.000000000000455,
+        38.999999999999545,
+        25,
+        36,
+        24,
+        25,
+        25
+      ],
+      "libraryMemory": {
+        "pssKiB": 769609,
+        "rssKiB": 1084428,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 764737,
+        "rssKiB": 1079556,
+        "processCount": 3
+      }
+    },
+    {
+      "startupMs": 1303.5882790000014,
+      "idleMemory": {
+        "pssKiB": 372716,
+        "rssKiB": 678832,
+        "processCount": 3
+      },
+      "importMs": 463.0000000000002,
+      "assets": 1000,
+      "queryTimes": [
+        224,
+        571,
+        45,
+        60,
+        33,
+        50,
+        71,
+        50,
+        60,
+        67,
+        47,
+        30,
+        67,
+        31,
+        27,
+        36,
+        38,
+        28,
+        25,
+        24
+      ],
+      "libraryMemory": {
+        "pssKiB": 786847,
+        "rssKiB": 1102252,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 775687,
+        "rssKiB": 1091092,
+        "processCount": 3
+      }
+    },
+    {
+      "startupMs": 1257.4098879999983,
+      "idleMemory": {
+        "pssKiB": 342436,
+        "rssKiB": 683456,
+        "processCount": 3
+      },
+      "importMs": 584.0000000000002,
+      "assets": 1000,
+      "queryTimes": [
+        684,
+        35,
+        35,
+        44,
+        30,
+        46.000000000000455,
+        56.999999999999545,
+        49,
+        74,
+        49,
+        55,
+        39,
+        44.000000000000455,
+        37.999999999999545,
+        35,
+        52.000000000000455,
+        33.999999999999545,
+        26.000000000000455,
+        34.999999999999545,
+        27
+      ],
+      "libraryMemory": {
+        "pssKiB": 723758,
+        "rssKiB": 1078932,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 768383,
+        "rssKiB": 1083456,
+        "processCount": 3
+      }
+    },
+    {
+      "startupMs": 1283.1841980000027,
+      "idleMemory": {
+        "pssKiB": 377533,
+        "rssKiB": 683760,
+        "processCount": 3
+      },
+      "importMs": 504.0000000000002,
+      "assets": 1000,
+      "queryTimes": [
+        421,
+        362,
+        44,
+        45,
+        33,
+        67,
+        59,
+        46,
+        41,
+        57,
+        43,
+        43.000000000000455,
+        38.999999999999545,
+        30.000000000000455,
+        36.999999999999545,
+        27,
+        40,
+        25.000000000000455,
+        24.999999999999545,
+        37
+      ],
+      "libraryMemory": {
+        "pssKiB": 775486,
+        "rssKiB": 1091064,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 779506,
+        "rssKiB": 1095084,
+        "processCount": 3
+      }
+    },
+    {
+      "startupMs": 1281.2579030000052,
+      "idleMemory": {
+        "pssKiB": 373379,
+        "rssKiB": 679112,
+        "processCount": 3
+      },
+      "importMs": 490,
+      "assets": 1000,
+      "queryTimes": [
+        374,
+        403,
+        53,
+        46,
+        32,
+        67,
+        70,
+        56,
+        35,
+        45,
+        39.000000000000455,
+        34.999999999999545,
+        44,
+        48,
+        27,
+        26,
+        26,
+        27,
+        25.000000000000455,
+        36
+      ],
+      "libraryMemory": {
+        "pssKiB": 761075,
+        "rssKiB": 1076176,
+        "processCount": 3
+      },
+      "settledLibraryMemory": {
+        "pssKiB": 756135,
+        "rssKiB": 1071236,
+        "processCount": 3
+      }
+    }
+  ]
+}

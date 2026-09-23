@@ -226,10 +226,11 @@ impl CatalogService {
                 let db = Connection::open(database_path).map_err(|e| e.to_string())?;
                 db.pragma_update(None, "foreign_keys", "ON")
                     .map_err(|e| e.to_string())?;
+                db.busy_timeout(Duration::from_secs(5))
+                    .map_err(|e| e.to_string())?;
                 let mut service = CatalogService::for_worker(db);
-                let revision = service.revision(&catalog_id)?;
                 let accepted = observations.len();
-                service.apply(&json!({"catalogId":catalog_id,"expectedRevision":revision,"mutations":[{"kind":"reconcile-complete","rootId":root_id,"observations":observations}]}))?;
+                service.apply_internal(&json!({"catalogId":catalog_id,"mutations":[{"kind":"reconcile-complete","rootId":root_id,"observations":observations}]}))?;
                 progress_snapshot["directoriesVisited"] = json!(directories);
                 progress_snapshot["filesConsidered"] = json!(files);
                 progress_snapshot["acceptedCount"] = json!(accepted);

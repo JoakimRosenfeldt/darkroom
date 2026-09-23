@@ -2,7 +2,7 @@ name: Native app
 
 on:
   push:
-    branches: [main, 't3code/**']
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -56,6 +56,12 @@ jobs:
         run: '"LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append'
       - run: npm ci
       - run: npm run build
+      - name: Linux package
+        if: runner.os == 'Linux'
+        run: npx tauri bundle --bundles deb --ci
+      - name: Windows package
+        if: runner.os == 'Windows'
+        run: npx tauri bundle --bundles nsis --ci
       - run: cargo build --manifest-path src-tauri/Cargo.toml --release --features diagnostics --bin darkroom-backend --locked
       - name: Linux desktop workflow
         if: runner.os == 'Linux'
@@ -77,6 +83,8 @@ jobs:
           path: |
             src-tauri/target/release/darkroom
             src-tauri/target/release/darkroom.exe
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux' && always()

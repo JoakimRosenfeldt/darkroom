@@ -520,9 +520,10 @@ export class DevelopRepository {
     if (!this.#head || !sidecar) {
       throw new DevelopRepositoryError("recovery-conflict", "Both states are not available to preserve.");
     }
+    // The copy flushes this repository, so it must run outside its write queue.
+    await createVirtualCopy();
     const execute = async (): Promise<void> => {
       const digest = await digestDevelopSidecarContents(sidecar.contents);
-      await createVirtualCopy();
       await this.#importExternalOnly(sidecar, digest);
     };
     const write = this.#queue.then(execute);

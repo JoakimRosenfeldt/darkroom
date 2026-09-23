@@ -137,9 +137,11 @@ for (let i = 0; i < iterations; i++) {
     }`);
     if (library.assets !== count) throw new Error(`Expected ${count} catalog assets, received ${library.assets}.`);
     await sleep(2000);
-    runs.push({ startupMs, idleMemory, ...library, libraryMemory: await memory(app.pid) });
+    const libraryMemory = await memory(app.pid);
+    await sleep(8000);
+    runs.push({ startupMs, idleMemory, ...library, libraryMemory, settledLibraryMemory: await memory(app.pid) });
     console.log(JSON.stringify(runs.at(-1)));
   } finally { await app.close(); }
 }
-const output = { backend: options["electron-root"] ? "Electron baseline" : "Rust/Tauri", measuredAt: new Date().toISOString(), environment: { os: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0].model, node: process.version, display: process.env.DISPLAY, wayland: process.env.WAYLAND_DISPLAY ?? null }, method: { photos: count, iterations, viewport: "default 1440 x 900 window", startup: "automation launch to desktop bridge and first button; different driver overheads", memory: "sum of process-tree /proc/smaps_rollup PSS; 1 s idle and 2 s after import/query", import: "click Import folder until library count is visible", queries: "20 complete catalog snapshots including IPC; no revision cache", temporary }, runs };
+const output = { backend: options["electron-root"] ? "Electron baseline" : "Rust/Tauri", measuredAt: new Date().toISOString(), environment: { os: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0].model, node: process.version, display: process.env.DISPLAY, wayland: process.env.WAYLAND_DISPLAY ?? null }, method: { photos: count, iterations, viewport: "default 1440 x 900 window", startup: "automation launch to desktop bridge and first button; different driver overheads", memory: "sum of process-tree /proc/smaps_rollup PSS; 1 s idle, 2 s and 10 s after import/query", import: "click Import folder until library count is visible", queries: "20 complete catalog snapshots including IPC; no revision cache", temporary }, runs };
 await writeFile(options.output ?? path.join(temporary, "results.json"), JSON.stringify(output, null, 2) + "\n");

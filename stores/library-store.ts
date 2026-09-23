@@ -78,7 +78,7 @@ import { getDarkroomAPI } from "@/lib/fs/platform";
 import { getAssetRequest } from "@/lib/fs/session-catalog";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
-import { getDevelopSession } from "@/lib/develop/session";
+import { getDevelopRepository } from "@/lib/develop/repository";
 import { writeKeywordSidecar } from "@/lib/develop/keyword-sidecar";
 import {
   parseMetadataXmp,
@@ -2341,6 +2341,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     ).length;
     const name = displayName?.trim() || `Copy ${familyCopies + 1}`;
     try {
+      await getDevelopRepository(source).flush();
       await persistStateSync(set, get);
       const current = get();
       if (
@@ -2349,20 +2350,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       ) {
         throw new Error("Catalog session changed before the virtual copy was created.");
       }
-      const metadata = current.entryMetadata[entryId];
-      if (!metadata) throw new Error("Photo metadata is unavailable.");
-      const snapshot = getDevelopSession(binding.catalogId, entryId)?.snapshot();
-      const committedDocument = snapshot && snapshot.processKind !== "read-only-newer"
-        ? snapshot.document
-        : metadata.develop ?? null;
       const workspace = current.libraryWorkspace;
-      const result = await createVirtualCopySession(parseEntryId(entryId), name, {
-        ...binding,
-        developJson: committedDocument === null
-          ? null
-          : JSON.stringify(committedDocument),
-        expectedSourceMetadataUpdatedAt: metadata.updatedAt,
-      });
+      const result = await createVirtualCopySession(parseEntryId(entryId), name, binding);
       const libraryWorkspace = cloneWorkspaceEntryState(
         result.state.libraryWorkspace,
         workspace,

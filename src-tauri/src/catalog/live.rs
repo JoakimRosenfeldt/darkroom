@@ -72,6 +72,22 @@ fn snapshot(row: &Value) -> Value {
 impl CatalogService {
     pub(super) fn query(&self, request: &Value) -> Result<Value, String> {
         let db = self.db()?;
+        db.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+        let result = self.query_snapshot(request);
+        match result {
+            Ok(value) => {
+                db.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = db.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn query_snapshot(&self, request: &Value) -> Result<Value, String> {
+        let db = self.db()?;
         let id = string(request, "catalogId")?;
         let catalog = one(db,"SELECT catalog_id AS catalogId,display_name AS displayName,app_version AS appVersion,install_state AS installState,revision FROM catalog_meta WHERE catalog_id=?",vec![SqlValue::Text(id.into())])?.ok_or("Catalog is missing.")?;
         if catalog["installState"] != "ready" {
@@ -183,8 +199,20 @@ impl CatalogService {
     }
 
     pub(super) fn apply(&mut self, request: &Value) -> Result<Value, String> {
-        let id = string(request, "catalogId")?.to_string();
         let expected = number(request, "expectedRevision")?;
+        self.apply_with_expected(request, Some(expected))
+    }
+
+    pub(super) fn apply_internal(&mut self, request: &Value) -> Result<Value, String> {
+        self.apply_with_expected(request, None)
+    }
+
+    fn apply_with_expected(
+        &mut self,
+        request: &Value,
+        expected: Option<i64>,
+    ) -> Result<Value, String> {
+        let id = string(request, "catalogId")?.to_string();
         let mutations = field(request, "mutations")?
             .as_array()
             .ok_or("Catalog mutations are invalid.")?;
@@ -196,9 +224,10 @@ impl CatalogService {
             .map_err(|e| e.to_string())?;
         let result = (|| -> Result<Value, String> {
             let revision = self.revision(&id)?;
-            if expected != revision {
+            if expected.is_some_and(|expected| expected != revision) {
                 return Err(format!(
-                    "Catalog live revision {expected} is stale; current revision is {revision}."
+                    "Catalog live revision {} is stale; current revision is {revision}.",
+                    expected.unwrap()
                 ));
             }
             if one(db,"SELECT 1 FROM edit_entries e LEFT JOIN develop_history_heads h ON h.catalog_id=e.catalog_id AND h.entry_id=e.entry_id WHERE e.catalog_id=? AND h.entry_id IS NULL LIMIT 1",vec![SqlValue::Text(id.clone())])?.is_some() { return Err("Develop history Head is missing; recovery is required.".into()) }
@@ -277,7 +306,7 @@ impl CatalogService {
                     SqlValue::Integer(revision),
                 ],
             )?;
-            let audit=json!({"version":1,"expectedRevision":expected,"revision":revision+1,"mutationKinds":kinds}).to_string();
+            let audit=json!({"version":1,"expectedRevision":expected.unwrap_or(revision),"revision":revision+1,"mutationKinds":kinds}).to_string();
             execute(
                 db,
                 "INSERT INTO audit_log (catalog_id,migration_id,event,payload_json,created_at) VALUES (?,NULL,'live-apply',?,?)",

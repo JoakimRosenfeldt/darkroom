@@ -9,7 +9,7 @@ autobins = false
 
 [lib]
 name = "darkroom_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

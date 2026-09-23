@@ -10,7 +10,17 @@ import exifr from "exifr";
 
 const root = process.cwd();
 const url = process.env.DARKROOM_SMOKE_URL ?? "http://localhost:3000";
-await fetch(url);
+const serverDeadline = Date.now() + 30_000;
+for (;;) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    break;
+  } catch (error) {
+    if (Date.now() >= serverDeadline) throw new Error(`Development server did not become ready at ${url} within 30 seconds. Start npm run dev.`, { cause: error });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 const directory = await mkdtemp(path.join(os.tmpdir(), "darkroom-develop-smoke-"));
 const photos = path.join(directory, "photos");
 const outputs = path.join(directory, "exports");
@@ -130,9 +140,13 @@ async function runtime() {
       "lib/develop/v3/preview-worker-client.ts",
       "lib/export/runner.ts",
     ];
-    const modules = new Map(await Promise.all(
-      names.map(async (name) => [name, await import(`/${name}`)]),
-    ));
+    const resources = performance.getEntriesByType("resource").map((entry) => new URL(entry.name));
+    const modules = new Map(await Promise.all(names.map(async (name) => {
+      // Reuse the app's module instance when a long-lived Vite server adds HMR timestamps.
+      const loaded = resources.filter((resource) => resource.pathname === `/${name}`)
+        .sort((a, b) => Number(b.searchParams.get("t") ?? 0) - Number(a.searchParams.get("t") ?? 0))[0];
+      return [name, await import(loaded?.href ?? `/${name}`)];
+    })));
     window.smokeModule = (name) => {
       if (!modules.has(name)) throw new Error(`Unknown smoke module: ${name}`);
       return modules.get(name);
@@ -143,6 +157,8 @@ async function ready() {
   await runtime();
   await page.waitForFunction(() => {
     const store = window.smokeModule("stores/develop-store.ts").useDevelopStore.getState();
+    const ui = store.sessions[store.activeEntryId]?.ui;
+    if (ui?.sidecarStatus === "error") throw new Error(ui.sidecarError);
     return store.activeEntryId && !Object.keys(store.pendingDefaultOperations).length &&
       store.sessions[store.activeEntryId]?.ui.sidecarStatus === "saved" &&
       document.querySelector('canvas[role="img"]')?.width > 1;
@@ -208,6 +224,7 @@ try {
       const entry = window.smokeEntry;
       const copyId = await ls.getState().createVirtualCopy(entry.id, "Alternate");
       const document = (await window.darkroom.developHistoryLoad({ catalogId: entry.catalogId, entryId: entry.id, revisionId: null })).value.document;
+      const copyDocument = (await window.darkroom.developHistoryLoad({ catalogId: entry.catalogId, entryId: copyId, revisionId: null })).value.document;
       const alternate = structuredClone(document);
       alternate.color.monochrome.enabled = false;
       const thumbnail = loadModule("lib/cache/thumbnail-cache.ts").loadThumbnailBlob;
@@ -219,10 +236,12 @@ try {
       const sizes = [smallImage.width, smallImage.height, largeImage.width, largeImage.height];
       smallImage.close(); largeImage.close();
       window.smokeCopyId = copyId;
-      return { sizes, different: await small.text() !== await other.text() };
+      return { sizes, different: await small.text() !== await other.text(), document, copyDocument };
     });
     assert.ok(Math.max(...result.sizes.slice(2)) > Math.max(...result.sizes.slice(0, 2)));
     assert.equal(result.different, true);
+    assert.equal(result.document.tone.basic.exposure, 0.75);
+    assert.deepEqual(result.copyDocument, result.document);
   });
 
   await check("preset batch and undo", async () => {
