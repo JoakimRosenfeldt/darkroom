@@ -25,7 +25,8 @@ async function blobToDecodedImage(
     const height = Math.max(1, Math.round(bitmap.height * scale));
     const decoded = {
       width, height, bits: 8, colors: 4,
-      pixelProvenance: standardPixelProvenance(), metadata,
+      pixelProvenance: standardPixelProvenance(),
+      metadata: { ...metadata, originalWidth: bitmap.width, originalHeight: bitmap.height },
     };
     if (!options.thumbnail && !options.sourcePixels) {
       return { ...decoded, rgb: new Uint8Array(0), blob, objectUrl: URL.createObjectURL(blob) };

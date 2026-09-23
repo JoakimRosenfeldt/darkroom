@@ -11,6 +11,12 @@ type LibRawInstance = InstanceType<
 let librawModule: typeof import("libraw-wasm") | null = null;
 let librawInstance: LibRawInstance | null = null;
 
+function positiveDimension(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
 async function acquireLibRaw(): Promise<LibRawInstance> {
   if (!librawModule) {
     librawModule = await import("libraw-wasm");
@@ -158,6 +164,12 @@ async function buildFromImageData(
     : await rgbDataToBlob(rgb, width, height, image.bits);
   options.signal?.throwIfAborted();
   const objectUrl = blob ? URL.createObjectURL(blob) : undefined;
+  const originalWidth = options.fullResolution
+    ? positiveDimension(image.width)
+    : positiveDimension(metadata.width);
+  const originalHeight = options.fullResolution
+    ? positiveDimension(image.height)
+    : positiveDimension(metadata.height);
 
   return {
     width,
@@ -190,7 +202,11 @@ async function buildFromImageData(
             reason: "The default LibRaw path returns rendered RGB pixels.",
           },
         },
-    metadata: { ...metadata, decoderProvenance: "libraw" },
+    metadata: {
+      ...metadata,
+      ...(originalWidth && originalHeight ? { originalWidth, originalHeight } : {}),
+      decoderProvenance: "libraw",
+    },
     blob,
     objectUrl,
   };
