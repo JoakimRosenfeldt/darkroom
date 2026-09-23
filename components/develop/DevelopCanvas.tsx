@@ -355,6 +355,7 @@ export function DevelopCanvas({
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
+  const [detailCanvasContainer, setDetailCanvasContainer] = useState<HTMLDivElement | null>(null);
   const [previewRenderScale, setPreviewRenderScale] = useState(1);
   const beforeRasterRef = useRef<{ readonly contentKey: string; readonly dimensions: DisplayDimensions } | null>(null);
 
@@ -1093,7 +1094,7 @@ export function DevelopCanvas({
       startedAtFit,
       moved: false,
     };
-    setPanning(true);
+    setPanning(!startedAtFit);
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -1101,7 +1102,10 @@ export function DevelopCanvas({
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    if (Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4) pan.moved = true;
+    if (Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4 && !pan.moved) {
+      pan.moved = true;
+      if (pan.startedAtFit) setPanning(true);
+    }
     if (!pan.moved) return;
     setZoomFocus(null);
     const offset = clampViewerOffset(viewport, imageRect, pan.scale, {
@@ -1315,6 +1319,7 @@ export function DevelopCanvas({
           preload
           passive
           panning={panning}
+          canvasContainer={detailCanvasContainer}
         />
       ) : null}
       <div
@@ -1378,6 +1383,15 @@ export function DevelopCanvas({
             style={displayDimensions}
           />
         </div>
+        <div
+          ref={setDetailCanvasContainer}
+          className="pointer-events-none absolute inset-0 transition-none"
+          style={{
+            // Undo the target view so detail follows the shared outer animation.
+            transform: `scale(${1 / viewTransform.scale}) translate(${-viewTransform.x}px, ${-viewTransform.y}px)`,
+            transformOrigin: "0 0",
+          }}
+        />
       </div>
       {showBefore && preview.kind === "rendered" ? (
         <div className="pointer-events-none absolute left-3 top-3 z-40 rounded bg-lr-panel/90 px-2 py-1 text-[11px] uppercase tracking-wider text-lr-text-muted">
