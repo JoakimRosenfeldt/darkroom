@@ -45,6 +45,7 @@ import type {
   CpuBackendDiagnostic,
   CpuPointColorInput,
 } from "@/lib/develop/v3/cpu-backend";
+import { MAX_CPU_RENDER_PIXELS } from "@/lib/develop/v3/cpu-backend";
 import type { Sha256Digest } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isEditableTarget } from "@/hooks/is-editable-target";
@@ -135,11 +136,42 @@ interface DisplayDimensions {
   readonly height: number;
 }
 
+interface PaintedRasterDimensions extends DisplayDimensions {
+  readonly document: DevelopDocumentV3;
+  readonly documentRevision: number;
+  readonly cropActive: boolean;
+  readonly entryId: string;
+  readonly assetRevision: number;
+}
+
 function positiveDimensions(width: unknown, height: unknown): DisplayDimensions | null {
   return typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
     typeof height === "number" && Number.isSafeInteger(height) && height > 0
     ? { width, height }
     : null;
+}
+
+function requestedPreviewDimensions(
+  width: number,
+  height: number,
+  previewScale: number,
+  devicePixelRatio: number,
+  aspect: DisplayDimensions,
+): DisplayDimensions {
+  const viewportWidth = Math.max(1, Math.round(width * previewScale));
+  const viewportHeight = Math.max(1, Math.round(height * previewScale));
+  const boundsWidth = Math.max(1, Math.round(viewportWidth * devicePixelRatio));
+  const boundsHeight = Math.max(1, Math.round(viewportHeight * devicePixelRatio));
+  const scale = Math.min(boundsWidth / aspect.width, boundsHeight / aspect.height);
+  let outputWidth = Math.max(1, Math.round(aspect.width * scale));
+  let outputHeight = Math.max(1, Math.round(aspect.height * scale));
+  const pixels = outputWidth * outputHeight;
+  if (pixels > MAX_CPU_RENDER_PIXELS) {
+    const capScale = Math.sqrt(MAX_CPU_RENDER_PIXELS / pixels);
+    outputWidth = Math.max(1, Math.floor(outputWidth * capScale));
+    outputHeight = Math.max(1, Math.floor(outputHeight * capScale));
+  }
+  return { width: outputWidth, height: outputHeight };
 }
 
 function initialFullSourceDimensions(
@@ -159,6 +191,7 @@ interface DrawnFrame {
   readonly document: DevelopDocumentV3;
   readonly documentRevision: number;
   readonly mode: V3PreviewRenderMode;
+  readonly rasterSaturated: boolean;
   readonly viewportHeight: number;
   readonly viewportWidth: number;
   readonly viewportScale: number;
@@ -261,6 +294,7 @@ export function DevelopCanvas({
   const drawnRequestRef = useRef(0);
   const drawnFrameRef = useRef<DrawnFrame | null>(null);
   const lastInteractiveRevisionRef = useRef<number | null>(null);
+  const beforeContentKeyRef = useRef<string | null>(null);
   const maskMattesRef = useRef<{
     readonly key: string;
     readonly value: Promise<readonly V3PreviewMaskMatte[]>;
@@ -287,7 +321,6 @@ export function DevelopCanvas({
       : undefined;
     return session?.transientEdit ? "interactive" : "settled";
   });
-  const previewModeRef = useRef(previewMode);
   const includePointColor = canvasTool.kind === "point-color";
   const maskTool = useDevelopStore((state) => {
     const session = state.activeCatalogId === entry.catalogId
@@ -314,12 +347,16 @@ export function DevelopCanvas({
   );
   const [preview, setPreview] = useState<PreviewState>({ kind: "loading" });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 1, height: 1 });
+  const [paintedRasterDimensions, setPaintedRasterDimensions] = useState<PaintedRasterDimensions | null>(null);
+  const [beforeRasterDimensions, setBeforeRasterDimensions] = useState<DisplayDimensions | null>(null);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const [previewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
+  const [zoomFocus, setZoomFocus] = useState<{ x: number; y: number } | null>(null);
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
   const [previewRenderScale, setPreviewRenderScale] = useState(1);
+  const beforeRasterRef = useRef<{ readonly contentKey: string; readonly dimensions: DisplayDimensions } | null>(null);
 
   const activeDisplayDimensions = displayDimensions;
   const [actualSize, setActualSize] = useState(false);
@@ -391,10 +428,6 @@ export function DevelopCanvas({
     }, 120);
     return () => window.clearTimeout(timeout);
   }, [panning, viewTransform.scale]);
-
-  useEffect(() => {
-    previewModeRef.current = previewMode;
-  }, [previewMode]);
 
   useEffect(() => {
     diagnosticsCallbackRef.current = onRenderDiagnostics;
@@ -475,28 +508,70 @@ export function DevelopCanvas({
       }
       const renderSnapshot = session.snapshot();
       const drawnFrame = drawnFrameRef.current;
-      const sameFrame = drawnFrame?.documentRevision ===
+      const sameContent = drawnFrame?.documentRevision ===
           renderSnapshot.documentRevision &&
         drawnFrame.document === document &&
-        drawnFrame.viewportWidth === width &&
-        drawnFrame.viewportHeight === height &&
-        drawnFrame.viewportScale === previewRenderScale &&
         drawnFrame.cropActive === cropActive;
+      const devicePixelRatio = Math.min(2, Math.max(0.5, window.devicePixelRatio || 1));
+      const requiredDimensions = requestedPreviewDimensions(
+        width,
+        height,
+        previewRenderScale,
+        devicePixelRatio,
+        { width: canvas.width, height: canvas.height },
+      );
+      const currentAnalysis = activeAnalysis.get(analysisKey(entry.catalogId, entry.id));
+      const hasCurrentAnalysis = cropActive ||
+        (currentAnalysis !== undefined && currentAnalysis.analysis.length > 0 &&
+          currentAnalysis.binding.documentRevision === renderSnapshot.documentRevision &&
+          currentAnalysis.binding.assetRevision === entry.assetRevision);
+      const canReuseSettledFrame = previewMode === "settled" && sameContent &&
+        drawnFrame?.mode === "settled" &&
+        (drawnFrame.rasterSaturated ||
+          (canvas.width >= requiredDimensions.width && canvas.height >= requiredDimensions.height)) &&
+        (!includePointColor || pointColorInputRef.current !== null) &&
+        hasCurrentAnalysis;
+      if (canReuseSettledFrame && drawnFrame) {
+        const scale = Math.min(width / canvas.width, height / canvas.height);
+        setDisplayDimensions((current) => {
+          const next = {
+            width: Math.max(1, Math.round(canvas.width * scale)),
+            height: Math.max(1, Math.round(canvas.height * scale)),
+          };
+          return current.width === next.width && current.height === next.height ? current : next;
+        });
+        drawnFrameRef.current = {
+          ...drawnFrame,
+          viewportHeight: height,
+          viewportWidth: width,
+        };
+        renderedViewportWidth = width;
+        renderedViewportHeight = height;
+        return;
+      }
       if (previewMode === "interactive") {
         lastInteractiveRevisionRef.current = renderSnapshot.documentRevision;
-        if (sameFrame) return;
+        if (sameContent && drawnFrame?.viewportWidth === width &&
+            drawnFrame.viewportHeight === height &&
+            drawnFrame.viewportScale === previewRenderScale) return;
       }
       const interactionRelease = previewMode === "settled" &&
         lastInteractiveRevisionRef.current === renderSnapshot.documentRevision;
-      if (interactionRelease && sameFrame && drawnFrame.mode === "settled" &&
+      if (interactionRelease && sameContent && drawnFrame?.viewportWidth === width &&
+          drawnFrame.viewportHeight === height && drawnFrame.viewportScale === previewRenderScale &&
+          drawnFrame.mode === "settled" &&
           (!includePointColor || pointColorInputRef.current !== null)) return;
 
       clearTimeout(refineTimer);
       clearTimeout(analysisTimer);
-      pointColorInputRef.current = null;
-      setShowBefore(false);
-      clearActiveAnalysis(entry.catalogId, entry.id);
-      analysisCallbackRef.current?.(EMPTY_ANALYSIS);
+      const sameContentSettledRender = previewMode === "settled" && sameContent &&
+        drawnFrame?.mode === "settled";
+      if (!sameContent) {
+        pointColorInputRef.current = null;
+        setShowBefore(false);
+        clearActiveAnalysis(entry.catalogId, entry.id);
+        analysisCallbackRef.current?.(EMPTY_ANALYSIS);
+      }
       const requestId = ++requestRef.current;
       if (!hasRenderedRef.current) setPreview({ kind: "loading" });
       if (detailRenderingRef.current) {
@@ -519,19 +594,22 @@ export function DevelopCanvas({
         result: V3PreviewRenderOutput,
         mode: V3PreviewRenderMode,
         backend: V3PreviewBackend,
-        allowStaleDraft = false,
       ): boolean => {
         const closeBitmap = (): void => {
           if (result.kind === "rendered" && "bitmap" in result) {
             result.bitmap.close();
           }
         };
-        const staleDraft = allowStaleDraft &&
-          previewModeRef.current === "interactive" &&
-          result.kind === "rendered" &&
-          quickWorkerRef.current === quickWorker &&
-          requestId > drawnRequestRef.current;
-        if ((disposed || requestId !== requestRef.current) && !staleDraft) {
+        if (disposed || requestId !== requestRef.current) {
+          closeBitmap();
+          return false;
+        }
+        const currentSnapshot = session.snapshot();
+        if (
+          renderSnapshot.processKind !== "v3" ||
+          currentSnapshot.processKind !== "v3" ||
+          currentSnapshot.documentRevision !== renderSnapshot.documentRevision
+        ) {
           closeBitmap();
           return false;
         }
@@ -548,84 +626,54 @@ export function DevelopCanvas({
           }
           return false;
         }
-        const currentSnapshot = session.snapshot();
-        if (
-          renderSnapshot.processKind !== "v3" ||
-          currentSnapshot.processKind !== "v3" ||
-          currentSnapshot.documentRevision !== renderSnapshot.documentRevision
-        ) {
-          if (staleDraft) {
-            const dimensions = result.dimensions;
-            if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
-            if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
-            if ("bitmap" in result) {
-              context.drawImage(result.bitmap, 0, 0);
-              result.bitmap.close();
-            } else {
-              context.putImageData(
-                new ImageData(
-                  imageDataPixels(result.pixels.pixels),
-                  dimensions.width,
-                  dimensions.height,
-                ),
-                0,
-                0,
-              );
-            }
-            const scale = Math.min(width / dimensions.width, height / dimensions.height);
-            setDisplayDimensions((current) => {
-              const next = {
-                width: Math.max(1, Math.round(dimensions.width * scale)),
-                height: Math.max(1, Math.round(dimensions.height * scale)),
-              };
-              return current.width === next.width && current.height === next.height ? current : next;
-            });
-            drawnRequestRef.current = requestId;
-            drawnFrameRef.current = {
-              backend,
-              cropActive,
-              document,
-              documentRevision: renderSnapshot.documentRevision,
-              mode,
-              viewportHeight: height,
-              viewportWidth: width,
-              viewportScale: previewRenderScale,
-            };
-            hasRenderedRef.current = true;
-            setPreview((current) => current.kind === "rendered" ? current : { kind: "rendered" });
-            return true;
-          }
-          analysisCallbackRef.current?.(EMPTY_ANALYSIS);
-          closeBitmap();
-          setPreview({
-            kind: "cancelled",
-            message: "The Develop document changed during this render.",
-          });
-          return false;
-        }
         const dimensions = result.dimensions;
-        pointColorInputRef.current = result.pointColorInput;
-        if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
-        if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
-        if ("bitmap" in result) {
-          context.drawImage(result.bitmap, 0, 0);
+        const keepExistingRaster = sameContent && drawnFrame?.mode === "settled" &&
+          canvas.width * canvas.height >= dimensions.width * dimensions.height;
+        if (!keepExistingRaster) {
+          pointColorInputRef.current = result.pointColorInput;
+          if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
+          if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
+          if ("bitmap" in result) {
+            context.drawImage(result.bitmap, 0, 0);
+            result.bitmap.close();
+          } else {
+            context.putImageData(
+              new ImageData(
+                imageDataPixels(result.pixels.pixels),
+                dimensions.width,
+                dimensions.height,
+              ),
+              0,
+              0,
+            );
+          }
+        } else if ("bitmap" in result) {
           result.bitmap.close();
-        } else {
-          context.putImageData(
-            new ImageData(
-              imageDataPixels(result.pixels.pixels),
-              dimensions.width,
-              dimensions.height,
-            ),
-            0,
-            0,
-          );
+        } else if (!pointColorInputRef.current) {
+          pointColorInputRef.current = result.pointColorInput;
         }
-        const scale = Math.min(width / dimensions.width, height / dimensions.height);
+        const paintedDimensions = { width: canvas.width, height: canvas.height };
+        setPaintedRasterDimensions((current) =>
+          current?.width === paintedDimensions.width && current.height === paintedDimensions.height
+            && current.document === document &&
+            current.documentRevision === renderSnapshot.documentRevision &&
+            current.cropActive === cropActive && current.entryId === entry.id &&
+            current.assetRevision === entry.assetRevision
+            ? current
+            : {
+                ...paintedDimensions,
+                document,
+                documentRevision: renderSnapshot.documentRevision,
+                cropActive,
+                entryId: entry.id,
+                assetRevision: entry.assetRevision,
+              },
+        );
+        const scale = Math.min(width / paintedDimensions.width, height / paintedDimensions.height);
         setDisplayDimensions((current) => {
           const next = {
-            width: Math.max(1, Math.round(dimensions.width * scale)),
-            height: Math.max(1, Math.round(dimensions.height * scale)),
+            width: Math.max(1, Math.round(paintedDimensions.width * scale)),
+            height: Math.max(1, Math.round(paintedDimensions.height * scale)),
           };
           return current.width === next.width && current.height === next.height ? current : next;
         });
@@ -641,15 +689,28 @@ export function DevelopCanvas({
           analysisCallbackRef.current?.(result.analysis.length ? result.analysis : EMPTY_ANALYSIS);
         }
         drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
+        const requestedDimensions = requestedPreviewDimensions(
+          width,
+          height,
+          previewRenderScale,
+          Math.min(2, Math.max(0.5, window.devicePixelRatio || 1)),
+          dimensions,
+        );
         drawnFrameRef.current = {
-          backend,
+          backend: keepExistingRaster && drawnFrame ? drawnFrame.backend : backend,
           cropActive,
           document,
           documentRevision: renderSnapshot.documentRevision,
-          mode,
+          mode: keepExistingRaster && drawnFrame ? drawnFrame.mode : mode,
+          rasterSaturated: keepExistingRaster && drawnFrame
+            ? drawnFrame.rasterSaturated
+            : mode === "settled" && (dimensions.width < requestedDimensions.width ||
+              dimensions.height < requestedDimensions.height),
           viewportHeight: height,
           viewportWidth: width,
-          viewportScale: previewRenderScale,
+          viewportScale: keepExistingRaster && drawnFrame
+            ? drawnFrame.viewportScale
+            : previewRenderScale,
         };
         hasRenderedRef.current = true;
         setPreview((current) => current.kind === "rendered" ? current : { kind: "rendered" });
@@ -676,13 +737,13 @@ export function DevelopCanvas({
           includePointColor,
         } as const;
         let backend = drawnFrame?.backend ?? null;
-        if (!interactionRelease) {
+        if (!interactionRelease && !sameContentSettledRender) {
           const quick = await quickWorker.render(renderDocument, {
             ...options,
             previewMode: "interactive",
             includeAnalysis: false,
           });
-          if (!applyResult(quick.result, "interactive", quick.backend, true)) return;
+          if (!applyResult(quick.result, "interactive", quick.backend)) return;
           backend = quick.backend;
           if (disposed || requestId !== requestRef.current) return;
         }
@@ -695,7 +756,7 @@ export function DevelopCanvas({
               previewMode: "refined",
               includeAnalysis: false,
             }).then((refined) => {
-              applyResult(refined.result, "refined", refined.backend, true);
+              applyResult(refined.result, "refined", refined.backend);
             }).catch(handleRenderError);
           }, 100);
           return;
@@ -805,8 +866,20 @@ export function DevelopCanvas({
           },
         }
       : neutralBeforeDocument;
-    setBeforeReady(false);
-    setShowBefore(false);
+    const beforeContentKey = JSON.stringify([
+      entry.catalogId,
+      entry.id,
+      entry.assetRevision,
+      cropActive,
+      renderDocument,
+    ]);
+    if (beforeContentKeyRef.current !== beforeContentKey) {
+      beforeContentKeyRef.current = beforeContentKey;
+      beforeRasterRef.current = null;
+      setBeforeReady(false);
+      setBeforeRasterDimensions(null);
+      setShowBefore(false);
+    }
 
     const timeout = window.setTimeout(() => {
       let beforeWorker: V3PreviewWorkerClient;
@@ -834,24 +907,38 @@ export function DevelopCanvas({
           return;
         }
         if (before.kind !== "rendered") return;
-        if (sourceCanvas.width !== before.dimensions.width) {
-          sourceCanvas.width = before.dimensions.width;
-        }
-        if (sourceCanvas.height !== before.dimensions.height) {
-          sourceCanvas.height = before.dimensions.height;
-        }
-        if ("bitmap" in before) {
-          sourceContext.drawImage(before.bitmap, 0, 0);
-          before.bitmap.close();
+        const existingRaster = beforeRasterRef.current;
+        const keepBeforeRaster = existingRaster?.contentKey === beforeContentKey &&
+          existingRaster.dimensions.width * existingRaster.dimensions.height >=
+            before.dimensions.width * before.dimensions.height;
+        if (keepBeforeRaster) {
+          if ("bitmap" in before) before.bitmap.close();
         } else {
-          sourceContext.putImageData(
-            new ImageData(
-              imageDataPixels(before.pixels.pixels),
-              before.dimensions.width,
-              before.dimensions.height,
-            ),
-            0,
-            0,
+          if (sourceCanvas.width !== before.dimensions.width) {
+            sourceCanvas.width = before.dimensions.width;
+          }
+          if (sourceCanvas.height !== before.dimensions.height) {
+            sourceCanvas.height = before.dimensions.height;
+          }
+          if ("bitmap" in before) {
+            sourceContext.drawImage(before.bitmap, 0, 0);
+            before.bitmap.close();
+          } else {
+            sourceContext.putImageData(
+              new ImageData(
+                imageDataPixels(before.pixels.pixels),
+                before.dimensions.width,
+                before.dimensions.height,
+              ),
+              0,
+              0,
+            );
+          }
+          beforeRasterRef.current = { contentKey: beforeContentKey, dimensions: before.dimensions };
+          setBeforeRasterDimensions((current) =>
+            current?.width === before.dimensions.width && current.height === before.dimensions.height
+              ? current
+              : before.dimensions,
           );
         }
         setBeforeReady(true);
@@ -893,6 +980,11 @@ export function DevelopCanvas({
     anchor = { x: viewport.width / 2, y: viewport.height / 2 },
   ) => {
     const current = viewTransformRef.current;
+    const focus = {
+      x: Math.max(0, Math.min(1, ((anchor.x - current.x) / current.scale - imageRect.x) / imageRect.width)),
+      y: Math.max(0, Math.min(1, ((anchor.y - current.y) / current.scale - imageRect.y) / imageRect.height)),
+    };
+    setZoomFocus(focus);
     const nextScale = Math.max(1, Math.min(maximumScale, current.scale * factor));
     if (nextScale > 1) lastZoomRef.current = nextScale;
     setActualSize(false);
@@ -902,19 +994,21 @@ export function DevelopCanvas({
     );
     viewTransformRef.current = next;
     setViewTransform(next);
-  }, [activeDisplayDimensions, maximumScale, viewport]);
+  }, [activeDisplayDimensions, imageRect, maximumScale, viewport]);
 
   function fit(): void {
     if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
+    setZoomFocus(null);
     setActualSize(false);
     setViewTransform(FIT_TRANSFORM);
   }
 
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
     const position = {
-      x: (pointer.x - imageRect.x) / imageRect.width,
-      y: (pointer.y - imageRect.y) / imageRect.height,
+      x: Math.max(0, Math.min(1, (pointer.x - imageRect.x) / imageRect.width)),
+      y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
     };
+    setZoomFocus(position);
     if (lastZoomRef.current === "actual") {
       setActualPosition(position);
       setActualSize(true);
@@ -1009,6 +1103,7 @@ export function DevelopCanvas({
     if (!pan || pan.pointerId !== event.pointerId) return;
     if (Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4) pan.moved = true;
     if (!pan.moved) return;
+    setZoomFocus(null);
     const offset = clampViewerOffset(viewport, imageRect, pan.scale, {
         x: pan.x + event.clientX - pan.startX,
         y: pan.y + event.clientY - pan.startY,
@@ -1094,6 +1189,13 @@ export function DevelopCanvas({
       input.pixels[offset + 2] ?? 0,
     ];
   }, []);
+  const currentPaintedRasterDimensions = paintedRasterDimensions?.document === document &&
+      paintedRasterDimensions.documentRevision === documentRevision &&
+      paintedRasterDimensions.cropActive === cropActive &&
+      paintedRasterDimensions.entryId === entry.id &&
+      paintedRasterDimensions.assetRevision === entry.assetRevision
+    ? { width: paintedRasterDimensions.width, height: paintedRasterDimensions.height }
+    : undefined;
 
   return (
     <div
@@ -1159,7 +1261,7 @@ export function DevelopCanvas({
           >
             +
           </button>
-          <button type="button" aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)} onClick={() => { setActualPosition(detailPosition); setActualSize(true); }} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
+          <button type="button" aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)} onClick={() => { setActualPosition(detailPosition); setZoomFocus(detailPosition); setActualSize(true); }} className={`rounded px-2 py-1 text-xs ${actualSize ? "bg-lr-selection text-lr-accent" : "text-white"}`}>100%</button>
           <span className="mx-0.5 h-4 w-px bg-white/10" />
           <button
             type="button"
@@ -1202,9 +1304,14 @@ export function DevelopCanvas({
           entry={entry}
           document={showBefore ? neutralBeforeDocument ?? document : document}
           position={detailPosition}
+          focusPosition={zoomFocus ?? detailPosition}
+          basePreviewDimensions={showBefore
+            ? beforeRasterDimensions ?? currentPaintedRasterDimensions
+            : currentPaintedRasterDimensions}
           displaySize={actualSize ? undefined : { width: displayDimensions.width * viewTransform.scale, height: displayDimensions.height * viewTransform.scale }}
           onSourceDimensions={reportFullSourceDimensions}
-          active={zoomed && !canvasInteractionActive}
+          active={preview.kind === "rendered" && !canvasInteractionActive}
+          showStatus={zoomed}
           preload
           passive
           panning={panning}
