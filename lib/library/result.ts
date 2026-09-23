@@ -66,6 +66,39 @@ export interface ResolveLibraryResultInput {
   readonly queryIndex?: QueryIndex;
 }
 
+interface LibraryResultCacheEntry {
+  readonly input: ResolveLibraryResultInput;
+  readonly queryKey: string;
+  readonly result: LibraryResult;
+}
+
+const LIBRARY_RESULT_CACHE_LIMIT = 4;
+const libraryResultCache: LibraryResultCacheEntry[] = [];
+
+function libraryResultQueryKey(input: ResolveLibraryResultInput): string {
+  return JSON.stringify([
+    input.primaryScope,
+    input.textQuery,
+    input.facets,
+    input.curationFilter,
+    input.formatFilter,
+    input.sort,
+    input.sortDirection,
+    [...input.expandedStackIds].sort(),
+  ]);
+}
+
+function sameSet(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
+  const leftSize = left?.size ?? 0;
+  if (leftSize !== (right?.size ?? 0)) return false;
+  if (leftSize === 0) return true;
+  if (!left || !right) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
 export function normalizeFolderPath(path: string | null): string {
   if (path === null) return "";
   return path.replaceAll("\\", "/").split("/").filter(Boolean).join("/");
@@ -298,6 +331,38 @@ export function resolveLibraryResult(input: ResolveLibraryResultInput): LibraryR
       input.workspace.stacks.map((stack) => `${stack.id}:${stack.updatedAt}`).join(","),
     ].join("|"),
   };
+}
+
+export function getLibraryResult(input: ResolveLibraryResultInput): LibraryResult {
+  const queryKey = libraryResultQueryKey(input);
+  const usesDuplicateIds = input.primaryScope.type === "duplicates";
+  const cachedIndex = libraryResultCache.findIndex(({ input: cached, queryKey: cachedQueryKey }) =>
+    cached.catalogRevision === input.catalogRevision &&
+    cached.entries === input.entries &&
+    cached.metadata === input.metadata &&
+    cached.albums === input.albums &&
+    cached.archivedEntryIds === input.archivedEntryIds &&
+    cached.workspace === input.workspace &&
+    cached.queryIndex === input.queryIndex &&
+    cachedQueryKey === queryKey &&
+    (!usesDuplicateIds || sameSet(cached.duplicateEntryIds, input.duplicateEntryIds)),
+  );
+  if (cachedIndex >= 0) {
+    const cached = libraryResultCache.splice(cachedIndex, 1)[0];
+    if (cached) {
+      libraryResultCache.push(cached);
+      return cached.result;
+    }
+  }
+
+  const result = resolveLibraryResult(input);
+  libraryResultCache.push({
+    input,
+    queryKey,
+    result,
+  });
+  if (libraryResultCache.length > LIBRARY_RESULT_CACHE_LIMIT) libraryResultCache.shift();
+  return result;
 }
 
 export function reconcileSelectionToResult(

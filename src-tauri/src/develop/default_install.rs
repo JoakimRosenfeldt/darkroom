@@ -244,18 +244,6 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         location["fallback"] = json!({"cameraMake":entry["cameraMake"],"cameraModel":entry["cameraModel"],"lens":entry["lensModel"]});
         (entry, location)
     };
-    let verified = native::analyze_file(&location, &backend.native)?;
-    check()?;
-    if !verified["error"].is_null()
-        || verified["sourceSha256"].is_null()
-        || !numbers_equal(&verified["size"], &original["observation"]["byteLength"])
-        || !numbers_equal(
-            &verified["modifiedAt"],
-            &original["observation"]["modifiedAt"],
-        )
-    {
-        return Err("Develop default source analysis is missing, stale, or failed.".into());
-    }
     let id = string(&request, "catalogId")?;
     let entry_id = string(&request, "entryId")?;
     {
@@ -269,11 +257,58 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         let loaded = history::loaded(db, id, entry_id, None)?;
         let head = &loaded["value"];
         if !stored.is_null() {
+            check()?;
             return Ok(json!({"kind":"already-installed","head":head,"installed":stored}));
         }
         if !pristine(&original, head) {
+            check()?;
             return Ok(json!({"kind":"not-pristine","head":head,"installed":null}));
         }
+    }
+    let has_enabled_defaults = {
+        let develop = backend
+            .develop
+            .lock()
+            .map_err(|_| "Develop service is unavailable.")?;
+        develop
+            .defaults
+            .list()?
+            .iter()
+            .any(|rule| rule["enabled"] == true)
+    };
+    check()?;
+    if !has_enabled_defaults {
+        let catalog = backend
+            .catalog
+            .lock()
+            .map_err(|_| "Catalog service is unavailable.")?;
+        catalog.require_session(&request)?;
+        let db = catalog.active_database().ok_or("Catalog is unavailable.")?;
+        let installed = stored(db, id, entry_id)?;
+        let loaded = history::loaded(db, id, entry_id, None)?;
+        let head = &loaded["value"];
+        if !installed.is_null() {
+            check()?;
+            return Ok(json!({"kind":"already-installed","head":head,"installed":installed}));
+        }
+        if !pristine(&original, head) {
+            check()?;
+            return Ok(json!({"kind":"not-pristine","head":head,"installed":null}));
+        }
+        check()?;
+        return Ok(json!({"kind":"no-match","head":head,"installed":null}));
+    }
+    let verified = native::analyze_file(&location, &backend.native)?;
+    check()?;
+    if !verified["error"].is_null()
+        || verified["sourceSha256"].is_null()
+        || !numbers_equal(&verified["size"], &original["observation"]["byteLength"])
+        || !numbers_equal(
+            &verified["modifiedAt"],
+            &original["observation"]["modifiedAt"],
+        )
+    {
+        return Err("Develop default source analysis is missing, stale, or failed.".into());
     }
     let camera = if verified["cameraMake"].is_string() && verified["cameraModel"].is_string() {
         json!({"kind":"known","make":verified["cameraMake"],"model":verified["cameraModel"]})

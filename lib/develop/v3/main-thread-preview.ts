@@ -69,7 +69,16 @@ export class MainThreadGpuPreview {
   }
 
   dispose(): void {
+    if (this.#disposed) return;
     this.#disposed = true;
-    void this.#pending.finally(() => this.#renderer.dispose());
+    void this.#pending.finally(() => {
+      // Let the next view paint before releasing the WebGL context.
+      const release = () => this.#renderer.dispose();
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(release, { timeout: 250 });
+      } else {
+        setTimeout(release, 32);
+      }
+    });
   }
 }

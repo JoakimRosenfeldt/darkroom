@@ -434,8 +434,9 @@ export class DevelopRepository {
   }
 
   installDefault(facts: DevelopDefaultFacts, requestId: OperationId): Promise<DevelopDefaultsProductionResult> {
+    const hydration = this.#hydration;
     const execute = async (): Promise<DevelopDefaultsProductionResult> => {
-      await this.#hydration;
+      await hydration;
       if (!isDesktopApp() || this.#projectionState.kind === "divergent") {
         throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
       }
@@ -534,8 +535,9 @@ export class DevelopRepository {
   }
 
   commitProcessUpgrade(snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v3" }>): Promise<void> {
+    const hydration = this.#hydration;
     const execute = async (): Promise<void> => {
-      await this.#hydration;
+      await hydration;
       const head = this.#head;
       if (!head || !isDesktopApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
       if (this.#projectionState.kind === "divergent") {
@@ -574,6 +576,7 @@ export class DevelopRepository {
   }
 
   async #enqueueCommittedCommand(command: CommittedDevelopCommand, documentRevision: number): Promise<void> {
+    const hydration = this.#hydration;
     if (this.#acceptedExternalImport?.operationId === null) {
       this.#acceptedExternalImport = {
         ...this.#acceptedExternalImport,
@@ -581,7 +584,7 @@ export class DevelopRepository {
       };
     }
     const execute = async (): Promise<void> => {
-      await this.#hydration;
+      await hydration;
       if (!isDesktopApp()) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Persistent Develop history needs the desktop app.");
       const head = this.#head;
       if (!head) throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop Head is unavailable.");
