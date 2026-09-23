@@ -341,11 +341,6 @@ export function PhotoViewer({
       includeBlob,
       rawColorMode,
     };
-    const prefetchOptions = {
-      includeBlob,
-      rawColorMode,
-      ...(progressiveRaw ? { maxEdge: 720 } : {}),
-    };
 
     async function loadImage() {
       if (entry.formatAvailability.status !== "supported") {
@@ -364,15 +359,11 @@ export function PhotoViewer({
       setImageLoad({ entry, rawColorMode, image: initialImage, error: null, loading: !hasImage });
 
       try {
-        if (fullPreview) {
-          preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
-          return;
-        }
+        if (fullPreview) return;
 
         const loadingImage = loadDevelopImage(entry, progressiveRaw
           ? { ...foregroundOptions, maxEdge: 720 }
           : foregroundOptions);
-        preloadDevelopImages(entries, availableActiveIndex, prefetchOptions);
         const result = await loadingImage;
         if (!active) return;
         hasImage = true;
@@ -403,7 +394,19 @@ export function PhotoViewer({
       active = false;
       controller.abort();
     };
-  }, [entry, entries, availableActiveIndex, developProcessKind, rawColorMode]);
+  }, [entry, developProcessKind, rawColorMode]);
+
+  useEffect(() => {
+    const activeEntry = entries[availableActiveIndex];
+    if (!activeEntry || activeEntry.formatAvailability.status !== "supported") return;
+    const progressiveRaw = activeEntry.formatId === "nef" && developProcessKind === "v3";
+    const includeBlob = developProcessKind === "v2";
+    preloadDevelopImages(entries, availableActiveIndex, {
+      includeBlob,
+      rawColorMode,
+      ...(progressiveRaw ? { maxEdge: 720 } : {}),
+    });
+  }, [entries, availableActiveIndex, developProcessKind, rawColorMode]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 

@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { getQueryIndex } from "@/lib/library/query";
 import { getExactDuplicateGroups } from "@/lib/library/duplicates";
-import { resolveLibraryResult, type LibraryPrimaryScope } from "@/lib/library/result";
+import { getLibraryResult, type LibraryPrimaryScope } from "@/lib/library/result";
 import type { LibraryResultQuery } from "@/lib/library/result-contract";
 import { recordVisibleLibraryResult } from "@/lib/library/result-session";
 import { useLibraryStore } from "@/stores/library-store";
@@ -28,12 +28,14 @@ export function useLibraryResult(
     () => getQueryIndex(entries, metadata, albums, workspace),
     [entries, metadata, albums, workspace],
   );
-  const duplicateEntryIds = useMemo(() => new Set(
-    getExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace)
-      .flatMap((group) => group.members.map((member) => member.entry.id)),
-  ), [albums, archivedEntryIds, entries, metadata, workspace]);
+  const duplicateEntryIds = useMemo(() => primaryScope.type === "duplicates"
+    ? new Set(
+        getExactDuplicateGroups(entries, metadata, albums, archivedEntryIds, workspace)
+          .flatMap((group) => group.members.map((member) => member.entry.id)),
+      )
+    : undefined, [albums, archivedEntryIds, entries, metadata, primaryScope.type, workspace]);
   const result = useMemo(
-    () => resolveLibraryResult({
+    () => getLibraryResult({
       catalogRevision,
       entries,
       metadata,

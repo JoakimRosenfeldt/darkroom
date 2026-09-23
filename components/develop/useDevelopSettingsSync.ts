@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
@@ -8,7 +8,7 @@ import {
   getDevelopRepository,
   type SidecarMetadataPatch,
 } from "@/lib/develop/repository";
-import { getDevelopSession } from "@/lib/develop/session";
+import { DevelopSessionCommandError, getDevelopSession } from "@/lib/develop/session";
 import { sourceSignatureForEntry } from "@/lib/develop/source-transform";
 import type { PersistedDevelopDocument } from "@/lib/develop/v3/document";
 import { createV3UpgradeAssetCopyAdapter } from "@/lib/develop/v3/upgrade-asset-copy";
@@ -29,6 +29,13 @@ export type DevelopDefaultsResolution =
 interface DefaultsResolutionState {
   readonly key: string;
   readonly value: DevelopDefaultsResolution;
+}
+
+interface RepositoryHydrationState {
+  readonly entry: LibraryEntry;
+  readonly repository: ReturnType<typeof getDevelopRepository>;
+  readonly session: NonNullable<ReturnType<typeof getDevelopSession>>;
+  readonly attempt: object;
 }
 
 interface UseDevelopSettingsSyncOptions {
@@ -56,9 +63,22 @@ export function useDevelopSettingsSync({
   defaultFacts,
 }: UseDevelopSettingsSyncOptions): DevelopDefaultsResolution {
   const [defaultsResolution, setDefaultsResolution] = useState<DefaultsResolutionState | null>(null);
+  const [repositoryHydration, setRepositoryHydration] = useState<RepositoryHydrationState | null>(null);
+  const defaultsIdentityKey = JSON.stringify([
+    entry.catalogId,
+    entry.sessionId,
+    entry.id,
+    entry.sourceId,
+    entry.assetId,
+    entry.assetRevision,
+  ]);
   const defaultsKey = defaultFacts
-    ? `${entry.catalogId}:${entry.sessionId}:${entry.id}:${JSON.stringify(defaultFacts)}`
+    ? JSON.stringify([defaultsIdentityKey, defaultFacts])
     : null;
+  const readDefaultRequest = useEffectEvent(() => ({
+    facts: defaultFacts,
+    repository: getDevelopRepository(entry),
+  }));
   const { documentRevision, persistedDocumentRevision, metadataRevision, persistedMetadataRevision, sidecarStatus } = useDevelopStore(useShallow((state) => {
     const session = state.sessions[entry.id];
     return {
@@ -76,6 +96,8 @@ export function useDevelopSettingsSync({
   const setSidecarStatus = useDevelopStore((state) => state.setSidecarStatus);
   const setProjectionState = useDevelopStore((state) => state.setProjectionState);
   const metadataRef = useRef(metadata);
+  const repositoryOpenAttemptRef = useRef<object | null>(null);
+  const upgradeAttemptRef = useRef<object | null>(null);
   const scheduledRevisionRef = useRef<{
     readonly catalogId: string;
     readonly entryId: string;
@@ -88,6 +110,15 @@ export function useDevelopSettingsSync({
     readonly document: number;
     readonly metadata: number;
   } | null>(null);
+  const repository = getDevelopRepository(entry);
+  const pendingDefaultOperation = useDevelopStore((state) =>
+    state.pendingDefaultOperations[JSON.stringify([entry.catalogId, entry.id])],
+  );
+  const activeProcessKind = useDevelopStore((state) =>
+    state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id
+      ? state.sessions[entry.id]?.processKind
+      : undefined,
+  );
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -96,11 +127,12 @@ export function useDevelopSettingsSync({
 
   useEffect(() => {
     let active = true;
-    const repository = getDevelopRepository(entry);
     const catalogDocument = repository.catalogDocument(metadataRef.current);
     activateEntry(entry.catalogId, entry.id, catalogDocument);
     const session = getDevelopSession(entry.catalogId, entry.id);
     if (!session) return;
+    const attempt = {};
+    repositoryOpenAttemptRef.current = attempt;
     const detachSourceSignatureProvider = session.attachSourceSignatureProvider(() => {
       const currentEntry = useLibraryStore.getState().entries.find(
         (candidate) =>
@@ -151,24 +183,16 @@ export function useDevelopSettingsSync({
         }
       },
     });
-    void repository.open(metadataRef.current).then(async () => {
-      if (!active || session.snapshot().processKind !== "v2") return;
-      try {
-        const snapshot = await session.upgradeToCurrentProcess();
-        if (active && snapshot.processKind === "v3") {
-          synchronizeSession(entry.id, snapshot);
-          await repository.commitProcessUpgrade(snapshot);
-        }
-      } catch (error) {
-        if (!active) return;
-        setSidecarStatus(
-          "error",
-          error instanceof Error ? error.message : "Could not prepare the editor.",
-        );
+    void repository.open(metadataRef.current).then(() => {
+      if (active && repositoryOpenAttemptRef.current === attempt) {
+        setRepositoryHydration({ entry, repository, session, attempt });
       }
     }).catch(() => undefined);
     return () => {
       active = false;
+      if (repositoryOpenAttemptRef.current === attempt) {
+        repositoryOpenAttemptRef.current = null;
+      }
       detachSourceSignatureProvider();
       void repository.flush().finally(disconnectRepository);
     };
@@ -178,8 +202,70 @@ export function useDevelopSettingsSync({
     entry.id,
     hydrateKeywords,
     persistCatalog,
+    repository,
     setSidecarStatus,
     setProjectionState,
+    synchronizeSession,
+  ]);
+
+  useEffect(() => {
+    const hydration = repositoryHydration;
+    if (
+      !hydration ||
+      hydration.entry !== entry ||
+      hydration.repository !== repository ||
+      hydration.attempt !== repositoryOpenAttemptRef.current ||
+      activeProcessKind !== "v2" ||
+      pendingDefaultOperation !== undefined
+    ) {
+      return;
+    }
+    const { catalogId, id } = entry;
+    const { attempt, session } = hydration;
+    const current = () => {
+      const state = useDevelopStore.getState();
+      return repositoryOpenAttemptRef.current === attempt &&
+        getDevelopSession(catalogId, id) === session &&
+        state.activeCatalogId === catalogId &&
+        state.activeEntryId === id;
+    };
+    if (!current() || upgradeAttemptRef.current === attempt) return;
+    upgradeAttemptRef.current = attempt;
+    void (async () => {
+      try {
+        const snapshot = await session.upgradeToCurrentProcess();
+        if (!current()) {
+          if (upgradeAttemptRef.current === attempt) upgradeAttemptRef.current = null;
+          return;
+        }
+        if (snapshot.processKind !== "v3") return;
+        synchronizeSession(id, snapshot);
+        await repository.commitProcessUpgrade(snapshot);
+      } catch (error) {
+        if (!current()) {
+          if (upgradeAttemptRef.current === attempt) upgradeAttemptRef.current = null;
+          return;
+        }
+        const pending = useDevelopStore.getState().pendingDefaultOperations[
+          JSON.stringify([catalogId, id])
+        ];
+        if (error instanceof DevelopSessionCommandError && error.code === "edit-blocked" && pending) {
+          if (upgradeAttemptRef.current === attempt) upgradeAttemptRef.current = null;
+          return;
+        }
+        setSidecarStatus(
+          "error",
+          error instanceof Error ? error.message : "Could not prepare the editor.",
+        );
+      }
+    })();
+  }, [
+    activeProcessKind,
+    entry,
+    pendingDefaultOperation,
+    repository,
+    repositoryHydration,
+    setSidecarStatus,
     synchronizeSession,
   ]);
 
@@ -191,13 +277,15 @@ export function useDevelopSettingsSync({
   }, [beginDefaultResolution, defaultFacts, entry.catalogId, entry.id, finishDefaultResolution]);
 
   useEffect(() => {
-    if (!defaultFacts || !defaultsKey) return;
+    if (!defaultsKey) return;
+    const request = readDefaultRequest();
+    if (!request.facts) return;
     let active = true;
     let settled = false;
-    const repository = getDevelopRepository(entry);
+    const repository = request.repository;
     const requestId = parseOperationId(crypto.randomUUID());
     beginDefaultResolution(entry.catalogId, entry.id, requestId);
-    const operation = repository.installDefault(defaultFacts, requestId).then((result) => {
+    const operation = repository.installDefault(request.facts, requestId).then((result) => {
       if (!active) return;
       if (result.kind === "installed" || result.kind === "already-installed") {
         setDefaultsResolution({ key: defaultsKey, value: { kind: "installed", installed: result.installed } });
@@ -223,7 +311,7 @@ export function useDevelopSettingsSync({
       active = false;
       if (!settled) void repository.cancelDefault(requestId);
     };
-  }, [beginDefaultResolution, defaultFacts, defaultsKey, entry, finishDefaultResolution, setSidecarStatus]);
+  }, [beginDefaultResolution, defaultsKey, entry.catalogId, entry.id, finishDefaultResolution, setSidecarStatus]);
 
   useEffect(() => {
     const alreadyScheduled =
