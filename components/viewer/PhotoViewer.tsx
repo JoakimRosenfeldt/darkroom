@@ -109,11 +109,15 @@ export function PhotoViewer({
     (state) => state.applyMetadataToEntries,
   );
   const metadata = useEntryMetadataForId(entry.id);
-  const [decoded, setDecoded] = useState<DevelopImage | null>(null);
+  const [imageLoad, setImageLoad] = useState<{
+    readonly entry: LibraryEntry;
+    readonly rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]>;
+    readonly image: DevelopImage | null;
+    readonly error: string | null;
+    readonly loading: boolean;
+  } | null>(null);
   const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
-  const [error, setError] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
   const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [v3CanvasState, setV3CanvasState] = useState<{
@@ -175,6 +179,27 @@ export function PhotoViewer({
     },
     [entry.id, hydrateEntryKeywordsDurably],
   );
+  const developProcessKind = useDevelopStore(
+    (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
+  );
+  const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
+    ? "libraw-camera-matrix"
+    : "decoder-rendered";
+  const cachedImage = useMemo(() => {
+    if (entry.formatAvailability.status !== "supported") return null;
+    return getCachedDevelopImage(entry, { rawColorMode }) ?? (
+      entry.formatId === "nef" && rawColorMode === "libraw-camera-matrix"
+        ? getCachedDevelopImage(entry, { rawColorMode, maxEdge: 720 })
+        : null
+    );
+  }, [entry, rawColorMode]);
+  // Never combine the next photo's settings or source facts with the previous pixels.
+  const currentLoad = imageLoad?.entry === entry && imageLoad.rawColorMode === rawColorMode
+    ? imageLoad
+    : null;
+  const decoded = currentLoad?.image ?? cachedImage;
+  const error = currentLoad?.error ?? null;
+  const loading = currentLoad?.loading ?? !decoded;
   const defaultFacts = useMemo(() => {
     if (!decoded) return undefined;
     const source = buildV3SourceRecord(entry, decoded, "preview");
@@ -198,9 +223,6 @@ export function PhotoViewer({
     const selected = masks.find((mask) => mask.id === session?.ui.selectedMaskId);
     return `${masks.length} ${masks.length === 1 ? "mask" : "masks"}${selected ? ` · ${selected.name}` : ""}`;
   });
-  const developProcessKind = useDevelopStore(
-    (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
-  );
   const undo = useDevelopStore((state) => state.undo);
   const redo = useDevelopStore((state) => state.redo);
   const canUndo = useDevelopStore((state) => (state.sessions[entry.id]?.undo.length ?? 0) > 0);
@@ -313,9 +335,6 @@ export function PhotoViewer({
     const controller = new AbortController();
     const progressiveRaw = entry.formatId === "nef" && developProcessKind === "v3";
     const includeBlob = developProcessKind === "v2";
-    const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
-      ? "libraw-camera-matrix"
-      : "decoder-rendered";
     const foregroundOptions = {
       signal: controller.signal,
       priority: 100,
@@ -324,35 +343,23 @@ export function PhotoViewer({
     };
 
     async function loadImage() {
-      let hasImage = false;
-      setLoading(true);
-      setError(null);
-      setDecoded(null);
-
       if (entry.formatAvailability.status !== "supported") {
-        setError(
-          entry.formatAvailability.reason ??
-            `Preview is unavailable for ${entry.name}.`,
-        );
-        setLoading(false);
+        setImageLoad({
+          entry, rawColorMode, image: null, loading: false,
+          error: entry.formatAvailability.reason ?? `Preview is unavailable for ${entry.name}.`,
+        });
         return;
       }
 
+      const fullPreview = getCachedDevelopImage(entry, { includeBlob, rawColorMode });
+      const initialImage = fullPreview ?? (progressiveRaw
+        ? getCachedDevelopImage(entry, { includeBlob, rawColorMode, maxEdge: 720 })
+        : null);
+      let hasImage = initialImage !== null;
+      setImageLoad({ entry, rawColorMode, image: initialImage, error: null, loading: !hasImage });
+
       try {
-        const fullPreview = progressiveRaw
-          ? getCachedDevelopImage(entry, {
-              maxEdge: 2_560,
-              includeBlob,
-              rawColorMode,
-            })
-          : null;
-        if (fullPreview) {
-          if (!active) return;
-          hasImage = true;
-          setDecoded(fullPreview);
-          setLoading(false);
-          return;
-        }
+        if (fullPreview) return;
 
         const loadingImage = loadDevelopImage(entry, progressiveRaw
           ? { ...foregroundOptions, maxEdge: 720 }
@@ -360,8 +367,7 @@ export function PhotoViewer({
         const result = await loadingImage;
         if (!active) return;
         hasImage = true;
-        setDecoded(result);
-        setLoading(false);
+        setImageLoad({ entry, rawColorMode, image: result, error: null, loading: false });
 
         if (progressiveRaw) {
           const refined = await loadDevelopImage(entry, {
@@ -369,20 +375,15 @@ export function PhotoViewer({
             maxEdge: 2_560,
           });
           if (active) {
-            setDecoded(refined);
+            setImageLoad({ entry, rawColorMode, image: refined, error: null, loading: false });
           }
         }
       } catch (loadError) {
         if (active && !hasImage) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Failed to decode image.",
-          );
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
+          setImageLoad({
+            entry, rawColorMode, image: null, loading: false,
+            error: loadError instanceof Error ? loadError.message : "Failed to decode image.",
+          });
         }
       }
     }
@@ -393,22 +394,19 @@ export function PhotoViewer({
       active = false;
       controller.abort();
     };
-  }, [entry, developProcessKind]);
+  }, [entry, developProcessKind, rawColorMode]);
 
   useEffect(() => {
     const activeEntry = entries[availableActiveIndex];
     if (!activeEntry || activeEntry.formatAvailability.status !== "supported") return;
     const progressiveRaw = activeEntry.formatId === "nef" && developProcessKind === "v3";
     const includeBlob = developProcessKind === "v2";
-    const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
-      ? "libraw-camera-matrix"
-      : "decoder-rendered";
     preloadDevelopImages(entries, availableActiveIndex, {
       includeBlob,
       rawColorMode,
       ...(progressiveRaw ? { maxEdge: 720 } : {}),
     });
-  }, [entries, availableActiveIndex, developProcessKind]);
+  }, [entries, availableActiveIndex, developProcessKind, rawColorMode]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
@@ -728,25 +726,23 @@ export function PhotoViewer({
           />
           </div>
 
-          {decoded ? (
-            <DevelopSidePanels
-              decoded={decoded}
-              entry={entry}
-              resultId={resultId}
-              resultCatalogRevision={resultCatalogRevision}
-              resultEntryIds={resultEntryIds}
-              missingEntryIds={missingEntryIds}
-              resultEntries={entries}
-              v3Analysis={v3Analysis}
-              v3RenderDiagnostics={v3RenderDiagnostics}
-              v3CanvasTool={v3CanvasTool}
-              onV3CanvasToolChange={setV3CanvasTool}
-              defaultFacts={defaultFacts}
-              defaultsResolution={defaultsResolution}
-              activePanel={activePanel}
-              onSelect={selectDevelopPanel}
-            />
-          ) : null}
+          <DevelopSidePanels
+            decoded={decoded}
+            entry={entry}
+            resultId={resultId}
+            resultCatalogRevision={resultCatalogRevision}
+            resultEntryIds={resultEntryIds}
+            missingEntryIds={missingEntryIds}
+            resultEntries={entries}
+            v3Analysis={v3Analysis}
+            v3RenderDiagnostics={v3RenderDiagnostics}
+            v3CanvasTool={v3CanvasTool}
+            onV3CanvasToolChange={setV3CanvasTool}
+            defaultFacts={defaultFacts}
+            defaultsResolution={defaultsResolution}
+            activePanel={activePanel}
+            onSelect={selectDevelopPanel}
+          />
         </div>
 
         {currentStack ? (
