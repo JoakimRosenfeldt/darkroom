@@ -1,24 +1,24 @@
 # Rust migration measurements
 
-Rust speeds up catalog import and the migrated CPU kernels in these runs. The Linux app payload is much smaller. Startup through the automation harness and memory use did not improve. These measurements do not establish an application-wide speedup.
+Rust speeds up catalog import and the migrated CPU kernels in these runs, and uses less idle memory. The Linux app payload is much smaller. Startup through the automation harness and loaded-library memory did not improve. These measurements do not establish an application-wide speedup.
 
 ## Whole desktop app
 
 Measured on 23 September 2026 on the same Linux workstation: AMD Ryzen 9 5900X, Linux 7.2.5, Node 24.21.0 automation, WebKitGTK 2.52.6, and an isolated 1600 × 1000 Xvfb display. Both builds use their production renderer and release backend. The Tauri build enables diagnostic folder selection so the harness can use native import without a dialog. Electron is the unchanged implementation at `3917042`, with its folder dialog selecting the same fixture.
 
-Each app ran five times with a fresh profile and a catalog containing 1,000 copies of the seven bundled JPEGs. Values are medians. Memory is the sum of proportional set size (PSS) for the app and its child processes, excluding automation drivers.
+Each app ran five times with a fresh profile and a catalog containing 1,000 copies of the seven bundled JPEGs. Both used exactly 1440 × 900 content pixels at device pixel ratio 1, verified and recorded on every run. The harness sets GTK scaling for both child processes and sets Electron's content size explicitly. Values are medians. Memory is the sum of proportional set size (PSS) for the app and its child processes, excluding automation drivers.
 
 | Measurement | Electron | Rust/Tauri | Change |
 | --- | ---: | ---: | ---: |
-| Import click to 1,000 visible catalog entries | 695 ms | 504 ms | 27.5% faster |
-| Automation launch to bridge and first button | 829 ms | 1,281 ms | 54.5% slower |
-| Idle PSS, one second after ready | 355.2 MiB | 364.6 MiB | 2.7% higher |
-| Library PSS, ten seconds after queries | 627.5 MiB | 750.4 MiB | 19.6% higher |
-| Complete catalog snapshot including IPC | 33.35 ms | 42.00 ms | 25.9% slower |
+| Import click to 1,000 visible catalog entries | 688.5 ms | 536 ms | 22.1% faster |
+| Automation launch to bridge and first button | 828 ms | 1,273 ms | 53.8% slower |
+| Idle PSS, one second after ready | 338.4 MiB | 288.5 MiB | 14.7% lower |
+| Library PSS, ten seconds after queries | 646.7 MiB | 714.1 MiB | 10.4% higher |
+| Complete catalog snapshot including IPC | 36.60 ms | 36.00 ms | 1.6% lower |
 
-The startup measurement includes different driver handshakes: Playwright for Electron and WebDriver for Tauri. It is not an isolated process-start benchmark. Import stops when the count is visible, before all background metadata and thumbnails finish. Twenty full catalog queries per run follow import immediately and contend with that background work; the table pools those 100 samples. The ten-second memory snapshot is neither peak memory nor a guarantee that every background task has settled. The raw files also include the earlier two-second snapshot, individual times, RSS, and process counts.
+The startup measurement includes different driver handshakes: Playwright for Electron and WebDriver for Tauri, plus Electron's content resize and viewport validation. It is not an isolated process-start benchmark. Import stops when the count is visible, before all background metadata and thumbnails finish. Twenty full catalog queries per run follow import immediately and contend with that background work; the table pools those 100 samples. The small query difference is not evidence of a material gain given the sample variability. The ten-second memory snapshot is neither peak memory nor a guarantee that every background task has settled. The raw files also include the earlier two-second snapshot, individual times, RSS, and process counts.
 
-This is a synthetic JPEG collection on one Linux machine. Xvfb uses software graphics; these results cannot predict physical GPU throughput, a large RAW collection, or macOS/Windows behavior. Linux uses WebKit's document-viewer cache policy because Darkroom owns its photo caches; a separate five-run check did not show a material memory improvement from that setting alone.
+This is a synthetic JPEG collection on one Linux machine. Xvfb uses software graphics; these results cannot predict physical GPU throughput, a large RAW collection, or macOS/Windows behavior. Linux uses WebKit's document-viewer cache policy because Darkroom owns its photo caches.
 
 Raw results: [Electron](electron-desktop.json), [Rust/Tauri](rust-desktop.json). Harness: [`benchmark-desktop.mjs`](../../scripts/benchmark-desktop.mjs).
 

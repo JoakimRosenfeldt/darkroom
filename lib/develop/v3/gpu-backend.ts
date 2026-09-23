@@ -702,7 +702,7 @@ float noise01(uvec2 pixel) {
 }
 
 void main() {
-  vec4 source = texture(uImage, vUv);
+  vec4 source = texelFetch(uImage, ivec2(gl_FragCoord.xy), 0);
   vec3 color = source.rgb;
   if (source.a > 0.0 && uVignette != 0.0) {
     vec2 normalized = abs(((gl_FragCoord.xy + uImageOrigin) / uImageSize - 0.5) * 2.0);
@@ -742,7 +742,7 @@ float encodeSrgb(float value) {
 }
 
 void main() {
-  vec4 source = texture(uImage, vUv);
+  vec4 source = texelFetch(uImage, ivec2(gl_FragCoord.xy), 0);
   outColor = vec4(
     encodeSrgb(source.r),
     encodeSrgb(source.g),
@@ -2265,6 +2265,8 @@ export class V3GpuPreviewRenderer {
     if (!gl.getExtension("OES_texture_float_linear")) {
       throw new Error("Linear float texture sampling is unavailable.");
     }
+    // Tile-local dithering would make identical source pixels quantize differently.
+    gl.disable(gl.DITHER);
     const maximumTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
     if (
       input.image.sourceWidth > maximumTextureSize ||

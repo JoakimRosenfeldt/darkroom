@@ -12,6 +12,7 @@ const options = Object.fromEntries(process.argv.slice(2).map((arg) => {
 }));
 if (process.platform !== "linux") throw new Error("Process-tree PSS measurement requires Linux /proc.");
 const root = process.cwd();
+const benchmarkEnv = { ...process.env, GDK_SCALE: "1", GDK_DPI_SCALE: "1" };
 const temporary = await mkdtemp(path.join(os.tmpdir(), "darkroom-desktop-benchmark-"));
 const photos = path.join(temporary, "photos");
 await mkdir(photos);
@@ -55,11 +56,12 @@ async function launchElectron(profile) {
   const { _electron } = await import(pathToFileURL(path.join(baseline, "node_modules/playwright/index.mjs")).href);
   const launcher = path.join(temporary, "electron-launcher.cjs");
   await writeFile(launcher, `const {app}=require("electron");app.setPath('userData',process.env.DARKROOM_USER_DATA);Object.defineProperty(app,'isPackaged',{value:true});require(${JSON.stringify(path.join(baseline, "electron-dist/main.js"))});`);
-  const env = { ...process.env, DARKROOM_USER_DATA: profile };
+  const env = { ...benchmarkEnv, DARKROOM_USER_DATA: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   const started = performance.now();
   const app = await _electron.launch({ executablePath: path.join(baseline, "node_modules/electron/dist/electron"), args: ["--ozone-platform=x11", launcher], env });
   const page = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1440, 900));
   await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, photos);
   return { started, pid: app.process().pid, evaluate: (script) => page.evaluate(`(${script})()`), close: () => app.close() };
 }
@@ -68,7 +70,7 @@ async function launchRust(profile) {
   const port = Number(options.port ?? 4455);
   const args = ["--port", String(port), "--native-port", String(port + 1)];
   if (options["native-driver"]) args.push("--native-driver", options["native-driver"]);
-  const driver = spawn(options.driver ?? "tauri-driver", args, { env: { ...process.env, DARKROOM_USER_DATA: profile, DARKROOM_SMOKE_PHOTOS: photos }, stdio: ["ignore", "ignore", "pipe"] });
+  const driver = spawn(options.driver ?? "tauri-driver", args, { env: { ...benchmarkEnv, DARKROOM_USER_DATA: profile, DARKROOM_SMOKE_PHOTOS: photos }, stdio: ["ignore", "ignore", "pipe"] });
   driver.stderr.on("data", (data) => process.stderr.write(data));
   const url = `http://127.0.0.1:${port}`;
   async function request(route, body, method = "POST") {
@@ -114,6 +116,10 @@ for (let i = 0; i < iterations; i++) {
   const app = await (options["electron-root"] ? launchElectron(profile) : launchRust(profile));
   try {
     await app.evaluate(`async()=>{for(let i=0;i<3000;i++){if(window.darkroom&&document.querySelector('button'))return;await new Promise(r=>setTimeout(r,10));}throw Error('UI did not load');}`);
+    const viewport = await app.evaluate(`()=>({width:innerWidth,height:innerHeight,devicePixelRatio})`);
+    if (viewport.width !== 1440 || viewport.height !== 900 || viewport.devicePixelRatio !== 1) {
+      throw new Error(`Expected 1440 x 900 content viewport at DPR 1; received ${JSON.stringify(viewport)}.`);
+    }
     const startupMs = performance.now() - app.started;
     await sleep(1000);
     const idleMemory = await memory(app.pid);
@@ -139,9 +145,9 @@ for (let i = 0; i < iterations; i++) {
     await sleep(2000);
     const libraryMemory = await memory(app.pid);
     await sleep(8000);
-    runs.push({ startupMs, idleMemory, ...library, libraryMemory, settledLibraryMemory: await memory(app.pid) });
+    runs.push({ viewport, startupMs, idleMemory, ...library, libraryMemory, settledLibraryMemory: await memory(app.pid) });
     console.log(JSON.stringify(runs.at(-1)));
   } finally { await app.close(); }
 }
-const output = { backend: options["electron-root"] ? "Electron baseline" : "Rust/Tauri", measuredAt: new Date().toISOString(), environment: { os: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0].model, node: process.version, display: process.env.DISPLAY, wayland: process.env.WAYLAND_DISPLAY ?? null }, method: { photos: count, iterations, viewport: "default 1440 x 900 window", startup: "automation launch to desktop bridge and first button; different driver overheads", memory: "sum of process-tree /proc/smaps_rollup PSS; 1 s idle, 2 s and 10 s after import/query", import: "click Import folder until library count is visible", queries: "20 complete catalog snapshots including IPC; no revision cache", temporary }, runs };
+const output = { backend: options["electron-root"] ? "Electron baseline" : "Rust/Tauri", measuredAt: new Date().toISOString(), environment: { os: `${os.type()} ${os.release()} ${os.arch()}`, cpu: os.cpus()[0].model, node: process.version, display: process.env.DISPLAY, wayland: process.env.WAYLAND_DISPLAY ?? null, gdkScale: benchmarkEnv.GDK_SCALE, gdkDpiScale: benchmarkEnv.GDK_DPI_SCALE }, method: { photos: count, iterations, viewport: "1440 x 900 content pixels at DPR 1; asserted and recorded for each run", startup: "automation launch to desktop bridge, first button and viewport validation; includes Electron content resize and different driver overheads", memory: "sum of process-tree /proc/smaps_rollup PSS; 1 s idle, 2 s and 10 s after import/query", import: "click Import folder until library count is visible", queries: "20 complete catalog snapshots including IPC; no revision cache", temporary }, runs };
 await writeFile(options.output ?? path.join(temporary, "results.json"), JSON.stringify(output, null, 2) + "\n");

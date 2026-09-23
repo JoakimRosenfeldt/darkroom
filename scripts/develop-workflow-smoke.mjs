@@ -327,6 +327,7 @@ try {
         return { difference, cachedMs, backends, exportBackend: whole.backend, pixelRange: max - min, interactiveMs: times.slice(1).sort((a, b) => a - b)[1] };
       } finally { worker.dispose(); }
     });
+    report.fullRegionMaxChannelDelta = result.difference;
     assert.equal(result.difference, 0);
     assert.ok(result.pixelRange > 10, "Rendered export contains image detail.");
     report.renderBackends = { preview: result.backends, export: result.exportBackend };

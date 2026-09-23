@@ -23,14 +23,15 @@
         ],
         "export": "gpu"
       },
+      "fullRegionMaxChannelDelta": 0,
       "timingsMs": {
-        "openPhoto": 411,
+        "openPhoto": 383,
         "cachedDecode": 0,
-        "interactiveWorker": 3,
-        "actualSize": 505,
-        "export-all": 413,
-        "export-copyright": 414,
-        "export-none": 405.0000000000009
+        "interactiveWorker": 2,
+        "actualSize": 582,
+        "export-all": 413.9999999999991,
+        "export-copyright": 407.9999999999991,
+        "export-none": 399
       }
     },
     {
@@ -55,14 +56,15 @@
         ],
         "export": "gpu"
       },
+      "fullRegionMaxChannelDelta": 0,
       "timingsMs": {
-        "openPhoto": 4724,
+        "openPhoto": 5196,
         "cachedDecode": 0,
-        "interactiveWorker": 6,
-        "actualSize": 3120,
-        "export-all": 1445.9999999999982,
-        "export-copyright": 1473,
-        "export-none": 1006
+        "interactiveWorker": 7.999999999998181,
+        "actualSize": 3140,
+        "export-all": 1466,
+        "export-copyright": 1428.0000000000036,
+        "export-none": 1009
       }
     }
   ],
