@@ -6,7 +6,7 @@ use std::path::Path;
 
 const LIBRAW_DIR: &str = "libraw/";
 
-const LIBRAW_FILES: [&str; 75] = [
+const LIBRAW_FILES: [&str; 79] = [
     "libraw/src/decoders/canon_600.cpp",
     "libraw/src/decoders/crx.cpp",
     "libraw/src/decoders/decoders_dcraw.cpp",
@@ -18,9 +18,13 @@ const LIBRAW_FILES: [&str; 75] = [
     "libraw/src/decoders/generic.cpp",
     "libraw/src/decoders/kodak_decoders.cpp",
     "libraw/src/decoders/load_mfbacks.cpp",
+    "libraw/src/decoders/olympus14.cpp",
+    "libraw/src/decoders/pana8.cpp",
     "libraw/src/decoders/smal.cpp",
+    "libraw/src/decoders/sonycc.cpp",
     "libraw/src/decoders/unpack.cpp",
     "libraw/src/decoders/unpack_thumb.cpp",
+    "libraw/src/decompressors/losslessjpeg.cpp",
     "libraw/src/demosaic/aahd_demosaic.cpp",
     "libraw/src/demosaic/ahd_demosaic.cpp",
     "libraw/src/demosaic/dcb_demosaic.cpp",

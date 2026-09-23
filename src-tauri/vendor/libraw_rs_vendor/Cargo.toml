@@ -13,7 +13,7 @@
 edition = "2021"
 name = "libraw_rs_vendor"
 version = "1.0.0"
-description = "Vendored libraw @version 0.21.1"
+description = "Vendored LibRaw 0.22.1"
 readme = "README.md"
 keywords = [
     "libraw",
