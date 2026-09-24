@@ -119,6 +119,19 @@ export function ModuleSpine({
         );
       })}
 
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event("darkroom:open-preferences"))}
+        title="Preferences"
+        aria-label="Preferences"
+        className="mt-auto flex h-11 w-14 flex-col items-center justify-center gap-1 rounded-[10px] text-[9px] font-medium text-lr-text-dim transition-colors hover:bg-lr-panel-raised hover:text-lr-text"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4" aria-hidden="true">
+          <path d="m9 3-.6 2.3-2 .9-2.1-.7-2 3.5 1.6 1.6v2.8L2.3 15l2 3.5 2.1-.7 2 .9L9 21h4l.6-2.3 2-.9 2.1.7 2-3.5-1.6-1.6v-2.8L19.7 9l-2-3.5-2.1.7-2-.9L13 3Z" />
+          <circle cx="11" cy="12" r="3" />
+        </svg>
+        <span>Prefs</span>
+      </button>
     </nav>
   );
 }
