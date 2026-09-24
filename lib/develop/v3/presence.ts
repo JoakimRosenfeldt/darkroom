@@ -177,9 +177,9 @@ export function applyTexturePixel(
     sourceRadiusInInputPixels(2, sourcePixelsPerInputPixel),
   );
   return [
-    clamp(center[0] + (center[0] - blur[0]) * strength * 1.2, 0, 16),
-    clamp(center[1] + (center[1] - blur[1]) * strength * 1.2, 0, 16),
-    clamp(center[2] + (center[2] - blur[2]) * strength * 1.2, 0, 16),
+    clamp(center[0] + (center[0] - blur[0]) * strength * 2.4, 0, 16),
+    clamp(center[1] + (center[1] - blur[1]) * strength * 2.4, 0, 16),
+    clamp(center[2] + (center[2] - blur[2]) * strength * 2.4, 0, 16),
   ];
 }
 
@@ -201,7 +201,7 @@ export function applyClarityPixel(
   );
   const centerLuminance = center[0] * 0.2126 + center[1] * 0.7152 + center[2] * 0.0722;
   const blurLuminance = blur[0] * 0.2126 + blur[1] * 0.7152 + blur[2] * 0.0722;
-  const adjustment = (centerLuminance - blurLuminance) * strength * 1.6;
+  const adjustment = (centerLuminance - blurLuminance) * strength * 3.2;
   return [
     clamp(center[0] + adjustment, 0, 16),
     clamp(center[1] + adjustment, 0, 16),
@@ -227,14 +227,14 @@ export function applyDehazePixel(
   );
   const darkChannel = clamp(Math.min(local[0], local[1], local[2]), 0, 1);
   if (strength > 0) {
-    const transmission = clamp(1 - strength * darkChannel * 1.2, 0.2, 1);
+    const transmission = clamp(1 - strength * darkChannel * 2.4, 0.1, 1);
     return [
       clamp((center[0] - (1 - transmission)) / transmission, 0, 16),
       clamp((center[1] - (1 - transmission)) / transmission, 0, 16),
       clamp((center[2] - (1 - transmission)) / transmission, 0, 16),
     ];
   }
-  const haze = -strength * 0.6;
+  const haze = Math.min(-strength * 1.2, 0.95);
   return [
     clamp(center[0] * (1 - haze) + haze, 0, 16),
     clamp(center[1] * (1 - haze) + haze, 0, 16),
