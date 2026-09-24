@@ -152,6 +152,7 @@ export function useEntryAspectRatios(
   const updateAspectRatio = useCallback((entryId: string, ratio: number) => {
     if (!Number.isFinite(ratio) || ratio <= 0) return;
     loadedRef.current.add(entryId);
+    pendingUpdatesRef.current.delete(entryId);
     setAspectRatios((current) => {
       const previous = current.get(entryId);
       if (previous !== undefined && Math.abs(previous - ratio) < 0.01) return current;

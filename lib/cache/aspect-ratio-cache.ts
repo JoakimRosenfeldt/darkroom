@@ -42,6 +42,10 @@ export async function getPersistedAspectRatio(
   }
 
   const stored = await idbGet<number>(persistKey(entry));
+  const remembered = memoryCache.get(cacheKey(entry));
+  if (remembered) {
+    return remembered;
+  }
   if (typeof stored === "number" && stored > 0) {
     memoryCache.set(cacheKey(entry), stored);
     return stored;

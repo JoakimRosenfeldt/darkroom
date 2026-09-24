@@ -1,4 +1,5 @@
 import {
+  getCachedEntryAspectRatio,
   getPersistedAspectRatio,
   rememberEntryAspectRatio,
 } from "@/lib/cache/aspect-ratio-cache";
@@ -94,6 +95,10 @@ export async function resolveEntryAspectRatio(
 
   const probe = probeEntryAspectRatio(entry)
     .then((ratio) => {
+      const cached = getCachedEntryAspectRatio(entry);
+      if (cached) {
+        return cached;
+      }
       rememberEntryAspectRatio(entry, ratio);
       return ratio;
     })

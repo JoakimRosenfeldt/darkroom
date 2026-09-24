@@ -139,7 +139,9 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
 
   let offset = 2;
   let orientation = 1;
-  while (offset + 9 < bytes.length) {
+  let dimensions: ImageDimensions | null = null;
+  let headerComplete = false;
+  while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) {
       offset += 1;
       continue;
@@ -149,10 +151,16 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       offset += 1;
     }
 
+    if (offset >= bytes.length) break;
+
     const marker = bytes[offset];
     offset += 1;
 
-    if (marker === 0xd8 || marker === 0xd9) {
+    if (marker === 0xd9 || marker === 0xda) {
+      headerComplete = true;
+      break;
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       continue;
     }
 
@@ -184,20 +192,21 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       marker === 0xce ||
       marker === 0xcf;
 
-    if (isStartOfFrame && offset + 7 <= bytes.length) {
+    if (isStartOfFrame && segmentLength >= 7 && !dimensions) {
       const height = readUint16BE(bytes, offset + 3);
       const width = readUint16BE(bytes, offset + 5);
       if (width > 0 && height > 0) {
-        return orientation >= 5 && orientation <= 8
-          ? { width: height, height: width }
-          : { width, height };
+        dimensions = { width, height };
       }
     }
 
     offset += segmentLength;
   }
 
-  return null;
+  if (!headerComplete || !dimensions) return null;
+  return orientation >= 5 && orientation <= 8
+    ? { width: dimensions.height, height: dimensions.width }
+    : dimensions;
 }
 
 function parseWebpDimensions(bytes: Uint8Array): ImageDimensions | null {
