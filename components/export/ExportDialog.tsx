@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getDarkroomAPI, isDesktopApp } from "@/lib/fs/platform";
+import { readExportPreferences } from "@/lib/export/preferences";
 import { useLibraryStore } from "@/stores/library-store";
 import {
   DEFAULT_EXPORT_PREFERENCES as DEFAULT_PREFERENCES,
@@ -291,7 +292,7 @@ export function ExportDialog({ entries, onClose }: ExportDialogProps) {
     const api = getDarkroomAPI();
     void Promise.all([
       api.getExportFormats(),
-      api.getExportOptions(),
+      readExportPreferences(),
     ])
       .then(([available, persisted]) => {
         if (!active) {

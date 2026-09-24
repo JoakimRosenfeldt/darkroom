@@ -3,6 +3,7 @@ import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, Route, Routes } from "react-router";
 import { LibraryBootstrap } from "@/components/shell/LibraryBootstrap";
+import { AppMenu } from "@/components/shell/AppMenu";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
@@ -20,6 +21,7 @@ createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
       <LibraryBootstrap />
+      <AppMenu />
       <Suspense fallback={<main className="flex h-screen items-center justify-center text-sm text-lr-text-dim">Loading...</main>}>
         <Routes>
           <Route path="/" element={<LibraryPage />} />

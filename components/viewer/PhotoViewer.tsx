@@ -38,6 +38,8 @@ import { isEditableTarget } from "@/hooks/is-editable-target";
 import { refreshViewerSession, updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
 import { developDefaultFactsFromSource } from "@/lib/develop/defaults/matcher";
 import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
+import { useWorkspacePreferences } from "@/hooks/useWorkspacePreferences";
+import { metadataMenuActions, useAppMenuActions } from "@/lib/app-menu";
 
 interface PhotoViewerProps {
   entry: LibraryEntry;
@@ -96,6 +98,7 @@ export function PhotoViewer({
   onRefreshResult,
 }: PhotoViewerProps) {
   const navigate = useNavigate();
+  const [workspacePreferences] = useWorkspacePreferences();
   const activeSelectedEntryId = useLibraryStore((state) => state.selectedEntryId);
   const selectedEntryIds = useLibraryStore((state) => state.selectedEntryIds);
   const stacks = useLibraryStore((state) => state.libraryWorkspace.stacks);
@@ -248,6 +251,26 @@ export function PhotoViewer({
   const [exportOpen, setExportOpen] = useState(false);
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
+
+  function compareNextPhoto() {
+    const candidate = adjacentEntry(1);
+    if (candidate) navigate(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
+  }
+
+  function compareSelectedPhotos() {
+    const [candidateId, selectId] = selectedEntryIds;
+    if (candidateId && selectId) {
+      navigate(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
+    }
+  }
+
+  useAppMenuActions(exportOpen ? {} : {
+    export: () => setExportOpen(true),
+    "compare-selected": selectedEntryIds.length === 2 &&
+      selectedEntryIds.every((id) => availableEntryById.has(id))
+      ? compareSelectedPhotos : undefined,
+    ...metadataMenuActions((patch) => applyMetadataToEntries(selectionTargets, patch)),
+  });
 
   async function createCopy() {
     const familyCount = useLibraryStore.getState().entries.filter(
@@ -659,10 +682,7 @@ export function PhotoViewer({
                 <button
                   type="button"
                   disabled={adjacentEntry(1) === null}
-                  onClick={() => {
-                    const candidate = adjacentEntry(1);
-                    if (candidate) navigate(`/compare?select=${encodeURIComponent(entry.id)}&candidate=${encodeURIComponent(candidate.id)}`);
-                  }}
+                  onClick={compareNextPhoto}
                   className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
                 >
                   Compare
@@ -786,14 +806,16 @@ export function PhotoViewer({
           </div>
         ) : null}
 
-        <Filmstrip
-          entries={entries}
-          orderedEntryIds={resultEntryIds}
-          missingEntryIds={missingEntryIds}
-          activeId={entry.id}
-          selectedIds={selectedEntryIds}
-          onSelect={selectPhoto}
-        />
+        {workspacePreferences.showFilmstrip ? (
+          <Filmstrip
+            entries={entries}
+            orderedEntryIds={resultEntryIds}
+            missingEntryIds={missingEntryIds}
+            activeId={entry.id}
+            selectedIds={selectedEntryIds}
+            onSelect={selectPhoto}
+          />
+        ) : null}
       </div>
       {exportOpen ? (
         <ExportDialog

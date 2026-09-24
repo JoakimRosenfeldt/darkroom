@@ -23,6 +23,7 @@ import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { MetadataBatchDialog } from "@/components/library/MetadataBatchDialog";
 import { createViewerSession, viewerPhotoHref } from "@/lib/viewer/session";
 import { DevelopJobDrawer } from "@/components/develop/DevelopJobDrawer";
+import { metadataMenuActions, useAppMenuActions } from "@/lib/app-menu";
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -81,6 +82,16 @@ export default function HomePage() {
       .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
   }, [entries, libraryResult.visibleEntryIds]);
   const visibleOrder = [...libraryResult.visibleEntryIds];
+  const developTargetId = selectedEntryId && libraryResult.viewerEntryIds.includes(selectedEntryId)
+    ? selectedEntryId
+    : libraryResult.viewerEntryIds[0];
+
+  function compareSelected() {
+    const [candidateId, selectId] = selectedEntryIds;
+    if (selectedEntryIds.length === 2 && candidateId && selectId) {
+      navigate(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
+    }
+  }
 
   function openInDevelop(id: string) {
     if (libraryResult.query === null) {
@@ -131,6 +142,19 @@ export default function HomePage() {
     metadataShortcutsDisabled: catalogView.type === "archive",
   });
 
+  const menuBlocked = overlayOpen || actionOverlayOpen || exportEntryIds !== null || metadataEntryIds !== null;
+  useAppMenuActions(menuBlocked ? {} : {
+    "open-develop": !needsFolderAccess && developTargetId && libraryResult.query
+      ? () => openInDevelop(developTargetId) : undefined,
+    "compare-selected": selectedEntryIds.length === 2 &&
+      selectedEntryIds.every((id) => libraryResult.viewerEntryIds.includes(id))
+      ? compareSelected : undefined,
+    export: selectedEntryIds.length > 0 && !needsFolderAccess
+      ? () => setExportEntryIds(selectedEntryIds) : undefined,
+    ...(selectedEntryIds.length > 0 && catalogView.type !== "archive"
+      ? metadataMenuActions((patch) => applyMetadataToEntries(selectedEntryIds, patch)) : {}),
+  });
+
   return (
     <div className="flex h-screen overflow-hidden bg-lr-toolbar">
       {contextMenu}
@@ -138,11 +162,7 @@ export default function HomePage() {
       {removePopup}
       <ModuleSpine
         activeModule="library"
-        developPhotoId={
-          selectedEntryId && libraryResult.viewerEntryIds.includes(selectedEntryId)
-            ? selectedEntryId
-            : libraryResult.viewerEntryIds[0]
-        }
+        developPhotoId={developTargetId}
         onOpenDevelop={openInDevelop}
       />
 
@@ -182,12 +202,7 @@ export default function HomePage() {
             }
             autoAdvance={autoAdvance}
             onAutoAdvanceChange={(next) => updateViewSettings({ autoAdvance: next })}
-            onCompare={() => {
-              const [candidateId, selectId] = selectedEntryIds;
-              if (candidateId && selectId) {
-                navigate(`/compare?select=${encodeURIComponent(selectId)}&candidate=${encodeURIComponent(candidateId)}`);
-              }
-            }}
+            onCompare={compareSelected}
             onExport={() => setExportEntryIds(selectedEntryIds)}
           />
 
