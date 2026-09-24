@@ -131,6 +131,7 @@ export function PhotoGrid({ entries, thumbSize, onGridRowsChange, onPhotoContext
                     width={row.cellSize}
                     height={row.cellSize}
                     fit="cover"
+                    thumbnailEdge={Math.max(360, thumbSize * 2)}
                     caption
                     selected={selectedEntrySet.has(entry.id)}
                     metadata={getEntryMetadata(entryMetadata, entry.id)}

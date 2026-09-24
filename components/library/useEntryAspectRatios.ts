@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { runWithAspectLimit } from "@/lib/cache/concurrency";
-import { getPersistedAspectRatio } from "@/lib/cache/aspect-ratio-cache";
 import {
   getCachedEntryAspectRatio,
   getEntryAspectRatio,
-  rememberEntryAspectRatio,
 } from "@/lib/library/grid-layout";
 
 function seedAspectRatios(entries: LibraryEntry[]): Map<string, number> {
@@ -98,30 +96,6 @@ export function useEntryAspectRatios(
       }
     }
 
-    async function hydratePersistedRatio(entryId: string): Promise<boolean> {
-      const entry = entriesById.get(entryId);
-      if (!entry || loadedRef.current.has(entryId)) {
-        return true;
-      }
-
-      const cached = getCachedEntryAspectRatio(entry);
-      if (cached) {
-        loadedRef.current.add(entryId);
-        scheduleUpdate(entryId, cached);
-        return true;
-      }
-
-      const persisted = await getPersistedAspectRatio(entry);
-      if (cancelled || !persisted || loadedRef.current.has(entryId)) {
-        return loadedRef.current.has(entryId);
-      }
-
-      loadedRef.current.add(entryId);
-      rememberEntryAspectRatio(entry, persisted);
-      scheduleUpdate(entryId, persisted);
-      return true;
-    }
-
     async function loadAspectRatio(entryId: string, priority: number) {
       if (
         cancelled ||
@@ -159,11 +133,7 @@ export function useEntryAspectRatios(
     );
 
     for (const [index, entryId] of uniquePriorityIds.entries()) {
-      void hydratePersistedRatio(entryId).then((hydrated) => {
-        if (!hydrated && !cancelled) {
-          return loadAspectRatio(entryId, priorityForIndex(index));
-        }
-      });
+      void loadAspectRatio(entryId, priorityForIndex(index));
     }
 
     return () => {

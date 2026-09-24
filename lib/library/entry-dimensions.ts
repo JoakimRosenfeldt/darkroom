@@ -5,17 +5,17 @@ import {
   getPersistedAspectRatio,
   rememberEntryAspectRatio,
 } from "@/lib/cache/aspect-ratio-cache";
-import { parseImageDimensions } from "@/lib/image/dimensions";
+import { parseImageDimensions, parseTiffDimensions } from "@/lib/image/dimensions";
 import {
   getFileFromEntry,
   getFileHeadFromEntry,
 } from "@/lib/fs/directory";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getFormatFamilyForEntry } from "@/lib/formats/registry";
-import { readRawDimensions } from "@/lib/raw/libraw-client";
 import { assetCacheKey } from "@/lib/cache/asset-cache-key";
 
 const STANDARD_PROBE_BYTES = 512 * 1024;
+const RAW_PROBE_BYTES = 256 * 1024;
 const inFlightProbes = new Map<string, Promise<number>>();
 
 function probeKey(entry: LibraryEntry): string {
@@ -83,8 +83,8 @@ async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
     return 1;
   }
 
-  const file = await getFileFromEntry(entry);
-  const dimensions = await readRawDimensions(new Uint8Array(await file.arrayBuffer()));
+  const head = await getFileHeadFromEntry(entry, RAW_PROBE_BYTES);
+  const dimensions = parseTiffDimensions(head);
   if (dimensions) {
     return dimensions.width / dimensions.height;
   }
@@ -101,17 +101,17 @@ export async function resolveEntryAspectRatio(
     return 1;
   }
 
+  const persisted = await getPersistedAspectRatio(entry);
+  throwIfAborted(options.signal);
+  if (persisted) {
+    return persisted;
+  }
+
   const cachedThumbnailRatio = await ratioFromCachedThumbnail(entry);
   throwIfAborted(options.signal);
   if (cachedThumbnailRatio) {
     rememberEntryAspectRatio(entry, cachedThumbnailRatio);
     return cachedThumbnailRatio;
-  }
-
-  const persisted = await getPersistedAspectRatio(entry);
-  throwIfAborted(options.signal);
-  if (persisted) {
-    return persisted;
   }
 
   const key = probeKey(entry);

@@ -323,6 +323,7 @@ export function DynamicPhotoGrid({
                       width={tile.width}
                       height={tile.height}
                       fit="cover"
+                      thumbnailEdge={Math.max(360, rowHeight * 3)}
                       onAspectRatio={updateAspectRatio}
                       selected={selectedEntrySet.has(tile.entry.id)}
                       metadata={getEntryMetadata(entryMetadata, tile.entry.id)}

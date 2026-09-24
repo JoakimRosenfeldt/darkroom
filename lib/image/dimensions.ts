@@ -3,6 +3,63 @@ export interface ImageDimensions {
   height: number;
 }
 
+export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
+  if (bytes.length < 8) return null;
+  const little = bytes[0] === 0x49 && bytes[1] === 0x49;
+  if (!little && !(bytes[0] === 0x4d && bytes[1] === 0x4d)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const read16 = (offset: number) => view.getUint16(offset, little);
+  const read32 = (offset: number) => view.getUint32(offset, little);
+  if (read16(2) !== 42) return null;
+
+  const firstIfd = read32(4);
+  const pending = [firstIfd];
+  const visited = new Set<number>();
+  let orientation = 1;
+  let dimensions: ImageDimensions | null = null;
+
+  while (pending.length > 0 && visited.size < 16) {
+    const offset = pending.shift()!;
+    if (visited.has(offset) || offset + 2 > bytes.length) continue;
+    visited.add(offset);
+    const count = read16(offset);
+    if (offset + 2 + count * 12 + 4 > bytes.length) continue;
+    let width = 0;
+    let height = 0;
+
+    for (let index = 0; index < count; index += 1) {
+      const field = offset + 2 + index * 12;
+      const tag = read16(field);
+      const type = read16(field + 2);
+      const valueCount = read32(field + 4);
+      const value = type === 3 && valueCount === 1
+        ? read16(field + 8)
+        : type === 4 && valueCount === 1
+          ? read32(field + 8)
+          : 0;
+      if (tag === 256) width = value;
+      if (tag === 257) height = value;
+      if (tag === 274 && offset === firstIfd) orientation = value;
+      if (tag === 330 && type === 4 && valueCount > 0 && valueCount <= 16) {
+        const list = valueCount === 1 ? field + 8 : read32(field + 8);
+        if (list + valueCount * 4 <= bytes.length) {
+          for (let item = 0; item < valueCount; item += 1) pending.push(read32(list + item * 4));
+        }
+      }
+    }
+
+    if (width > 0 && height > 0 && width * height > (dimensions?.width ?? 0) * (dimensions?.height ?? 0)) {
+      dimensions = { width, height };
+    }
+    pending.push(read32(offset + 2 + count * 12));
+  }
+
+  if (!dimensions) return null;
+  return orientation >= 5 && orientation <= 8
+    ? { width: dimensions.height, height: dimensions.width }
+    : dimensions;
+}
+
 function readUint16BE(bytes: Uint8Array, offset: number): number {
   return (bytes[offset] << 8) | bytes[offset + 1];
 }
