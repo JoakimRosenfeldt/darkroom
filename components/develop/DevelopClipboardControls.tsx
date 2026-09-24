@@ -142,6 +142,7 @@ export function DevelopClipboardControls({
   const [pasteGroups, setPasteGroups] = useState<readonly DevelopClipboardGroup[]>([]);
   const [copyOpen, setCopyOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [requestRegeneration, setRequestRegeneration] = useState(false);
   const initialCameraProfileBinding: CameraProfileBinding = {
     entryId: entry.id,
@@ -369,6 +370,7 @@ export function DevelopClipboardControls({
       setClipboardState({ kind: "ready", payload: value });
       setPasteGroups(transferredGroups);
       setCopyOpen(false);
+      setReportOpen(false);
       const skipped = [
         ...[...omittedMaskGroups].map((group) => `${GROUP_LABELS[group]} had no transferable masks`),
         ...(maskCounts["source-specific"] > 0 &&
@@ -516,6 +518,7 @@ export function DevelopClipboardControls({
         restoreEntryMetadata(entry.id, metadataAfter);
       }
       setLastReport(result.report);
+      setReportOpen(reportReasons(result.report).length > 0);
       const applied = [
         ...(commit.documentChanged
           ? result.report.included.map((field) => GROUP_LABELS[field])
@@ -546,9 +549,9 @@ export function DevelopClipboardControls({
           : null;
 
   return (
-    <section className="border-b border-lr-border-subtle px-3 py-2.5">
-      <div className="flex flex-wrap gap-1.5" aria-label="Develop settings clipboard">
-        <ActionButton onClick={() => setCopyOpen((open) => !open)} pressed={copyOpen} disabled={disabled || !desktopAvailable}>Copy</ActionButton>
+    <div className="relative flex items-center gap-2">
+      <div className="flex items-center gap-1.5" aria-label="Develop settings clipboard">
+        <ActionButton onClick={() => { setPasteOpen(false); setReportOpen(false); setCopyOpen((open) => !open); }} pressed={copyOpen} disabled={disabled || !desktopAvailable}>Copy</ActionButton>
         <ActionButton
           onClick={() => void paste(plainPasteGroups, false, false)}
           disabled={disabled || busy || pasteReason !== null}
@@ -559,6 +562,8 @@ export function DevelopClipboardControls({
         <ActionButton
           onClick={() => {
             void refreshClipboard();
+            setCopyOpen(false);
+            setReportOpen(false);
             setPasteOpen((open) => !open);
           }}
           pressed={pasteOpen}
@@ -568,12 +573,11 @@ export function DevelopClipboardControls({
           Paste settings
         </ActionButton>
       </div>
-      {disabled ? <p className="mt-1.5 text-[9px] leading-3 text-lr-text-faint">Clipboard edits pause during preset Preview or Amount.</p> : null}
-      {!desktopAvailable ? <p className="mt-1.5 text-[9px] leading-3 text-lr-text-faint">Develop clipboard requires the desktop app.</p> : null}
-      {pasteReason ? <p className="mt-1.5 text-[9px] leading-3 text-lr-text-faint">Paste unavailable: {pasteReason}</p> : null}
+      {message ? <p role="status" title={message} className="max-w-36 truncate text-[10px] text-lr-accent">{message}</p> : null}
 
+      {copyOpen || pasteOpen || reportOpen ? <div className="absolute bottom-full right-0 z-20 mb-2 max-h-[min(65vh,520px)] w-[min(352px,calc(100vw-32px))] overflow-y-auto rounded-lg border border-lr-border bg-lr-panel p-3 shadow-xl">
       {copyOpen ? (
-        <div className="mt-2.5 border-t border-lr-border-subtle pt-2.5">
+        <div>
           <p className="text-[10px] font-medium text-lr-text">Copy groups</p>
           <GroupChooser
             available={DEVELOP_CLIPBOARD_GROUPS}
@@ -588,7 +592,7 @@ export function DevelopClipboardControls({
       ) : null}
 
       {pasteOpen && readyPayload ? (
-        <div className="mt-2.5 border-t border-lr-border-subtle pt-2.5">
+        <div>
           <div className="flex items-baseline gap-2">
             <p className="text-[10px] font-medium text-lr-text">Paste settings</p>
             <p className="ml-auto text-[9px] text-lr-text-faint">{new Date(readyPayload.createdAt).toLocaleString()}</p>
@@ -630,14 +634,15 @@ export function DevelopClipboardControls({
           </div>
         </div>
       ) : null}
-      {message ? <p role="status" className="mt-2 text-[10px] leading-4 text-lr-accent">{message}</p> : null}
-      {lastReport && reportReasons(lastReport).length > 0 ? (
-        <div className="mt-1 text-[9px] leading-4 text-lr-text-faint">
+      {reportOpen && lastReport && reportReasons(lastReport).length > 0 ? (
+        <div className="text-[10px] leading-4 text-lr-text-faint">
           <p>Skipped:</p>
           {reportReasons(lastReport).map((reason) => <p key={reason}>{reason}</p>)}
+          <ActionButton onClick={() => setReportOpen(false)}>Close</ActionButton>
         </div>
       ) : null}
-    </section>
+      </div> : null}
+    </div>
   );
 }
 
