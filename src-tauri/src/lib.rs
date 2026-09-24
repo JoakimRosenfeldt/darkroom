@@ -1,6 +1,7 @@
 mod catalog;
 mod commands;
 mod develop;
+mod menu;
 mod native;
 
 use serde_json::{Value, json};
@@ -451,6 +452,7 @@ async fn darkroom_export(
 
 pub fn run() {
     tauri::Builder::default()
+        .on_menu_event(menu::handle_event)
         .register_asynchronous_uri_scheme_protocol(
             "darkroom-model",
             |context, request, responder| {
@@ -503,13 +505,15 @@ pub fn run() {
                 native: native::NativeContext::new(user_data, resources, emit),
             });
             app.manage(backend);
+            menu::install(app.handle())?;
             main_window(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             darkroom_invoke,
             darkroom_read,
-            darkroom_export
+            darkroom_export,
+            menu::darkroom_menu_state
         ])
         .build(tauri::generate_context!())
         .expect("Could not start Darkroom")

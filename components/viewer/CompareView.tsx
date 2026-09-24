@@ -11,6 +11,8 @@ import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
 import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
 import { useLibraryStore } from "@/stores/library-store";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
+import { useWorkspacePreferences } from "@/hooks/useWorkspacePreferences";
+import { metadataMenuActions, useAppMenuActions } from "@/lib/app-menu";
 
 export function CompareView({
   select,
@@ -26,7 +28,8 @@ export function CompareView({
   const applyMetadata = useLibraryStore((state) => state.applyMetadataToEntries);
   const [candidateId, setCandidateId] = useState(candidate.id);
   const [activePane, setActivePane] = useState<"select" | "candidate">("candidate");
-  const [linked, setLinked] = useState(true);
+  const [workspacePreferences, updateWorkspacePreferences] = useWorkspacePreferences();
+  const linked = workspacePreferences.linkedCompare;
   const [selectZoom, setSelectZoom] = useState(0);
   const [candidateZoom, setCandidateZoom] = useState(0);
   const [selectPosition, setSelectPosition] = useState<LoupePosition>({ x: 0.5, y: 0.5 });
@@ -35,6 +38,8 @@ export function CompareView({
   const candidateIndex = entries.findIndex((entry) => entry.id === currentCandidate.id);
   const active = activePane === "select" ? select : currentCandidate;
   const activeMetadata = getEntryMetadata(metadata, active.id);
+
+  useAppMenuActions(metadataMenuActions((patch) => applyMetadata([active.id], patch)));
 
   function setZoom(percent: number) {
     if (linked || activePane === "select") setSelectZoom(percent);
@@ -63,7 +68,7 @@ export function CompareView({
             Back to Library
           </button>
           <span className="ml-2 text-sm font-semibold text-lr-text">Compare</span>
-          <button type="button" onClick={() => setLinked((value) => !value)} aria-pressed={linked} className={`rounded border px-2.5 py-1.5 text-xs ${linked ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}>
+          <button type="button" onClick={() => updateWorkspacePreferences({ linkedCompare: !linked })} aria-pressed={linked} className={`rounded border px-2.5 py-1.5 text-xs ${linked ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}>
             {linked ? "Linked" : "Independent"}
           </button>
           <div className="ml-auto flex items-center gap-1 rounded border border-lr-border-subtle p-1">
