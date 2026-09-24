@@ -18,7 +18,8 @@
     "desktop:dev": "tauri dev",
     "start": "node scripts/start-desktop.mjs",
     "build:backend": "cargo build --manifest-path src-tauri/Cargo.toml --features diagnostics --bin darkroom-backend --locked",
-    "test:develop:desktop": "cargo build --manifest-path src-tauri/Cargo.toml --features diagnostics --bin darkroom --locked && node scripts/develop-workflow-smoke.mjs"
+    "test:develop:desktop": "cargo build --manifest-path src-tauri/Cargo.toml --features diagnostics --bin darkroom --locked && node scripts/develop-workflow-smoke.mjs",
+    "benchmark:native": "node scripts/benchmark-native-renderer.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

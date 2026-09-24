@@ -1,3 +1,5 @@
+import { setNativeGpuTransport } from "./native-context";
+import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
 import { MAX_CPU_RENDER_PIXELS, V3CpuPreviewCache, renderV3Cpu, renderV3CpuRegion } from "@/lib/develop/v3/cpu-backend";
@@ -16,6 +18,9 @@ import type {
   V3PreviewWorkerMaskMatte,
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
+
+let nativeRequestId = 0;
+const nativeRequests = new Map<number, { resolve: (bytes: ArrayBuffer) => void; reject: (error: Error) => void }>();
 
 type RenderMessage = Exclude<V3PreviewWorkerRequest, { readonly kind: "initialize" }>;
 
@@ -220,9 +225,22 @@ async function renderLatest(): Promise<void> {
   }
 }
 
-self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest>): void => {
+self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerResponse>): void => {
   const message = event.data;
+  if (message.kind === "native-gpu-result" || message.kind === "native-gpu-error") {
+    const pending = nativeRequests.get(message.id);
+    nativeRequests.delete(message.id);
+    if (message.kind === "native-gpu-result") pending?.resolve(message.bytes);
+    else pending?.reject(new Error(message.message));
+    return;
+  }
   if (message.kind === "initialize") {
+    if (message.nativeGpu) setNativeGpuTransport((bytes) => new Promise((resolve, reject) => {
+      const id = ++nativeRequestId;
+      nativeRequests.set(id, { resolve, reject });
+      const request: NativeGpuWorkerRequest = { kind: "native-gpu", id, bytes };
+      self.postMessage(request, { transfer: [bytes.buffer] });
+    }));
     entry = message.entry;
     image = message.image;
     gpuRenderer?.dispose();

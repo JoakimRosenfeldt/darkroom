@@ -159,9 +159,10 @@ async function ready() {
     const store = window.smokeModule("stores/develop-store.ts").useDevelopStore.getState();
     const ui = store.sessions[store.activeEntryId]?.ui;
     if (ui?.sidecarStatus === "error") throw new Error(ui.sidecarError);
+    const canvas = document.querySelector('canvas[role="img"]');
     return store.activeEntryId && !Object.keys(store.pendingDefaultOperations).length &&
       store.sessions[store.activeEntryId]?.ui.sidecarStatus === "saved" &&
-      document.querySelector('canvas[role="img"]')?.width > 1;
+      canvas?.width > 1 && canvas.closest('[aria-busy]')?.getAttribute("aria-busy") === "false";
   }, null, { timeout: 90_000 });
 }
 async function check(name, run) {
@@ -331,9 +332,15 @@ try {
     assert.equal(result.difference, 0);
     assert.ok(result.pixelRange > 10, "Rendered export contains image detail.");
     report.renderBackends = { preview: result.backends, export: result.exportBackend };
-    if (process.env.DARKROOM_SMOKE_REQUIRE_GPU === "1") {
+    if (process.env.DARKROOM_SMOKE_REQUIRE_GPU === "1" || process.env.DARKROOM_SMOKE_REQUIRE_NATIVE === "1") {
       assert.ok(result.backends.every((backend) => backend === "gpu"));
       assert.equal(result.exportBackend, "gpu");
+    }
+    if (process.env.DARKROOM_SMOKE_REQUIRE_NATIVE === "1") {
+      const info = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("darkroom_gpu_info"));
+      assert.ok(["Vulkan", "Metal"].includes(info.backend), `Unexpected native backend: ${info.backend}`);
+      assert.ok(info.renderedFrames > 0, "The native backend executed rendered frames.");
+      report.nativeGpu = info;
     }
     report.timingsMs.cachedDecode = result.cachedMs;
     report.timingsMs.interactiveWorker = result.interactiveMs;

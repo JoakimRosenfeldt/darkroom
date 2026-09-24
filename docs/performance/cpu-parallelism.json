@@ -1,0 +1,229 @@
+{
+  "measuredAt": "2026-09-25",
+  "environment": {
+    "os": "Linux 7.2.5-3-omarchy x86_64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 24,
+    "computeWorkers": 23,
+    "node": "v26.8.1",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "profile": "release, thin LTO, codegen-units=1"
+  },
+  "method": {
+    "command": "PATH=\"$HOME/.cargo/bin:$PATH\" node --no-warnings --experimental-strip-types scripts/benchmark-prototypes.mjs",
+    "baselineCommit": "fcf112f1cb82128c0e2ee8bf4b3edf4063ee3581",
+    "baselineSourceSha256": "23a0b7f28068ff8f6a4434d6eac78d9e669b019a3d953b3f5afcab5bbf0f5043",
+    "optimizedSourceSha256": "1d37014fb3ef86b6f58dfcb26ac2a950ee84612892a03564b918966409b05b70",
+    "dimensions": [
+      512,
+      512
+    ],
+    "channels": 4,
+    "pixels": "i % 4 === 3 ? 255 : (i * 23 + 41) % 256",
+    "selection": "i % 9 === 0 ? 128 : 0",
+    "warmups": 1,
+    "samples": 5,
+    "statistic": "median",
+    "unit": "milliseconds",
+    "includes": "CPU kernel, allocations, worker dispatch and result destruction",
+    "excludes": [
+      "IPC",
+      "image decode",
+      "PNG encoding",
+      "disk I/O",
+      "UI rendering"
+    ],
+    "limitations": [
+      "Synthetic input on one Linux workstation.",
+      "No CPU isolation; timings vary with other application and build activity.",
+      "These measurements do not establish whole-application speed or macOS/Windows performance."
+    ]
+  },
+  "parallelism": {
+    "minimumPixels": 16384,
+    "rowTaskMinimum": 4,
+    "workerLimit": "available_parallelism minus one, with serial execution on one or two logical CPUs",
+    "fallback": "Serial execution if worker creation fails",
+    "sharedWith": "Native GPU readback conversion"
+  },
+  "correctness": {
+    "method": "Temporary differential benchmark comparing original and optimized kernels. No repository tests added.",
+    "cases": 208,
+    "dimensions": [
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        17
+      ],
+      [
+        17,
+        1
+      ],
+      [
+        3,
+        5
+      ],
+      [
+        127,
+        129
+      ],
+      [
+        128,
+        128
+      ],
+      [
+        512,
+        512
+      ],
+      [
+        1024,
+        768
+      ]
+    ],
+    "channels": [
+      3,
+      4
+    ],
+    "operations": [
+      "depth",
+      "denoise",
+      "raw-details",
+      "super-resolution",
+      "generative-remove"
+    ],
+    "parameters": {
+      "denoiseStrength": [
+        0,
+        1,
+        34,
+        55,
+        100
+      ],
+      "rawDetailsAmount": [
+        0,
+        67,
+        100
+      ],
+      "removeSeed": [
+        0,
+        12345,
+        4294967295
+      ],
+      "removeSearchRadius": [
+        1,
+        7,
+        64
+      ]
+    },
+    "result": "All output dimensions, image bytes, depth float bits, candidate ordering and pre-cancelled requests matched.",
+    "executions": [
+      "Default 23-worker shared pool",
+      "Single-CPU affinity to exercise serial fallback"
+    ]
+  },
+  "results": [
+    {
+      "operation": "depth",
+      "beforeMs": [
+        2.564229,
+        2.420507,
+        2.101071,
+        2.1065530000000003,
+        2.113252
+      ],
+      "afterMs": [
+        0.7675820000000001,
+        0.608969,
+        0.586519,
+        0.606589,
+        0.615919
+      ],
+      "beforeMedianMs": 2.113252,
+      "afterMedianMs": 0.608969,
+      "speedup": 3.4702127694513187
+    },
+    {
+      "operation": "denoise",
+      "beforeMs": [
+        42.109781,
+        42.04429,
+        42.06438,
+        42.071261,
+        42.148401
+      ],
+      "afterMs": [
+        2.4973069999999997,
+        2.7882219999999998,
+        2.437247,
+        2.354405,
+        2.3818960000000002
+      ],
+      "beforeMedianMs": 42.071261,
+      "afterMedianMs": 2.437247,
+      "speedup": 17.26179619874391
+    },
+    {
+      "operation": "raw-details",
+      "beforeMs": [
+        9.816609,
+        9.712548,
+        9.711548,
+        9.819479000000001,
+        9.719868
+      ],
+      "afterMs": [
+        0.71459,
+        0.7571019999999999,
+        0.739961,
+        0.735201,
+        0.740441
+      ],
+      "beforeMedianMs": 9.719868,
+      "afterMedianMs": 0.739961,
+      "speedup": 13.13564904096297
+    },
+    {
+      "operation": "super-resolution",
+      "beforeMs": [
+        156.071326,
+        151.853482,
+        152.39371,
+        152.58584199999999,
+        151.57058800000001
+      ],
+      "afterMs": [
+        8.990965,
+        9.210137999999999,
+        8.794042000000001,
+        9.259689,
+        8.945174
+      ],
+      "beforeMedianMs": 152.39371,
+      "afterMedianMs": 8.990965,
+      "speedup": 16.9496500097598
+    },
+    {
+      "operation": "generative-remove",
+      "beforeMs": [
+        4.085642,
+        4.085582,
+        4.088183,
+        4.086702,
+        4.080342
+      ],
+      "afterMs": [
+        0.739262,
+        0.724321,
+        0.70372,
+        0.7080409999999999,
+        0.736751
+      ],
+      "beforeMedianMs": 4.085642,
+      "afterMedianMs": 0.724321,
+      "speedup": 5.640651037316328
+    }
+  ]
+}

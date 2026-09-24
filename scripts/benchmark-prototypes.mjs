@@ -24,12 +24,13 @@ edition = "2024"
 [dependencies]
 serde_json = "1"
 base64 = "0.22"
+rayon = "1.11"
 [profile.release]
 lto = "thin"
 codegen-units = 1
 `);
   const rustSource = readFileSync(new URL("./benchmark-prototypes.rs", import.meta.url), "utf8")
-    .replace(/#\[path = "[^"]+"\]\s*mod prototype;/, `#[path=${JSON.stringify(path.join(root, "src-tauri/src/develop/prototype.rs"))}] mod prototype;`);
+    .replace(/#\[path = "[^"]+"\]\s*mod prototype;/, `#[path=${JSON.stringify(path.join(root, "src-tauri/src/develop/prototype.rs"))}] mod prototype;\n#[path=${JSON.stringify(path.join(root, "src-tauri/src/compute.rs"))}] mod compute;`);
   writeFileSync(path.join(directory, "src/main.rs"), rustSource);
   const rust = JSON.parse(execFileSync(cargo, ["run", "--release", "--quiet", "--manifest-path", path.join(directory, "Cargo.toml")], {
     encoding: "utf8",

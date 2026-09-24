@@ -1,0 +1,344 @@
+{
+  "results": [
+    {
+      "iteration": 0,
+      "tileEdge": 512,
+      "elapsed": 289.80000001192093,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 6,
+        "renderedPasses": 42,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 0.579229,
+        "lastPrepareMs": 0.18130300000000002,
+        "lastGpuWaitMs": 0.249484,
+        "lastPackMs": 0.135052
+      }
+    },
+    {
+      "iteration": 0,
+      "tileEdge": 1024,
+      "elapsed": 30.69999998807907,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 8,
+        "renderedPasses": 56,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 1.366961,
+        "lastPrepareMs": 0.6748010000000001,
+        "lastGpuWaitMs": 0.45349700000000004,
+        "lastPackMs": 0.214563
+      }
+    },
+    {
+      "iteration": 1,
+      "tileEdge": 1024,
+      "elapsed": 29.700000017881393,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 10,
+        "renderedPasses": 70,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 0.883563,
+        "lastPrepareMs": 0.25918399999999997,
+        "lastGpuWaitMs": 0.348905,
+        "lastPackMs": 0.25467399999999996
+      }
+    },
+    {
+      "iteration": 1,
+      "tileEdge": 512,
+      "elapsed": 48.30000001192093,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 16,
+        "renderedPasses": 112,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 0.611479,
+        "lastPrepareMs": 0.172683,
+        "lastGpuWaitMs": 0.243423,
+        "lastPackMs": 0.182783
+      }
+    },
+    {
+      "iteration": 2,
+      "tileEdge": 512,
+      "elapsed": 45.400000005960464,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 22,
+        "renderedPasses": 154,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 1.154808,
+        "lastPrepareMs": 0.59041,
+        "lastGpuWaitMs": 0.413336,
+        "lastPackMs": 0.13038200000000003
+      }
+    },
+    {
+      "iteration": 2,
+      "tileEdge": 1024,
+      "elapsed": 27.400000005960464,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 24,
+        "renderedPasses": 168,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 0.8870939999999999,
+        "lastPrepareMs": 0.22505299999999998,
+        "lastGpuWaitMs": 0.347105,
+        "lastPackMs": 0.298465
+      }
+    },
+    {
+      "iteration": 3,
+      "tileEdge": 1024,
+      "elapsed": 26.599999994039536,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 26,
+        "renderedPasses": 182,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 0.830173,
+        "lastPrepareMs": 0.220693,
+        "lastGpuWaitMs": 0.329525,
+        "lastPackMs": 0.261234
+      }
+    },
+    {
+      "iteration": 3,
+      "tileEdge": 512,
+      "elapsed": 51,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 32,
+        "renderedPasses": 224,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 0.6411500000000001,
+        "lastPrepareMs": 0.177233,
+        "lastGpuWaitMs": 0.24158400000000002,
+        "lastPackMs": 0.206963
+      }
+    },
+    {
+      "iteration": 4,
+      "tileEdge": 512,
+      "elapsed": 50.5,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 38,
+        "renderedPasses": 266,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 0.646,
+        "lastPrepareMs": 0.229053,
+        "lastGpuWaitMs": 0.253194,
+        "lastPackMs": 0.145183
+      }
+    },
+    {
+      "iteration": 4,
+      "tileEdge": 1024,
+      "elapsed": 28.400000005960464,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 40,
+        "renderedPasses": 280,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 1.000875,
+        "lastPrepareMs": 0.255014,
+        "lastGpuWaitMs": 0.358396,
+        "lastPackMs": 0.369515
+      }
+    },
+    {
+      "iteration": 5,
+      "tileEdge": 1024,
+      "elapsed": 25.700000017881393,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 42,
+        "renderedPasses": 294,
+        "activeSessions": 1,
+        "textureBytes": 102797828,
+        "lastFrameMs": 0.7641819999999999,
+        "lastPrepareMs": 0.21204399999999998,
+        "lastGpuWaitMs": 0.33043500000000003,
+        "lastPackMs": 0.205143
+      }
+    },
+    {
+      "iteration": 5,
+      "tileEdge": 512,
+      "elapsed": 40.400000005960464,
+      "info": {
+        "backend": "Vulkan",
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "maxTextureDimension": 32768,
+        "maxTextureArrayLayers": 2048,
+        "maxColorAttachments": 8,
+        "maxColorAttachmentBytesPerSample": 128,
+        "renderedFrames": 48,
+        "renderedPasses": 336,
+        "activeSessions": 1,
+        "textureBytes": 45937284,
+        "lastFrameMs": 0.61166,
+        "lastPrepareMs": 0.215433,
+        "lastGpuWaitMs": 0.235904,
+        "lastPackMs": 0.143282
+      }
+    }
+  ],
+  "parity": {
+    "dimensions": [
+      2051,
+      1537
+    ],
+    "cpu": {
+      "maximum": 1,
+      "mean": 0.019777314777658962,
+      "changed": 249383,
+      "samples": 12609548
+    },
+    "region": {
+      "maximum": 0,
+      "mean": 0,
+      "changed": 0,
+      "samples": 14396
+    }
+  },
+  "tileDeltas": [
+    {
+      "maximum": 1,
+      "mean": 2.099609375e-05,
+      "changed": 86,
+      "samples": 4096000
+    },
+    {
+      "maximum": 1,
+      "mean": 1.85546875e-05,
+      "changed": 76,
+      "samples": 4096000
+    },
+    {
+      "maximum": 1,
+      "mean": 2.0751953125e-05,
+      "changed": 85,
+      "samples": 4096000
+    },
+    {
+      "maximum": 1,
+      "mean": 1.8798828125e-05,
+      "changed": 77,
+      "samples": 4096000
+    },
+    {
+      "maximum": 1,
+      "mean": 1.7333984375e-05,
+      "changed": 71,
+      "samples": 4096000
+    },
+    {
+      "maximum": 1,
+      "mean": 1.904296875e-05,
+      "changed": 78,
+      "samples": 4096000
+    }
+  ],
+  "medianMs": {
+    "512": 47.95000000298023,
+    "1024": 27
+  },
+  "method": {
+    "date": "2026-09-25",
+    "platform": "Linux x86_64",
+    "cpu": "AMD Ryzen 9 5900X",
+    "dimensions": [
+      1280,
+      800
+    ],
+    "warmups": 2,
+    "measuredSamples": 4,
+    "order": "Alternating 512 then 1024, then 1024 then 512, on the same source and device.",
+    "workload": "Spatial adjustments and grain; completed RGBA8 export, including temporary HTTP diagnostics transport.",
+    "variant": "Temporary esbuild copies of gpu-backend.ts changed only the native export tile edge.",
+    "reference": "CPU full-frame output and a 61 by 59 region at x=1010,y=1010 in a 2051 by 1537 image.",
+    "limits": "One Linux workstation. This measures the native tile-size change, not a whole-app speedup."
+  }
+}

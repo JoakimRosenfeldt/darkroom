@@ -1,3 +1,4 @@
+import { NativeGpuContext, nativeGpuAvailable } from "./native-context";
 import {
   analyzeV3DisplayOutput,
   analyzeV3SceneHeadroom,
@@ -38,6 +39,8 @@ import {
 } from "@/lib/develop/v3/point-color";
 import { effectiveInputCalibration } from "@/lib/develop/v3/profiles";
 
+type GpuContext = WebGL2RenderingContext | NativeGpuContext;
+
 const CURVE_LUT_SIZE = 1_024;
 const MAX_CACHED_GEOMETRY_MAPS = 16;
 const MAX_CACHED_GEOMETRY_BYTES = 64 * 1024 * 1024;
@@ -46,6 +49,7 @@ const MAX_CACHED_TARGET_BYTES = 192 * 1024 * 1024;
 const MAX_CACHED_LOCAL_ADJUSTMENTS = 16;
 const MAX_CACHED_LOCAL_ADJUSTMENT_BYTES = 192 * 1024 * 1024;
 const GPU_TILE_EDGE = 512;
+const NATIVE_GPU_TILE_EDGE = 1_024;
 const MAX_GPU_MASK_LAYERS = 8;
 const MAX_CACHED_MASK_COVERAGE_BYTES = 64 * 1024 * 1024;
 const MIXER_BANDS = [
@@ -610,11 +614,10 @@ vec3 texelAt(ivec2 pixel) {
 }
 
 vec3 sampleAt(vec2 offsetPixels) {
-  vec2 center = gl_FragCoord.xy - vec2(0.5);
-  vec2 coordinate = clamp(center + offsetPixels, vec2(0.0), uImageSize - vec2(1.0));
-  ivec2 low = ivec2(floor(coordinate));
-  ivec2 high = min(low + 1, ivec2(uImageSize) - 1);
-  vec2 fraction = coordinate - vec2(low);
+  ivec2 coordinate = ivec2(gl_FragCoord.xy) + ivec2(floor(offsetPixels));
+  ivec2 low = clamp(coordinate, ivec2(0), ivec2(uImageSize) - 1);
+  ivec2 high = clamp(coordinate + ivec2(1), ivec2(0), ivec2(uImageSize) - 1);
+  vec2 fraction = fract(offsetPixels);
   vec3 top = mix(
     texelAt(ivec2(low.x, low.y)),
     texelAt(ivec2(high.x, low.y)),
@@ -781,8 +784,8 @@ interface GeometryMap {
 }
 
 interface GpuState {
-  readonly canvas: OffscreenCanvas | HTMLCanvasElement;
-  readonly gl: WebGL2RenderingContext;
+  readonly canvas: OffscreenCanvas | HTMLCanvasElement | null;
+  readonly gl: GpuContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
   readonly sourceIsInteger: boolean;
@@ -866,8 +869,12 @@ function localMaskSourcesGpuSupported(document: DevelopDocumentV3): boolean {
   });
 }
 
-export function v3GpuPreviewSupport(input: CpuRenderInput): GpuSupport {
-  if (typeof OffscreenCanvas === "undefined" && typeof document === "undefined") {
+export function v3GpuPreviewSupport(
+  input: CpuRenderInput,
+  backend: "auto" | "native" | "webgl" = "auto",
+): GpuSupport {
+  const native = backend === "native" || (backend === "auto" && nativeGpuAvailable());
+  if (!native && typeof OffscreenCanvas === "undefined" && typeof document === "undefined") {
     return { kind: "unsupported", reason: "OffscreenCanvas is unavailable." };
   }
   if (input.image.bits < 8 || input.image.bits > 16) {
@@ -919,7 +926,7 @@ export function v3GpuPreviewSupport(input: CpuRenderInput): GpuSupport {
   return { kind: "supported" };
 }
 
-function shader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
+function shader(gl: GpuContext, type: number, source: string): WebGLShader {
   const value = gl.createShader(type);
   if (!value) throw new Error("Could not create a GPU shader.");
   gl.shaderSource(value, source);
@@ -933,7 +940,7 @@ function shader(gl: WebGL2RenderingContext, type: number, source: string): WebGL
 }
 
 function program(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   fragmentSource: string,
   integerSourceProgram = false,
 ): WebGLProgram {
@@ -958,7 +965,7 @@ function program(
 }
 
 function texture(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   input: {
     readonly width: number;
     readonly height: number;
@@ -1011,7 +1018,7 @@ function sourcePixels(input: CpuRenderInput): Uint8Array {
   return target;
 }
 
-function sourceTexture(gl: WebGL2RenderingContext, input: CpuRenderInput): WebGLTexture {
+function sourceTexture(gl: GpuContext, input: CpuRenderInput): WebGLTexture {
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   try {
@@ -1046,7 +1053,7 @@ function sourceTexture(gl: WebGL2RenderingContext, input: CpuRenderInput): WebGL
 }
 
 function floatTarget(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   width: number,
   height: number,
   precision: "half" | "float",
@@ -1063,7 +1070,7 @@ function floatTarget(
 }
 
 function createTargets(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   width: number,
   height: number,
   precision: "half" | "float",
@@ -1081,7 +1088,7 @@ function createTargets(
   };
 }
 
-function deleteTargets(gl: WebGL2RenderingContext, targets: GpuTargets): void {
+function deleteTargets(gl: GpuContext, targets: GpuTargets): void {
   gl.deleteTexture(targets.pointwise);
   gl.deleteTexture(targets.toneInput);
   gl.deleteTexture(targets.pointColorInput);
@@ -1498,7 +1505,7 @@ function curvesAreIdentity(document: DevelopDocumentV3): boolean {
 }
 
 function bindTexture(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   programValue: WebGLProgram,
   name: string,
   unit: number,
@@ -1510,7 +1517,7 @@ function bindTexture(
 }
 
 function attach(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   targets: GpuTargets,
   textures: readonly WebGLTexture[],
 ): void {
@@ -1540,7 +1547,7 @@ function attach(
   }
 }
 
-function draw(gl: WebGL2RenderingContext): void {
+function draw(gl: GpuContext): void {
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -1933,7 +1940,7 @@ function flippedRgba8(source: Uint8Array, width: number, height: number): Uint8A
 }
 
 function readOutputPixels(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   width: number,
   height: number,
 ): Uint8Array {
@@ -1963,7 +1970,7 @@ function pointColorInput(
 }
 
 function readFloatTexture(
-  gl: WebGL2RenderingContext,
+  gl: GpuContext,
   targets: GpuTargets,
   value: WebGLTexture,
 ): Float32Array {
@@ -2077,6 +2084,8 @@ export class V3GpuPreviewRenderer {
   #state: GpuState | null = null;
   #unavailable = false;
 
+  constructor(readonly backend: "auto" | "native" | "webgl" = "auto") {}
+
   dispose(): void {
     const state = this.#state;
     if (!state) return;
@@ -2095,8 +2104,10 @@ export class V3GpuPreviewRenderer {
       state.gl.deleteTexture(value.texture);
     }
     for (const value of state.maskCoverage.values()) state.gl.deleteTexture(value.texture);
-    state.canvas.width = 0;
-    state.canvas.height = 0;
+    if (state.canvas) {
+      state.canvas.width = 0;
+      state.canvas.height = 0;
+    }
     state.gl.getExtension("WEBGL_lose_context")?.loseContext();
     this.#state = null;
   }
@@ -2105,11 +2116,11 @@ export class V3GpuPreviewRenderer {
     input: CpuRenderInput,
     options: { readonly includeAnalysis: boolean },
   ): Promise<V3GpuPreviewRenderResult | null> {
-    if (this.#unavailable || v3GpuPreviewSupport(input).kind !== "supported") return null;
+    if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
     const preparation = await prepareV3CpuRender(input);
     if (preparation.kind !== "ready") return preparation;
     try {
-      const frame = this.#renderFrame(
+      const frame = await this.#renderFrame(
         input,
         options.includeAnalysis,
         fullOutputRegion(input),
@@ -2145,7 +2156,7 @@ export class V3GpuPreviewRenderer {
     input: CpuRenderInput,
     core: RenderRegion,
   ): Promise<CpuRenderResult | null> {
-    if (this.#unavailable || v3GpuPreviewSupport(input).kind !== "supported") return null;
+    if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
     const preparation = await prepareV3CpuRender(input);
     if (preparation.kind !== "ready") return null;
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
@@ -2179,7 +2190,7 @@ export class V3GpuPreviewRenderer {
       this.#unavailable ||
       input.request.plan.qualityAndDimensions.kind !== "export" ||
       input.request.requestedTaps.length > 0 ||
-      v3GpuPreviewSupport(input).kind !== "supported"
+      v3GpuPreviewSupport(input, this.backend).kind !== "supported"
     ) return null;
     const preparation = await prepareV3CpuRender(input);
     if (preparation.kind !== "ready") return null;
@@ -2216,17 +2227,24 @@ export class V3GpuPreviewRenderer {
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     const pixels = new Uint8Array(core.width * core.height * 4);
     const halo = activeStageHalo(input);
-    for (let y = core.y; y < core.y + core.height; y += GPU_TILE_EDGE) {
-      for (let x = core.x; x < core.x + core.width; x += GPU_TILE_EDGE) {
+    const state = this.#state ?? await this.#initialize(input);
+    const wideLocalTexture = !inactiveLocalEdits(input.document) &&
+      input.document.local.masks.filter((mask) => mask.enabled).length > MAX_GPU_MASK_LAYERS;
+    const regionLimit = Math.floor(state.maximumTextureSize / (wideLocalTexture ? 5 : 1));
+    const tileEdge = state.gl instanceof NativeGpuContext
+      ? Math.max(1, Math.min(NATIVE_GPU_TILE_EDGE, regionLimit - halo * 2))
+      : GPU_TILE_EDGE;
+    for (let y = core.y; y < core.y + core.height; y += tileEdge) {
+      for (let x = core.x; x < core.x + core.width; x += tileEdge) {
         if (input.cancellation?.isCancelled()) return null;
         const tileCore = {
           x,
           y,
-          width: Math.min(GPU_TILE_EDGE, core.x + core.width - x),
-          height: Math.min(GPU_TILE_EDGE, core.y + core.height - y),
+          width: Math.min(tileEdge, core.x + core.width - x),
+          height: Math.min(tileEdge, core.y + core.height - y),
         };
         const renderedRegion = expandedGpuRegion(tileCore, dimensions, halo);
-        const frame = this.#renderFrame(
+        const frame = await this.#renderFrame(
           input,
           false,
           renderedRegion,
@@ -2250,15 +2268,18 @@ export class V3GpuPreviewRenderer {
     return pixels;
   }
 
-  #initialize(input: CpuRenderInput): GpuState {
-    const canvas = typeof document === "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
-    const gl = canvas.getContext("webgl2", {
+  async #initialize(input: CpuRenderInput): Promise<GpuState> {
+    const native = this.backend === "native" || (this.backend === "auto" && nativeGpuAvailable());
+    const canvas = native ? null : typeof document === "undefined"
+      ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+    const gl = native ? new NativeGpuContext() : canvas?.getContext("webgl2", {
       alpha: true,
       antialias: false,
       depth: false,
       preserveDrawingBuffer: false,
       premultipliedAlpha: false,
     }) as WebGL2RenderingContext | null;
+    if (gl instanceof NativeGpuContext) await gl.initialize();
     if (!gl || !gl.getExtension("EXT_color_buffer_float")) {
       throw new Error("Float WebGL rendering is unavailable.");
     }
@@ -2308,8 +2329,10 @@ export class V3GpuPreviewRenderer {
     if (current) {
       state.targets.delete(key);
       state.targets.set(key, current);
-      if (state.canvas.width !== width) state.canvas.width = width;
-      if (state.canvas.height !== height) state.canvas.height = height;
+      if (state.canvas) {
+        if (state.canvas.width !== width) state.canvas.width = width;
+        if (state.canvas.height !== height) state.canvas.height = height;
+      }
       state.gl.viewport(0, 0, width, height);
       return current;
     }
@@ -2330,8 +2353,10 @@ export class V3GpuPreviewRenderer {
         deleteTargets(state.gl, oldest);
       }
     }
-    if (state.canvas.width !== width) state.canvas.width = width;
-    if (state.canvas.height !== height) state.canvas.height = height;
+    if (state.canvas) {
+      if (state.canvas.width !== width) state.canvas.width = width;
+      if (state.canvas.height !== height) state.canvas.height = height;
+    }
     state.gl.viewport(0, 0, width, height);
     return targets;
   }
@@ -2374,14 +2399,14 @@ export class V3GpuPreviewRenderer {
     return value;
   }
 
-  #renderFrame(
+  async #renderFrame(
     input: CpuRenderInput,
     includeAnalysis: boolean,
     region: RenderRegion,
     precision: "half" | "float",
     readPixels: boolean,
-  ): GpuRenderedFrame {
-    const state = this.#state ?? this.#initialize(input);
+  ): Promise<GpuRenderedFrame> {
+    const state = this.#state ?? await this.#initialize(input);
     if (state.gl.isContextLost()) throw new Error("The GPU preview context was lost.");
     if (state.sourceIsInteger !== integerSource(input)) {
       throw new Error("The GPU preview source precision changed after initialization.");
@@ -2400,6 +2425,25 @@ export class V3GpuPreviewRenderer {
     const spatial = renderSpatial(state, input, targets);
     renderPostCrop(state, input, targets, spatial, region);
     renderEncoded(state, targets);
+    if (state.gl instanceof NativeGpuContext) {
+      const floatReads: WebGLTexture[] = [];
+      if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
+      if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(targets.postCrop);
+      if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
+      await state.gl.submit(floatReads);
+      const pixels = readOutputPixels(state.gl, dimensions.width, dimensions.height);
+      const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
+      const tone = floatRead(targets.toneInput);
+      const scene = floatRead(targets.postCrop);
+      const point = floatRead(targets.pointColorInput);
+      return {
+        bitmap: readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels), dimensions.width, dimensions.height)),
+        pixels: readPixels ? pixels : null,
+        pointColorInput: point ? pointColorInput(point, dimensions.width, dimensions.height) : null,
+        analysis: includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [],
+        renderDurationMs: performance.now() - started,
+      };
+    }
     if (!includeAnalysis) {
       const pixels = readPixels
         ? readOutputPixels(state.gl, dimensions.width, dimensions.height)
@@ -2410,7 +2454,7 @@ export class V3GpuPreviewRenderer {
       const pointInput = wantsPointColor
         ? readFloatTexture(state.gl, targets, targets.pointColorInput)
         : null;
-      const bitmap = !readPixels && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
+      const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
       return {
         bitmap,
         renderDurationMs: performance.now() - started,
@@ -2439,7 +2483,7 @@ export class V3GpuPreviewRenderer {
       ? null
       : readFloatTexture(state.gl, targets, targets.pointColorInput);
     const analysis = requestedAnalysis(input, toneInput, scene, pixels);
-    const bitmap = !readPixels && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
+    const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
     return {
       bitmap,
       renderDurationMs: performance.now() - started,

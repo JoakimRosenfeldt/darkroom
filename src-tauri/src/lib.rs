@@ -1,6 +1,8 @@
 mod catalog;
 mod commands;
+mod compute;
 mod develop;
+mod gpu;
 mod menu;
 mod native;
 
@@ -472,6 +474,57 @@ async fn darkroom_export(
     .map_err(|e| e.to_string())?
 }
 
+static GPU: std::sync::OnceLock<Mutex<Result<gpu::NativeGpu, String>>> = std::sync::OnceLock::new();
+static GPU_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[tauri::command]
+async fn darkroom_gpu(
+    window: tauri::WebviewWindow,
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("Native rendering needs a binary request.".into());
+    };
+    if body.len() < 4 || body.len() > 512 * 1024 * 1024 {
+        return Err("Native render request size is invalid.".into());
+    }
+    let permit = GPU_QUEUE.acquire().await.map_err(|e| e.to_string())?;
+    let bytes = body.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut gpu = GPU
+            .get_or_init(|| Mutex::new(gpu::NativeGpu::new()))
+            .lock()
+            .map_err(|_| "Native renderer is unavailable.")?;
+        gpu.as_mut()
+            .map_err(|e| e.clone())?
+            .execute(&bytes)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    drop(permit);
+    result
+}
+
+#[tauri::command]
+async fn darkroom_gpu_info(window: tauri::WebviewWindow) -> Result<Value, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let gpu = GPU
+            .get_or_init(|| Mutex::new(gpu::NativeGpu::new()))
+            .lock()
+            .map_err(|_| "Native renderer is unavailable.")?;
+        serde_json::to_value(gpu.as_ref().map_err(|e| e.clone())?.info()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn run() {
     tauri::Builder::default()
         .on_menu_event(menu::handle_event)
@@ -536,6 +589,8 @@ pub fn run() {
             darkroom_read,
             darkroom_preview,
             darkroom_export,
+            darkroom_gpu,
+            darkroom_gpu_info,
             menu::darkroom_menu_state
         ])
         .build(tauri::generate_context!())

@@ -38,6 +38,7 @@ export type V3PreviewWorkerRequest =
       readonly kind: "initialize";
       readonly entry: LibraryEntry;
       readonly image: V3PreviewWorkerImage;
+      readonly nativeGpu?: boolean;
     }
   | {
       readonly kind: "render";
@@ -63,3 +64,8 @@ export type V3PreviewWorkerResponse =
       readonly requestId: number;
       readonly message: string;
     };
+
+export type NativeGpuWorkerRequest = { kind: "native-gpu"; id: number; bytes: Uint8Array<ArrayBuffer> };
+export type NativeGpuWorkerResponse =
+  | { kind: "native-gpu-result"; id: number; bytes: ArrayBuffer }
+  | { kind: "native-gpu-error"; id: number; message: string };

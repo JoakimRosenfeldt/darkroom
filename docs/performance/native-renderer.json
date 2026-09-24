@@ -1,0 +1,708 @@
+{
+  "checks": [
+    {
+      "name": "neutral",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "tone",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.0076171875,
+        "changed": 156,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.0173828125,
+        "changed": 356,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "curves",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.00517578125,
+        "changed": 106,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02060546875,
+        "changed": 422,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "white-balance-and-calibration",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.00869140625,
+        "changed": 178,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02548828125,
+        "changed": 522,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "mixer-and-global-color",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.00673828125,
+        "changed": 138,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.020751953125,
+        "changed": 425,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "point-color",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.002197265625,
+        "changed": 45,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.004833984375,
+        "changed": 99,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "monochrome",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.006884765625,
+        "changed": 141,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02373046875,
+        "changed": 486,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "grading",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.008935546875,
+        "changed": 183,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.019189453125,
+        "changed": 393,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "denoise",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.004931640625,
+        "changed": 101,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.016162109375,
+        "changed": 331,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "spatial",
+      "nativeVsWebgl": {
+        "maximum": 2,
+        "mean": 0.01640625,
+        "changed": 334,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.01806640625,
+        "changed": 370,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "grain-and-vignette",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.010009765625,
+        "changed": 205,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.022998046875,
+        "changed": 471,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "crop-and-geometry",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.009566326530612245,
+        "changed": 90,
+        "samples": 9408
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02540391156462585,
+        "changed": 239,
+        "samples": 9408
+      },
+      "passed": true
+    },
+    {
+      "name": "two-local-masks",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.00791015625,
+        "changed": 162,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02177734375,
+        "changed": 446,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "nine-local-masks",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.00888671875,
+        "changed": 182,
+        "samples": 20480
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.0203125,
+        "changed": 416,
+        "samples": 20480
+      },
+      "passed": true
+    },
+    {
+      "name": "10-bit-source",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.0025182698005135297,
+        "changed": 51,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "12-bit-source",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.004098360655737705,
+        "changed": 83,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "14-bit-source",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.0025182698005135297,
+        "changed": 51,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "16-bit-source",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.005530317993284614,
+        "changed": 112,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "rgba8-source",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "nativeVsCpu": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "linear16-source",
+      "nativeVsWebgl": {
+        "maximum": 1,
+        "mean": 0.008690499703732965,
+        "changed": 176,
+        "samples": 20252
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.024293896899071698,
+        "changed": 492,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-2",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-3",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-4",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-5",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-6",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-7",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "orientation-8",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20252
+      },
+      "passed": true
+    },
+    {
+      "name": "preview-analysis-and-point-color",
+      "nativeVsWebgl": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 20480
+      },
+      "pointColor": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 15360
+      },
+      "analysis": {
+        "maximumScalarDelta": 0,
+        "maximumHistogramBinDelta": 0,
+        "structureMatches": true,
+        "passed": true
+      },
+      "passed": true
+    },
+    {
+      "name": "tiled-export-and-region",
+      "dimensions": {
+        "width": 2051,
+        "height": 1537
+      },
+      "region": {
+        "x": 1010,
+        "y": 1010,
+        "width": 61,
+        "height": 59
+      },
+      "nativeVsWebgl": {
+        "maximum": 4,
+        "mean": 0.01703883438169235,
+        "changed": 214722,
+        "samples": 12609548
+      },
+      "nativeVsCpu": {
+        "maximum": 1,
+        "mean": 0.02002902879627406,
+        "changed": 252557,
+        "samples": 12609548
+      },
+      "webglVsCpu": {
+        "maximum": 4,
+        "mean": 0.02601829978362428,
+        "changed": 327952,
+        "samples": 12609548
+      },
+      "regionDelta": {
+        "maximum": 0,
+        "mean": 0,
+        "changed": 0,
+        "samples": 14396
+      },
+      "criterion": "Native output must match the CPU reference within 2/255 per channel; export regions must match exactly.",
+      "passed": true
+    }
+  ],
+  "timings": [
+    {
+      "backend": "native",
+      "operation": "preview",
+      "width": 1280,
+      "height": 800,
+      "coldMs": 134.19999998807907,
+      "warmMs": [
+        28.099999994039536,
+        29.900000005960464,
+        30.600000023841858,
+        29
+      ],
+      "medianWarmMs": 29.450000002980232,
+      "nativeFrames": [
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 36,
+          "renderedPasses": 144,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 14.459859999999999,
+          "lastPrepareMs": 5.25991,
+          "lastGpuWaitMs": 7.1408879999999995,
+          "lastPackMs": 2.0077409999999998
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 37,
+          "renderedPasses": 151,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 6.885554,
+          "lastPrepareMs": 0.23791400000000001,
+          "lastGpuWaitMs": 6.101072,
+          "lastPackMs": 0.530528
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 38,
+          "renderedPasses": 158,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 6.855454000000001,
+          "lastPrepareMs": 0.21063300000000001,
+          "lastGpuWaitMs": 6.062782,
+          "lastPackMs": 0.564388
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 39,
+          "renderedPasses": 165,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 7.026757,
+          "lastPrepareMs": 0.257423,
+          "lastGpuWaitMs": 6.127323,
+          "lastPackMs": 0.62376
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 40,
+          "renderedPasses": 172,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 6.853055,
+          "lastPrepareMs": 0.217803,
+          "lastGpuWaitMs": 6.149774,
+          "lastPackMs": 0.469036
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 41,
+          "renderedPasses": 179,
+          "activeSessions": 1,
+          "textureBytes": 49168404,
+          "lastFrameMs": 6.885425,
+          "lastPrepareMs": 0.198293,
+          "lastGpuWaitMs": 6.113513,
+          "lastPackMs": 0.560099
+        }
+      ]
+    },
+    {
+      "backend": "webgl",
+      "operation": "preview",
+      "width": 1280,
+      "height": 800,
+      "coldMs": 67.7000000178814,
+      "warmMs": [
+        0.4000000059604645,
+        0.29999998211860657,
+        0.29999998211860657,
+        0.19999998807907104
+      ],
+      "medianWarmMs": 0.29999998211860657
+    },
+    {
+      "backend": "native",
+      "operation": "export",
+      "width": 1280,
+      "height": 800,
+      "coldMs": 192.90000000596046,
+      "warmMs": [
+        39.900000005960464,
+        36.69999998807907,
+        39.099999994039536,
+        40.70000001788139
+      ],
+      "medianWarmMs": 39.5,
+      "nativeFrames": [
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 43,
+          "renderedPasses": 193,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.474283,
+          "lastPrepareMs": 0.261483,
+          "lastGpuWaitMs": 2.983466,
+          "lastPackMs": 0.208613
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 45,
+          "renderedPasses": 207,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.563834,
+          "lastPrepareMs": 0.272025,
+          "lastGpuWaitMs": 2.941164,
+          "lastPackMs": 0.330955
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 47,
+          "renderedPasses": 221,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.173388,
+          "lastPrepareMs": 0.229684,
+          "lastGpuWaitMs": 2.687871,
+          "lastPackMs": 0.237493
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 49,
+          "renderedPasses": 235,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.128268,
+          "lastPrepareMs": 0.205093,
+          "lastGpuWaitMs": 2.703401,
+          "lastPackMs": 0.204803
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 51,
+          "renderedPasses": 249,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.666875,
+          "lastPrepareMs": 0.355315,
+          "lastGpuWaitMs": 2.9994959999999997,
+          "lastPackMs": 0.290774
+        },
+        {
+          "backend": "Vulkan",
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "maxTextureDimension": 32768,
+          "maxTextureArrayLayers": 2048,
+          "maxColorAttachments": 8,
+          "maxColorAttachmentBytesPerSample": 128,
+          "renderedFrames": 53,
+          "renderedPasses": 263,
+          "activeSessions": 1,
+          "textureBytes": 94198804,
+          "lastFrameMs": 3.238709,
+          "lastPrepareMs": 0.211904,
+          "lastGpuWaitMs": 2.8162920000000002,
+          "lastPackMs": 0.19501300000000002
+        }
+      ]
+    },
+    {
+      "backend": "webgl",
+      "operation": "export",
+      "width": 1280,
+      "height": 800,
+      "coldMs": 144.60000002384186,
+      "warmMs": [
+        135.40000000596046,
+        120.7999999821186,
+        106.09999999403954,
+        109.59999999403954
+      ],
+      "medianWarmMs": 115.19999998807907
+    }
+  ],
+  "passed": true,
+  "webglAdapter": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3080/PCIe/SSE2, OpenGL ES 3.2)",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+  "hardwareConcurrency": 24,
+  "measuredAt": "2026-09-24T22:56:30.719Z",
+  "platform": "linux",
+  "arch": "x64",
+  "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+  "executable": "/home/joakim/.t3/worktrees/darkroom/t3code-6779267f/src-tauri/target/native-benchmark/release/darkroom-native-benchmark",
+  "nativeProbeLog": "{\"backend\":\"Vulkan\",\"adapter\":\"NVIDIA GeForce RTX 3080\",\"deviceType\":\"DiscreteGpu\",\"maxTextureDimension\":32768,\"maxTextureArrayLayers\":2048,\"maxColorAttachments\":8,\"maxColorAttachmentBytesPerSample\":128,\"renderedFrames\":0,\"renderedPasses\":0,\"activeSessions\":0,\"textureBytes\":0,\"lastFrameMs\":0.0,\"lastPrepareMs\":0.0,\"lastGpuWaitMs\":0.0,\"lastPackMs\":0.0}",
+  "timingScope": "Preview measures bitmap handoff. Native includes GPU readback and binary HTTP diagnostics transport; WebGL can hand off a GPU bitmap without waiting for pixel readback. Export measures completed CPU pixel readback for both backends. Source decoding and runtime request preparation are excluded. Two warmup frames precede four measured frames. Check adapter identities before comparing backends."
+}

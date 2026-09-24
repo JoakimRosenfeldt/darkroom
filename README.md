@@ -78,14 +78,14 @@ src-tauri/src/develop/  History-linked batches, stores, assets, image jobs
 src-tauri/src/native/   Native files, metadata, codecs, models, Nikon runtime
 lib/desktop/            Typed Tauri transport and event subscriptions
 lib/raw/                RAW decoding workers and profiles
-lib/develop/            Develop documents and WebGL preview renderer
+lib/develop/            Develop documents, native GPU pass preparation, CPU fallback
 lib/cache/              Thumbnail and edited-image caches
 stores/                 Renderer state
 ```
 
 The renderer sends typed commands with catalog/session identifiers. Rust resolves file locations from the active catalog and validates paths. Photo reads and export pixels use binary IPC. Cancellable scans, import, metadata analysis, and image jobs run outside the UI thread.
 
-Interactive previews retain the WebGL2 renderer, including its CPU fallback. RAW decoding remains in the existing LibRaw worker, with the qualified Nikon helper on macOS. Rust performs independent source/profile verification for automatic Develop defaults. Prototype image operations use native Rust kernels.
+The native rendering POC runs v3 previews and exports through Vulkan on Windows and Linux, and Metal on macOS. Rust uses the native `wgpu` backends without browser WebGPU. Workers prepare the existing shader passes, geometry, and masks. Frozen v2 documents retain their existing renderer, and unsupported v3 stages retain the CPU fallback. RAW decoding remains in the LibRaw worker, with the qualified Nikon helper on macOS. Rust image kernels share a bounded CPU pool. See the [native renderer POC](docs/native-renderer.md) for scope, measurements, and platform verification status.
 
 See the [migration and parity notes](docs/rust-migration.md) and [measured performance results](docs/performance/README.md).
 
@@ -141,7 +141,7 @@ For formats that need a different decoder than LibRaw, point `decode()` at a new
 
 - Output is 8-bit sRGB. Full-resolution output is limited to 50 megapixels.
 - RAW qualification currently covers the bundled Nikon Z6 III files with the native Nikon decoder. Other cameras, lighting conditions, and automatic lens profiles need separate qualification.
-- Full-resolution masked views can take several seconds. WebKit uses the main-thread GPU canvas with export tiles that yield between draws; other engines can use the GPU worker. A CPU worker remains the fallback.
+- Full-resolution masked views can take several seconds. Native previews require a Vulkan driver on Windows and Linux, or Metal on macOS. A CPU worker remains the fallback. Native frames currently return pixels to the webview, so GPU readback and transport still affect performance.
 - The Nikon helper is required for the bundled high-efficiency NEFs. Embedded JPEG previews support culling, but editing and export require decoded RAW pixels.
 
 ## License
