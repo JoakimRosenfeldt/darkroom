@@ -657,10 +657,10 @@ void main() {
   } else if (uMode == 2) {
     if (uAmount > 0.0) {
       float darkChannel = clamp(min(min(average.r, average.g), average.b), 0.0, 1.0);
-      float transmission = clamp(1.0 - uAmount * darkChannel * 1.6, 0.2, 1.0);
+      float transmission = clamp(1.0 - uAmount * darkChannel * 0.8, 0.2, 1.0);
       result = (center - (1.0 - transmission)) / transmission;
     } else {
-      float haze = -uAmount * 0.8;
+      float haze = -uAmount * 0.4;
       result = center * (1.0 - haze) + haze;
     }
   } else {
@@ -1818,7 +1818,7 @@ function renderSpatial(
     run({
       mode: 0,
       amount: clamp(presence.texture, -100, 100) / 100,
-      radius: clamp(2 / clamp(sourceScale, 1 / 64, 64), 0.25, 512),
+      radius: clamp(6 / clamp(sourceScale, 1 / 64, 64), 0.25, 512),
     });
   }
   if (presence.clarity !== 0) {

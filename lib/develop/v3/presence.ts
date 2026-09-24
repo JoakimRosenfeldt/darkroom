@@ -35,8 +35,8 @@ export const PRESENCE_STAGE_DECLARATIONS = [
     id: "texture",
     semanticStageId: "presence",
     orderWithinStage: 1,
-    sourceRelativeScale: { kind: "source-pixels", radius: 2 },
-    haloSourcePixels: 2,
+    sourceRelativeScale: { kind: "source-pixels", radius: 6 },
+    haloSourcePixels: 6,
     borderPolicy: "clamp-to-edge",
     inputPrecision: "linear-float32",
     dependencies: ["local-adjustments"],
@@ -174,7 +174,7 @@ export function applyTexturePixel(
     image,
     x,
     y,
-    sourceRadiusInInputPixels(2, sourcePixelsPerInputPixel),
+    sourceRadiusInInputPixels(6, sourcePixelsPerInputPixel),
   );
   return [
     clamp(center[0] + (center[0] - blur[0]) * strength * 4.8, 0, 16),
@@ -227,14 +227,14 @@ export function applyDehazePixel(
   );
   const darkChannel = clamp(Math.min(local[0], local[1], local[2]), 0, 1);
   if (strength > 0) {
-    const transmission = clamp(1 - strength * darkChannel * 1.6, 0.2, 1);
+    const transmission = clamp(1 - strength * darkChannel * 0.8, 0.2, 1);
     return [
       clamp((center[0] - (1 - transmission)) / transmission, 0, 16),
       clamp((center[1] - (1 - transmission)) / transmission, 0, 16),
       clamp((center[2] - (1 - transmission)) / transmission, 0, 16),
     ];
   }
-  const haze = -strength * 0.8;
+  const haze = -strength * 0.4;
   return [
     clamp(center[0] * (1 - haze) + haze, 0, 16),
     clamp(center[1] * (1 - haze) + haze, 0, 16),

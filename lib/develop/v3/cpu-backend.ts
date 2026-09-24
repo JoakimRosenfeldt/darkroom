@@ -753,7 +753,7 @@ export function activeStageHalo(input: CpuRenderInput): number {
   const presence = input.document.presence;
   const sharpening = input.document.detail.sharpening;
   let halo = 0;
-  if (presence.texture !== 0) halo += Math.ceil(clamp(2 / scale, 0.25, 512));
+  if (presence.texture !== 0) halo += Math.ceil(clamp(6 / scale, 0.25, 512));
   if (presence.clarity !== 0) halo += Math.ceil(clamp(16 / scale, 0.25, 512));
   if (presence.dehaze !== 0) halo += Math.ceil(clamp(32 / scale, 0.25, 512));
   if (sharpening.sharpening !== 0) {
