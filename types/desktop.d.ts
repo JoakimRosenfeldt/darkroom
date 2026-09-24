@@ -199,6 +199,7 @@ export interface DarkroomAPI {
   catalogAutoImportCancel(request: AutoImportCancelRequest): Promise<AutoImportStatus>;
   catalogAutoImportOpenIngress(request: CatalogSessionRequest): Promise<void>;
   catalogReadAsset(request: CatalogAssetRequest): Promise<ArrayBuffer>;
+  catalogReadEmbeddedPreview(request: CatalogAssetRequest): Promise<ArrayBuffer>;
   developAssetPut(request: DevelopAssetPutRequest): Promise<DevelopAssetPutResult>;
   developAssetTransition(
     request: DevelopAssetTransitionRequest,

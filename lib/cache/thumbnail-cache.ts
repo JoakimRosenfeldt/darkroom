@@ -1,6 +1,9 @@
 import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { decodeEntry } from "@/lib/raw/decode";
+import { getAssetRequest } from "@/lib/fs/session-catalog";
+import { getDarkroomAPI } from "@/lib/fs/platform";
+import { runWithThumbnailLimit } from "./concurrency";
 import { assetCacheKey, type AssetCacheIdentity } from "./asset-cache-key";
 import type { StoredDevelopDocument } from "@/lib/develop/v3/document";
 import { renderEditedPreview } from "./render-edited-preview";
@@ -33,6 +36,41 @@ interface InFlightThumbnailLoad {
 }
 
 const inFlightLoads = new Map<string, InFlightThumbnailLoad>();
+
+async function nativeEmbeddedPreview(
+  entry: LibraryEntry,
+  edge: number,
+  signal?: AbortSignal,
+): Promise<Blob | null> {
+  const bytes = await getDarkroomAPI().catalogReadEmbeddedPreview(getAssetRequest(entry));
+  signal?.throwIfAborted();
+  if (bytes.byteLength === 0) return null;
+
+  const original = new Blob([bytes], { type: "image/jpeg" });
+  const bitmap = await createImageBitmap(original);
+  try {
+    signal?.throwIfAborted();
+    const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1) return original;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Could not resize the embedded RAW preview.");
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      return await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error("Could not encode the embedded RAW preview.")),
+        "image/jpeg", 0.92,
+      ));
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } finally {
+    bitmap.close();
+  }
+}
 
 function waitForCaller(
   load: InFlightThumbnailLoad,
@@ -170,6 +208,22 @@ export async function loadThumbnailBlob(
       controller.signal.throwIfAborted();
       await setCachedThumbnail(key, blob);
       return blob;
+    }
+    if (entry.formatId === "nef") {
+      try {
+        const blob = await runWithThumbnailLimit(
+          () => nativeEmbeddedPreview(entry, edge, controller.signal),
+          { priority: options.priority, signal: controller.signal },
+        );
+        if (blob) {
+          controller.signal.throwIfAborted();
+          void setCachedThumbnail(key, blob).catch(() => undefined);
+          return blob;
+        }
+      } catch {
+        controller.signal.throwIfAborted();
+        // LibRaw's renderer decoder remains available for unsupported previews.
+      }
     }
     const decoded = await decodeEntry(entry, {
       thumbnail: true,

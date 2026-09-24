@@ -40,12 +40,14 @@ export function useEntryAspectRatios(
     seedAspectRatios(entries),
   );
   const previousEntriesByIdRef = useRef(entriesById);
-  const inFlightRef = useRef(new Set<string>());
+  const generationRef = useRef(0);
+  const inFlightRef = useRef(new Map<string, number>());
   const loadedRef = useRef(new Set<string>());
   const pendingUpdatesRef = useRef(new Map<string, number>());
   const flushFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
+    generationRef.current += 1;
     const catalogEntries = [...entriesById.values()];
     const seeded = seedAspectRatios(catalogEntries);
     const previousEntriesById = previousEntriesByIdRef.current;
@@ -71,7 +73,7 @@ export function useEntryAspectRatios(
   }, [entrySetKey, entriesById]);
 
   useEffect(() => {
-    let cancelled = false;
+    const generation = generationRef.current;
 
     function scheduleUpdate(id: string, ratio: number) {
       pendingUpdatesRef.current.set(id, ratio);
@@ -98,33 +100,32 @@ export function useEntryAspectRatios(
 
     async function loadAspectRatio(entryId: string, priority: number) {
       if (
-        cancelled ||
         loadedRef.current.has(entryId) ||
-        inFlightRef.current.has(entryId) ||
+        inFlightRef.current.get(entryId) === generation ||
         !entriesById.has(entryId)
       ) {
         return;
       }
 
       const entry = entriesById.get(entryId)!;
-      inFlightRef.current.add(entryId);
+      inFlightRef.current.set(entryId, generation);
 
       try {
         const ratio = await runWithAspectLimit(
           () => getEntryAspectRatio(entry),
           { priority },
         );
-        if (!cancelled && !loadedRef.current.has(entryId)) {
+        if (generation === generationRef.current && !loadedRef.current.has(entryId)) {
           loadedRef.current.add(entryId);
           scheduleUpdate(entryId, ratio);
         }
       } catch {
-        if (!cancelled && !loadedRef.current.has(entryId)) {
+        if (generation === generationRef.current && !loadedRef.current.has(entryId)) {
           loadedRef.current.add(entryId);
           scheduleUpdate(entryId, 1);
         }
       } finally {
-        inFlightRef.current.delete(entryId);
+        if (inFlightRef.current.get(entryId) === generation) inFlightRef.current.delete(entryId);
       }
     }
 
@@ -136,14 +137,17 @@ export function useEntryAspectRatios(
       void loadAspectRatio(entryId, priorityForIndex(index));
     }
 
+  }, [entriesById, priorityEntryIds]);
+
+  useEffect(() => {
     return () => {
-      cancelled = true;
+      generationRef.current += 1;
       if (flushFrameRef.current !== null) {
         window.cancelAnimationFrame(flushFrameRef.current);
         flushFrameRef.current = null;
       }
     };
-  }, [entriesById, priorityEntryIds]);
+  }, []);
 
   const updateAspectRatio = useCallback((entryId: string, ratio: number) => {
     if (!Number.isFinite(ratio) || ratio <= 0) return;

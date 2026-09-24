@@ -17,6 +17,7 @@ export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
   const visited = new Set<number>();
   let orientation = 1;
   let dimensions: ImageDimensions | null = null;
+  let previewDimensions: ImageDimensions | null = null;
 
   while (pending.length > 0 && visited.size < 16) {
     const offset = pending.shift()!;
@@ -26,6 +27,8 @@ export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
     if (offset + 2 + count * 12 + 4 > bytes.length) continue;
     let width = 0;
     let height = 0;
+    let jpegOffset = 0;
+    let jpegLength = 0;
 
     for (let index = 0; index < count; index += 1) {
       const field = offset + 2 + index * 12;
@@ -40,6 +43,8 @@ export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
       if (tag === 256) width = value;
       if (tag === 257) height = value;
       if (tag === 274 && offset === firstIfd) orientation = value;
+      if (tag === 513) jpegOffset = value;
+      if (tag === 514) jpegLength = value;
       if (tag === 330 && type === 4 && valueCount > 0 && valueCount <= 16) {
         const list = valueCount === 1 ? field + 8 : read32(field + 8);
         if (list + valueCount * 4 <= bytes.length) {
@@ -51,9 +56,14 @@ export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
     if (width > 0 && height > 0 && width * height > (dimensions?.width ?? 0) * (dimensions?.height ?? 0)) {
       dimensions = { width, height };
     }
+    if (width > 0 && height > 0 && jpegOffset > 0 && jpegLength > 0 &&
+      width * height > (previewDimensions?.width ?? 0) * (previewDimensions?.height ?? 0)) {
+      previewDimensions = { width, height };
+    }
     pending.push(read32(offset + 2 + count * 12));
   }
 
+  dimensions = previewDimensions ?? dimensions;
   if (!dimensions) return null;
   return orientation >= 5 && orientation <= 8
     ? { width: dimensions.height, height: dimensions.width }

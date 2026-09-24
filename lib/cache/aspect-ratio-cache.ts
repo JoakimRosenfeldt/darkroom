@@ -2,7 +2,7 @@ import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { assetCacheKey } from "./asset-cache-key";
 
-const CACHE_PREFIX = "darkroom-aspect-v2:";
+const CACHE_PREFIX = "darkroom-aspect-v3:";
 const memoryCache = new Map<string, number>();
 
 function cacheKey(entry: Pick<LibraryEntry, "catalogId" | "assetId" | "assetRevision">): string {

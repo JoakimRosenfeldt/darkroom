@@ -1,7 +1,4 @@
 import {
-  getCachedThumbnail,
-} from "@/lib/cache/thumbnail-cache";
-import {
   getPersistedAspectRatio,
   rememberEntryAspectRatio,
 } from "@/lib/cache/aspect-ratio-cache";
@@ -30,24 +27,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Aspect ratio probe was cancelled.", "AbortError");
   }
-}
-
-async function ratioFromCachedThumbnail(entry: LibraryEntry): Promise<number | null> {
-  const blob = await getCachedThumbnail({
-    catalogId: entry.catalogId,
-    assetId: entry.assetId,
-    revision: entry.assetRevision,
-    thumbnail: true,
-  });
-
-  if (!blob) {
-    return null;
-  }
-
-  const bitmap = await createImageBitmap(blob);
-  const ratio = bitmap.width / bitmap.height;
-  bitmap.close();
-  return ratio;
 }
 
 async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
@@ -105,13 +84,6 @@ export async function resolveEntryAspectRatio(
   throwIfAborted(options.signal);
   if (persisted) {
     return persisted;
-  }
-
-  const cachedThumbnailRatio = await ratioFromCachedThumbnail(entry);
-  throwIfAborted(options.signal);
-  if (cachedThumbnailRatio) {
-    rememberEntryAspectRatio(entry, cachedThumbnailRatio);
-    return cachedThumbnailRatio;
   }
 
   const key = probeKey(entry);

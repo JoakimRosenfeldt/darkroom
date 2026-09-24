@@ -102,7 +102,16 @@ export function DynamicPhotoGrid({
     [selectEntry, visibleOrder],
   );
 
-  const { aspectRatios, updateAspectRatio } = useEntryAspectRatios(entries, visibleEntryIds);
+  const initialEntryCount = containerWidth > 0
+    ? Math.min(entries.length, Math.max(24, Math.min(80, Math.ceil(containerWidth / rowHeight) * 6)))
+    : 0;
+  const priorityEntryIds = useMemo(() => [
+    ...visibleEntryIds,
+    ...entries.slice(0, initialEntryCount * 2).map((entry) => entry.id),
+  ], [visibleEntryIds, entries, initialEntryCount]);
+  const { aspectRatios, updateAspectRatio } = useEntryAspectRatios(entries, priorityEntryIds);
+  const initialRatiosReady = initialEntryCount > 0 &&
+    entries.slice(0, initialEntryCount).every((entry) => aspectRatios.has(entry.id));
 
   const rows = useMemo(
     () =>
@@ -154,7 +163,7 @@ export function DynamicPhotoGrid({
     overscan: 4,
   });
 
-  const layoutReady = containerWidth > 0 && rows.length > 0;
+  const layoutReady = containerWidth > 0 && rows.length > 0 && initialRatiosReady;
 
   useEffect(() => {
     if (!onGridRowsChange) {
@@ -197,7 +206,7 @@ export function DynamicPhotoGrid({
 
   useEffect(() => {
     const element = parentRef.current;
-    if (!element || visibleRows.length === 0) {
+    if (!layoutReady || !element || visibleRows.length === 0) {
       return;
     }
 
@@ -230,11 +239,11 @@ export function DynamicPhotoGrid({
       element.removeEventListener("scroll", updateVisibleEntryIds);
       window.removeEventListener("resize", updateVisibleEntryIds);
     };
-  }, [visibleRows, selectedEntryId, virtualizer]);
+  }, [layoutReady, visibleRows, selectedEntryId, virtualizer]);
 
   useLayoutEffect(() => {
     const element = parentRef.current;
-    if (!element || visibleRows.length === 0) {
+    if (!layoutReady || !element || visibleRows.length === 0) {
       return;
     }
 

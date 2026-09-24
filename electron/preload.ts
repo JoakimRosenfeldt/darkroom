@@ -460,6 +460,10 @@ const darkroom = {
     return ipcRenderer.invoke("darkroom:catalog-read-asset", parseCatalogAssetRequest(request));
   },
 
+  catalogReadEmbeddedPreview(): Promise<ArrayBuffer> {
+    return Promise.resolve(new ArrayBuffer(0));
+  },
+
   async developAssetPut(
     request: DevelopAssetPutRequest,
   ): Promise<DevelopAssetPutResult> {
