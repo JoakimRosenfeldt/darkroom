@@ -102,7 +102,7 @@ export function DynamicPhotoGrid({
     [selectEntry, visibleOrder],
   );
 
-  const { aspectRatios } = useEntryAspectRatios(entries, visibleEntryIds);
+  const { aspectRatios, updateAspectRatio } = useEntryAspectRatios(entries, visibleEntryIds);
 
   const rows = useMemo(
     () =>
@@ -323,6 +323,7 @@ export function DynamicPhotoGrid({
                       width={tile.width}
                       height={tile.height}
                       fit="cover"
+                      onAspectRatio={updateAspectRatio}
                       selected={selectedEntrySet.has(tile.entry.id)}
                       metadata={getEntryMetadata(entryMetadata, tile.entry.id)}
                       onSelect={handleSelect}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { runWithAspectLimit } from "@/lib/cache/concurrency";
 import { getPersistedAspectRatio } from "@/lib/cache/aspect-ratio-cache";
@@ -41,6 +41,7 @@ export function useEntryAspectRatios(
   const [aspectRatios, setAspectRatios] = useState<Map<string, number>>(() =>
     seedAspectRatios(entries),
   );
+  const previousEntriesByIdRef = useRef(entriesById);
   const inFlightRef = useRef(new Set<string>());
   const loadedRef = useRef(new Set<string>());
   const pendingUpdatesRef = useRef(new Map<string, number>());
@@ -49,11 +50,18 @@ export function useEntryAspectRatios(
   useEffect(() => {
     const catalogEntries = [...entriesById.values()];
     const seeded = seedAspectRatios(catalogEntries);
+    const previousEntriesById = previousEntriesByIdRef.current;
+    previousEntriesByIdRef.current = entriesById;
     loadedRef.current = new Set(seeded.keys());
     setAspectRatios((current) => {
       const next = new Map(seeded);
       for (const [id, ratio] of current) {
-        if (entriesById.has(id) && !next.has(id)) {
+        const entry = entriesById.get(id);
+        const previous = previousEntriesById.get(id);
+        if (entry && previous &&
+          entry.catalogId === previous.catalogId &&
+          entry.assetId === previous.assetId &&
+          entry.assetRevision === previous.assetRevision) {
           next.set(id, ratio);
           loadedRef.current.add(id);
         }
@@ -132,12 +140,12 @@ export function useEntryAspectRatios(
           () => getEntryAspectRatio(entry),
           { priority },
         );
-        if (!cancelled) {
+        if (!cancelled && !loadedRef.current.has(entryId)) {
           loadedRef.current.add(entryId);
           scheduleUpdate(entryId, ratio);
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !loadedRef.current.has(entryId)) {
           loadedRef.current.add(entryId);
           scheduleUpdate(entryId, 1);
         }
@@ -167,5 +175,17 @@ export function useEntryAspectRatios(
     };
   }, [entriesById, priorityEntryIds]);
 
-  return { aspectRatios };
+  const updateAspectRatio = useCallback((entryId: string, ratio: number) => {
+    if (!Number.isFinite(ratio) || ratio <= 0) return;
+    loadedRef.current.add(entryId);
+    setAspectRatios((current) => {
+      const previous = current.get(entryId);
+      if (previous !== undefined && Math.abs(previous - ratio) < 0.01) return current;
+      const next = new Map(current);
+      next.set(entryId, ratio);
+      return next;
+    });
+  }, []);
+
+  return { aspectRatios, updateAspectRatio };
 }

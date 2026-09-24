@@ -24,6 +24,7 @@ interface PhotoTileProps {
   compact?: boolean;
   caption?: boolean;
   fit?: "contain" | "cover";
+  onAspectRatio?: (entryId: string, ratio: number) => void;
   metadata?: EntryMetadata;
   onSelect?: (entryId: string, modifiers: SelectEntryModifiers) => void;
   onContextMenu?: (entryId: string, event: React.MouseEvent) => void;
@@ -40,6 +41,7 @@ export const PhotoTile = memo(function PhotoTile({
   compact = false,
   caption = false,
   fit = "contain",
+  onAspectRatio,
   metadata,
   onSelect,
   onContextMenu,
@@ -235,6 +237,12 @@ export const PhotoTile = memo(function PhotoTile({
           alt={entry.name}
           loading="lazy"
           decoding="async"
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+              onAspectRatio?.(entry.id, image.naturalWidth / image.naturalHeight);
+            }
+          }}
           className={`absolute inset-0 h-full w-full ${imageFit}`}
         />
       ) : (

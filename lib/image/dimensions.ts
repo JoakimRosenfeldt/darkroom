@@ -7,6 +7,35 @@ function readUint16BE(bytes: Uint8Array, offset: number): number {
   return (bytes[offset] << 8) | bytes[offset + 1];
 }
 
+function jpegOrientation(bytes: Uint8Array, start: number, end: number): number {
+  if (end - start < 14 ||
+    bytes[start] !== 0x45 || bytes[start + 1] !== 0x78 ||
+    bytes[start + 2] !== 0x69 || bytes[start + 3] !== 0x66 ||
+    bytes[start + 4] !== 0 || bytes[start + 5] !== 0) return 1;
+
+  const tiff = start + 6;
+  const little = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
+  const big = bytes[tiff] === 0x4d && bytes[tiff + 1] === 0x4d;
+  if (!little && !big) return 1;
+  const read16 = (offset: number) => little
+    ? bytes[offset] | (bytes[offset + 1] << 8)
+    : readUint16BE(bytes, offset);
+  const read32 = (offset: number) => little
+    ? (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0
+    : readUint32BE(bytes, offset) >>> 0;
+  if (read16(tiff + 2) !== 42) return 1;
+  const ifd = tiff + read32(tiff + 4);
+  if (ifd + 2 > end) return 1;
+  const count = read16(ifd);
+  for (let index = 0; index < count && ifd + 2 + (index + 1) * 12 <= end; index += 1) {
+    const field = ifd + 2 + index * 12;
+    if (read16(field) === 0x0112 && read16(field + 2) === 3 && read32(field + 4) === 1) {
+      return read16(field + 8);
+    }
+  }
+  return 1;
+}
+
 function readUint32BE(bytes: Uint8Array, offset: number): number {
   return (
     (bytes[offset] << 24) |
@@ -42,6 +71,7 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
   }
 
   let offset = 2;
+  let orientation = 1;
   while (offset + 9 < bytes.length) {
     if (bytes[offset] !== 0xff) {
       offset += 1;
@@ -68,6 +98,10 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       break;
     }
 
+    if (marker === 0xe1 && orientation === 1) {
+      orientation = jpegOrientation(bytes, offset + 2, offset + segmentLength);
+    }
+
     const isStartOfFrame =
       marker === 0xc0 ||
       marker === 0xc1 ||
@@ -87,7 +121,9 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       const height = readUint16BE(bytes, offset + 3);
       const width = readUint16BE(bytes, offset + 5);
       if (width > 0 && height > 0) {
-        return { width, height };
+        return orientation >= 5 && orientation <= 8
+          ? { width: height, height: width }
+          : { width, height };
       }
     }
 
