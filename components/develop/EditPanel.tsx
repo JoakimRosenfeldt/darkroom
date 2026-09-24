@@ -52,7 +52,6 @@ import {
 import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
 import { CameraProfileControls } from "@/components/develop/CameraProfileControls";
 import { DevelopPresetPanel } from "@/components/develop/DevelopPresetPanel";
-import { DevelopClipboardControls } from "@/components/develop/DevelopClipboardControls";
 
 import { useExperimentalTools } from "@/hooks/useExperimentalTools";
 import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
@@ -232,8 +231,6 @@ export function EditPanel({
       {experimental && decoded && document ? <div className={presetTransient ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient}>
         <PrototypeOperations decoded={decoded} document={document} entry={entry} />
       </div> : null}
-      {decoded && document ? <DevelopClipboardControls document={document} image={decoded} entry={entry} disabled={presetTransient} /> : null}
-
       {activePanel !== "crop" && activePanel !== "masking" && activePanel !== "cleanup" ? (
         <div
           className="grid grid-cols-4 gap-0.5 border-b border-lr-border-subtle px-3 py-2.5"

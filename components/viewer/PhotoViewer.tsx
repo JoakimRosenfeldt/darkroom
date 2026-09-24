@@ -29,7 +29,8 @@ import {
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
-import { useDevelopStore } from "@/stores/develop-store";
+import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
+import { DevelopClipboardControls } from "@/components/develop/DevelopClipboardControls";
 import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
@@ -216,6 +217,17 @@ export function PhotoViewer({
     defaultFacts,
   });
   const defaultsPending = defaultsResolution.kind === "pending";
+  const clipboardSession = useDevelopStore(useShallow((state) => {
+    const session = state.sessions[entry.id];
+    const document = session?.previewDocument ?? session?.persistedDocument;
+    return {
+      document: session?.processKind === "v3" && document?.version === 3 ? document : null,
+      disabled: state.activeCatalogId !== entry.catalogId ||
+        state.activeEntryId !== entry.id ||
+        session?.ui.projection.kind === "divergent" ||
+        isPresetTransientEdit(session?.transientEdit),
+    };
+  }));
   const maskHeader = useDevelopStore((state) => {
     const session = state.sessions[entry.id];
     const document = session?.previewDocument ?? session?.persistedDocument;
@@ -711,6 +723,15 @@ export function PhotoViewer({
           <EntryMetadataBar
             entryId={entry.id}
             metadata={metadata}
+            actions={decoded && clipboardSession.document ? (
+              <DevelopClipboardControls
+                key={entry.id}
+                document={clipboardSession.document}
+                image={decoded}
+                entry={entry}
+                disabled={defaultsPending || clipboardSession.disabled}
+              />
+            ) : null}
             onPick={() => applyMetadataToEntries(selectionTargets, { pick: "pick" })}
             onReject={() => applyMetadataToEntries(selectionTargets, { pick: "reject" })}
             onClearPick={() => applyMetadataToEntries(selectionTargets, { pick: "none" })}

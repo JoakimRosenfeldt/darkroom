@@ -8,6 +8,7 @@ import type { EntryMetadata } from "@/lib/catalog/types";
 import { COLOR_LABELS } from "@/lib/catalog/types";
 import { StarRatingControl } from "@/components/library/StarRatingControl";
 import { useLibraryStore } from "@/stores/library-store";
+import type { ReactNode } from "react";
 
 interface EntryMetadataBadgesProps {
   metadata: EntryMetadata;
@@ -65,6 +66,7 @@ export function EntryMetadataBadges({
 interface EntryMetadataBarProps {
   entryId: string;
   metadata: EntryMetadata;
+  actions?: ReactNode;
   onPick: () => void;
   onReject: () => void;
   onClearPick: () => void;
@@ -74,6 +76,7 @@ interface EntryMetadataBarProps {
 
 export function EntryMetadataBar({
   metadata,
+  actions,
   onPick,
   onReject,
   onClearPick,
@@ -132,6 +135,7 @@ export function EntryMetadataBar({
           />
         ))}
       </div>
+      {actions ? <div className="ml-auto">{actions}</div> : null}
     </div>
   );
 }
