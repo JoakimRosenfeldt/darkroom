@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
 import { currentV3AnalysisBinding } from "@/components/develop/DevelopCanvas";
 import { getDevelopSession } from "@/lib/develop/session";
@@ -23,6 +24,13 @@ export interface V3AutoToneControlProps {
 
 export interface V3HistogramPanelProps {
   readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly sourceIdentity: V3HistogramSourceIdentity;
+}
+
+export interface V3HistogramSourceIdentity {
+  readonly catalogId: string;
+  readonly entryId: string;
+  readonly assetRevision: number;
 }
 
 function toneInputTap(analysis: readonly CpuAnalysisTapResult[]): ToneInputTap | null {
@@ -219,7 +227,7 @@ function HistogramGraphic({ tap }: { readonly tap: DisplayOutputTap }) {
           />
         ))}
       </svg>
-      <div className="mt-1 flex gap-3 text-[9px] font-medium" aria-hidden="true">
+      <div className="mt-1 flex gap-3 text-[9px] font-medium leading-3" aria-hidden="true">
         {channels.map((channel) => (
           <span key={channel.id} style={{ color: channel.color }}>{channel.id}</span>
         ))}
@@ -295,21 +303,49 @@ function HeadroomSummary({ tap }: { readonly tap: SceneHeadroomTap | null }) {
   );
 }
 
-export function V3HistogramPanel({ analysis }: V3HistogramPanelProps) {
-  const display = displayOutputTap(analysis);
-  const headroom = sceneHeadroomTap(analysis);
+export function V3HistogramPanel({ analysis, sourceIdentity }: V3HistogramPanelProps) {
+  const binding = currentV3AnalysisBinding(analysis);
+  const analysisMatchesSource = binding?.catalogId === sourceIdentity.catalogId &&
+    binding.entryId === sourceIdentity.entryId &&
+    binding.assetRevision === sourceIdentity.assetRevision;
+  const incomingDisplay = analysisMatchesSource ? displayOutputTap(analysis) : null;
+  const readyDisplay = incomingDisplay?.state.kind === "ready" ? incomingDisplay : null;
+  const sourceKey = JSON.stringify([
+    sourceIdentity.catalogId,
+    sourceIdentity.entryId,
+    sourceIdentity.assetRevision,
+  ]);
+  const [lastReadyDisplay, setLastReadyDisplay] = useState<{
+    readonly sourceKey: string;
+    readonly tap: DisplayOutputTap;
+  } | null>(null);
+  if (readyDisplay && (
+    lastReadyDisplay?.sourceKey !== sourceKey ||
+    lastReadyDisplay.tap !== readyDisplay
+  )) {
+    setLastReadyDisplay({ sourceKey, tap: readyDisplay });
+  }
+
+  const cachedDisplay = lastReadyDisplay?.sourceKey === sourceKey
+    ? lastReadyDisplay.tap
+    : null;
+  const display = readyDisplay ?? (
+    incomingDisplay === null || incomingDisplay.state.kind === "loading"
+      ? cachedDisplay ?? incomingDisplay
+      : incomingDisplay
+  );
+  const headroom = analysisMatchesSource ? sceneHeadroomTap(analysis) : null;
   return (
     <div className="space-y-2.5" aria-live="polite">
-      {display ? (
-        <>
+      <div className="min-h-[88px]">
+        {display ? (
           <HistogramGraphic tap={display} />
-
-        </>
-      ) : (
-        <StatusCard title="Histogram unavailable">
-          Display-output analysis has not been requested.
-        </StatusCard>
-      )}
+        ) : (
+          <StatusCard title="Histogram unavailable">
+            Display-output analysis has not been requested.
+          </StatusCard>
+        )}
+      </div>
       <details className="text-xs text-lr-text-muted"><summary className="cursor-pointer">Clipping details</summary><div className="mt-2 space-y-2">{display ? <ClippingSummary tap={display} /> : null}<HeadroomSummary tap={headroom} /></div></details>
     </div>
   );

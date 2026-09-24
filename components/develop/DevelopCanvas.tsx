@@ -745,7 +745,7 @@ export function DevelopCanvas({
           const quick = await quickWorker.render(renderDocument, {
             ...options,
             previewMode: "interactive",
-            includeAnalysis: false,
+            includeAnalysis: previewMode === "interactive" && !cropActive,
           });
           if (!applyResult(quick.result, "interactive", quick.backend)) return;
           backend = quick.backend;

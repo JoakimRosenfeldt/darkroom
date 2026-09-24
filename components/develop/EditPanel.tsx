@@ -33,6 +33,7 @@ import type {
 import {
   V3AutoToneControl,
   V3HistogramPanel,
+  type V3HistogramSourceIdentity,
 } from "@/components/develop/V3AnalysisControls";
 import { MaskExpressionEditor } from "@/components/develop/MaskExpressionEditor";
 import { PrototypeOperations } from "@/components/develop/PrototypeOperations";
@@ -175,6 +176,11 @@ export function EditPanel({
     ? session.document
     : null;
   const preparing = editingDisabled || !decoded || !document;
+  const histogramSource: V3HistogramSourceIdentity = {
+    catalogId: entry.catalogId,
+    entryId: entry.id,
+    assetRevision: entry.assetRevision,
+  };
 
   const status = session ? saveLabel({
     sidecarStatus: session.sidecarStatus,
@@ -264,7 +270,7 @@ export function EditPanel({
         {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
         <div className={presetTransient && activeTab !== "presets" ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient && activeTab !== "presets"}>
         {activeTab === "light" ? <>
-          <PanelSection title="Histogram"><V3HistogramPanel analysis={analysis} /></PanelSection>
+          <PanelSection title="Histogram"><V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} /></PanelSection>
           <WhiteBalanceControls document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} />
           <LightTab document={document} analysis={analysis} />
         </> : null}
@@ -279,7 +285,7 @@ export function EditPanel({
           <summary className="cursor-pointer text-lr-text-muted">Advanced</summary>
           <ToggleRow label="Experimental tools" checked={experimental} onChange={setExperimental} />
           {diagnostics.length > 0 ? <details className="mt-2"><summary className="cursor-pointer">Image details</summary><ul className="mt-2 space-y-1 text-lr-text-muted">{diagnostics.map((diagnostic, index) => <li key={index}>{diagnosticMessage(diagnostic)}</li>)}</ul></details> : null}
-          {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} /> : null}
+          {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} histogramSource={histogramSource} /> : null}
         </details>
         </div>
         </> : <p role="status" className="px-4 py-3 text-xs text-lr-text-faint">Preparing editor…</p>}
@@ -1028,10 +1034,12 @@ function OutputTab({
   document,
   analysis,
   diagnostics,
+  histogramSource,
 }: {
   readonly document: DevelopDocumentV3;
   readonly analysis: readonly CpuAnalysisTapResult[];
   readonly diagnostics: readonly V3CanvasDiagnostic[];
+  readonly histogramSource: V3HistogramSourceIdentity;
 }) {
   const depth = currentGeneratedJobCapability("depth");
   const lensState = document.lensBlur.kind === "enabled"
@@ -1043,7 +1051,7 @@ function OutputTab({
   return (
     <>
       <PanelSection title="Histogram & headroom">
-        <V3HistogramPanel analysis={analysis} />
+        <V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} />
         {diagnostics.length > 0 ? (
           <StatusCard title="Preview notes" tone="warning">
             <ul className="space-y-1">
