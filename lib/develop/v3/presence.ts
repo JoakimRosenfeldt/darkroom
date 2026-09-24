@@ -35,8 +35,8 @@ export const PRESENCE_STAGE_DECLARATIONS = [
     id: "texture",
     semanticStageId: "presence",
     orderWithinStage: 1,
-    sourceRelativeScale: { kind: "source-pixels", radius: 2 },
-    haloSourcePixels: 2,
+    sourceRelativeScale: { kind: "source-pixels", radius: 6 },
+    haloSourcePixels: 6,
     borderPolicy: "clamp-to-edge",
     inputPrecision: "linear-float32",
     dependencies: ["local-adjustments"],
@@ -174,12 +174,12 @@ export function applyTexturePixel(
     image,
     x,
     y,
-    sourceRadiusInInputPixels(2, sourcePixelsPerInputPixel),
+    sourceRadiusInInputPixels(6, sourcePixelsPerInputPixel),
   );
   return [
-    clamp(center[0] + (center[0] - blur[0]) * strength * 0.6, 0, 16),
-    clamp(center[1] + (center[1] - blur[1]) * strength * 0.6, 0, 16),
-    clamp(center[2] + (center[2] - blur[2]) * strength * 0.6, 0, 16),
+    clamp(center[0] + (center[0] - blur[0]) * strength * 4.8, 0, 16),
+    clamp(center[1] + (center[1] - blur[1]) * strength * 4.8, 0, 16),
+    clamp(center[2] + (center[2] - blur[2]) * strength * 4.8, 0, 16),
   ];
 }
 
@@ -201,7 +201,7 @@ export function applyClarityPixel(
   );
   const centerLuminance = center[0] * 0.2126 + center[1] * 0.7152 + center[2] * 0.0722;
   const blurLuminance = blur[0] * 0.2126 + blur[1] * 0.7152 + blur[2] * 0.0722;
-  const adjustment = (centerLuminance - blurLuminance) * strength * 0.8;
+  const adjustment = (centerLuminance - blurLuminance) * strength * (strength < 0 ? 1.6 : 3.2);
   return [
     clamp(center[0] + adjustment, 0, 16),
     clamp(center[1] + adjustment, 0, 16),
@@ -234,7 +234,7 @@ export function applyDehazePixel(
       clamp((center[2] - (1 - transmission)) / transmission, 0, 16),
     ];
   }
-  const haze = -strength * 0.35;
+  const haze = -strength * 0.4;
   return [
     clamp(center[0] * (1 - haze) + haze, 0, 16),
     clamp(center[1] * (1 - haze) + haze, 0, 16),

@@ -650,9 +650,9 @@ void main() {
   vec3 average = nineTap(uRadius);
   vec3 result = center;
   if (uMode == 0) {
-    result = center + (center - average) * uAmount * 0.6;
+    result = center + (center - average) * uAmount * 4.8;
   } else if (uMode == 1) {
-    float adjustment = (luminance(center) - luminance(average)) * uAmount * 0.8;
+    float adjustment = (luminance(center) - luminance(average)) * uAmount * (uAmount < 0.0 ? 1.6 : 3.2);
     result = center + adjustment;
   } else if (uMode == 2) {
     if (uAmount > 0.0) {
@@ -660,7 +660,7 @@ void main() {
       float transmission = clamp(1.0 - uAmount * darkChannel * 0.8, 0.2, 1.0);
       result = (center - (1.0 - transmission)) / transmission;
     } else {
-      float haze = -uAmount * 0.35;
+      float haze = -uAmount * 0.4;
       result = center * (1.0 - haze) + haze;
     }
   } else {
@@ -1818,7 +1818,7 @@ function renderSpatial(
     run({
       mode: 0,
       amount: clamp(presence.texture, -100, 100) / 100,
-      radius: clamp(2 / clamp(sourceScale, 1 / 64, 64), 0.25, 512),
+      radius: clamp(6 / clamp(sourceScale, 1 / 64, 64), 0.25, 512),
     });
   }
   if (presence.clarity !== 0) {
