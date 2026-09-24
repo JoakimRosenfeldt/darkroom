@@ -650,17 +650,17 @@ void main() {
   vec3 average = nineTap(uRadius);
   vec3 result = center;
   if (uMode == 0) {
-    result = center + (center - average) * uAmount * 2.4;
+    result = center + (center - average) * uAmount * 4.8;
   } else if (uMode == 1) {
-    float adjustment = (luminance(center) - luminance(average)) * uAmount * 3.2;
+    float adjustment = (luminance(center) - luminance(average)) * uAmount * (uAmount < 0.0 ? 1.6 : 3.2);
     result = center + adjustment;
   } else if (uMode == 2) {
     if (uAmount > 0.0) {
       float darkChannel = clamp(min(min(average.r, average.g), average.b), 0.0, 1.0);
-      float transmission = clamp(1.0 - uAmount * darkChannel * 2.4, 0.1, 1.0);
+      float transmission = clamp(1.0 - uAmount * darkChannel * 1.6, 0.2, 1.0);
       result = (center - (1.0 - transmission)) / transmission;
     } else {
-      float haze = min(-uAmount * 1.2, 0.95);
+      float haze = -uAmount * 0.8;
       result = center * (1.0 - haze) + haze;
     }
   } else {
