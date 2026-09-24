@@ -418,6 +418,28 @@ async fn darkroom_read(
 }
 
 #[tauri::command]
+async fn darkroom_preview(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<Backend>>,
+    request: Value,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let location = backend
+            .catalog
+            .lock()
+            .map_err(|_| "Catalog service is unavailable.")?
+            .resolve_asset(&request)?;
+        native::read_embedded_preview(&location).map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn darkroom_export(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<Backend>>,
@@ -512,6 +534,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             darkroom_invoke,
             darkroom_read,
+            darkroom_preview,
             darkroom_export,
             menu::darkroom_menu_state
         ])

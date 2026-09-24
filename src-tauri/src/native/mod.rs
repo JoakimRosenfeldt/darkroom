@@ -4,6 +4,7 @@ use serde_json::Value;
 
 mod ai_models;
 mod assets;
+mod embedded_preview;
 mod export;
 mod libraw_profile;
 mod metadata;
@@ -18,6 +19,7 @@ pub(crate) use windows_file::{windows_handle_identity, windows_path_identity};
 pub use ai_models::verified_model_path;
 pub use assets::read_asset_bytes;
 pub(crate) use assets::resolve_asset as resolve_asset_path;
+pub use embedded_preview::read_embedded_preview;
 pub use export::encode_export_raw;
 pub use libraw_profile::verify_libraw_profile;
 pub use metadata::analyze_file;

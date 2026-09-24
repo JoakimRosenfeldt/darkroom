@@ -1,21 +1,19 @@
 import {
-  getCachedThumbnail,
-} from "@/lib/cache/thumbnail-cache";
-import {
+  getCachedEntryAspectRatio,
   getPersistedAspectRatio,
   rememberEntryAspectRatio,
 } from "@/lib/cache/aspect-ratio-cache";
-import { parseImageDimensions } from "@/lib/image/dimensions";
+import { parseImageDimensions, parseTiffDimensions } from "@/lib/image/dimensions";
 import {
   getFileFromEntry,
   getFileHeadFromEntry,
 } from "@/lib/fs/directory";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { getFormatFamilyForEntry } from "@/lib/formats/registry";
-import { readRawDimensions } from "@/lib/raw/libraw-client";
 import { assetCacheKey } from "@/lib/cache/asset-cache-key";
 
 const STANDARD_PROBE_BYTES = 512 * 1024;
+const RAW_PROBE_BYTES = 256 * 1024;
 const inFlightProbes = new Map<string, Promise<number>>();
 
 function probeKey(entry: LibraryEntry): string {
@@ -30,24 +28,6 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("Aspect ratio probe was cancelled.", "AbortError");
   }
-}
-
-async function ratioFromCachedThumbnail(entry: LibraryEntry): Promise<number | null> {
-  const blob = await getCachedThumbnail({
-    catalogId: entry.catalogId,
-    assetId: entry.assetId,
-    revision: entry.assetRevision,
-    thumbnail: true,
-  });
-
-  if (!blob) {
-    return null;
-  }
-
-  const bitmap = await createImageBitmap(blob);
-  const ratio = bitmap.width / bitmap.height;
-  bitmap.close();
-  return ratio;
 }
 
 async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
@@ -83,8 +63,8 @@ async function probeEntryAspectRatio(entry: LibraryEntry): Promise<number> {
     return 1;
   }
 
-  const file = await getFileFromEntry(entry);
-  const dimensions = await readRawDimensions(new Uint8Array(await file.arrayBuffer()));
+  const head = await getFileHeadFromEntry(entry, RAW_PROBE_BYTES);
+  const dimensions = parseTiffDimensions(head);
   if (dimensions) {
     return dimensions.width / dimensions.height;
   }
@@ -101,13 +81,6 @@ export async function resolveEntryAspectRatio(
     return 1;
   }
 
-  const cachedThumbnailRatio = await ratioFromCachedThumbnail(entry);
-  throwIfAborted(options.signal);
-  if (cachedThumbnailRatio) {
-    rememberEntryAspectRatio(entry, cachedThumbnailRatio);
-    return cachedThumbnailRatio;
-  }
-
   const persisted = await getPersistedAspectRatio(entry);
   throwIfAborted(options.signal);
   if (persisted) {
@@ -122,6 +95,10 @@ export async function resolveEntryAspectRatio(
 
   const probe = probeEntryAspectRatio(entry)
     .then((ratio) => {
+      const cached = getCachedEntryAspectRatio(entry);
+      if (cached) {
+        return cached;
+      }
       rememberEntryAspectRatio(entry, ratio);
       return ratio;
     })

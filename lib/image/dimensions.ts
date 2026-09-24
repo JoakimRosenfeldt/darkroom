@@ -3,8 +3,104 @@ export interface ImageDimensions {
   height: number;
 }
 
+export function parseTiffDimensions(bytes: Uint8Array): ImageDimensions | null {
+  if (bytes.length < 8) return null;
+  const little = bytes[0] === 0x49 && bytes[1] === 0x49;
+  if (!little && !(bytes[0] === 0x4d && bytes[1] === 0x4d)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const read16 = (offset: number) => view.getUint16(offset, little);
+  const read32 = (offset: number) => view.getUint32(offset, little);
+  if (read16(2) !== 42) return null;
+
+  const firstIfd = read32(4);
+  const pending = [firstIfd];
+  const visited = new Set<number>();
+  let orientation = 1;
+  let dimensions: ImageDimensions | null = null;
+  let previewDimensions: ImageDimensions | null = null;
+
+  while (pending.length > 0 && visited.size < 16) {
+    const offset = pending.shift()!;
+    if (visited.has(offset) || offset + 2 > bytes.length) continue;
+    visited.add(offset);
+    const count = read16(offset);
+    if (offset + 2 + count * 12 + 4 > bytes.length) continue;
+    let width = 0;
+    let height = 0;
+    let jpegOffset = 0;
+    let jpegLength = 0;
+
+    for (let index = 0; index < count; index += 1) {
+      const field = offset + 2 + index * 12;
+      const tag = read16(field);
+      const type = read16(field + 2);
+      const valueCount = read32(field + 4);
+      const value = type === 3 && valueCount === 1
+        ? read16(field + 8)
+        : type === 4 && valueCount === 1
+          ? read32(field + 8)
+          : 0;
+      if (tag === 256) width = value;
+      if (tag === 257) height = value;
+      if (tag === 274 && offset === firstIfd) orientation = value;
+      if (tag === 513) jpegOffset = value;
+      if (tag === 514) jpegLength = value;
+      if (tag === 330 && type === 4 && valueCount > 0 && valueCount <= 16) {
+        const list = valueCount === 1 ? field + 8 : read32(field + 8);
+        if (list + valueCount * 4 <= bytes.length) {
+          for (let item = 0; item < valueCount; item += 1) pending.push(read32(list + item * 4));
+        }
+      }
+    }
+
+    if (width > 0 && height > 0 && width * height > (dimensions?.width ?? 0) * (dimensions?.height ?? 0)) {
+      dimensions = { width, height };
+    }
+    if (width > 0 && height > 0 && jpegOffset > 0 && jpegLength > 0 &&
+      width * height > (previewDimensions?.width ?? 0) * (previewDimensions?.height ?? 0)) {
+      previewDimensions = { width, height };
+    }
+    pending.push(read32(offset + 2 + count * 12));
+  }
+
+  dimensions = previewDimensions ?? dimensions;
+  if (!dimensions) return null;
+  return orientation >= 5 && orientation <= 8
+    ? { width: dimensions.height, height: dimensions.width }
+    : dimensions;
+}
+
 function readUint16BE(bytes: Uint8Array, offset: number): number {
   return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function jpegOrientation(bytes: Uint8Array, start: number, end: number): number {
+  if (end - start < 14 ||
+    bytes[start] !== 0x45 || bytes[start + 1] !== 0x78 ||
+    bytes[start + 2] !== 0x69 || bytes[start + 3] !== 0x66 ||
+    bytes[start + 4] !== 0 || bytes[start + 5] !== 0) return 1;
+
+  const tiff = start + 6;
+  const little = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
+  const big = bytes[tiff] === 0x4d && bytes[tiff + 1] === 0x4d;
+  if (!little && !big) return 1;
+  const read16 = (offset: number) => little
+    ? bytes[offset] | (bytes[offset + 1] << 8)
+    : readUint16BE(bytes, offset);
+  const read32 = (offset: number) => little
+    ? (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0
+    : readUint32BE(bytes, offset) >>> 0;
+  if (read16(tiff + 2) !== 42) return 1;
+  const ifd = tiff + read32(tiff + 4);
+  if (ifd + 2 > end) return 1;
+  const count = read16(ifd);
+  for (let index = 0; index < count && ifd + 2 + (index + 1) * 12 <= end; index += 1) {
+    const field = ifd + 2 + index * 12;
+    if (read16(field) === 0x0112 && read16(field + 2) === 3 && read32(field + 4) === 1) {
+      return read16(field + 8);
+    }
+  }
+  return 1;
 }
 
 function readUint32BE(bytes: Uint8Array, offset: number): number {
@@ -42,7 +138,10 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
   }
 
   let offset = 2;
-  while (offset + 9 < bytes.length) {
+  let orientation = 1;
+  let dimensions: ImageDimensions | null = null;
+  let headerComplete = false;
+  while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) {
       offset += 1;
       continue;
@@ -52,10 +151,16 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       offset += 1;
     }
 
+    if (offset >= bytes.length) break;
+
     const marker = bytes[offset];
     offset += 1;
 
-    if (marker === 0xd8 || marker === 0xd9) {
+    if (marker === 0xd9 || marker === 0xda) {
+      headerComplete = true;
+      break;
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       continue;
     }
 
@@ -66,6 +171,10 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
     const segmentLength = readUint16BE(bytes, offset);
     if (segmentLength < 2 || offset + segmentLength > bytes.length) {
       break;
+    }
+
+    if (marker === 0xe1 && orientation === 1) {
+      orientation = jpegOrientation(bytes, offset + 2, offset + segmentLength);
     }
 
     const isStartOfFrame =
@@ -83,18 +192,21 @@ function parseJpegDimensions(bytes: Uint8Array): ImageDimensions | null {
       marker === 0xce ||
       marker === 0xcf;
 
-    if (isStartOfFrame && offset + 7 <= bytes.length) {
+    if (isStartOfFrame && segmentLength >= 7 && !dimensions) {
       const height = readUint16BE(bytes, offset + 3);
       const width = readUint16BE(bytes, offset + 5);
       if (width > 0 && height > 0) {
-        return { width, height };
+        dimensions = { width, height };
       }
     }
 
     offset += segmentLength;
   }
 
-  return null;
+  if (!headerComplete || !dimensions) return null;
+  return orientation >= 5 && orientation <= 8
+    ? { width: dimensions.height, height: dimensions.width }
+    : dimensions;
 }
 
 function parseWebpDimensions(bytes: Uint8Array): ImageDimensions | null {

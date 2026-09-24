@@ -16,11 +16,9 @@ export async function getEntryAspectRatio(
     return cached;
   }
 
-  const ratio = await resolveEntryAspectRatio(entry, {
+  return resolveEntryAspectRatio(entry, {
     signal: options.signal,
   });
-  rememberEntryAspectRatio(entry, ratio);
-  return ratio;
 }
 
 export interface PackedTile {

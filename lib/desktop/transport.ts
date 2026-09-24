@@ -84,6 +84,9 @@ export const desktopTransport = {
       if (channel === "darkroom:catalog-read-asset" || channel === "darkroom:catalog-read-asset-head") {
         return await invoke<ArrayBuffer>("darkroom_read", { channel, args }) as T;
       }
+      if (channel === "darkroom:catalog-read-embedded-preview") {
+        return await invoke<ArrayBuffer>("darkroom_preview", { request: args[0] }) as T;
+      }
       if (channel === "darkroom:encode-and-save-export") {
         const payload = args[2];
         const wrapped = payload !== null && typeof payload === "object" && "pixels" in payload;

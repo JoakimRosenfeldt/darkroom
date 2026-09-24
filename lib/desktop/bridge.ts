@@ -462,6 +462,10 @@ const darkroom: DarkroomAPI = {
     return desktopTransport.invoke("darkroom:catalog-read-asset", parseCatalogAssetRequest(request));
   },
 
+  catalogReadEmbeddedPreview(request: CatalogAssetRequest): Promise<ArrayBuffer> {
+    return desktopTransport.invoke("darkroom:catalog-read-embedded-preview", parseCatalogAssetRequest(request));
+  },
+
   async developAssetPut(
     request: DevelopAssetPutRequest,
   ): Promise<DevelopAssetPutResult> {

@@ -261,9 +261,13 @@ fn bindings(out_dir: &Path) {
         .allowlist_function("libraw_init")
         .allowlist_function("libraw_close")
         .allowlist_function("libraw_open_buffer")
+        .allowlist_function("libraw_open_file")
+        .allowlist_function("libraw_open_wfile")
         .allowlist_function("libraw_unpack")
+        .allowlist_function("libraw_unpack_thumb")
         .allowlist_function("libraw_dcraw_process")
         .allowlist_function("libraw_dcraw_make_mem_image")
+        .allowlist_function("libraw_dcraw_make_mem_thumb")
         .allowlist_function("libraw_dcraw_clear_mem")
         .size_t_is_usize(true)
         // these are never part of the API

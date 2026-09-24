@@ -2,7 +2,7 @@ import { idbGet, idbSet } from "./idb";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { assetCacheKey } from "./asset-cache-key";
 
-const CACHE_PREFIX = "darkroom-aspect:";
+const CACHE_PREFIX = "darkroom-aspect-v3:";
 const memoryCache = new Map<string, number>();
 
 function cacheKey(entry: Pick<LibraryEntry, "catalogId" | "assetId" | "assetRevision">): string {
@@ -42,6 +42,10 @@ export async function getPersistedAspectRatio(
   }
 
   const stored = await idbGet<number>(persistKey(entry));
+  const remembered = memoryCache.get(cacheKey(entry));
+  if (remembered) {
+    return remembered;
+  }
   if (typeof stored === "number" && stored > 0) {
     memoryCache.set(cacheKey(entry), stored);
     return stored;

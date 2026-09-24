@@ -9,6 +9,7 @@ import { getFormatLabelForEntry } from "@/lib/formats/registry";
 import {
   loadThumbnailBlob,
 } from "@/lib/cache/thumbnail-cache";
+import { getCachedEntryAspectRatio, rememberEntryAspectRatio } from "@/lib/cache/aspect-ratio-cache";
 import { EntryMetadataBadges } from "./EntryMetadataBar";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import { useLibraryStore } from "@/stores/library-store";
@@ -24,6 +25,8 @@ interface PhotoTileProps {
   compact?: boolean;
   caption?: boolean;
   fit?: "contain" | "cover";
+  thumbnailEdge?: number;
+  onAspectRatio?: (entryId: string, ratio: number) => void;
   metadata?: EntryMetadata;
   onSelect?: (entryId: string, modifiers: SelectEntryModifiers) => void;
   onContextMenu?: (entryId: string, event: React.MouseEvent) => void;
@@ -40,6 +43,8 @@ export const PhotoTile = memo(function PhotoTile({
   compact = false,
   caption = false,
   fit = "contain",
+  thumbnailEdge,
+  onAspectRatio,
   metadata,
   onSelect,
   onContextMenu,
@@ -55,7 +60,7 @@ export const PhotoTile = memo(function PhotoTile({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
-  const decodeEdge = Math.max(width, height, MIN_THUMBNAIL_EDGE);
+  const decodeEdge = thumbnailEdge ?? Math.max(width, height, MIN_THUMBNAIL_EDGE);
   const developDocument = metadata?.develop ?? null;
   const jobs = useDevelopJobStore((state) => state.jobs);
   const prototypeJobs = useMemo(() => jobs.filter((job) =>
@@ -154,7 +159,7 @@ export const PhotoTile = memo(function PhotoTile({
       setStatus("loading");
       try {
         const blob = await loadThumbnailBlob(entry, decodeEdge, {
-          document: developDocument,
+          document: developDocument ?? undefined,
           priority: 20,
           signal: controller.signal,
         });
@@ -235,6 +240,16 @@ export const PhotoTile = memo(function PhotoTile({
           alt={entry.name}
           loading="lazy"
           decoding="async"
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+              const ratio = image.naturalWidth / image.naturalHeight;
+              if (!developDocument && Math.abs((getCachedEntryAspectRatio(entry) ?? 0) - ratio) >= 0.01) {
+                rememberEntryAspectRatio(entry, ratio);
+              }
+              onAspectRatio?.(entry.id, ratio);
+            }
+          }}
           className={`absolute inset-0 h-full w-full ${imageFit}`}
         />
       ) : (

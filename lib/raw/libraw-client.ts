@@ -341,10 +341,7 @@ export async function readRawDimensions(
       return null;
     }
 
-    return {
-      width: metadata.width,
-      height: metadata.height,
-    };
+    return orientedImageSize(metadata.width, metadata.height, Number(metadata.flip));
   });
 }
 
