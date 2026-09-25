@@ -267,7 +267,7 @@ export function EditPanel({
         {activeTab === "presets" ? <DevelopPresetPanel document={document} image={decoded} entry={entry} /> : null}
         <div className={presetTransient && activeTab !== "presets" ? "pointer-events-none opacity-45" : undefined} aria-disabled={presetTransient && activeTab !== "presets"}>
         {activeTab === "light" ? <>
-          <PanelSection title="Histogram"><V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} /></PanelSection>
+          <PanelSection title="Histogram"><V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} decodedMetadata={decoded.metadata} /></PanelSection>
           <WhiteBalanceControls document={document} image={decoded} entry={entry} canvasTool={canvasTool} onCanvasToolChange={onCanvasToolChange} />
           <LightTab document={document} analysis={analysis} />
         </> : null}
@@ -282,7 +282,7 @@ export function EditPanel({
           <summary className="cursor-pointer text-lr-text-muted">Advanced</summary>
           <ToggleRow label="Experimental tools" checked={experimental} onChange={setExperimental} />
           {diagnostics.length > 0 ? <details className="mt-2"><summary className="cursor-pointer">Image details</summary><ul className="mt-2 space-y-1 text-lr-text-muted">{diagnostics.map((diagnostic, index) => <li key={index}>{diagnosticMessage(diagnostic)}</li>)}</ul></details> : null}
-          {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} histogramSource={histogramSource} /> : null}
+          {experimental ? <OutputTab document={document} analysis={analysis} diagnostics={diagnostics} histogramSource={histogramSource} decodedMetadata={decoded.metadata} /> : null}
         </details>
         </div>
         </> : <p role="status" className="px-4 py-3 text-xs text-lr-text-faint">Preparing editor…</p>}
@@ -1032,11 +1032,13 @@ function OutputTab({
   analysis,
   diagnostics,
   histogramSource,
+  decodedMetadata,
 }: {
   readonly document: DevelopDocumentV3;
   readonly analysis: readonly CpuAnalysisTapResult[];
   readonly diagnostics: readonly V3CanvasDiagnostic[];
   readonly histogramSource: V3HistogramSourceIdentity;
+  readonly decodedMetadata: Record<string, unknown>;
 }) {
   const depth = currentGeneratedJobCapability("depth");
   const lensState = document.lensBlur.kind === "enabled"
@@ -1048,7 +1050,7 @@ function OutputTab({
   return (
     <>
       <PanelSection title="Histogram & headroom">
-        <V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} />
+        <V3HistogramPanel analysis={analysis} sourceIdentity={histogramSource} decodedMetadata={decodedMetadata} />
         {diagnostics.length > 0 ? (
           <StatusCard title="Preview notes" tone="warning">
             <ul className="space-y-1">

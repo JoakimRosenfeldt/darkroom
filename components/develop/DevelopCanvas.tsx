@@ -824,13 +824,17 @@ export function DevelopCanvas({
           detailWorkerRef.current = detailWorker;
           detailRenderingRef.current = true;
         }
-        const detailed = await detailWorker.render(renderDocument, {
+        const detailedPromise = detailWorker.render(renderDocument, {
           ...options,
           previewMode: "settled",
           includeAnalysis: backend !== "gpu" && !cropActive,
         }).finally(() => {
           if (detailWorkerRef.current === detailWorker) detailRenderingRef.current = false;
         });
+        if (backend === "gpu" && !cropActive && !hasCurrentAnalysis) {
+          void renderAnalysis("interactive").catch(handleRenderError);
+        }
+        const detailed = await detailedPromise;
         if (!applyResult(detailed.result, "settled", detailed.backend)) return;
         if (cropActive || disposed || requestId !== requestRef.current ||
             (detailed.result.kind === "rendered" && detailed.result.analysis.length > 0)) return;
