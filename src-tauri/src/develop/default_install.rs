@@ -181,6 +181,21 @@ fn pristine(entry: &Value, head: &Value) -> bool {
                 == serde_json::from_str::<Value>(include_str!("default-document.json")).unwrap())
 }
 
+fn loaded_head(
+    db: &rusqlite::Connection,
+    catalog_id: &str,
+    entry_id: &str,
+) -> Result<Value, String> {
+    let loaded = history::loaded(db, catalog_id, entry_id, None)?;
+    if loaded["kind"] == "recovery" {
+        return Err(loaded["corruption"]["message"]
+            .as_str()
+            .unwrap_or("Develop history needs recovery.")
+            .into());
+    }
+    Ok(loaded["value"].clone())
+}
+
 pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
     let (request_id, binding) = binding(&request, true)?;
     defaults::validate_facts(&request["facts"])?;
@@ -254,13 +269,12 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         catalog.require_session(&request)?;
         let db = catalog.active_database().ok_or("Catalog is unavailable.")?;
         let stored = stored(db, id, entry_id)?;
-        let loaded = history::loaded(db, id, entry_id, None)?;
-        let head = &loaded["value"];
+        let head = loaded_head(db, id, entry_id)?;
         if !stored.is_null() {
             check()?;
             return Ok(json!({"kind":"already-installed","head":head,"installed":stored}));
         }
-        if !pristine(&original, head) {
+        if !pristine(&original, &head) {
             check()?;
             return Ok(json!({"kind":"not-pristine","head":head,"installed":null}));
         }
@@ -285,13 +299,12 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         catalog.require_session(&request)?;
         let db = catalog.active_database().ok_or("Catalog is unavailable.")?;
         let installed = stored(db, id, entry_id)?;
-        let loaded = history::loaded(db, id, entry_id, None)?;
-        let head = &loaded["value"];
+        let head = loaded_head(db, id, entry_id)?;
         if !installed.is_null() {
             check()?;
             return Ok(json!({"kind":"already-installed","head":head,"installed":installed}));
         }
-        if !pristine(&original, head) {
+        if !pristine(&original, &head) {
             check()?;
             return Ok(json!({"kind":"not-pristine","head":head,"installed":null}));
         }
@@ -440,12 +453,11 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
     let result = (|| {
         check()?;
         let stored = stored(db, id, entry_id)?;
-        let loaded = history::loaded(db, id, entry_id, None)?;
-        let head = &loaded["value"];
+        let head = loaded_head(db, id, entry_id)?;
         if !stored.is_null() {
             return Ok(json!({"kind":"already-installed","head":head,"installed":stored}));
         }
-        if !pristine(&current, head) {
+        if !pristine(&current, &head) {
             return Ok(json!({"kind":"not-pristine","head":head,"installed":null}));
         }
         let Some((rule, preset, application)) = candidate else {
@@ -460,9 +472,7 @@ pub fn install(backend: Arc<Backend>, request: Value) -> Result<Value, String> {
         let installed = json!({"catalogId":id,"entryId":entry_id,"revisionId":revision,"ruleId":rule["ruleId"],"ruleRevision":rule["revision"],"presetId":preset["presetId"],"presetRevision":preset["revision"],"selectedFields":rule["preset"]["selectedFields"],"baselineDocument":application["document"],"appliedFields":application["report"]["included"],"skipped":application["report"]["skipped"],"unsupported":application["report"]["unsupported"],"createdAt":created});
         db.execute("INSERT INTO develop_default_installs(catalog_id,entry_id,revision_id,provenance_json,created_at) VALUES(?1,?2,?3,?4,?5)",params![id,entry_id,revision,history::js_stringify(&installed),created]).map_err(|e|e.to_string())?;
         check()?;
-        Ok(
-            json!({"kind":"installed","head":history::loaded(db,id,entry_id,None)?["value"],"installed":installed}),
-        )
+        Ok(json!({"kind":"installed","head":loaded_head(db,id,entry_id)?,"installed":installed}))
     })();
     match result {
         Ok(v) => {

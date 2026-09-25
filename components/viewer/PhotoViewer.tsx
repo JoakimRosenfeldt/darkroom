@@ -188,6 +188,10 @@ export function PhotoViewer({
   const developProcessKind = useDevelopStore(
     (state) => state.sessions[entry.id]?.processKind ?? (metadata.develop?.version === 2 ? "v2" : "v3"),
   );
+  const historyRecovery = useDevelopStore((state) => {
+    const projection = state.sessions[entry.id]?.ui.projection;
+    return projection?.kind === "recovery" ? projection.message : null;
+  });
   const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
     ? "libraw-camera-matrix"
     : "decoder-rendered";
@@ -712,7 +716,7 @@ export function PhotoViewer({
                 />
             ) : decoded && !error ? (
               <div className="flex h-full items-center justify-center text-xs uppercase tracking-wider text-lr-text-faint" role="status">
-                Preparing editor…
+                {historyRecovery ?? "Preparing editor…"}
               </div>
             ) : null}
           </div>

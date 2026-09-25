@@ -114,13 +114,14 @@ function saveLabel(input: {
   readonly persistedDocumentRevision: number;
   readonly metadataRevision: number;
   readonly persistedMetadataRevision: number;
+  readonly xmpPending: boolean;
 }): string {
   if (input.previewing) return "Previewing";
   if (input.sidecarStatus === "saving") return "Saving…";
   if (input.sidecarStatus === "error") return "Save failed";
   return input.documentRevision === input.persistedDocumentRevision &&
       input.metadataRevision === input.persistedMetadataRevision
-    ? "Saved"
+    ? input.xmpPending ? "Saved to catalog · XMP pending" : "Saved"
     : "Unsaved changes";
 }
 
@@ -155,6 +156,7 @@ export function EditPanel({
       processKind: current.processKind,
       sidecarStatus: current.ui.sidecarStatus,
       sidecarError: current.ui.sidecarError,
+      projection: current.ui.projection,
       documentRevision: current.documentRevision,
       persistedDocumentRevision: current.persistedDocumentRevision,
       metadataRevision: current.metadataRevision,
@@ -188,6 +190,7 @@ export function EditPanel({
     persistedDocumentRevision: session.persistedDocumentRevision,
     metadataRevision: session.metadataRevision,
     persistedMetadataRevision: session.persistedMetadataRevision,
+    xmpPending: session.projection.kind === "pending",
   }) : "Preparing editor…";
   const panelTitle = activePanel === "cleanup" ? "Cleanup" : "Develop";
   const presetTransient = session?.presetTransient ?? false;
@@ -220,6 +223,10 @@ export function EditPanel({
           {session?.sidecarError ? (
             <p className="mt-0.5 break-words text-xs leading-4 text-lr-danger">
               XMP: {session.sidecarError}
+            </p>
+          ) : session?.projection.kind === "pending" ? (
+            <p className="mt-0.5 break-words text-xs leading-4 text-lr-danger">
+              XMP pending: {session.projection.reason}
             </p>
           ) : null}
         </div>

@@ -79,7 +79,7 @@ export function useDevelopSettingsSync({
     facts: defaultFacts,
     repository: getDevelopRepository(entry),
   }));
-  const { documentRevision, persistedDocumentRevision, metadataRevision, persistedMetadataRevision, sidecarStatus } = useDevelopStore(useShallow((state) => {
+  const { documentRevision, persistedDocumentRevision, metadataRevision, persistedMetadataRevision, sidecarStatus, projectionKind } = useDevelopStore(useShallow((state) => {
     const session = state.sessions[entry.id];
     return {
       documentRevision: session?.documentRevision,
@@ -87,6 +87,7 @@ export function useDevelopSettingsSync({
       metadataRevision: session?.metadataRevision,
       persistedMetadataRevision: session?.persistedMetadataRevision,
       sidecarStatus: session?.ui.sidecarStatus,
+      projectionKind: session?.ui.projection.kind,
     };
   }));
   const activateEntry = useDevelopStore((state) => state.activateEntry);
@@ -329,6 +330,7 @@ export function useDevelopSettingsSync({
       metadataRevision === undefined ||
       sidecarStatus === "idle" ||
       sidecarStatus === "loading" ||
+      projectionKind === "recovery" ||
       retryExhausted ||
       (sidecarStatus === "saving" && alreadyScheduled) ||
       (
@@ -379,6 +381,7 @@ export function useDevelopSettingsSync({
     metadataRevision,
     persistedDocumentRevision,
     persistedMetadataRevision,
+    projectionKind,
     setSidecarStatus,
     sidecarStatus,
   ]);

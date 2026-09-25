@@ -130,6 +130,7 @@ interface FailedWrite {
   readonly documentRevision: number;
   readonly metadataRevision: number;
   readonly attempts: number;
+  readonly message: string;
 }
 
 interface AcceptedExternalImport {
@@ -382,8 +383,7 @@ export class DevelopRepository {
             const process = openDevelopSessionDocument(loaded.lastValidRevision.document);
             adapters.onSessionChanged(session.hydrateAuthoritative(process));
           }
-          this.#adapters?.setStatus("error", loaded.corruption.message);
-          return;
+          throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
         }
         this.#head = loaded.value;
         await this.#recoverJournal();
@@ -408,6 +408,9 @@ export class DevelopRepository {
         await this.#reconcileProjection(sidecar);
         this.#adapters?.setStatus("saved");
       } catch (error) {
+        if (this.#projectionState.kind !== "recovery") {
+          this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Could not open Develop history.") });
+        }
         this.#adapters?.setStatus(
           "error",
           errorMessage(error, "Could not open Develop settings."),
@@ -437,7 +440,7 @@ export class DevelopRepository {
     const hydration = this.#hydration;
     const execute = async (): Promise<DevelopDefaultsProductionResult> => {
       await hydration;
-      if (!isDesktopApp() || this.#projectionState.kind === "divergent") {
+      if (!isDesktopApp() || this.#projectionState.kind === "divergent" || this.#projectionState.kind === "recovery") {
         throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
       }
       const result = await getDarkroomAPI().developDefaultsInstall({
@@ -455,7 +458,7 @@ export class DevelopRepository {
           session.hydrateAuthoritative(openDevelopSessionDocument(result.head.document)),
         );
         if (this.#entry.entryKind === "original") {
-          await this.#projectHead(result.head.revisionId, result.head.document);
+          await this.#projectHeadOrDefer(result.head.revisionId, result.head.document);
         }
         this.#adapters?.setStatus("saved");
       }
@@ -561,7 +564,7 @@ export class DevelopRepository {
         this.#entry.entryKind === "original" &&
         !(await this.#detectConcurrentSidecar(loaded.value))
       ) {
-        await this.#projectHead(result.revision.revisionId, snapshot.document);
+        await this.#projectHeadOrDefer(result.revision.revisionId, snapshot.document);
       }
       const session = this.#requireSession();
       this.#requireAdapters().onSessionChanged(session.markPersisted(snapshot.documentRevision, snapshot.persistedMetadataRevision));
@@ -569,7 +572,9 @@ export class DevelopRepository {
     };
     const write = this.#queue.then(execute, execute);
     this.#queue = write.catch((error: unknown) => {
-      this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop upgrade could not be committed.") });
+      if (this.#projectionState.kind !== "recovery") {
+        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop upgrade could not be committed.") });
+      }
       this.#adapters?.setStatus("error", errorMessage(error, "Develop upgrade could not be committed."));
     });
     return write;
@@ -627,7 +632,7 @@ export class DevelopRepository {
           if (acceptedImport !== null) this.#acceptedExternalImport = null;
         } else {
           if (acceptedImport !== null) this.#acceptedExternalImport = null;
-          await this.#projectHead(result.revision.revisionId, command.after);
+          await this.#projectHeadOrDefer(result.revision.revisionId, command.after);
         }
       }
       const session = this.#requireSession();
@@ -653,7 +658,9 @@ export class DevelopRepository {
           differences: this.#differenceSummary(sidecar),
         });
       } else {
-        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+        if (this.#projectionState.kind !== "recovery") {
+          this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+        }
       }
       this.#adapters?.setStatus("error", errorMessage(error, "Develop command could not be committed."));
     });
@@ -772,6 +779,19 @@ export class DevelopRepository {
     await this.#recordProjection(revisionId, await digestDevelopSidecarContents(projected.contents));
   }
 
+  async #projectHeadOrDefer(revisionId: DevelopRevisionId, document: unknown): Promise<void> {
+    try {
+      await this.#projectHead(revisionId, document);
+    } catch (error) {
+      if (this.#adapters?.faultInjector) throw error;
+      this.#setProjectionState({
+        kind: "pending",
+        revisionId,
+        reason: errorMessage(error, "XMP projection failed."),
+      });
+    }
+  }
+
   #differenceSummary(external: DevelopSidecar): readonly string[] {
     const headDocument = this.#head?.document;
     if (!headDocument || typeof headDocument !== "object" || headDocument === null) return ["Develop payload"];
@@ -857,7 +877,7 @@ export class DevelopRepository {
         return;
       }
       this.#setProjectionState({ kind: "pending", revisionId: head.revisionId, reason: "XMP projection is missing." });
-      await this.#projectHead(head.revisionId, head.document);
+      await this.#projectHeadOrDefer(head.revisionId, head.document);
       return;
     }
     const digest = await digestDevelopSidecarContents(sidecar.contents);
@@ -881,7 +901,7 @@ export class DevelopRepository {
     }
     if (this.#projection && digest === this.#projection.contentSha256 && this.#projection.revisionId !== head.revisionId) {
       this.#setProjectionState({ kind: "pending", revisionId: head.revisionId, reason: "XMP is behind the durable Develop Head." });
-      await this.#projectHead(head.revisionId, head.document);
+      await this.#projectHeadOrDefer(head.revisionId, head.document);
       return;
     }
     if (this.#projection && this.#projection.revisionId === head.revisionId) {
@@ -935,7 +955,7 @@ export class DevelopRepository {
       return Promise.reject(
         new DevelopRepositoryError(
           "retry-exhausted",
-          "Develop save failed three times. Check catalog and XMP access, then make another edit or reopen the photo.",
+          `Develop save failed three times: ${failedWrite.message}`,
         ),
       );
     }
@@ -984,10 +1004,11 @@ export class DevelopRepository {
         documentRevision: pending.snapshot.documentRevision,
         metadataRevision: pending.snapshot.metadataRevision,
         attempts,
+        message: errorMessage(error, "Could not save Develop settings."),
       };
       this.#adapters?.setStatus(
         "error",
-        errorMessage(error, "Could not save Develop settings."),
+        this.#failedWrite.message,
       );
     });
     const queue = this.#queue;
@@ -1028,7 +1049,7 @@ export class DevelopRepository {
       metadataPatch: pending.metadata,
     });
     if (this.#head && this.#entry.entryKind === "original") {
-      await this.#projectHead(this.#head.revisionId, this.#head.document);
+      await this.#projectHeadOrDefer(this.#head.revisionId, this.#head.document);
     }
     this.#failedWrite = null;
     adapters.onSessionChanged(
@@ -1099,7 +1120,7 @@ export class DevelopRepository {
       if (this.#metadata) this.#metadata = { ...this.#metadata, ...journal.metadata };
     }
     if (journal.documentDirty && this.#head && this.#entry.entryKind === "original") {
-      await this.#projectHead(this.#head.revisionId, this.#head.document);
+      await this.#projectHeadOrDefer(this.#head.revisionId, this.#head.document);
     }
     clearJournal(this.#entry);
   }
