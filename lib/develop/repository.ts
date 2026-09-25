@@ -383,8 +383,7 @@ export class DevelopRepository {
             const process = openDevelopSessionDocument(loaded.lastValidRevision.document);
             adapters.onSessionChanged(session.hydrateAuthoritative(process));
           }
-          this.#adapters?.setStatus("error", loaded.corruption.message);
-          return;
+          throw new DevelopRepositoryError("recovery-conflict", loaded.corruption.message);
         }
         this.#head = loaded.value;
         await this.#recoverJournal();
@@ -409,6 +408,9 @@ export class DevelopRepository {
         await this.#reconcileProjection(sidecar);
         this.#adapters?.setStatus("saved");
       } catch (error) {
+        if (this.#projectionState.kind !== "recovery") {
+          this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Could not open Develop history.") });
+        }
         this.#adapters?.setStatus(
           "error",
           errorMessage(error, "Could not open Develop settings."),
@@ -438,7 +440,7 @@ export class DevelopRepository {
     const hydration = this.#hydration;
     const execute = async (): Promise<DevelopDefaultsProductionResult> => {
       await hydration;
-      if (!isDesktopApp() || this.#projectionState.kind === "divergent") {
+      if (!isDesktopApp() || this.#projectionState.kind === "divergent" || this.#projectionState.kind === "recovery") {
         throw new DevelopRepositoryError("recovery-adapter-unavailable", "Develop defaults are unavailable.");
       }
       const result = await getDarkroomAPI().developDefaultsInstall({
@@ -570,7 +572,9 @@ export class DevelopRepository {
     };
     const write = this.#queue.then(execute, execute);
     this.#queue = write.catch((error: unknown) => {
-      this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop upgrade could not be committed.") });
+      if (this.#projectionState.kind !== "recovery") {
+        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop upgrade could not be committed.") });
+      }
       this.#adapters?.setStatus("error", errorMessage(error, "Develop upgrade could not be committed."));
     });
     return write;
@@ -654,7 +658,9 @@ export class DevelopRepository {
           differences: this.#differenceSummary(sidecar),
         });
       } else {
-        this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+        if (this.#projectionState.kind !== "recovery") {
+          this.#setProjectionState({ kind: "recovery", message: errorMessage(error, "Develop command could not be committed.") });
+        }
       }
       this.#adapters?.setStatus("error", errorMessage(error, "Develop command could not be committed."));
     });

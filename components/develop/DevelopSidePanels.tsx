@@ -61,11 +61,14 @@ export function DevelopSidePanels({
   defaultsResolution,
 }: DevelopSidePanelsProps) {
   const processKind = useDevelopStore((state) => state.sessions[entry.id]?.processKind);
-  const projectionConflict = useDevelopStore((state) => state.sessions[entry.id]?.ui.projection.kind === "divergent");
+  const projectionBlocked = useDevelopStore((state) => {
+    const kind = state.sessions[entry.id]?.ui.projection.kind;
+    return kind === "divergent" || kind === "recovery";
+  });
   const readOnly = useDevelopStore((state) => state.sessions[entry.id]?.readOnly);
   const sidecarError = useDevelopStore((state) => state.sessions[entry.id]?.ui.sidecarError);
   const entryActive = useDevelopStore((state) => state.activeCatalogId === entry.catalogId && state.activeEntryId === entry.id);
-  const effectivePanel = projectionConflict ? "history" : activePanel;
+  const effectivePanel = projectionBlocked ? "history" : activePanel;
   const defaultsPending = defaultsResolution.kind === "pending";
   const panel = effectivePanel === "history" ? (
     <DevelopHistoryPanel key={`${entry.catalogId}:${entry.id}`} entry={entry} editingDisabled={defaultsPending} />
@@ -83,7 +86,7 @@ export function DevelopSidePanels({
       key={effectivePanel ?? "edit"}
       decoded={decoded}
       entry={entry}
-      editingDisabled={defaultsPending || !entryActive}
+      editingDisabled={defaultsPending || projectionBlocked || !entryActive}
       activePanel={effectivePanel}
       analysis={v3Analysis}
       diagnostics={v3RenderDiagnostics}
@@ -113,7 +116,7 @@ export function DevelopSidePanels({
       <DevelopPanelRail
         activePanel={effectivePanel}
         onSelect={onSelect}
-        editingDisabled={!decoded || !entryActive || processKind !== "v3" || projectionConflict || defaultsPending}
+        editingDisabled={!decoded || !entryActive || processKind !== "v3" || projectionBlocked || defaultsPending}
       />
       <DevelopJobDrawer />
     </>
