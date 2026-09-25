@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { parseCatalogDecodeResult } from "@/lib/catalog/api";
 
 type Listener = (event: undefined, payload: unknown) => void;
 
@@ -87,6 +88,29 @@ export const desktopTransport = {
       if (channel === "darkroom:catalog-read-embedded-preview") {
         return await invoke<ArrayBuffer>("darkroom_preview", { request: args[0] }) as T;
       }
+      if (channel === "darkroom:catalog-decode-asset") {
+        const response = await invoke<ArrayBuffer>("darkroom_decode", { args });
+        if (!(response instanceof ArrayBuffer) || response.byteLength < 4) {
+          throw new Error("Native decode response is invalid.");
+        }
+        const metadataLength = new DataView(response).getUint32(0, true);
+        const pixelOffset = 4 + metadataLength;
+        if (metadataLength > 64 * 1024 || pixelOffset > response.byteLength || response.byteLength - pixelOffset > 512 * 1024 * 1024) {
+          throw new Error("Native decode response size is invalid.");
+        }
+        const metadata: unknown = JSON.parse(new TextDecoder().decode(new Uint8Array(response, 4, metadataLength)));
+        if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
+          throw new Error("Native decode metadata is invalid.");
+        }
+        if ("available" in metadata && metadata.available === true) {
+          if (!("byteCount" in metadata) || metadata.byteCount !== response.byteLength - pixelOffset) {
+            throw new Error("Native decode pixel byte count is invalid.");
+          }
+          return parseCatalogDecodeResult({ ...metadata, pixels: response.slice(pixelOffset) }) as T;
+        }
+        if (pixelOffset !== response.byteLength) throw new Error("Native decode failure contains pixels.");
+        return parseCatalogDecodeResult(metadata) as T;
+      }
       if (channel === "darkroom:encode-and-save-export") {
         const payload = args[2];
         const wrapped = payload !== null && typeof payload === "object" && "pixels" in payload;
@@ -107,7 +131,7 @@ export const desktopTransport = {
         return await invoke<T>("darkroom_export", request);
       }
       const result = await invoke<unknown>("darkroom_invoke", { channel, args: encode(args) });
-      return (channel === "darkroom:catalog-decode-asset" || channel === "darkroom:develop-asset-read"
+      return (channel === "darkroom:develop-asset-read"
         ? decode(result)
         : result) as T;
     } catch (error) {

@@ -444,6 +444,40 @@ async fn darkroom_preview(
     .map_err(|e| e.to_string())?
 }
 
+static NEF_DECODE_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[tauri::command]
+async fn darkroom_decode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<Backend>>,
+    mut args: Value,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    if args.as_array().is_none_or(|items| items.len() != 2) {
+        return Err("Asset decode arguments are invalid.".into());
+    }
+    let permit = NEF_DECODE_QUEUE
+        .acquire()
+        .await
+        .map_err(|e| e.to_string())?;
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let location = backend
+            .catalog
+            .lock()
+            .map_err(|_| "Catalog service is unavailable.")?
+            .resolve_asset(&args[0])?;
+        args.as_array_mut().unwrap().push(location);
+        native::decode_asset_binary(args.as_array().unwrap(), &backend.native)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn darkroom_export(
     window: tauri::WebviewWindow,
@@ -658,6 +692,7 @@ pub fn run() {
             darkroom_invoke,
             darkroom_read,
             darkroom_preview,
+            darkroom_decode,
             darkroom_export,
             darkroom_gpu,
             darkroom_gpu_info,
