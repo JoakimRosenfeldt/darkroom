@@ -224,9 +224,27 @@ function CameraSettings({ entryId, decodedMetadata }: {
   );
 }
 
+function HistogramSkeleton() {
+  return (
+    <svg
+      viewBox={`0 0 ${HISTOGRAM_WIDTH} ${HISTOGRAM_HEIGHT}`}
+      role="status"
+      aria-label="Loading histogram"
+      className="block h-full w-full animate-pulse rounded-[6px] border border-lr-border-subtle bg-lr-panel-raised/55 text-lr-text-faint"
+    >
+      <path
+        d="M0 112 L0 101 L12 91 L24 65 L40 48 L55 57 L72 36 L90 61 L108 40 L130 26 L150 48 L166 31 L182 54 L205 66 L225 91 L256 105 L256 112 Z"
+        fill="currentColor"
+        opacity="0.2"
+        aria-hidden="true"
+      />
+    </svg>
+  );
+}
+
 function HistogramGraphic({ tap }: { readonly tap: DisplayOutputTap }) {
   if (tap.state.kind === "loading") {
-    return <StatusCard title="Histogram loading">Analyzing the full-frame display output…</StatusCard>;
+    return <HistogramSkeleton />;
   }
   if (tap.state.kind === "unavailable") {
     return <StatusCard title="Histogram unavailable" tone="warning">{tap.state.reason}</StatusCard>;
@@ -369,13 +387,11 @@ export function V3HistogramPanel({ analysis, sourceIdentity, decodedMetadata }: 
   const headroom = analysisMatchesSource ? sceneHeadroomTap(analysis) : null;
   return (
     <div className="space-y-2.5" aria-live="polite">
-      <div className="min-h-[88px]">
+      <div className="h-[112px]">
         {display ? (
           <HistogramGraphic tap={display} />
         ) : (
-          <StatusCard title="Histogram unavailable">
-            Display-output analysis has not been requested.
-          </StatusCard>
+          <HistogramSkeleton />
         )}
       </div>
       <CameraSettings entryId={sourceIdentity.entryId} decodedMetadata={decodedMetadata} />
