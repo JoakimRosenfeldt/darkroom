@@ -1,0 +1,1965 @@
+{
+  "date": "2026-09-25",
+  "baselineCommit": "b676e7da2f2dae267b18be91056679e19e49d548",
+  "method": "In-page performance.now; canvas draw interception and requestAnimationFrame followed by a task. This records frame submission and the next paint opportunity, not compositor presentation. Edits change exposure and contrast inside a real edit group. Zoom uses the 100% button; panning uses trusted WebDriver pointer actions. Detail readiness requires full-resolution coverage; fullyOpaque also includes tile fades. JPEG fixture resized to 4000px wide. Three warmup samples excluded from quantiles. The first zoom warmup sample records cold detail latency.",
+  "machine": "Linux, Ryzen 9 5900X, NVIDIA RTX 3080, WebKitGTK under Xvfb",
+  "scope": "Production comparison changes the native drag resolution controller. Development comparison holds the revised frontend constant and changes only profile.dev.package.darkroom.opt-level from 0 to 2. Three warmups and twelve measured samples per repeated phase. Later upload-copy and lifecycle cleanup changes are verified separately. These are Linux observations, not macOS or Windows latency measurements.",
+  "runs": {
+    "productionBefore": {
+      "environment": {
+        "source": {
+          "height": 2667,
+          "width": 4000
+        },
+        "native": {
+          "activeSessions": 2,
+          "maxColorAttachmentBytesPerSample": 128,
+          "lastPrepareMs": 4.257875,
+          "maxColorAttachments": 8,
+          "renderedPasses": 8,
+          "lastFrameMs": 7.446044,
+          "lastPackMs": 1.897819,
+          "backend": "Vulkan",
+          "maxTextureDimension": 32768,
+          "textureBytes": 263390216,
+          "lastGpuWaitMs": 1.244149,
+          "maxTextureArrayLayers": 2048,
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "renderedFrames": 4
+        },
+        "viewport": {
+          "dpr": 2,
+          "height": 613,
+          "width": 896
+        },
+        "main": {
+          "height": 1195,
+          "width": 1792
+        }
+      },
+      "phases": {
+        "edit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 46.999999999999545,
+              "p95": 49
+            },
+            "paintOpportunityMs": {
+              "p50": 61.999999999999545,
+              "p95": 66.00000000000045
+            }
+          },
+          "samples": [
+            [
+              40.0,
+              55.0,
+              612,
+              408
+            ],
+            [
+              46,
+              61,
+              432,
+              288
+            ],
+            [
+              42,
+              56,
+              432,
+              288
+            ],
+            [
+              48,
+              66.0,
+              309,
+              206
+            ],
+            [
+              47.0,
+              63.0,
+              309,
+              206
+            ],
+            [
+              49,
+              65,
+              309,
+              206
+            ],
+            [
+              47,
+              63,
+              309,
+              206
+            ],
+            [
+              44,
+              60,
+              309,
+              206
+            ],
+            [
+              48,
+              64,
+              309,
+              206
+            ],
+            [
+              45,
+              60.0,
+              309,
+              206
+            ],
+            [
+              47.0,
+              62.0,
+              309,
+              206
+            ],
+            [
+              47,
+              66,
+              309,
+              206
+            ]
+          ],
+          "warmupSamples": [
+            [
+              262,
+              277,
+              865,
+              577
+            ],
+            [
+              50,
+              64,
+              865,
+              577
+            ],
+            [
+              46,
+              63.0,
+              612,
+              408
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoomedEdit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 63.00000000000182,
+              "p95": 71
+            },
+            "paintOpportunityMs": {
+              "p50": 79,
+              "p95": 91
+            }
+          },
+          "detailRestoredMs": 245,
+          "samples": [
+            [
+              65.0,
+              65.0,
+              309,
+              206
+            ],
+            [
+              62.0,
+              81.0,
+              309,
+              206
+            ],
+            [
+              58,
+              77,
+              309,
+              206
+            ],
+            [
+              71,
+              91,
+              309,
+              206
+            ],
+            [
+              66,
+              66,
+              309,
+              206
+            ],
+            [
+              69,
+              86.0,
+              309,
+              206
+            ],
+            [
+              64,
+              64,
+              309,
+              206
+            ],
+            [
+              63.0,
+              81,
+              309,
+              206
+            ],
+            [
+              64,
+              64,
+              309,
+              206
+            ],
+            [
+              61,
+              80,
+              309,
+              206
+            ],
+            [
+              63,
+              81,
+              309,
+              206
+            ],
+            [
+              61,
+              79,
+              309,
+              206
+            ]
+          ],
+          "warmupSamples": [
+            [
+              49,
+              68,
+              309,
+              206
+            ],
+            [
+              45,
+              65,
+              309,
+              206
+            ],
+            [
+              59.0,
+              77,
+              309,
+              206
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoom": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 22
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 22
+            },
+            "firstVisualMs": {
+              "p50": 17,
+              "p95": 21
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 2
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 2
+            }
+          },
+          "samples": [
+            [
+              18.0,
+              17.0,
+              1
+            ],
+            [
+              18,
+              17.0,
+              1.0
+            ],
+            [
+              18,
+              17,
+              2
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              19,
+              17.0,
+              1
+            ],
+            [
+              18,
+              17,
+              0
+            ],
+            [
+              19,
+              17,
+              2
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              19,
+              18.0,
+              1.0
+            ],
+            [
+              22,
+              21,
+              2
+            ],
+            [
+              19,
+              17.0,
+              2.0
+            ]
+          ],
+          "warmupSamples": [
+            [
+              167.0,
+              41,
+              25
+            ],
+            [
+              19,
+              18,
+              2
+            ],
+            [
+              18,
+              17,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        },
+        "pan": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 20.00000000000182
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 20.00000000000182
+            },
+            "firstVisualMs": {
+              "p50": 17.99999999999818,
+              "p95": 19
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 1
+            }
+          },
+          "samples": [
+            [
+              20,
+              19,
+              1
+            ],
+            [
+              20.0,
+              19,
+              1
+            ],
+            [
+              19.0,
+              18.0,
+              1
+            ],
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              19,
+              19,
+              0
+            ],
+            [
+              19,
+              17,
+              1
+            ],
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              20.0,
+              18,
+              1.0
+            ],
+            [
+              19.0,
+              18.0,
+              1
+            ],
+            [
+              19,
+              17,
+              0
+            ]
+          ],
+          "warmupSamples": [
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              19.0,
+              17.0,
+              1.0
+            ],
+            [
+              20,
+              18,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        }
+      },
+      "cancelledDrag": {
+        "pixelsRestored": true,
+        "height": 1195,
+        "width": 1792,
+        "documentRestored": true,
+        "restoredMs": 1011
+      },
+      "pausedZoomedEdit": {
+        "height": 1226,
+        "width": 1792,
+        "fullDetailMs": 288
+      }
+    },
+    "productionHigherResolution": {
+      "environment": {
+        "source": {
+          "height": 2667,
+          "width": 4000
+        },
+        "native": {
+          "activeSessions": 2,
+          "maxColorAttachmentBytesPerSample": 128,
+          "lastPrepareMs": 4.622058,
+          "maxColorAttachments": 8,
+          "renderedPasses": 8,
+          "lastFrameMs": 7.315188,
+          "lastPackMs": 1.35643,
+          "backend": "Vulkan",
+          "maxTextureDimension": 32768,
+          "textureBytes": 263390216,
+          "lastGpuWaitMs": 1.225598,
+          "maxTextureArrayLayers": 2048,
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "renderedFrames": 4
+        },
+        "viewport": {
+          "dpr": 2,
+          "height": 613,
+          "width": 896
+        },
+        "main": {
+          "height": 1195,
+          "width": 1792
+        }
+      },
+      "phases": {
+        "edit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 61,
+              "p95": 65.99999999999955
+            },
+            "paintOpportunityMs": {
+              "p50": 69,
+              "p95": 87
+            }
+          },
+          "samples": [
+            [
+              54.0,
+              69,
+              1224,
+              816
+            ],
+            [
+              54.0,
+              69,
+              1224,
+              816
+            ],
+            [
+              54,
+              70,
+              1224,
+              816
+            ],
+            [
+              55,
+              69,
+              1224,
+              816
+            ],
+            [
+              54,
+              73,
+              1224,
+              816
+            ],
+            [
+              62,
+              62,
+              1224,
+              816
+            ],
+            [
+              65,
+              81,
+              1224,
+              816
+            ],
+            [
+              66.0,
+              68.0,
+              1224,
+              816
+            ],
+            [
+              66.0,
+              67.0,
+              1224,
+              816
+            ],
+            [
+              62,
+              76,
+              1224,
+              816
+            ],
+            [
+              62.0,
+              87,
+              1224,
+              816
+            ],
+            [
+              61,
+              77,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              753,
+              769.0,
+              1224,
+              816
+            ],
+            [
+              53.0,
+              68.0,
+              1224,
+              816
+            ],
+            [
+              57.0,
+              71,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoomedEdit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 67,
+              "p95": 84
+            },
+            "paintOpportunityMs": {
+              "p50": 85,
+              "p95": 96
+            }
+          },
+          "detailRestoredMs": 252.00000000000182,
+          "samples": [
+            [
+              66,
+              96,
+              1224,
+              816
+            ],
+            [
+              59,
+              76,
+              1224,
+              816
+            ],
+            [
+              84,
+              85.0,
+              1224,
+              816
+            ],
+            [
+              66.0,
+              66.0,
+              1224,
+              816
+            ],
+            [
+              67,
+              67,
+              1224,
+              816
+            ],
+            [
+              79,
+              79,
+              1224,
+              816
+            ],
+            [
+              71,
+              91,
+              1224,
+              816
+            ],
+            [
+              69.0,
+              87,
+              1224,
+              816
+            ],
+            [
+              68,
+              85,
+              1224,
+              816
+            ],
+            [
+              64,
+              83.0,
+              1224,
+              816
+            ],
+            [
+              67,
+              86.0,
+              1224,
+              816
+            ],
+            [
+              76,
+              94,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              67,
+              88.0,
+              1224,
+              816
+            ],
+            [
+              58,
+              80.0,
+              1224,
+              816
+            ],
+            [
+              65,
+              99,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoom": {
+          "metrics": {
+            "readyMs": {
+              "p50": 18,
+              "p95": 19
+            },
+            "fullyOpaqueMs": {
+              "p50": 18,
+              "p95": 19
+            },
+            "firstVisualMs": {
+              "p50": 17,
+              "p95": 18
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 2
+            }
+          },
+          "samples": [
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              19.0,
+              18.0,
+              1
+            ],
+            [
+              19,
+              17.0,
+              1.0
+            ],
+            [
+              18,
+              17.0,
+              1.0
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              18,
+              17,
+              2
+            ],
+            [
+              19,
+              17,
+              1
+            ],
+            [
+              19,
+              17.0,
+              0
+            ],
+            [
+              18,
+              17,
+              0
+            ],
+            [
+              18,
+              17,
+              1
+            ]
+          ],
+          "warmupSamples": [
+            [
+              184,
+              40,
+              24
+            ],
+            [
+              19.0,
+              17,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        },
+        "pan": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 20
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 20
+            },
+            "firstVisualMs": {
+              "p50": 18,
+              "p95": 19
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            }
+          },
+          "samples": [
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18.0,
+              0
+            ],
+            [
+              20,
+              19,
+              1.0
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              19,
+              17,
+              1
+            ],
+            [
+              19.0,
+              17,
+              1
+            ],
+            [
+              19.0,
+              18.0,
+              1
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              20,
+              19,
+              1.0
+            ],
+            [
+              20,
+              18,
+              1.0
+            ],
+            [
+              19,
+              17,
+              1
+            ]
+          ],
+          "warmupSamples": [
+            [
+              19.0,
+              17,
+              1
+            ],
+            [
+              18.0,
+              17.0,
+              1
+            ],
+            [
+              20,
+              19,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        }
+      },
+      "cancelledDrag": {
+        "pixelsRestored": true,
+        "height": 1195,
+        "width": 1792,
+        "documentRestored": true,
+        "restoredMs": 1001
+      },
+      "pausedZoomedEdit": {
+        "height": 1226,
+        "width": 1792,
+        "fullDetailMs": 277
+      }
+    },
+    "developmentUnoptimized": {
+      "environment": {
+        "source": {
+          "height": 2667,
+          "width": 4000
+        },
+        "native": {
+          "activeSessions": 2,
+          "maxColorAttachmentBytesPerSample": 128,
+          "lastPrepareMs": 8.810669,
+          "maxColorAttachments": 8,
+          "renderedPasses": 8,
+          "lastFrameMs": 40.609655000000004,
+          "lastPackMs": 30.714109999999998,
+          "backend": "Vulkan",
+          "maxTextureDimension": 32768,
+          "textureBytes": 263390216,
+          "lastGpuWaitMs": 0.9120140000000001,
+          "maxTextureArrayLayers": 2048,
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "renderedFrames": 4
+        },
+        "viewport": {
+          "dpr": 2,
+          "height": 613,
+          "width": 896
+        },
+        "main": {
+          "height": 1195,
+          "width": 1792
+        }
+      },
+      "phases": {
+        "edit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 78,
+              "p95": 81
+            },
+            "paintOpportunityMs": {
+              "p50": 93,
+              "p95": 95.00000000000091
+            }
+          },
+          "samples": [
+            [
+              73,
+              88,
+              1224,
+              816
+            ],
+            [
+              80,
+              95,
+              1224,
+              816
+            ],
+            [
+              75,
+              90,
+              1224,
+              816
+            ],
+            [
+              78,
+              93.0,
+              1224,
+              816
+            ],
+            [
+              79.0,
+              93.0,
+              1224,
+              816
+            ],
+            [
+              76,
+              91,
+              1224,
+              816
+            ],
+            [
+              80,
+              95.0,
+              1224,
+              816
+            ],
+            [
+              76.0,
+              90.0,
+              1224,
+              816
+            ],
+            [
+              79,
+              93,
+              1224,
+              816
+            ],
+            [
+              78,
+              93,
+              1224,
+              816
+            ],
+            [
+              81,
+              95,
+              1224,
+              816
+            ],
+            [
+              78,
+              93,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              599,
+              618,
+              1224,
+              816
+            ],
+            [
+              75.0,
+              90,
+              1224,
+              816
+            ],
+            [
+              80,
+              96,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoomedEdit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 105,
+              "p95": 120
+            },
+            "paintOpportunityMs": {
+              "p50": 120,
+              "p95": 144
+            }
+          },
+          "detailRestoredMs": 338,
+          "samples": [
+            [
+              120,
+              120,
+              1224,
+              816
+            ],
+            [
+              107,
+              124,
+              1224,
+              816
+            ],
+            [
+              109,
+              126,
+              1224,
+              816
+            ],
+            [
+              105.0,
+              121,
+              1224,
+              816
+            ],
+            [
+              118.0,
+              119,
+              1224,
+              816
+            ],
+            [
+              105,
+              122,
+              1224,
+              816
+            ],
+            [
+              102,
+              118,
+              1224,
+              816
+            ],
+            [
+              103,
+              103,
+              1224,
+              816
+            ],
+            [
+              106,
+              144,
+              1224,
+              816
+            ],
+            [
+              81,
+              101,
+              1224,
+              816
+            ],
+            [
+              85,
+              101,
+              1224,
+              816
+            ],
+            [
+              105,
+              122,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              79.0,
+              98.0,
+              1224,
+              816
+            ],
+            [
+              101.0,
+              121.0,
+              1224,
+              816
+            ],
+            [
+              91,
+              111,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoom": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 20.00000000000182
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 20.00000000000182
+            },
+            "firstVisualMs": {
+              "p50": 18,
+              "p95": 18.00000000000182
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 2.000000000001819
+            },
+            "drawCpuMs": {
+              "p50": 0.999999999998181,
+              "p95": 2
+            }
+          },
+          "samples": [
+            [
+              19,
+              18,
+              2
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              18,
+              17,
+              0
+            ],
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              20.0,
+              18,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              20,
+              18.0,
+              1.0
+            ],
+            [
+              19.0,
+              17.0,
+              1
+            ],
+            [
+              19,
+              18,
+              2
+            ],
+            [
+              19,
+              17.0,
+              1.0
+            ]
+          ],
+          "warmupSamples": [
+            [
+              604,
+              41,
+              24
+            ],
+            [
+              19,
+              18.0,
+              1.0
+            ],
+            [
+              18.0,
+              17,
+              1.0
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        },
+        "pan": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 23.99999999999818
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 23.99999999999818
+            },
+            "firstVisualMs": {
+              "p50": 18,
+              "p95": 23.99999999999818
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 1.000000000001819
+            }
+          },
+          "samples": [
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              24.0,
+              24.0,
+              1
+            ],
+            [
+              20,
+              19,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18,
+              1.0
+            ],
+            [
+              19,
+              17.0,
+              1.0
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18,
+              0
+            ],
+            [
+              20,
+              19,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19.0,
+              18,
+              1
+            ]
+          ],
+          "warmupSamples": [
+            [
+              20,
+              18,
+              1.0
+            ],
+            [
+              20.0,
+              18.0,
+              1
+            ],
+            [
+              20,
+              18,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        }
+      },
+      "cancelledDrag": {
+        "pixelsRestored": true,
+        "height": 1195,
+        "width": 1792,
+        "documentRestored": true,
+        "restoredMs": 1342
+      },
+      "pausedZoomedEdit": {
+        "height": 1226,
+        "width": 1792,
+        "fullDetailMs": 384.99999999999636
+      }
+    },
+    "developmentOptimized": {
+      "environment": {
+        "source": {
+          "height": 2667,
+          "width": 4000
+        },
+        "native": {
+          "activeSessions": 2,
+          "maxColorAttachmentBytesPerSample": 128,
+          "lastPrepareMs": 6.555435,
+          "maxColorAttachments": 8,
+          "renderedPasses": 8,
+          "lastFrameMs": 10.393982,
+          "lastPackMs": 2.686079,
+          "backend": "Vulkan",
+          "maxTextureDimension": 32768,
+          "textureBytes": 263390216,
+          "lastGpuWaitMs": 1.122897,
+          "maxTextureArrayLayers": 2048,
+          "adapter": "NVIDIA GeForce RTX 3080",
+          "deviceType": "DiscreteGpu",
+          "renderedFrames": 4
+        },
+        "viewport": {
+          "dpr": 2,
+          "height": 613,
+          "width": 896
+        },
+        "main": {
+          "height": 1195,
+          "width": 1792
+        }
+      },
+      "phases": {
+        "edit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 61,
+              "p95": 79
+            },
+            "paintOpportunityMs": {
+              "p50": 76,
+              "p95": 84
+            }
+          },
+          "samples": [
+            [
+              56,
+              70.0,
+              1224,
+              816
+            ],
+            [
+              60.0,
+              76.0,
+              1224,
+              816
+            ],
+            [
+              60,
+              75,
+              1224,
+              816
+            ],
+            [
+              59.0,
+              78,
+              1224,
+              816
+            ],
+            [
+              61,
+              80,
+              1224,
+              816
+            ],
+            [
+              62.0,
+              77,
+              1224,
+              816
+            ],
+            [
+              60,
+              84,
+              1224,
+              816
+            ],
+            [
+              65,
+              80,
+              1224,
+              816
+            ],
+            [
+              76,
+              76,
+              1224,
+              816
+            ],
+            [
+              79,
+              80.0,
+              1224,
+              816
+            ],
+            [
+              70.0,
+              70.0,
+              1224,
+              816
+            ],
+            [
+              71.0,
+              71.0,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              287.0,
+              312,
+              1224,
+              816
+            ],
+            [
+              65,
+              82,
+              1224,
+              816
+            ],
+            [
+              71,
+              89,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoomedEdit": {
+          "metrics": {
+            "submittedMs": {
+              "p50": 69,
+              "p95": 94
+            },
+            "paintOpportunityMs": {
+              "p50": 88,
+              "p95": 116
+            }
+          },
+          "detailRestoredMs": 260,
+          "samples": [
+            [
+              66,
+              84,
+              1224,
+              816
+            ],
+            [
+              78,
+              116,
+              1224,
+              816
+            ],
+            [
+              65,
+              96,
+              1224,
+              816
+            ],
+            [
+              65,
+              96,
+              1224,
+              816
+            ],
+            [
+              68,
+              99,
+              1224,
+              816
+            ],
+            [
+              61,
+              77,
+              1224,
+              816
+            ],
+            [
+              81,
+              81,
+              1224,
+              816
+            ],
+            [
+              70,
+              89,
+              1224,
+              816
+            ],
+            [
+              79,
+              79,
+              1224,
+              816
+            ],
+            [
+              71,
+              86,
+              1224,
+              816
+            ],
+            [
+              94,
+              109,
+              1224,
+              816
+            ],
+            [
+              69,
+              88,
+              1224,
+              816
+            ]
+          ],
+          "warmupSamples": [
+            [
+              68,
+              88,
+              1224,
+              816
+            ],
+            [
+              88,
+              88,
+              1224,
+              816
+            ],
+            [
+              66,
+              80,
+              1224,
+              816
+            ]
+          ],
+          "sampleColumns": [
+            "submittedMs",
+            "paintOpportunityMs",
+            "width",
+            "height"
+          ]
+        },
+        "zoom": {
+          "metrics": {
+            "readyMs": {
+              "p50": 20,
+              "p95": 21
+            },
+            "fullyOpaqueMs": {
+              "p50": 20,
+              "p95": 21
+            },
+            "firstVisualMs": {
+              "p50": 18,
+              "p95": 19
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 2.0000000000009095
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 1
+            }
+          },
+          "samples": [
+            [
+              21,
+              19,
+              0
+            ],
+            [
+              20.0,
+              18,
+              1
+            ],
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              20.0,
+              18.0,
+              1.0
+            ],
+            [
+              20,
+              19,
+              1
+            ],
+            [
+              19.0,
+              18.0,
+              1
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              20.0,
+              18.0,
+              0
+            ],
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              20,
+              18,
+              1
+            ],
+            [
+              17,
+              17,
+              1
+            ]
+          ],
+          "warmupSamples": [
+            [
+              177,
+              42,
+              23
+            ],
+            [
+              21,
+              19,
+              2.0
+            ],
+            [
+              19,
+              18,
+              1
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        },
+        "pan": {
+          "metrics": {
+            "readyMs": {
+              "p50": 19,
+              "p95": 20
+            },
+            "fullyOpaqueMs": {
+              "p50": 19,
+              "p95": 20
+            },
+            "firstVisualMs": {
+              "p50": 17.00000000000182,
+              "p95": 19
+            },
+            "firstDetailMs": {
+              "p50": 1,
+              "p95": 2
+            },
+            "drawCpuMs": {
+              "p50": 1,
+              "p95": 2
+            }
+          },
+          "samples": [
+            [
+              19,
+              17,
+              2
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              18.0,
+              1.0
+            ],
+            [
+              20,
+              18,
+              1.0
+            ],
+            [
+              20,
+              19,
+              2
+            ],
+            [
+              19,
+              18,
+              1
+            ],
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              19,
+              17,
+              0
+            ],
+            [
+              18,
+              17,
+              1
+            ],
+            [
+              19,
+              17,
+              1
+            ],
+            [
+              18,
+              17.0,
+              1.0
+            ],
+            [
+              19.0,
+              18.0,
+              0
+            ]
+          ],
+          "warmupSamples": [
+            [
+              20,
+              19,
+              1
+            ],
+            [
+              19,
+              17.0,
+              0
+            ],
+            [
+              20,
+              19,
+              0
+            ]
+          ],
+          "sampleColumns": [
+            "readyMs",
+            "firstVisualMs",
+            "drawCpuMs"
+          ]
+        }
+      },
+      "cancelledDrag": {
+        "pixelsRestored": true,
+        "height": 1195,
+        "width": 1792,
+        "documentRestored": true,
+        "restoredMs": 997
+      },
+      "pausedZoomedEdit": {
+        "height": 1226,
+        "width": 1792,
+        "fullDetailMs": 312
+      }
+    }
+  }
+}

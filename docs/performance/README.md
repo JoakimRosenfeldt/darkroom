@@ -1,5 +1,7 @@
 # Rust migration measurements
 
+The newer [native renderer POC](../native-renderer.md) has separate [GPU measurements](native-renderer.json) and [CPU parallelism measurements](cpu-parallelism.json). The WebGL observations below describe the earlier migration baseline.
+
 Rust speeds up catalog import and the migrated CPU kernels in these runs, and uses less idle memory. The Linux app payload is much smaller. Startup through the automation harness and loaded-library memory did not improve. These measurements do not establish an application-wide speedup.
 
 ## Packaging builds

@@ -41,6 +41,8 @@ import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
 import { useWorkspacePreferences } from "@/hooks/useWorkspacePreferences";
 import { metadataMenuActions, useAppMenuActions } from "@/lib/app-menu";
 
+const NO_CANVAS_TOOL = { kind: "none" } as const;
+
 interface PhotoViewerProps {
   entry: LibraryEntry;
   entries: LibraryEntry[];
@@ -127,10 +129,10 @@ export function PhotoViewer({
   const [v3CanvasState, setV3CanvasState] = useState<{
     readonly entryId: string;
     readonly tool: V3CanvasTool;
-  }>({ entryId: entry.id, tool: { kind: "none" } });
+  }>({ entryId: entry.id, tool: NO_CANVAS_TOOL });
   const v3CanvasTool = v3CanvasState.entryId === entry.id
     ? v3CanvasState.tool
-    : { kind: "none" } satisfies V3CanvasTool;
+    : NO_CANVAS_TOOL;
   const setV3CanvasTool = useCallback((tool: V3CanvasTool) => {
     setV3CanvasState({ entryId: entry.id, tool });
   }, [entry.id]);
@@ -191,11 +193,7 @@ export function PhotoViewer({
     : "decoder-rendered";
   const cachedImage = useMemo(() => {
     if (entry.formatAvailability.status !== "supported") return null;
-    return getCachedDevelopImage(entry, { rawColorMode }) ?? (
-      entry.formatId === "nef" && rawColorMode === "libraw-camera-matrix"
-        ? getCachedDevelopImage(entry, { rawColorMode, maxEdge: 720 })
-        : null
-    );
+    return getCachedDevelopImage(entry, { rawColorMode });
   }, [entry, rawColorMode]);
   // Never combine the next photo's settings or source facts with the previous pixels.
   const currentLoad = imageLoad?.entry === entry && imageLoad.rawColorMode === rawColorMode
@@ -368,7 +366,6 @@ export function PhotoViewer({
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    const progressiveRaw = entry.formatId === "nef" && developProcessKind === "v3";
     const includeBlob = developProcessKind === "v2";
     const foregroundOptions = {
       signal: controller.signal,
@@ -386,35 +383,17 @@ export function PhotoViewer({
         return;
       }
 
-      const fullPreview = getCachedDevelopImage(entry, { includeBlob, rawColorMode });
-      const initialImage = fullPreview ?? (progressiveRaw
-        ? getCachedDevelopImage(entry, { includeBlob, rawColorMode, maxEdge: 720 })
-        : null);
-      let hasImage = initialImage !== null;
-      setImageLoad({ entry, rawColorMode, image: initialImage, error: null, loading: !hasImage });
+      const initialImage = getCachedDevelopImage(entry, { includeBlob, rawColorMode });
+      setImageLoad({ entry, rawColorMode, image: initialImage, error: null, loading: initialImage === null });
 
       try {
-        if (fullPreview) return;
+        if (initialImage) return;
 
-        const loadingImage = loadDevelopImage(entry, progressiveRaw
-          ? { ...foregroundOptions, maxEdge: 720 }
-          : foregroundOptions);
-        const result = await loadingImage;
+        const result = await loadDevelopImage(entry, foregroundOptions);
         if (!active) return;
-        hasImage = true;
         setImageLoad({ entry, rawColorMode, image: result, error: null, loading: false });
-
-        if (progressiveRaw) {
-          const refined = await loadDevelopImage(entry, {
-            ...foregroundOptions,
-            maxEdge: 2_560,
-          });
-          if (active) {
-            setImageLoad({ entry, rawColorMode, image: refined, error: null, loading: false });
-          }
-        }
       } catch (loadError) {
-        if (active && !hasImage) {
+        if (active) {
           setImageLoad({
             entry, rawColorMode, image: null, loading: false,
             error: loadError instanceof Error ? loadError.message : "Failed to decode image.",
@@ -434,14 +413,12 @@ export function PhotoViewer({
   useEffect(() => {
     const activeEntry = entries[availableActiveIndex];
     if (!activeEntry || activeEntry.formatAvailability.status !== "supported") return;
-    const progressiveRaw = activeEntry.formatId === "nef" && developProcessKind === "v3";
     const includeBlob = developProcessKind === "v2";
-    preloadDevelopImages(entries, availableActiveIndex, {
+    preloadDevelopImages(entries, decoded ? availableActiveIndex : -1, {
       includeBlob,
       rawColorMode,
-      ...(progressiveRaw ? { maxEdge: 720 } : {}),
     });
-  }, [entries, availableActiveIndex, developProcessKind, rawColorMode]);
+  }, [decoded, entries, availableActiveIndex, developProcessKind, rawColorMode]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
@@ -730,7 +707,7 @@ export function PhotoViewer({
                   maskingActive={
                     !defaultsPending && (activePanel === "masking" || (maskUi?.tool ?? "none") !== "none")
                   }
-                  canvasTool={defaultsPending ? { kind: "none" } : v3CanvasTool}
+                  canvasTool={defaultsPending ? NO_CANVAS_TOOL : v3CanvasTool}
                   onCanvasToolChange={setV3CanvasTool}
                 />
             ) : decoded && !error ? (

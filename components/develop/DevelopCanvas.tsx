@@ -292,6 +292,7 @@ export function DevelopCanvas({
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
+  const analyzedRequestRef = useRef(0);
   const drawnFrameRef = useRef<DrawnFrame | null>(null);
   const lastInteractiveRevisionRef = useRef<number | null>(null);
   const beforeContentKeyRef = useRef<string | null>(null);
@@ -351,15 +352,11 @@ export function DevelopCanvas({
   const [beforeRasterDimensions, setBeforeRasterDimensions] = useState<DisplayDimensions | null>(null);
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const [previewTransform, setViewTransform] = useState<ViewerTransform>(FIT_TRANSFORM);
-  const [wheelZoomDirect, setWheelZoomDirect] = useState(false);
   const [zoomFocus, setZoomFocus] = useState<{ x: number; y: number } | null>(null);
   const [showBefore, setShowBefore] = useState(false);
   const [beforeReady, setBeforeReady] = useState(false);
   const [panning, setPanning] = useState(false);
   const [detailCanvasContainer, setDetailCanvasContainer] = useState<HTMLDivElement | null>(null);
-  const [previewRenderScale, setPreviewRenderScale] = useState(1);
-  const transformElementRef = useRef<HTMLDivElement | null>(null);
-  const wheelZoomDirectRef = useRef(false);
   const beforeRasterRef = useRef<{ readonly contentKey: string; readonly dimensions: DisplayDimensions } | null>(null);
 
   const activeDisplayDimensions = displayDimensions;
@@ -404,6 +401,14 @@ export function DevelopCanvas({
   };
   const canvasInteractionActive = cropActive || canvasTool.kind !== "none" ||
     (maskingActive && maskTool !== "none");
+  const previewRenderScale = canvasInteractionActive ? viewTransform.scale : 1;
+  const presentationContext = useMemo(() => ({ entry, image, cropActive, canvasTool, maskingActive, maskTool }),
+    [entry, image, cropActive, canvasTool, maskingActive, maskTool]);
+  const presentationContextRef = useRef<typeof presentationContext | null>(null);
+  useLayoutEffect(() => {
+    presentationContextRef.current = presentationContext;
+    return () => { presentationContextRef.current = null; };
+  }, [presentationContext]);
 
   const applyFullSourceDimensions = useCallback((dimensions: DisplayDimensions) => {
     const current = fullSourceDimensionsRef.current;
@@ -425,15 +430,6 @@ export function DevelopCanvas({
   }, [applyFullSourceDimensions]);
 
   useEffect(() => {
-    if (panning) return;
-    const timeout = window.setTimeout(() => {
-      if (panRef.current) return;
-      setPreviewRenderScale((current) => current === viewTransform.scale ? current : viewTransform.scale);
-    }, 120);
-    return () => window.clearTimeout(timeout);
-  }, [panning, viewTransform.scale]);
-
-  useEffect(() => {
     diagnosticsCallbackRef.current = onRenderDiagnostics;
   }, [onRenderDiagnostics]);
 
@@ -444,6 +440,7 @@ export function DevelopCanvas({
   useEffect(() => {
     hasRenderedRef.current = false;
     drawnRequestRef.current = 0;
+    analyzedRequestRef.current = 0;
     drawnFrameRef.current = null;
     lastInteractiveRevisionRef.current = null;
     maskMattesRef.current = null;
@@ -594,6 +591,25 @@ export function DevelopCanvas({
           }
         : document;
 
+      const isCurrentRequest = (): boolean => {
+        const current = session.snapshot();
+        return !disposed && requestId === requestRef.current &&
+          presentationContextRef.current === presentationContext &&
+          quickWorkerRef.current === quickWorker &&
+          renderSnapshot.processKind === "v3" && current.processKind === "v3" &&
+          current.documentRevision === renderSnapshot.documentRevision &&
+          (current.previewDocument ?? current.document) === document;
+      };
+
+      const isLiveInteraction = (): boolean => {
+        const current = session.snapshot();
+        return previewMode === "interactive" && !canvasInteractionActive &&
+          presentationContextRef.current === presentationContext &&
+          quickWorkerRef.current === quickWorker && current.processKind === "v3" &&
+          renderSnapshot.transientEdit !== null &&
+          current.transientEdit?.id === renderSnapshot.transientEdit.id;
+      };
+
       const applyResult = (
         result: V3PreviewRenderOutput,
         mode: V3PreviewRenderMode,
@@ -604,16 +620,11 @@ export function DevelopCanvas({
             result.bitmap.close();
           }
         };
-        if (disposed || requestId !== requestRef.current) {
-          closeBitmap();
-          return false;
-        }
-        const currentSnapshot = session.snapshot();
-        if (
-          renderSnapshot.processKind !== "v3" ||
-          currentSnapshot.processKind !== "v3" ||
-          currentSnapshot.documentRevision !== renderSnapshot.documentRevision
-        ) {
+        const currentRequest = isCurrentRequest();
+        // Keep completed drag frames moving while the worker prepares the latest input.
+        const progressing = !currentRequest && result.kind === "rendered" && mode === "interactive" &&
+          requestId >= drawnRequestRef.current && isLiveInteraction();
+        if (!currentRequest && !progressing) {
           closeBitmap();
           return false;
         }
@@ -634,7 +645,7 @@ export function DevelopCanvas({
         const keepExistingRaster = sameContent && drawnFrame?.mode === "settled" &&
           canvas.width * canvas.height >= dimensions.width * dimensions.height;
         if (!keepExistingRaster) {
-          pointColorInputRef.current = result.pointColorInput;
+          pointColorInputRef.current = currentRequest ? result.pointColorInput : null;
           if (canvas.width !== dimensions.width) canvas.width = dimensions.width;
           if (canvas.height !== dimensions.height) canvas.height = dimensions.height;
           if ("bitmap" in result) {
@@ -682,7 +693,7 @@ export function DevelopCanvas({
           return current.width === next.width && current.height === next.height ? current : next;
         });
         diagnosticsCallbackRef.current?.(result.diagnostics);
-        if (!cropActive) {
+        if (!cropActive && result.analysis.length > 0) {
           bindActiveAnalysis(result.analysis, {
             catalogId: entry.catalogId,
             entryId: entry.id,
@@ -690,7 +701,7 @@ export function DevelopCanvas({
             documentRevision: renderSnapshot.documentRevision,
             planFingerprint: result.planFingerprint,
           });
-          analysisCallbackRef.current?.(result.analysis.length ? result.analysis : EMPTY_ANALYSIS);
+          analysisCallbackRef.current?.(result.analysis);
         }
         drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
         const requestedDimensions = requestedPreviewDimensions(
@@ -740,19 +751,59 @@ export function DevelopCanvas({
           maskMattes,
           includePointColor,
         } as const;
+        const renderAnalysis = async (mode: "interactive" | "settled"): Promise<void> => {
+          const canPublish = (): boolean =>
+            isCurrentRequest() ||
+            (mode === "interactive" && isLiveInteraction());
+          if (cropActive || !canPublish()) return;
+          const analysisWorker = analysisWorkerRef.current ??= new V3PreviewWorkerClient(entry, image);
+          const analysisScale = mode === "interactive"
+            ? Math.min(1, 256 / (Math.max(options.viewportDimensions.width, options.viewportDimensions.height) *
+                Math.min(2, Math.max(0.5, options.devicePixelRatio))))
+            : 1;
+          const analyzed = await analysisWorker.render(renderDocument, {
+            ...options,
+            viewportDimensions: {
+              width: Math.max(1, Math.round(options.viewportDimensions.width * analysisScale)),
+              height: Math.max(1, Math.round(options.viewportDimensions.height * analysisScale)),
+            },
+            previewMode: mode,
+            includeAnalysis: true,
+            includePointColor: mode === "settled" && includePointColor,
+          });
+          const result = analyzed.result;
+          if (result.kind !== "rendered") return;
+          if ("bitmap" in result) result.bitmap.close();
+          if (!canPublish() || requestId < analyzedRequestRef.current) return;
+          if (result.pointColorInput) pointColorInputRef.current = result.pointColorInput;
+          const analysis = mode === "interactive"
+            ? result.analysis.filter((tap) => tap.tap !== "tone-input")
+            : result.analysis;
+          analyzedRequestRef.current = requestId;
+          bindActiveAnalysis(analysis, {
+            catalogId: entry.catalogId,
+            entryId: entry.id,
+            assetRevision: entry.assetRevision,
+            documentRevision: renderSnapshot.documentRevision,
+            planFingerprint: result.planFingerprint,
+          });
+          analysisCallbackRef.current?.(analysis);
+        };
         let backend = drawnFrame?.backend ?? null;
         if (!interactionRelease && !sameContentSettledRender) {
           const quick = await quickWorker.render(renderDocument, {
             ...options,
             previewMode: "interactive",
-            includeAnalysis: previewMode === "interactive" && !cropActive,
+            includeAnalysis: false,
           });
           if (!applyResult(quick.result, "interactive", quick.backend)) return;
           backend = quick.backend;
-          if (disposed || requestId !== requestRef.current) return;
+          if ((disposed || requestId !== requestRef.current) && !isLiveInteraction()) return;
         }
 
         if (previewMode === "interactive") {
+          void renderAnalysis("interactive").catch(handleRenderError);
+          if (disposed || requestId !== requestRef.current) return;
           refineTimer = setTimeout(() => {
             if (disposed || requestId !== requestRef.current) return;
             void quickWorker.render(renderDocument, {
@@ -784,31 +835,8 @@ export function DevelopCanvas({
         if (cropActive || disposed || requestId !== requestRef.current ||
             (detailed.result.kind === "rendered" && detailed.result.analysis.length > 0)) return;
         analysisTimer = setTimeout(() => {
-          void renderAnalysis().catch(handleRenderError);
+          void renderAnalysis("settled").catch(handleRenderError);
         }, 120);
-        const renderAnalysis = async (): Promise<void> => {
-          if (disposed || requestId !== requestRef.current) return;
-          const analysisWorker = analysisWorkerRef.current ??= new V3PreviewWorkerClient(entry, image);
-          const analyzed = await analysisWorker.render(renderDocument, {
-            ...options,
-            previewMode: "settled",
-            includeAnalysis: true,
-          });
-          const result = analyzed.result;
-          if (result.kind !== "rendered") return;
-          if ("bitmap" in result) result.bitmap.close();
-          if (disposed || requestId !== requestRef.current ||
-              session.snapshot().documentRevision !== renderSnapshot.documentRevision) return;
-          pointColorInputRef.current = result.pointColorInput;
-          bindActiveAnalysis(result.analysis, {
-            catalogId: entry.catalogId,
-            entryId: entry.id,
-            assetRevision: entry.assetRevision,
-            documentRevision: renderSnapshot.documentRevision,
-            planFingerprint: result.planFingerprint,
-          });
-          analysisCallbackRef.current?.(result.analysis);
-        };
       };
 
       const handleRenderError = (error: unknown): void => {
@@ -829,7 +857,7 @@ export function DevelopCanvas({
       cancelAnimationFrame(animationFrame);
       animationFrame = requestAnimationFrame(() => render(force));
     };
-    scheduleRender(true);
+    render(true);
     const observer = new ResizeObserver(() => scheduleRender());
     observer.observe(container);
     return () => {
@@ -844,7 +872,7 @@ export function DevelopCanvas({
       }
       observer.disconnect();
     };
-  }, [cropActive, document, documentRevision, entry, image, includePointColor, previewMode, previewRenderScale]);
+  }, [canvasInteractionActive, cropActive, document, documentRevision, entry, image, includePointColor, presentationContext, previewMode, previewRenderScale]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1000,13 +1028,7 @@ export function DevelopCanvas({
     setViewTransform(next);
   }, [activeDisplayDimensions, imageRect, maximumScale, viewport]);
 
-  const setWheelZoomDirectMode = useCallback((direct: boolean): void => {
-    wheelZoomDirectRef.current = direct;
-    setWheelZoomDirect(direct);
-  }, []);
-
   function fit(): void {
-    setWheelZoomDirectMode(false);
     if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
     setZoomFocus(null);
     setActualSize(false);
@@ -1015,7 +1037,6 @@ export function DevelopCanvas({
   }
 
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
-    setWheelZoomDirectMode(false);
     const position = {
       x: Math.max(0, Math.min(1, (pointer.x - imageRect.x) / imageRect.width)),
       y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
@@ -1050,9 +1071,8 @@ export function DevelopCanvas({
   }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
-    setWheelZoomDirectMode(false);
     applyZoom(1.25 ** direction);
-  }, [applyZoom, setWheelZoomDirectMode]);
+  }, [applyZoom]);
 
   const onWheel = useEffectEvent((event: WheelEvent): void => {
     if ((maskingActive && maskTool === "brush") || previewMode === "interactive" ||
@@ -1060,30 +1080,6 @@ export function DevelopCanvas({
         (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
     const bounds = containerRef.current!.getBoundingClientRect();
-    if (!wheelZoomDirectRef.current) {
-      // Take over from the visible point of an in-flight control zoom.
-      const transform = transformElementRef.current
-        ? window.getComputedStyle(transformElementRef.current).transform
-        : "none";
-      if (transform !== "none") {
-        try {
-          const matrix = new DOMMatrixReadOnly(transform);
-          if (matrix.is2D && Number.isFinite(matrix.a) && matrix.a > 0 &&
-              Number.isFinite(matrix.d) && Math.abs(matrix.a - matrix.d) < 1e-6 &&
-              Math.abs(matrix.b) < 1e-6 && Math.abs(matrix.c) < 1e-6 &&
-              Number.isFinite(matrix.e) && Number.isFinite(matrix.f)) {
-            viewTransformRef.current = {
-              scale: (matrix.a + matrix.d) / 2,
-              x: matrix.e,
-              y: matrix.f,
-            };
-          }
-        } catch {
-          // Keep the latest transform ref when the browser cannot parse the computed value.
-        }
-      }
-      setWheelZoomDirectMode(true);
-    }
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1;
     const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
@@ -1106,8 +1102,6 @@ export function DevelopCanvas({
       Boolean(event.target.closest("button, input, select, [role=button]"));
     if (interactive || canvasInteractionActive || preview.kind !== "rendered" ||
         event.button !== 0 || !event.isPrimary) return;
-
-    setWheelZoomDirectMode(false);
 
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -1238,6 +1232,15 @@ export function DevelopCanvas({
       paintedRasterDimensions.assetRevision === entry.assetRevision
     ? { width: paintedRasterDimensions.width, height: paintedRasterDimensions.height }
     : undefined;
+  const detailBaseDimensions = showBefore
+    ? beforeRasterDimensions ?? currentPaintedRasterDimensions
+    : currentPaintedRasterDimensions;
+  const detailActive = preview.kind === "rendered" && !canvasInteractionActive && (zoomed || (
+    previewMode !== "interactive" && detailBaseDimensions !== undefined && (
+      detailBaseDimensions.width < Math.round(displayDimensions.width * (window.devicePixelRatio || 1)) ||
+      detailBaseDimensions.height < Math.round(displayDimensions.height * (window.devicePixelRatio || 1))
+    )
+  ));
 
   return (
     <div
@@ -1307,7 +1310,6 @@ export function DevelopCanvas({
             type="button"
             aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)}
             onClick={() => {
-              setWheelZoomDirectMode(false);
               setActualPosition(detailPosition);
               setZoomFocus(detailPosition);
               setActualSize(true);
@@ -1359,12 +1361,10 @@ export function DevelopCanvas({
           document={showBefore ? neutralBeforeDocument ?? document : document}
           position={detailPosition}
           focusPosition={zoomFocus ?? detailPosition}
-          basePreviewDimensions={showBefore
-            ? beforeRasterDimensions ?? currentPaintedRasterDimensions
-            : currentPaintedRasterDimensions}
+          basePreviewDimensions={detailBaseDimensions}
           displaySize={actualSize ? undefined : { width: displayDimensions.width * viewTransform.scale, height: displayDimensions.height * viewTransform.scale }}
           onSourceDimensions={reportFullSourceDimensions}
-          active={preview.kind === "rendered" && !canvasInteractionActive}
+          active={detailActive}
           showStatus={zoomed}
           preload
           passive
@@ -1373,13 +1373,9 @@ export function DevelopCanvas({
         />
       ) : null}
       <div
-        ref={transformElementRef}
         className={[
           "absolute inset-0 will-change-transform",
           preview.kind === "rendered" ? "" : "invisible",
-          panning || wheelZoomDirect
-            ? "transition-none"
-            : "transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         ].join(" ")}
         style={{
           transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
@@ -1438,7 +1434,7 @@ export function DevelopCanvas({
           ref={setDetailCanvasContainer}
           className="pointer-events-none absolute inset-0 transition-none"
           style={{
-            // Undo the target view so detail follows the shared outer animation.
+            // Detail tiles already use viewport coordinates.
             transform: `scale(${1 / viewTransform.scale}) translate(${-viewTransform.x}px, ${-viewTransform.y}px)`,
             transformOrigin: "0 0",
           }}

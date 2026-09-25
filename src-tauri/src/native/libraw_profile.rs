@@ -8,7 +8,7 @@ use super::assets::{check_open_regular, open_regular, resolve_asset};
 const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: u64 = 256 * 1024 * 1024;
 
-struct RawHandle(*mut raw::libraw_data_t);
+pub(super) struct RawHandle(pub(super) *mut raw::libraw_data_t);
 impl Drop for RawHandle {
     fn drop(&mut self) {
         unsafe {
@@ -16,7 +16,7 @@ impl Drop for RawHandle {
         }
     }
 }
-struct ProcessedImage(*mut raw::libraw_processed_image_t);
+pub(super) struct ProcessedImage(pub(super) *mut raw::libraw_processed_image_t);
 impl Drop for ProcessedImage {
     fn drop(&mut self) {
         unsafe {
@@ -25,7 +25,7 @@ impl Drop for ProcessedImage {
     }
 }
 
-fn c_text(bytes: &[std::ffi::c_char], label: &str) -> Result<String, String> {
+pub(super) fn c_text(bytes: &[std::ffi::c_char], label: &str) -> Result<String, String> {
     let length = bytes
         .iter()
         .position(|byte| *byte == 0)

@@ -1,0 +1,345 @@
+{
+  "date": "2026-09-25",
+  "method": "Two distinct Nikon RAW files, 24 MP Z6III and 20 MP D500, twelve photo switches with two seconds dwell each. Same immutable unoptimized diagnostics executable and Vite development frontend. RSS sampled from the Linux process tree; VmHWM captures per-process lifetime peaks. Aggregate RSS includes native app, WebKit processes, and automation drivers; shared memory can be counted more than once.",
+  "scope": "This isolates full-resolution LibRaw worker disposal. No Mac process termination was reproduced. GPU upload-copy and reload cleanup changes are measured separately.",
+  "runs": {
+    "before": {
+      "timingsMs": {
+        "openPhoto": 1928
+      },
+      "navigation": {
+        "records": [
+          {
+            "index": 0,
+            "readyMs": 3158,
+            "changedMs": 59,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 197800224
+          },
+          {
+            "index": 1,
+            "readyMs": 2569,
+            "changedMs": 94,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 198006392
+          },
+          {
+            "index": 2,
+            "readyMs": 2800,
+            "changedMs": 85,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 3,
+            "readyMs": 3564,
+            "changedMs": 80,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 198006392
+          },
+          {
+            "index": 4,
+            "readyMs": 2791.999999999998,
+            "changedMs": 104.99999999999818,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 5,
+            "readyMs": 2728.9999999999964,
+            "changedMs": 76.99999999999636,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530288220
+          },
+          {
+            "index": 6,
+            "readyMs": 2735.0000000000036,
+            "changedMs": 101,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 7,
+            "readyMs": 2726.0000000000036,
+            "changedMs": 83,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530288220
+          },
+          {
+            "index": 8,
+            "readyMs": 2713,
+            "changedMs": 76,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 9,
+            "readyMs": 2767.9999999999964,
+            "changedMs": 77.99999999999636,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530276788
+          },
+          {
+            "index": 10,
+            "readyMs": 2753,
+            "changedMs": 117.00000000000364,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482405056
+          },
+          {
+            "index": 11,
+            "readyMs": 2759,
+            "changedMs": 92,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530288220
+          },
+          {}
+        ],
+        "restoringAppearances": 0,
+        "originalPanelFound": true,
+        "removedPanels": 0,
+        "originalTimeOrigin": 1790319855637
+      },
+      "peaks": {
+        "tauri-driver": {
+          "sampledRssMiB": 3.55859375,
+          "lifetimePeakMiB": 3.55859375
+        },
+        "WebKitWebDriver": {
+          "sampledRssMiB": 25.23046875,
+          "lifetimePeakMiB": 25.23046875
+        },
+        "darkroom": {
+          "sampledRssMiB": 1586.6796875,
+          "lifetimePeakMiB": 1590.28515625
+        },
+        "WebKitNetworkPr": {
+          "sampledRssMiB": 295.96875,
+          "lifetimePeakMiB": 368.50390625
+        },
+        "WebKitWebProces": {
+          "sampledRssMiB": 2854.6171875,
+          "lifetimePeakMiB": 3046.7109375
+        }
+      },
+      "sampledAggregateRssMiB": 4057.15234375
+    },
+    "after": {
+      "timingsMs": {
+        "openPhoto": 1887
+      },
+      "navigation": {
+        "records": [
+          {
+            "index": 0,
+            "readyMs": 3150,
+            "changedMs": 65,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 197800224
+          },
+          {
+            "index": 1,
+            "readyMs": 2576,
+            "changedMs": 111,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 198006392
+          },
+          {
+            "index": 2,
+            "readyMs": 2633.000000000002,
+            "changedMs": 90,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482405056
+          },
+          {
+            "index": 3,
+            "readyMs": 3586,
+            "changedMs": 101,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 2,
+            "nativeTextureBytes": 197994960
+          },
+          {
+            "index": 4,
+            "readyMs": 2751.0000000000036,
+            "changedMs": 111,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 5,
+            "readyMs": 2714,
+            "changedMs": 87,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530276788
+          },
+          {
+            "index": 6,
+            "readyMs": 2698,
+            "changedMs": 80,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482405056
+          },
+          {
+            "index": 7,
+            "readyMs": 2697,
+            "changedMs": 89,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 548267660
+          },
+          {
+            "index": 8,
+            "readyMs": 2514,
+            "changedMs": 78,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 9,
+            "readyMs": 2722.0000000000036,
+            "changedMs": 79,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530288220
+          },
+          {
+            "index": 10,
+            "readyMs": 2787,
+            "changedMs": 113,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 482413220
+          },
+          {
+            "index": 11,
+            "readyMs": 2527,
+            "changedMs": 91,
+            "restoringAppearances": 0,
+            "originalDocument": true,
+            "originalPanelConnected": true,
+            "removedPanels": 0,
+            "activeNativeSessions": 3,
+            "nativeTextureBytes": 530288220
+          },
+          {}
+        ],
+        "restoringAppearances": 0,
+        "originalPanelFound": true,
+        "removedPanels": 0,
+        "originalTimeOrigin": 1790320185698
+      },
+      "peaks": {
+        "tauri-driver": {
+          "sampledRssMiB": 3.625,
+          "lifetimePeakMiB": 3.625
+        },
+        "WebKitWebDriver": {
+          "sampledRssMiB": 25.140625,
+          "lifetimePeakMiB": 25.140625
+        },
+        "darkroom": {
+          "sampledRssMiB": 1560.80859375,
+          "lifetimePeakMiB": 1574.33203125
+        },
+        "WebKitNetworkPr": {
+          "sampledRssMiB": 248.10546875,
+          "lifetimePeakMiB": 297.85546875
+        },
+        "WebKitWebProces": {
+          "sampledRssMiB": 2040.81640625,
+          "lifetimePeakMiB": 2175.89453125
+        }
+      },
+      "sampledAggregateRssMiB": 3157.203125
+    }
+  }
+}

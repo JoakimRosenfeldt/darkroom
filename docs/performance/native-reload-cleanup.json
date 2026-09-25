@@ -1,0 +1,113 @@
+{
+  "date": "2026-09-25",
+  "method": "Real Tauri development app on Linux Vulkan. Open Develop, let rendering settle, then reload the web document three times. Each observation follows restored editor readiness. The assertion rejects native session or texture accumulation.",
+  "runs": {
+    "before": [
+      {
+        "reload": 0,
+        "timeOrigin": 1790319957568,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 10
+      },
+      {
+        "reload": 1,
+        "timeOrigin": 1790319961869,
+        "activeSessions": 8,
+        "textureBytes": 1097124384,
+        "renderedFrames": 20
+      },
+      {
+        "reload": 2,
+        "timeOrigin": 1790319964970,
+        "activeSessions": 11,
+        "textureBytes": 1533967148,
+        "renderedFrames": 29
+      },
+      {
+        "reload": 3,
+        "timeOrigin": 1790319968021.0002,
+        "activeSessions": 11,
+        "textureBytes": 1533967148,
+        "renderedFrames": 32
+      }
+    ],
+    "after": [
+      {
+        "reload": 0,
+        "timeOrigin": 1790320663110.0002,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 10
+      },
+      {
+        "reload": 1,
+        "timeOrigin": 1790320667219,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 20
+      },
+      {
+        "reload": 2,
+        "timeOrigin": 1790320670177,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 30
+      },
+      {
+        "reload": 3,
+        "timeOrigin": 1790320673203,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 40
+      }
+    ]
+  },
+  "activeRenderStress": {
+    "method": "Five full document reloads during edit updates every 8 ms. Native rendering must resume without retaining earlier sessions.",
+    "observations": [
+      {
+        "reload": 0,
+        "timeOrigin": 1790320700879,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 10
+      },
+      {
+        "reload": 1,
+        "timeOrigin": 1790320705113.0002,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 21
+      },
+      {
+        "reload": 2,
+        "timeOrigin": 1790320708216,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 32
+      },
+      {
+        "reload": 3,
+        "timeOrigin": 1790320711321,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 43
+      },
+      {
+        "reload": 4,
+        "timeOrigin": 1790320714326,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 54
+      },
+      {
+        "reload": 5,
+        "timeOrigin": 1790320717451,
+        "activeSessions": 4,
+        "textureBytes": 548562192,
+        "renderedFrames": 65
+      }
+    ]
+  }
+}

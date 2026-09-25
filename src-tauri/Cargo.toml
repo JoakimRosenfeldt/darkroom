@@ -44,6 +44,10 @@ tiff = { version = "0.10", default-features = false, features = ["lzw"] }
 libraw_rs_vendor = "1.0.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ryu-js = "1"
+rayon = "1.11"
+wgpu = { version = "26.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "glsl", "wgsl", "naga-ir"] }
+pollster = "0.4"
+half = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
@@ -67,6 +71,12 @@ path = "src/main.rs"
 name = "darkroom-backend"
 path = "src/bin/backend.rs"
 required-features = ["diagnostics"]
+
+[profile.dev.package.darkroom]
+opt-level = 2
+
+[profile.dev.package.libraw_rs_vendor]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

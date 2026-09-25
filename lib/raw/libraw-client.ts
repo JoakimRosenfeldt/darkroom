@@ -35,12 +35,20 @@ function runLibRaw<T>(
 ): Promise<T> {
   return runWithRawLimit(async () => {
     const raw = await acquireLibRaw();
-    options.signal?.throwIfAborted();
-    const result = await operation(raw);
-    if (options.signal?.aborted && typeof result === "object" && result !== null &&
-        "objectUrl" in result && typeof result.objectUrl === "string") URL.revokeObjectURL(result.objectUrl);
-    options.signal?.throwIfAborted();
-    return result;
+    try {
+      options.signal?.throwIfAborted();
+      const result = await operation(raw);
+      if (options.signal?.aborted && typeof result === "object" && result !== null &&
+          "objectUrl" in result && typeof result.objectUrl === "string") URL.revokeObjectURL(result.objectUrl);
+      options.signal?.throwIfAborted();
+      return result;
+    } finally {
+      if (options.fullResolution) {
+        // Release the grown WASM heap; decoded pixels have their own cache.
+        raw.dispose();
+        librawInstance = null;
+      }
+    }
   }, options);
 }
 
@@ -128,7 +136,7 @@ async function buildFromEmbeddedThumbnail(
   };
 }
 
-async function buildFromImageData(
+export async function buildFromImageData(
   image: {
     data: Uint8Array | Uint16Array;
     width: number;
@@ -261,8 +269,10 @@ async function decodeOpenedRaw(
 ): Promise<DecodedImage | null> {
   return runLibRaw(async (raw) => {
     await raw.open(input.slice() as BufferSource, buildSettings(options, halfSize));
+    options.signal?.throwIfAborted();
 
     const metadata = await raw.metadata(true);
+    options.signal?.throwIfAborted();
     if (!metadata) {
       throw new Error("Could not read RAW metadata");
     }
@@ -271,11 +281,18 @@ async function decodeOpenedRaw(
       metadata as Record<string, unknown>,
     );
     let image: Awaited<ReturnType<typeof raw.imageData>>;
+    const abort = (): void => {
+      raw.dispose();
+      if (librawInstance === raw) librawInstance = null;
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
     try {
       image = await raw.imageData();
     } catch (error) {
       options.signal?.throwIfAborted();
       throw unsupportedNikonCompression(metadataRecord) ?? error;
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
     }
     options.signal?.throwIfAborted();
     if (!image?.data?.length || image.width <= 0 || image.height <= 0) {

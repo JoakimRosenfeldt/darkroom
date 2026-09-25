@@ -1,0 +1,1218 @@
+{
+  "measuredAt": "2026-09-25",
+  "baselineFrontendCommit": "d3221234880cc0b6c915360dc337bfcead60569d",
+  "optimizedSourceSha256": {
+    "components/develop/DevelopCanvas.tsx": "2b3dfdcc0b4a227f0067d8ef17bd59cad07a94f16c565638f916e57e06f4f8f7",
+    "components/viewer/PhotoLoupe.tsx": "edacecca6b291e712737d46f279ba05de6cf7aff5bdadbb62f081e1e84306bbb",
+    "lib/viewer/detail-tiles.ts": "13f537128f5f794b42d9d1316f16acb5cca5099b00f8c6dc9efe92ab7ec99f69",
+    "lib/develop/v3/gpu-backend.ts": "65c25eaf0bae09f0abf184e190b7ef2e1846549f883fd3bac2cdef2983ddfcce",
+    "lib/develop/v3/native-context.ts": "e574724b88ebcc18620a099a79ee5464e15cfb4940a80978bb53472a75a60612",
+    "src-tauri/src/gpu.rs": "6d425966a7f1310da6e8d3604fc7585582bc8cd48fca81c42aaec4c33a7b7581"
+  },
+  "method": "In-page performance.now; canvas draw interception and requestAnimationFrame followed by a task. This records frame submission and the next paint opportunity, not compositor presentation. Edits change exposure and contrast inside a real edit group. Zoom uses the 100% button; panning uses trusted WebDriver pointer actions. Detail readiness requires full-resolution coverage; fullyOpaque also includes tile fades. JPEG fixture resized to 4000px wide. Three warmup samples excluded from quantiles. The first zoom warmup sample records cold detail latency.",
+  "environment": {
+    "platform": "Linux x86_64",
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "backend": "Vulkan",
+    "webkitVersion": "2.52.6",
+    "display": "Xvfb 1600x1000x24, GDK_BACKEND=x11, WEBKIT_DISABLE_DMABUF_RENDERER=1",
+    "frontend": "Production Vite bundles; temporary smoke module imports only",
+    "nativeProfile": "release optimized, diagnostics feature, darkroom debug-assertions=true to retain localhost development URL",
+    "nativeExecutableSha256": "a1ba09652cd92a68c1318b9e2a93b324a29dd4a13157ab9ecf9522f7f9b71866"
+  },
+  "notes": [
+    "Both frontends used the same optimized native executable. The added flipY readback option defaults to false for the baseline frontend.",
+    "12 measured samples follow 3 warmups for each repeated phase. Cold zoom, release restoration, paused editing and rapid drag are single observations.",
+    "The existing adaptive preview resolution controller is unchanged. Per-sample dimensions are retained; at 309 by 206 the Fit median is 102 ms before and 60 ms after.",
+    "Cold zoom starts with a loaded source and uncached sharp viewport detail; it is not application startup.",
+    "The baseline timed out on cancellation readiness after all timing phases completed. Its pixels are not claimed to be incorrect. The optimized run restored exact document and pixels and re-enabled Auto Tone.",
+    "Xvfb measures canvas submission and the next paint opportunity. Physical presentation, Windows and macOS performance were not measured."
+  ],
+  "rawReportSha256": {
+    "before": "8c889e11597012c7c6303d0d9123ac86d8723588667a18944959fb191fb44abf",
+    "after": "8ee245d04e37e5abf149d8616b325c830518b69c066d16ca6adea762a549bf3b"
+  },
+  "before": {
+    "failure": "AssertionError [ERR_ASSERTION]: Cancelling a drag must restore its document and exact settled pixels",
+    "initial": {
+      "source": {
+        "height": 2667,
+        "width": 4000
+      },
+      "native": {
+        "activeSessions": 2,
+        "maxColorAttachmentBytesPerSample": 128,
+        "lastPrepareMs": 4.77,
+        "maxColorAttachments": 8,
+        "renderedPasses": 9,
+        "lastFrameMs": 7.51,
+        "lastPackMs": 1.2,
+        "backend": "Vulkan",
+        "maxTextureDimension": 32768,
+        "textureBytes": 263390248,
+        "lastGpuWaitMs": 1.49,
+        "maxTextureArrayLayers": 2048,
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "renderedFrames": 3
+      },
+      "viewport": {
+        "dpr": 2,
+        "height": 613,
+        "width": 896
+      },
+      "main": {
+        "height": 1195,
+        "width": 1792
+      }
+    },
+    "final": {
+      "source": {
+        "height": 2667,
+        "width": 4000
+      },
+      "native": {
+        "activeSessions": 4,
+        "maxColorAttachmentBytesPerSample": 128,
+        "lastPrepareMs": 0.16,
+        "maxColorAttachments": 8,
+        "renderedPasses": 1119,
+        "lastFrameMs": 1.21,
+        "lastPackMs": 0.01,
+        "backend": "Vulkan",
+        "maxTextureDimension": 32768,
+        "textureBytes": 381353432,
+        "lastGpuWaitMs": 1.03,
+        "maxTextureArrayLayers": 2048,
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "renderedFrames": 373
+      },
+      "viewport": {
+        "dpr": 2,
+        "height": 613,
+        "width": 896
+      },
+      "main": {
+        "height": 1195,
+        "width": 1792
+      }
+    },
+    "edit": {
+      "metrics": {
+        "submittedMs": {
+          "p50": 71.0,
+          "p95": 193
+        },
+        "paintOpportunityMs": {
+          "p50": 102,
+          "p95": 193
+        }
+      },
+      "samples": [
+        {
+          "submittedMs": 193,
+          "width": 865,
+          "paintOpportunityMs": 193,
+          "height": 577
+        },
+        {
+          "submittedMs": 107,
+          "width": 612,
+          "paintOpportunityMs": 107,
+          "height": 408
+        },
+        {
+          "submittedMs": 104,
+          "width": 612,
+          "paintOpportunityMs": 104,
+          "height": 408
+        },
+        {
+          "submittedMs": 71,
+          "width": 432,
+          "paintOpportunityMs": 102,
+          "height": 288
+        },
+        {
+          "submittedMs": 74,
+          "width": 432,
+          "paintOpportunityMs": 107,
+          "height": 288
+        },
+        {
+          "submittedMs": 71.0,
+          "width": 309,
+          "paintOpportunityMs": 102,
+          "height": 206
+        },
+        {
+          "submittedMs": 74,
+          "width": 309,
+          "paintOpportunityMs": 105,
+          "height": 206
+        },
+        {
+          "submittedMs": 73,
+          "width": 309,
+          "paintOpportunityMs": 104.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 70.0,
+          "width": 309,
+          "paintOpportunityMs": 101,
+          "height": 206
+        },
+        {
+          "submittedMs": 71.0,
+          "width": 309,
+          "paintOpportunityMs": 102.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 69,
+          "width": 309,
+          "paintOpportunityMs": 101,
+          "height": 206
+        },
+        {
+          "submittedMs": 68,
+          "width": 309,
+          "paintOpportunityMs": 99,
+          "height": 206
+        }
+      ]
+    },
+    "zoom": {
+      "metrics": {
+        "readyMs": {
+          "p50": 45,
+          "p95": 149
+        },
+        "fullyOpaqueMs": {
+          "p50": 45,
+          "p95": 246
+        },
+        "firstVisualMs": {
+          "p50": 27.0,
+          "p95": 86
+        },
+        "firstDetailMs": {
+          "p50": 1,
+          "p95": 3
+        },
+        "drawCpuMs": {
+          "p50": 2.0,
+          "p95": 15.0
+        }
+      },
+      "samples": [
+        {
+          "readyMs": 149,
+          "width": 1792,
+          "fullyOpaqueMs": 246,
+          "firstVisualMs": 24,
+          "drawCount": 447,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 15.0
+        },
+        {
+          "readyMs": 43,
+          "width": 1792,
+          "fullyOpaqueMs": 43,
+          "firstVisualMs": 43,
+          "drawCount": 90,
+          "firstDetailMs": 0,
+          "height": 1226,
+          "drawCpuMs": 4.0
+        },
+        {
+          "readyMs": 86,
+          "width": 1792,
+          "fullyOpaqueMs": 86,
+          "firstVisualMs": 86,
+          "drawCount": 60,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 2.0
+        },
+        {
+          "readyMs": 44,
+          "width": 1792,
+          "fullyOpaqueMs": 44,
+          "firstVisualMs": 20,
+          "drawCount": 90,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 4.0
+        },
+        {
+          "readyMs": 86,
+          "width": 1792,
+          "fullyOpaqueMs": 86,
+          "firstVisualMs": 27.0,
+          "drawCount": 90,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 3
+        },
+        {
+          "readyMs": 30.0,
+          "width": 1792,
+          "fullyOpaqueMs": 30.0,
+          "firstVisualMs": 30.0,
+          "drawCount": 120,
+          "firstDetailMs": 2.0,
+          "height": 1226,
+          "drawCpuMs": 2
+        },
+        {
+          "readyMs": 45,
+          "width": 1792,
+          "fullyOpaqueMs": 45,
+          "firstVisualMs": 45,
+          "drawCount": 90,
+          "firstDetailMs": 3,
+          "height": 1226,
+          "drawCpuMs": 3
+        },
+        {
+          "readyMs": 84,
+          "width": 1792,
+          "fullyOpaqueMs": 84,
+          "firstVisualMs": 20,
+          "drawCount": 30,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 45,
+          "width": 1792,
+          "fullyOpaqueMs": 45,
+          "firstVisualMs": 45,
+          "drawCount": 60,
+          "firstDetailMs": 3,
+          "height": 1226,
+          "drawCpuMs": 2.0
+        },
+        {
+          "readyMs": 65,
+          "width": 1792,
+          "fullyOpaqueMs": 65,
+          "firstVisualMs": 45,
+          "drawCount": 60,
+          "firstDetailMs": 2,
+          "height": 1226,
+          "drawCpuMs": 3.0
+        },
+        {
+          "readyMs": 85.0,
+          "width": 1792,
+          "fullyOpaqueMs": 85.0,
+          "firstVisualMs": 20.0,
+          "drawCount": 30,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 26,
+          "width": 1792,
+          "fullyOpaqueMs": 26,
+          "firstVisualMs": 26,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        }
+      ]
+    },
+    "pan": {
+      "metrics": {
+        "readyMs": {
+          "p50": 17.0,
+          "p95": 19
+        },
+        "fullyOpaqueMs": {
+          "p50": 17.0,
+          "p95": 19
+        },
+        "firstVisualMs": {
+          "p50": 17.0,
+          "p95": 19
+        },
+        "firstDetailMs": {
+          "p50": 1,
+          "p95": 1
+        },
+        "drawCpuMs": {
+          "p50": 1,
+          "p95": 2
+        }
+      },
+      "samples": [
+        {
+          "readyMs": 17,
+          "width": 1792,
+          "fullyOpaqueMs": 17,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18.0,
+          "width": 1792,
+          "fullyOpaqueMs": 18.0,
+          "firstVisualMs": 18.0,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 17.0,
+          "width": 1792,
+          "fullyOpaqueMs": 17.0,
+          "firstVisualMs": 17.0,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 18,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 17,
+          "width": 1792,
+          "fullyOpaqueMs": 17,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 19,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 18,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 2
+        },
+        {
+          "readyMs": 17,
+          "width": 1792,
+          "fullyOpaqueMs": 17,
+          "firstVisualMs": 17,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 17,
+          "width": 1792,
+          "fullyOpaqueMs": 17,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 17,
+          "width": 1792,
+          "fullyOpaqueMs": 17,
+          "firstVisualMs": 16,
+          "drawCount": 20,
+          "firstDetailMs": 0,
+          "height": 1226,
+          "drawCpuMs": 1
+        }
+      ]
+    },
+    "zoomedEdit": {
+      "metrics": {
+        "submittedMs": {
+          "p50": 67.0,
+          "p95": 87
+        },
+        "paintOpportunityMs": {
+          "p50": 95.0,
+          "p95": 102
+        }
+      },
+      "samples": [
+        {
+          "submittedMs": 86.0,
+          "width": 309,
+          "paintOpportunityMs": 87.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 65,
+          "width": 309,
+          "paintOpportunityMs": 93,
+          "height": 206
+        },
+        {
+          "submittedMs": 67.0,
+          "width": 309,
+          "paintOpportunityMs": 96,
+          "height": 206
+        },
+        {
+          "submittedMs": 67.0,
+          "width": 309,
+          "paintOpportunityMs": 97,
+          "height": 206
+        },
+        {
+          "submittedMs": 69.0,
+          "width": 309,
+          "paintOpportunityMs": 97,
+          "height": 206
+        },
+        {
+          "submittedMs": 68,
+          "width": 309,
+          "paintOpportunityMs": 96,
+          "height": 206
+        },
+        {
+          "submittedMs": 66.0,
+          "width": 309,
+          "paintOpportunityMs": 95.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 72,
+          "width": 309,
+          "paintOpportunityMs": 102,
+          "height": 206
+        },
+        {
+          "submittedMs": 87,
+          "width": 309,
+          "paintOpportunityMs": 87,
+          "height": 206
+        },
+        {
+          "submittedMs": 63,
+          "width": 309,
+          "paintOpportunityMs": 92,
+          "height": 206
+        },
+        {
+          "submittedMs": 69,
+          "width": 309,
+          "paintOpportunityMs": 98,
+          "height": 206
+        },
+        {
+          "submittedMs": 66,
+          "width": 309,
+          "paintOpportunityMs": 94,
+          "height": 206
+        }
+      ],
+      "detailRestoredMs": 2267,
+      "detailExportsDuringMeasuredSamples": 24
+    },
+    "coldZoom": {
+      "readyMs": 3235,
+      "width": 1792,
+      "fullyOpaqueMs": 3354,
+      "firstVisualMs": 124,
+      "drawCount": 2283,
+      "firstDetailMs": 8,
+      "height": 1226,
+      "drawCpuMs": 410.0
+    },
+    "rapidDrag": {
+      "autoDisabledDuringDrag": true,
+      "inputsMs": [
+        0,
+        32,
+        62,
+        93,
+        126,
+        158,
+        192,
+        222,
+        252,
+        282,
+        313,
+        347,
+        377,
+        408,
+        441,
+        474
+      ],
+      "paintsMs": [
+        574
+      ],
+      "durationMs": 504,
+      "paintsDuringDrag": 0,
+      "firstPaintAfterReleaseMs": 70,
+      "histogramUpdates": 0,
+      "settledAfterReleaseMs": 70,
+      "workerResultsDuringDrag": 8
+    },
+    "cancelledDrag": {
+      "failure": "Error: Error: Timed out: cancelled drag restored\nuntil@"
+    },
+    "pausedZoomedEdit": {
+      "height": 1226,
+      "width": 1792,
+      "fullDetailMs": 995
+    },
+    "idleFrameIntervalsMs": {
+      "p95": 41,
+      "p50": 16,
+      "max": 42
+    }
+  },
+  "after": {
+    "failure": null,
+    "initial": {
+      "source": {
+        "height": 2667,
+        "width": 4000
+      },
+      "native": {
+        "activeSessions": 3,
+        "maxColorAttachmentBytesPerSample": 128,
+        "lastPrepareMs": 9.06,
+        "maxColorAttachments": 8,
+        "renderedPasses": 10,
+        "lastFrameMs": 11.19,
+        "lastPackMs": 0.24,
+        "backend": "Vulkan",
+        "maxTextureDimension": 32768,
+        "textureBytes": 318464908,
+        "lastGpuWaitMs": 1.85,
+        "maxTextureArrayLayers": 2048,
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "renderedFrames": 5
+      },
+      "viewport": {
+        "dpr": 2,
+        "height": 613,
+        "width": 896
+      },
+      "main": {
+        "height": 1195,
+        "width": 1792
+      }
+    },
+    "final": {
+      "source": {
+        "height": 2667,
+        "width": 4000
+      },
+      "native": {
+        "activeSessions": 4,
+        "maxColorAttachmentBytesPerSample": 128,
+        "lastPrepareMs": 0.12,
+        "maxColorAttachments": 8,
+        "renderedPasses": 292,
+        "lastFrameMs": 28.72,
+        "lastPackMs": 12.77,
+        "backend": "Vulkan",
+        "maxTextureDimension": 32768,
+        "textureBytes": 523133912,
+        "lastGpuWaitMs": 15.82,
+        "maxTextureArrayLayers": 2048,
+        "adapter": "NVIDIA GeForce RTX 3080",
+        "deviceType": "DiscreteGpu",
+        "renderedFrames": 146
+      },
+      "viewport": {
+        "dpr": 2,
+        "height": 613,
+        "width": 896
+      },
+      "main": {
+        "height": 1195,
+        "width": 1792
+      }
+    },
+    "edit": {
+      "metrics": {
+        "submittedMs": {
+          "p50": 45,
+          "p95": 54
+        },
+        "paintOpportunityMs": {
+          "p50": 60,
+          "p95": 68
+        }
+      },
+      "samples": [
+        {
+          "submittedMs": 43,
+          "width": 612,
+          "paintOpportunityMs": 60,
+          "height": 408
+        },
+        {
+          "submittedMs": 45,
+          "width": 432,
+          "paintOpportunityMs": 59,
+          "height": 288
+        },
+        {
+          "submittedMs": 45,
+          "width": 432,
+          "paintOpportunityMs": 60.0,
+          "height": 288
+        },
+        {
+          "submittedMs": 40,
+          "width": 309,
+          "paintOpportunityMs": 55.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 46,
+          "width": 309,
+          "paintOpportunityMs": 61.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 43,
+          "width": 309,
+          "paintOpportunityMs": 59,
+          "height": 206
+        },
+        {
+          "submittedMs": 44.0,
+          "width": 309,
+          "paintOpportunityMs": 60.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 54,
+          "width": 309,
+          "paintOpportunityMs": 54,
+          "height": 206
+        },
+        {
+          "submittedMs": 48,
+          "width": 309,
+          "paintOpportunityMs": 63,
+          "height": 206
+        },
+        {
+          "submittedMs": 49,
+          "width": 309,
+          "paintOpportunityMs": 65,
+          "height": 206
+        },
+        {
+          "submittedMs": 48,
+          "width": 309,
+          "paintOpportunityMs": 68,
+          "height": 206
+        },
+        {
+          "submittedMs": 44,
+          "width": 309,
+          "paintOpportunityMs": 60,
+          "height": 206
+        }
+      ]
+    },
+    "zoom": {
+      "metrics": {
+        "readyMs": {
+          "p50": 19,
+          "p95": 20.0
+        },
+        "fullyOpaqueMs": {
+          "p50": 19,
+          "p95": 20.0
+        },
+        "firstVisualMs": {
+          "p50": 17,
+          "p95": 19.0
+        },
+        "firstDetailMs": {
+          "p50": 1,
+          "p95": 2
+        },
+        "drawCpuMs": {
+          "p50": 1,
+          "p95": 2.0
+        }
+      },
+      "samples": [
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 20,
+          "width": 1792,
+          "fullyOpaqueMs": 20,
+          "firstVisualMs": 19.0,
+          "drawCount": 30,
+          "firstDetailMs": 2,
+          "height": 1226,
+          "drawCpuMs": 2.0
+        },
+        {
+          "readyMs": 20,
+          "width": 1792,
+          "fullyOpaqueMs": 20,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 2.0
+        },
+        {
+          "readyMs": 19.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19.0,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 20.0,
+          "width": 1792,
+          "fullyOpaqueMs": 20.0,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17.0,
+          "drawCount": 30,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        }
+      ]
+    },
+    "pan": {
+      "metrics": {
+        "readyMs": {
+          "p50": 19,
+          "p95": 21.0
+        },
+        "fullyOpaqueMs": {
+          "p50": 19,
+          "p95": 21.0
+        },
+        "firstVisualMs": {
+          "p50": 17,
+          "p95": 20.0
+        },
+        "firstDetailMs": {
+          "p50": 1,
+          "p95": 1.0
+        },
+        "drawCpuMs": {
+          "p50": 1.0,
+          "p95": 1
+        }
+      },
+      "samples": [
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 17,
+          "drawCount": 20,
+          "firstDetailMs": 0,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 21.0,
+          "width": 1792,
+          "fullyOpaqueMs": 21.0,
+          "firstVisualMs": 20.0,
+          "drawCount": 30,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19.0,
+          "firstVisualMs": 17.0,
+          "drawCount": 20,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 0
+        },
+        {
+          "readyMs": 18,
+          "width": 1792,
+          "fullyOpaqueMs": 18,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 0
+        },
+        {
+          "readyMs": 19.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19.0,
+          "firstVisualMs": 18,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 0
+        },
+        {
+          "readyMs": 19.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19.0,
+          "firstVisualMs": 17.0,
+          "drawCount": 30,
+          "firstDetailMs": 0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 20,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 1
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 17,
+          "drawCount": 30,
+          "firstDetailMs": 1,
+          "height": 1226,
+          "drawCpuMs": 0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 18,
+          "drawCount": 20,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 19,
+          "width": 1792,
+          "fullyOpaqueMs": 19,
+          "firstVisualMs": 18,
+          "drawCount": 30,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1.0
+        },
+        {
+          "readyMs": 19.0,
+          "width": 1792,
+          "fullyOpaqueMs": 19.0,
+          "firstVisualMs": 17.0,
+          "drawCount": 20,
+          "firstDetailMs": 1.0,
+          "height": 1226,
+          "drawCpuMs": 1
+        }
+      ]
+    },
+    "zoomedEdit": {
+      "metrics": {
+        "submittedMs": {
+          "p50": 64,
+          "p95": 77
+        },
+        "paintOpportunityMs": {
+          "p50": 82,
+          "p95": 92
+        }
+      },
+      "samples": [
+        {
+          "submittedMs": 69.0,
+          "width": 309,
+          "paintOpportunityMs": 85.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 64,
+          "width": 309,
+          "paintOpportunityMs": 82,
+          "height": 206
+        },
+        {
+          "submittedMs": 66,
+          "width": 309,
+          "paintOpportunityMs": 82,
+          "height": 206
+        },
+        {
+          "submittedMs": 63,
+          "width": 309,
+          "paintOpportunityMs": 84.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 44.0,
+          "width": 309,
+          "paintOpportunityMs": 59.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 61,
+          "width": 309,
+          "paintOpportunityMs": 79.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 64,
+          "width": 309,
+          "paintOpportunityMs": 82.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 69,
+          "width": 309,
+          "paintOpportunityMs": 87,
+          "height": 206
+        },
+        {
+          "submittedMs": 77,
+          "width": 309,
+          "paintOpportunityMs": 92,
+          "height": 206
+        },
+        {
+          "submittedMs": 68,
+          "width": 309,
+          "paintOpportunityMs": 85.0,
+          "height": 206
+        },
+        {
+          "submittedMs": 62,
+          "width": 309,
+          "paintOpportunityMs": 81,
+          "height": 206
+        },
+        {
+          "submittedMs": 64,
+          "width": 309,
+          "paintOpportunityMs": 82,
+          "height": 206
+        }
+      ],
+      "detailRestoredMs": 239,
+      "detailExportsDuringMeasuredSamples": 0
+    },
+    "coldZoom": {
+      "readyMs": 187.0,
+      "width": 1792,
+      "fullyOpaqueMs": 187.0,
+      "firstVisualMs": 41.0,
+      "drawCount": 39,
+      "firstDetailMs": 7.0,
+      "height": 1226,
+      "drawCpuMs": 23
+    },
+    "rapidDrag": {
+      "autoDisabledDuringDrag": true,
+      "inputsMs": [
+        0,
+        28,
+        59,
+        88,
+        117,
+        147,
+        178,
+        204,
+        235,
+        264,
+        292,
+        323,
+        352,
+        383.0,
+        413,
+        442,
+        471
+      ],
+      "paintsMs": [
+        88,
+        147,
+        235,
+        322,
+        442,
+        523
+      ],
+      "durationMs": 501,
+      "paintsDuringDrag": 5,
+      "firstPaintAfterReleaseMs": 22,
+      "histogramUpdates": 3,
+      "settledAfterReleaseMs": 37,
+      "workerResultsDuringDrag": 8
+    },
+    "cancelledDrag": {
+      "pixelsRestored": true,
+      "height": 1195,
+      "width": 1792,
+      "documentRestored": true,
+      "restoredMs": 1036
+    },
+    "pausedZoomedEdit": {
+      "height": 1226,
+      "width": 1792,
+      "fullDetailMs": 291.0
+    },
+    "idleFrameIntervalsMs": {
+      "p95": 17,
+      "p50": 16,
+      "max": 19
+    }
+  }
+}

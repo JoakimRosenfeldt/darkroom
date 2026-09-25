@@ -1,3 +1,5 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { PixelDimensions } from "@/lib/develop/process";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
@@ -63,6 +65,10 @@ function sourceImage(image: DevelopImage): V3PreviewWorkerImage {
 
 export class V3PreviewWorkerClient {
   #worker: Worker | null = null;
+  #workerPromise: Promise<Worker> | null = null;
+  #workerReady = false;
+  readonly #nativeSessions = new Set<string>();
+  readonly #nativeGpu = isTauri();
   readonly #mainGpu: Promise<MainThreadGpuPreview> | null;
   readonly #entry: LibraryEntry;
   readonly #image: DevelopImage;
@@ -77,11 +83,10 @@ export class V3PreviewWorkerClient {
     this.#entry = entry;
     this.#image = image;
     const webkit = typeof navigator !== "undefined" && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
-    this.#mainGpu = webkit ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
-    if (!this.#mainGpu) this.#ensureWorker();
+    this.#mainGpu = webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
   }
 
-  #receive(response: V3PreviewWorkerResponse): void {
+  #receive(response: Exclude<V3PreviewWorkerResponse, { readonly kind: "ready" }>): void {
     const pending = this.#pending.get(response.requestId);
     if (!pending) {
       if (response.kind === "result" && response.result.kind === "rendered" && "bitmap" in response.result) response.result.bitmap.close();
@@ -98,25 +103,90 @@ export class V3PreviewWorkerClient {
     else pending.reject(new Error(response.message));
   }
 
-  #ensureWorker(): Worker {
-    if (this.#worker) return this.#worker;
+  #ensureWorker(): Promise<Worker> {
+    if (this.#workerPromise) return this.#workerPromise;
     const worker = this.#worker = workerFactory();
-    worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse>) => this.#receive(event.data);
-    worker.onerror = (): void => {
-      const error = new Error("The preview worker stopped unexpectedly.");
-      for (const pending of this.#pending.values()) pending.reject(error);
-      this.#pending.clear();
-      this.#queuedPreview?.reject(error);
-      this.#queuedPreview = null;
-      this.#disposed = true;
-      worker.terminate();
-      void this.#mainGpu?.then((renderer) => renderer.dispose());
-    };
-    const image = sourceImage(this.#image);
-    const buffer = image.rgb.buffer;
-    if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
-    worker.postMessage({ kind: "initialize", entry: this.#entry, image }, [buffer]);
-    return worker;
+    this.#workerPromise = new Promise((resolve, reject) => {
+      const fail = (error: Error): void => {
+        for (const pending of this.#pending.values()) pending.reject(error);
+        this.#pending.clear();
+        this.#queuedPreview?.reject(error);
+        this.#queuedPreview = null;
+        this.#disposed = true;
+        if (this.#workerReady) worker.terminate();
+        else {
+          // Failed imports can leave sibling loads pending. Detach the photo without terminating them.
+          worker.onmessage = null;
+          worker.onerror = null;
+          this.#worker = null;
+        }
+        void this.#releaseNativeSessions();
+        void this.#mainGpu?.then((renderer) => renderer.dispose());
+        reject(error);
+      };
+      worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse | NativeGpuWorkerRequest>) => {
+        if (event.data.kind === "ready") {
+          this.#workerReady = true;
+          if (this.#disposed) {
+            worker.terminate();
+            reject(new Error("The preview worker was disposed."));
+            return;
+          }
+          try {
+            const image = sourceImage(this.#image);
+            const buffer = image.rgb.buffer;
+            if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
+            worker.postMessage({ kind: "initialize", entry: this.#entry, image, nativeGpu: this.#nativeGpu }, [buffer]);
+            resolve(worker);
+          } catch (error) {
+            fail(error instanceof Error ? error : new Error("Could not initialize the preview worker."));
+          }
+        } else if (event.data.kind === "native-gpu") void this.#nativeRequest(worker, event.data);
+        else this.#receive(event.data);
+      };
+      worker.onerror = (): void => fail(new Error("The preview worker stopped unexpectedly."));
+    });
+    return this.#workerPromise;
+  }
+
+  async #nativeRequest(worker: Worker, request: NativeGpuWorkerRequest): Promise<void> {
+    let session: string | null = null;
+    try {
+      const length = new DataView(request.bytes.buffer).getUint32(0, true);
+      const metadata: unknown = JSON.parse(new TextDecoder().decode(request.bytes.subarray(4, 4 + length)));
+      if (metadata && typeof metadata === "object" && "session" in metadata && typeof metadata.session === "string") {
+        session = metadata.session;
+        this.#nativeSessions.add(session);
+      }
+      const bytes = await invoke<ArrayBuffer>("darkroom_gpu", request.bytes);
+      if (this.#disposed) {
+        if (session) this.#nativeSessions.add(session);
+        await this.#releaseNativeSessions();
+        return;
+      }
+      const response: NativeGpuWorkerResponse = { kind: "native-gpu-result", id: request.id, bytes };
+      worker.postMessage(response, [bytes]);
+    } catch (error) {
+      if (this.#disposed) {
+        if (session) this.#nativeSessions.add(session);
+        await this.#releaseNativeSessions();
+        return;
+      }
+      const response: NativeGpuWorkerResponse = { kind: "native-gpu-error", id: request.id, message: error instanceof Error ? error.message : String(error) };
+      worker.postMessage(response);
+    }
+  }
+
+  async #releaseNativeSessions(): Promise<void> {
+    const sessions = [...this.#nativeSessions];
+    this.#nativeSessions.clear();
+    await Promise.all(sessions.map(async (session) => {
+      const metadata = new TextEncoder().encode(JSON.stringify({ session, release: true }));
+      const request = new Uint8Array(4 + metadata.length);
+      new DataView(request.buffer).setUint32(0, metadata.length, true);
+      request.set(metadata, 4);
+      try { await invoke("darkroom_gpu", request); } catch { /* Failed devices own no usable sessions. */ }
+    }));
   }
 
   async #dispatch(message: Exclude<V3PreviewWorkerRequest, { kind: "initialize" }>): Promise<void> {
@@ -126,7 +196,9 @@ export class V3PreviewWorkerClient {
         if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
       }
       if (this.#disposed) return;
-      this.#ensureWorker().postMessage({ ...message, maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes });
+      const worker = await this.#ensureWorker();
+      if (this.#disposed) return;
+      worker.postMessage({ ...message, maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes });
       this.#maskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
     } catch (error) {
       this.#receive({ kind: "error", requestId: message.requestId, message: error instanceof Error ? error.message : "Could not render preview." });
@@ -172,7 +244,9 @@ export class V3PreviewWorkerClient {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    this.#worker?.terminate();
+    // Avoid tearing down WebKit module loaders while the worker is still starting.
+    if (this.#workerReady) this.#worker?.terminate();
+    void this.#releaseNativeSessions();
     void this.#mainGpu?.then((renderer) => renderer.dispose());
     for (const pending of this.#pending.values()) {
       pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });

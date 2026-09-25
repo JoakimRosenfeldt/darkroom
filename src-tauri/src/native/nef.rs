@@ -257,11 +257,37 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
     Ok(report)
 }
 
-fn failure(code: &str, message: &str) -> Value {
-    json!({"available":false,"code":code,"message":message})
+struct DecodedAsset {
+    metadata: Value,
+    pixels: Vec<u8>,
 }
 
-fn decode(args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
+impl DecodedAsset {
+    fn into_json(mut self) -> Value {
+        if self.metadata["available"] == true {
+            self.metadata["pixels"] = binary_value(&self.pixels);
+        }
+        self.metadata
+    }
+
+    fn into_binary(self) -> Result<Vec<u8>, String> {
+        let metadata = serde_json::to_vec(&self.metadata).map_err(|e| e.to_string())?;
+        let mut response = Vec::with_capacity(4 + metadata.len() + self.pixels.len());
+        response.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        response.extend_from_slice(&metadata);
+        response.extend_from_slice(&self.pixels);
+        Ok(response)
+    }
+}
+
+fn failure(code: &str, message: &str) -> DecodedAsset {
+    DecodedAsset {
+        metadata: json!({"available":false,"code":code,"message":message}),
+        pixels: Vec::new(),
+    }
+}
+
+fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
     let request = args.get(1).ok_or("Invalid Nikon decode request.")?;
     let mode = request.get("mode").and_then(Value::as_str).unwrap_or("");
     let max_edge = request.get("maxEdge").and_then(Value::as_u64).unwrap_or(0);
@@ -430,15 +456,20 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
             "Nikon decoder changed during decoding.",
         ));
     }
-    Ok(
-        json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb","pixels":binary_value(&pixels)}),
-    )
+    Ok(DecodedAsset {
+        metadata: json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb"}),
+        pixels,
+    })
+}
+
+pub fn decode_asset_binary(args: &[Value], ctx: &NativeContext) -> Result<Vec<u8>, String> {
+    decode(args, ctx)?.into_binary()
 }
 
 pub fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
     match command {
         "darkroom:get-format-capability-report" => report(ctx),
-        "darkroom:catalog-decode-asset" => decode(args, ctx),
+        "darkroom:catalog-decode-asset" => decode(args, ctx).map(DecodedAsset::into_json),
         _ => Err(format!("Unknown Nikon command: {command}")),
     }
 }

@@ -6,6 +6,7 @@ mod ai_models;
 mod assets;
 mod embedded_preview;
 mod export;
+mod libraw_decode;
 mod libraw_profile;
 mod metadata;
 mod nef;
@@ -21,9 +22,11 @@ pub use assets::read_asset_bytes;
 pub(crate) use assets::resolve_asset as resolve_asset_path;
 pub use embedded_preview::read_embedded_preview;
 pub use export::encode_export_raw;
+pub use libraw_decode::{LibRawDecodeOptions, decode_libraw};
 pub use libraw_profile::verify_libraw_profile;
 pub use metadata::analyze_file;
 pub(crate) use metadata::{analyze_file_with_digest, sha256 as metadata_sha256};
+pub use nef::decode_asset_binary;
 
 #[derive(Clone)]
 pub struct NativeContext {

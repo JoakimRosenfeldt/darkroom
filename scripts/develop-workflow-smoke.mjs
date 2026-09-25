@@ -32,6 +32,9 @@ const fixture = process.env.DARKROOM_SMOKE_RAW ?? path.join(root, "public/demo",
 const sampleName = raw ? "sample.NEF" : "sample.jpg";
 const originalHash = createHash("sha256").update(await readFile(fixture)).digest("hex");
 await copyFile(fixture, path.join(photos, sampleName));
+if (process.env.DARKROOM_SMOKE_BENCHMARK === "1" && !raw) {
+  await sharp(fixture).resize({ width: 4000 }).jpeg({ quality: 95 }).toFile(path.join(photos, sampleName));
+}
 await copyFile(fixture, path.join(photos, raw ? "second.NEF" : "second.jpg"));
 await copyFile(path.join(root, "public/demo", demo), path.join(photos, "demo.jpg"));
 const report = { directory, fixture, checks: [], timingsMs: {} };
@@ -121,6 +124,7 @@ async function launch() {
     getByText: (text) => locator({ text }),
     url: () => request(`/session/${session}/url`),
     goto: (url) => request(`/session/${session}/url`, { url }),
+    performActions: (actions) => request(`/session/${session}/actions`, { actions }),
     screenshot: async ({ path }) => writeFile(path, Buffer.from(await request(`/session/${session}/screenshot`), "base64")),
   };
   await page.waitForFunction(() => window.darkroom?.isDesktop);
@@ -129,6 +133,7 @@ async function launch() {
 }
 async function runtime() {
   await page.evaluate(async () => {
+    if (window.smokeModule) return;
     const names = [
       "stores/develop-store.ts",
       "stores/library-store.ts",
@@ -159,9 +164,10 @@ async function ready() {
     const store = window.smokeModule("stores/develop-store.ts").useDevelopStore.getState();
     const ui = store.sessions[store.activeEntryId]?.ui;
     if (ui?.sidecarStatus === "error") throw new Error(ui.sidecarError);
+    const canvas = document.querySelector('canvas[role="img"]');
     return store.activeEntryId && !Object.keys(store.pendingDefaultOperations).length &&
       store.sessions[store.activeEntryId]?.ui.sidecarStatus === "saved" &&
-      document.querySelector('canvas[role="img"]')?.width > 1;
+      canvas?.width > 1 && canvas.closest('[aria-busy]')?.getAttribute("aria-busy") === "false";
   }, null, { timeout: 90_000 });
 }
 async function check(name, run) {
@@ -182,6 +188,11 @@ try {
   await ready();
   report.timingsMs.openPhoto = Date.now() - started;
   const photoUrl = await page.url();
+
+  if (process.env.DARKROOM_SMOKE_BENCHMARK === "1") {
+    const { benchmarkDevelopInteraction } = await import("./benchmark-develop-interaction.mjs");
+    await benchmarkDevelopInteraction(page, report);
+  } else {
 
   await check("new photo, edit, undo, redo and delayed catalog save", async () => {
     const result = await page.evaluate(async () => {
@@ -331,9 +342,15 @@ try {
     assert.equal(result.difference, 0);
     assert.ok(result.pixelRange > 10, "Rendered export contains image detail.");
     report.renderBackends = { preview: result.backends, export: result.exportBackend };
-    if (process.env.DARKROOM_SMOKE_REQUIRE_GPU === "1") {
+    if (process.env.DARKROOM_SMOKE_REQUIRE_GPU === "1" || process.env.DARKROOM_SMOKE_REQUIRE_NATIVE === "1") {
       assert.ok(result.backends.every((backend) => backend === "gpu"));
       assert.equal(result.exportBackend, "gpu");
+    }
+    if (process.env.DARKROOM_SMOKE_REQUIRE_NATIVE === "1") {
+      const info = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("darkroom_gpu_info"));
+      assert.ok(["Vulkan", "Metal"].includes(info.backend), `Unexpected native backend: ${info.backend}`);
+      assert.ok(info.renderedFrames > 0, "The native backend executed rendered frames.");
+      report.nativeGpu = info;
     }
     report.timingsMs.cachedDecode = result.cachedMs;
     report.timingsMs.interactiveWorker = result.interactiveMs;
@@ -430,12 +447,14 @@ try {
       const receipts = await window.darkroom.developBatchList({ catalogId: state.catalogId, sessionId: state.sessionId, limit: 10 });
       return receipts.some((receipt) => receipt.batchId === id && receipt.cancellationRequested);
     }, report.cancelledBatchId), true);
+    await page.waitForFunction(() => Boolean(document.querySelector('svg[aria-label^="Full-frame RGB histogram"]')));
     await page.screenshot({ path: path.join(directory, "reopened.png") });
   });
   const hash = createHash("sha256").update(await readFile(fixture)).digest("hex");
   assert.equal(hash, originalHash);
   assert.equal(createHash("sha256").update(await readFile(path.join(photos, sampleName))).digest("hex"), originalHash);
   report.checks.push("source files unchanged");
+  }
 } catch (error) {
   report.failure = String(error);
   report.rendererState = await page?.evaluate(() => {
@@ -447,6 +466,9 @@ try {
 } finally {
   const remainingApps = (await processTree()).filter((item) => item.name === path.basename(executable));
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));
+  if (process.env.DARKROOM_SMOKE_BENCHMARK_OUTPUT) {
+    await writeFile(process.env.DARKROOM_SMOKE_BENCHMARK_OUTPUT, JSON.stringify(report, null, 2));
+  }
   if (session) {
     await page?.screenshot({ path: path.join(directory, "final.png") }).catch(() => {});
     await request(`/session/${session}`, undefined, "DELETE").catch(() => {});

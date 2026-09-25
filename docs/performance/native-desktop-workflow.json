@@ -1,0 +1,79 @@
+{
+  "directory": "/tmp/darkroom-develop-smoke-UOAkVx",
+  "fixture": "/home/joakim/.t3/worktrees/darkroom/t3code-6779267f/public/demo/city-night.jpg",
+  "checks": [
+    "new photo, edit, undo, redo and delayed catalog save",
+    "edited thumbnail size and virtual-copy identity",
+    "preset batch and undo",
+    "batch cancellation keeps completed edits and stops remaining items",
+    "detail regions match full output, and cached slider timing",
+    "100% uses one source pixel per display pixel",
+    "JPEG metadata, ICC, resize, collision and cancellation",
+    "process interruption preserves the masked crop and virtual copy",
+    "source files unchanged"
+  ],
+  "timingsMs": {
+    "openPhoto": 587,
+    "cachedDecode": 0,
+    "interactiveWorker": 12,
+    "actualSize": 4,
+    "export-all": 208.9999999999991,
+    "export-copyright": 172,
+    "export-none": 154.9999999999991
+  },
+  "cancelledBatchId": "8e72602b-3d58-4ca5-9d39-e659b5ffa220",
+  "fullRegionMaxChannelDelta": 0,
+  "renderBackends": {
+    "preview": [
+      "gpu",
+      "gpu",
+      "gpu",
+      "gpu"
+    ],
+    "export": "gpu"
+  },
+  "nativeGpu": {
+    "activeSessions": 4,
+    "maxColorAttachmentBytesPerSample": 128,
+    "lastPrepareMs": 0.35484600000000005,
+    "maxColorAttachments": 8,
+    "renderedPasses": 46,
+    "lastFrameMs": 0.756691,
+    "lastPackMs": 0.00979,
+    "backend": "Vulkan",
+    "maxTextureDimension": 32768,
+    "textureBytes": 244327948,
+    "lastGpuWaitMs": 0.363505,
+    "maxTextureArrayLayers": 2048,
+    "adapter": "NVIDIA GeForce RTX 3080",
+    "deviceType": "DiscreteGpu",
+    "renderedFrames": 23
+  },
+  "processHighWaterMemoryMiB": [
+    {
+      "pid": 1831720,
+      "name": "tauri-driver",
+      "peakResident": 3.734375
+    },
+    {
+      "pid": 1831721,
+      "name": "WebKitWebDriver",
+      "peakResident": 21.38671875
+    },
+    {
+      "pid": 1831726,
+      "name": "darkroom",
+      "peakResident": 559.2265625
+    },
+    {
+      "pid": 1831745,
+      "name": "WebKitNetworkPr",
+      "peakResident": 96.2421875
+    },
+    {
+      "pid": 1831749,
+      "name": "WebKitWebProces",
+      "peakResident": 701.92578125
+    }
+  ]
+}

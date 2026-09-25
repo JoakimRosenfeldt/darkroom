@@ -1,0 +1,23 @@
+{
+  "environment": "Linux WebKitGTK, Tauri diagnostics development build, Vite development server with React StrictMode",
+  "method": "Navigate to the other photo immediately after each preview-worker construction, for 16 switches. Observe Worker messages, termination calls, errors, and document timeOrigin.",
+  "baselineCommit": "606c1d53d22678b31488a627b36dda9331bac42f",
+  "change": "Lazy preview worker creation; initialize source pixels and permit termination only after module evaluation sends ready.",
+  "limitation": "The Linux probe detects premature worker termination. It does not reproduce or prove resolution of the macOS PAC_EXCEPTION crash.",
+  "before": {
+    "photoSwitches": 16,
+    "workersCreated": 36,
+    "workersTerminatedBeforeFirstMessage": 33,
+    "javascriptErrors": 0,
+    "documentReloaded": false
+  },
+  "after": {
+    "photoSwitches": 16,
+    "workersCreated": 19,
+    "workersTerminatedBeforeFirstMessage": 0,
+    "javascriptErrors": 0,
+    "documentReloaded": false,
+    "workersReady": 19,
+    "messagesSentBeforeReady": 0
+  }
+}
