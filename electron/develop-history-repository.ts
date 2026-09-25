@@ -276,7 +276,7 @@ export class DevelopHistoryRepository {
     } catch (error) {
       return this.reconstructionFailure("document", error instanceof Error ? error.message : "Develop history document is invalid.", checkpointRevisionId, null);
     }
-    const checkpointHash = sha256(canonicalDevelopHistoryDocument(document));
+    const checkpointHash = sha256(string(checkpoint, "checkpointJson"));
     if (checkpointHash !== parseDevelopDocumentHash(string(checkpoint, "documentHash"))) {
       return this.reconstructionFailure("hash", "Develop history checkpoint hash is corrupt.", checkpointRevisionId, null);
     }

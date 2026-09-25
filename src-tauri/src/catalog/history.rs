@@ -570,7 +570,7 @@ fn try_reconstruct(
             failed: checkpoint_id.clone(),
             last_valid: None,
         })?;
-    if digest(&canonical_json(&document)) != chain[0]["documentHash"] {
+    if digest(chain[0]["checkpointJson"].as_str().unwrap_or_default()) != chain[0]["documentHash"] {
         return Err(ReconstructionFailure {
             kind: "hash",
             message: "Develop history checkpoint hash is corrupt.".into(),
