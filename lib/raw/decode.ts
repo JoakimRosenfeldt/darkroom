@@ -9,6 +9,7 @@ import { getAssetRequest } from "@/lib/fs/session-catalog";
 import { runWithThumbnailLimit } from "@/lib/cache/concurrency";
 import { nefProfile } from "./profiles/nef";
 import { standardImageProfile } from "./profiles/standard";
+import { decodeWithNativeLibRaw } from "./native-client";
 import type { DecodeOptions, DecodedImage, ImageProfile } from "./types";
 
 const PROFILES: Record<"standard" | "nef", typeof standardImageProfile> = {
@@ -54,6 +55,11 @@ export async function decodeEntry(
 
   const decode = async () => {
     options?.signal?.throwIfAborted();
+    const request = getAssetRequest(entry);
+    if (profile.id === "nef") {
+      const native = await decodeWithNativeLibRaw(request, options);
+      if (native) return native;
+    }
     const file = await getFileFromEntry(entry);
     options?.signal?.throwIfAborted();
     const buffer = new Uint8Array(await file.arrayBuffer());
@@ -61,7 +67,7 @@ export async function decodeEntry(
     const decoded = await profile.decode(buffer, {
       ...options,
       relativePath: entry.relativePath,
-      assetRequest: getAssetRequest(entry),
+      assetRequest: request,
       assetRevision: entry.assetRevision,
     });
     if (options?.signal?.aborted && decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);

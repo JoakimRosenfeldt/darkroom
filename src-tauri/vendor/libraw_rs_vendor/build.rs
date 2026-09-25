@@ -260,6 +260,7 @@ fn bindings(out_dir: &Path) {
         .allowlist_type("libraw_processed_image_t")
         .allowlist_function("libraw_init")
         .allowlist_function("libraw_close")
+        .allowlist_function("libraw_set_progress_handler")
         .allowlist_function("libraw_open_buffer")
         .allowlist_function("libraw_open_file")
         .allowlist_function("libraw_open_wfile")

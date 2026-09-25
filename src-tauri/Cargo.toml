@@ -75,6 +75,9 @@ required-features = ["diagnostics"]
 [profile.dev.package.darkroom]
 opt-level = 2
 
+[profile.dev.package.libraw_rs_vendor]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

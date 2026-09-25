@@ -1,0 +1,432 @@
+{
+  "environment": {
+    "os": "Linux x86_64",
+    "webview": "WebKitGTK",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "renderBackend": "Vulkan",
+    "frontend": "Vite development",
+    "nativeBuild": "diagnostics debug; app opt-level2; candidate LibRaw vendor opt-level3",
+    "viewportCss": {
+      "width": 1440,
+      "height": 873
+    },
+    "devicePixelRatio": 2,
+    "fixtures": [
+      "Nikon Z6 III, 24 MP",
+      "Nikon D500, 21 MP"
+    ],
+    "cpu": "AMD Ryzen 9 5900X"
+  },
+  "sampling": "One instrumented sample per scenario and variant. Timings measure the actual canvas paint call after selection/edit release, not a fixed dwell or decode-only duration. macOS hardware performance remains unverified. Cold refers to app/decoder and decoded-photo caches; the operating-system file cache was not flushed.",
+  "versions": {
+    "baselineCommit": "9b07c079a8fb5d62ccc2374eb3b7bdf77e6052ec",
+    "candidateBaseCommit": "9b07c079a8fb5d62ccc2374eb3b7bdf77e6052ec",
+    "candidateDecoderRevision": "libraw-native-0.22.1-compat-v1",
+    "candidateSourceSha256": {
+      "lib/raw/native-client.ts": "05a6deb310e2a67188070aefcd0064306ae81c0d96692565f963f74d263efab6",
+      "lib/raw/decode.ts": "f8290f48c939565ff2fa902bb76480bfc6f5cd86e8ab4664196ae66578044ef8",
+      "lib/raw/libraw-client.ts": "a38dab246ba73147372a6eb786edeab1b5d518bfa4ac7f34232c97049fd724a8",
+      "src-tauri/src/lib.rs": "8de8f96655f0a5252675ce794c116dbec92e9a050f42fc247e6e842b3b21ac86",
+      "src-tauri/src/native/libraw_decode.rs": "2f58bd38f4154623300b31d8b694f8bf6f0abf59ad16eb1229e63831eb73c0c9",
+      "src-tauri/src/native/libraw_profile.rs": "0a495dcfcba1c5bd1436833a2f8ef777e66fb2af4e6d6deccd3b755f54a4e64c",
+      "src-tauri/src/native/mod.rs": "eef55912ad05241e40bb4a605d12a463b4003e3dc2498130c7447058514ef142",
+      "src-tauri/vendor/libraw_rs_vendor/build.rs": "eab4aefa110f46e213df54dd28c4fc2bca311fefaa9ff3077e0de7b2cd65a2ac",
+      "src-tauri/Cargo.toml": "61cee3b90e374abce32f2ae5b9d0a941953f38943a9bbd803f5a074178716649"
+    },
+    "timingScope": "Timings preceded only the queued-cancellation notification fix. Final controls and workflow reran after that backend-only change; normal decoding/rendering code did not change."
+  },
+  "measurements": {
+    "coldFirstPhoto": {
+      "baseline": {
+        "firstQuickPaintMs": 1812,
+        "firstSettledPaintMs": 1872
+      },
+      "candidate": {
+        "firstQuickPaintMs": 1293,
+        "firstSettledPaintMs": 1352
+      },
+      "candidateToBaselineFirstPaintRatio": 0.7136
+    },
+    "warmAppUncachedThirdPhoto": {
+      "baseline": {
+        "firstQuickPaintMs": 1033,
+        "firstSettledPaintMs": 1163
+      },
+      "candidate": {
+        "firstQuickPaintMs": 745,
+        "firstSettledPaintMs": 800
+      },
+      "candidateToBaselineFirstPaintRatio": 0.7212
+    },
+    "cachedSwitch": {
+      "baseline": {
+        "firstQuickPaintMs": 392,
+        "firstSettledPaintMs": 453
+      },
+      "candidate": {
+        "firstQuickPaintMs": 294,
+        "firstSettledPaintMs": 350
+      },
+      "candidateToBaselineFirstPaintRatio": 0.75
+    },
+    "sliderRelease": {
+      "baseline": {
+        "firstQuickPaintMs": 85,
+        "firstSettledPaintMs": 125
+      },
+      "candidate": {
+        "firstQuickPaintMs": 69,
+        "firstSettledPaintMs": 101
+      },
+      "candidateToBaselineFirstPaintRatio": 0.8118
+    }
+  },
+  "quality": {
+    "sourcePreviewDimensions": {
+      "width": 1706,
+      "height": 2560
+    },
+    "allPostSwitchAndReleaseFramesSettled": true,
+    "uncachedThirdWasAbsentFromCacheBeforeClick": true,
+    "documentReloads": 0,
+    "javascriptErrors": []
+  },
+  "nativeSource": {
+    "execution": "libraw-native",
+    "revision": "libraw-native-0.22.1-compat-v1",
+    "sourceSnapshotsVerified": 10,
+    "fullSourceSnapshotsVerified": 9,
+    "workerSourceInitializations": 21,
+    "compressedFileCopiesInJavaScript": {
+      "baseline": 8,
+      "candidate": 0
+    },
+    "wasmProfileFallbacksInCandidateNavigation": 0
+  },
+  "controls": {
+    "cases": [
+      {
+        "cancelled": true,
+        "error": "AbortError: The operation was aborted.",
+        "kind": "before-start"
+      },
+      {
+        "cancelled": true,
+        "error": "AbortError: The operation was aborted.",
+        "kind": "before-registration-ack",
+        "elapsedMs": 284.00000000000045
+      },
+      {
+        "blockers": [
+          {
+            "error": null,
+            "bytes": 146992568,
+            "elapsedMs": 1928.9999999999995
+          },
+          {
+            "error": null,
+            "bytes": 146992568,
+            "elapsedMs": 2587.0000000000005
+          }
+        ],
+        "kind": "queued",
+        "cancelled": true,
+        "blockersActive": true,
+        "error": "RAW decode was cancelled.",
+        "elapsedAfterCancelMs": 0
+      },
+      {
+        "kind": "running-after-200ms",
+        "elapsedMs": 271.9999999999991,
+        "cancelled": true,
+        "error": "RAW decode was cancelled.",
+        "wasPending": true,
+        "elapsedAfterCancelMs": 66.99999999999909
+      },
+      {
+        "rejected": true,
+        "error": "Catalog session is stale.",
+        "kind": "stale-session"
+      },
+      {
+        "rejected": true,
+        "error": "Catalog session is stale.",
+        "kind": "wrong-catalog"
+      },
+      {
+        "rejected": true,
+        "error": "Asset was not found in this catalog.",
+        "kind": "unknown-asset"
+      }
+    ],
+    "publicParserPixelsMatchRawPacket": true,
+    "requestIdReusedAfterCancellation": true,
+    "requestIdReusedAfterError": true,
+    "recoverableNativeFailureFallback": {
+      "revision": "darkroom-libraw-linear-camera-v1",
+      "reason": "Native maxEdge preflight rejection while WASM supports the request",
+      "width": 1999,
+      "execution": null,
+      "height": 3000,
+      "path": "libraw",
+      "bytes": 35982000
+    },
+    "queuedCancelBeforeFixMs": 2588,
+    "queuedCancelAfterFixMs": 0,
+    "queuedCancelAssertionMs": 500
+  },
+  "workflow": {
+    "checks": [
+      "new photo, edit, undo, redo and delayed catalog save",
+      "edited thumbnail size and virtual-copy identity",
+      "preset batch and undo",
+      "batch cancellation keeps completed edits and stops remaining items",
+      "detail regions match full output, and cached slider timing",
+      "100% uses one source pixel per display pixel",
+      "JPEG metadata, ICC, resize, collision and cancellation",
+      "process interruption preserves the masked crop and virtual copy",
+      "source files unchanged"
+    ],
+    "nativeSource": {
+      "execution": "libraw-native",
+      "height": 2560,
+      "revision": "libraw-native-0.22.1-compat-v1",
+      "width": 1706
+    },
+    "failure": null
+  },
+  "rawArtifacts": {
+    "baseline": "/tmp/darkroom-native-paired-baseline.json",
+    "candidate": "/tmp/darkroom-native-paired-candidate.json",
+    "uncachedBaseline": "/tmp/darkroom-native-third-baseline.json",
+    "uncachedCandidate": "/tmp/darkroom-native-third-candidate.json",
+    "controls": "/tmp/darkroom-native-raw-controls.json",
+    "workflow": "/tmp/darkroom-native-raw-workflow.json"
+  },
+  "pixelParity": {
+    "revision": "libraw-native-0.22.1-compat-v1",
+    "cases": [
+      {
+        "camera": "d500",
+        "mode": "preview",
+        "sourceDimensions": [
+          3728,
+          5600
+        ],
+        "outputDimensions": [
+          1704,
+          2560
+        ],
+        "orientation": 5,
+        "samples": 13086720,
+        "maxError": 0,
+        "meanError": 0,
+        "changedSamples": 0,
+        "decoderRevision": "libraw-native-0.22.1-compat-v1",
+        "metadataDifferences": [
+          {
+            "path": ".color_data.rgb_cam.0.0",
+            "native": 1.4137407541275024,
+            "wasm": 1.413740873336792
+          },
+          {
+            "path": ".color_data.rgb_cam.0.1",
+            "native": -0.32104381918907166,
+            "wasm": -0.3210439085960388
+          },
+          {
+            "path": ".color_data.rgb_cam.0.2",
+            "native": -0.09269698709249496,
+            "wasm": -0.09269700944423676
+          },
+          {
+            "path": ".color_data.rgb_cam.1.0",
+            "native": -0.15850187838077545,
+            "wasm": -0.15850189328193665
+          },
+          {
+            "path": ".color_data.rgb_cam.1.1",
+            "native": 1.5165295600891113,
+            "wasm": 1.5165296792984009
+          },
+          {
+            "path": ".color_data.rgb_cam.2.0",
+            "native": 0.024200256913900375,
+            "wasm": 0.024200260639190674
+          }
+        ]
+      },
+      {
+        "camera": "d500",
+        "mode": "full",
+        "sourceDimensions": [
+          3728,
+          5600
+        ],
+        "outputDimensions": [
+          3728,
+          5600
+        ],
+        "orientation": 5,
+        "samples": 62630400,
+        "maxError": 0,
+        "meanError": 0,
+        "changedSamples": 0,
+        "decoderRevision": "libraw-native-0.22.1-compat-v1",
+        "metadataDifferences": [
+          {
+            "path": ".color_data.rgb_cam.0.0",
+            "native": 1.4137407541275024,
+            "wasm": 1.413740873336792
+          },
+          {
+            "path": ".color_data.rgb_cam.0.1",
+            "native": -0.32104381918907166,
+            "wasm": -0.3210439085960388
+          },
+          {
+            "path": ".color_data.rgb_cam.0.2",
+            "native": -0.09269698709249496,
+            "wasm": -0.09269700944423676
+          },
+          {
+            "path": ".color_data.rgb_cam.1.0",
+            "native": -0.15850187838077545,
+            "wasm": -0.15850189328193665
+          },
+          {
+            "path": ".color_data.rgb_cam.1.1",
+            "native": 1.5165295600891113,
+            "wasm": 1.5165296792984009
+          },
+          {
+            "path": ".color_data.rgb_cam.2.0",
+            "native": 0.024200256913900375,
+            "wasm": 0.024200260639190674
+          }
+        ]
+      },
+      {
+        "camera": "z6iii",
+        "mode": "preview",
+        "sourceDimensions": [
+          4040,
+          6064
+        ],
+        "outputDimensions": [
+          1706,
+          2560
+        ],
+        "orientation": 5,
+        "samples": 13102080,
+        "maxError": 0,
+        "meanError": 0,
+        "changedSamples": 0,
+        "decoderRevision": "libraw-native-0.22.1-compat-v1",
+        "metadataDifferences": [
+          {
+            "path": ".color_data.rgb_cam.0.0",
+            "native": 1.4796135425567627,
+            "wasm": 1.4796136617660522
+          },
+          {
+            "path": ".color_data.rgb_cam.0.1",
+            "native": -0.25594088435173035,
+            "wasm": -0.2559409439563751
+          },
+          {
+            "path": ".color_data.rgb_cam.0.2",
+            "native": -0.22367271780967712,
+            "wasm": -0.22367268800735474
+          },
+          {
+            "path": ".color_data.rgb_cam.1.0",
+            "native": -0.14586755633354187,
+            "wasm": -0.14586752653121948
+          },
+          {
+            "path": ".color_data.rgb_cam.1.2",
+            "native": -0.37036600708961487,
+            "wasm": -0.37036603689193726
+          },
+          {
+            "path": ".color_data.rgb_cam.2.0",
+            "native": -0.0021267638076096773,
+            "wasm": -0.002126779407262802
+          }
+        ]
+      },
+      {
+        "camera": "z6iii",
+        "mode": "full",
+        "sourceDimensions": [
+          4040,
+          6064
+        ],
+        "outputDimensions": [
+          4040,
+          6064
+        ],
+        "orientation": 5,
+        "samples": 73495680,
+        "maxError": 0,
+        "meanError": 0,
+        "changedSamples": 0,
+        "decoderRevision": "libraw-native-0.22.1-compat-v1",
+        "metadataDifferences": [
+          {
+            "path": ".color_data.rgb_cam.0.0",
+            "native": 1.4796135425567627,
+            "wasm": 1.4796136617660522
+          },
+          {
+            "path": ".color_data.rgb_cam.0.1",
+            "native": -0.25594088435173035,
+            "wasm": -0.2559409439563751
+          },
+          {
+            "path": ".color_data.rgb_cam.0.2",
+            "native": -0.22367271780967712,
+            "wasm": -0.22367268800735474
+          },
+          {
+            "path": ".color_data.rgb_cam.1.0",
+            "native": -0.14586755633354187,
+            "wasm": -0.14586752653121948
+          },
+          {
+            "path": ".color_data.rgb_cam.1.2",
+            "native": -0.37036600708961487,
+            "wasm": -0.37036603689193726
+          },
+          {
+            "path": ".color_data.rgb_cam.2.0",
+            "native": -0.0021267638076096773,
+            "wasm": -0.002126779407262802
+          }
+        ]
+      }
+    ],
+    "cancellation": [
+      {
+        "delayMs": 0,
+        "elapsedMs": 0.031451,
+        "error": "RAW decode was cancelled."
+      },
+      {
+        "delayMs": 50,
+        "elapsedMs": 272.48178,
+        "error": "RAW decode was cancelled."
+      },
+      {
+        "delayMs": 200,
+        "elapsedMs": 273.77739,
+        "error": "RAW decode was cancelled."
+      }
+    ],
+    "invalidSize": {
+      "elapsedMs": 0.02623,
+      "error": "RAW preview size is invalid."
+    }
+  }
+}

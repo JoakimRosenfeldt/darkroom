@@ -8,10 +8,11 @@ mod native;
 
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tauri::{Emitter, Manager};
@@ -446,6 +447,116 @@ async fn darkroom_preview(
 
 static NEF_DECODE_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+#[derive(Default)]
+struct RawDecodeJobs(Mutex<HashMap<String, Arc<RawDecodeCancellation>>>);
+
+#[derive(Default)]
+struct RawDecodeCancellation {
+    requested: AtomicBool,
+    queued: tokio::sync::Notify,
+}
+
+impl RawDecodeCancellation {
+    fn cancel(&self) {
+        self.requested.store(true, Ordering::Relaxed);
+        self.queued.notify_one();
+    }
+}
+
+struct RawDecodeJob {
+    id: String,
+    cancelled: Arc<RawDecodeCancellation>,
+    jobs: Arc<RawDecodeJobs>,
+}
+
+impl Drop for RawDecodeJob {
+    fn drop(&mut self) {
+        self.cancelled.cancel();
+        if let Ok(mut jobs) = self.jobs.0.lock() {
+            jobs.remove(&self.id);
+        }
+    }
+}
+
+#[tauri::command]
+async fn darkroom_libraw_decode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<Backend>>,
+    jobs: tauri::State<'_, Arc<RawDecodeJobs>>,
+    request_id: String,
+    request: Value,
+    options: native::LibRawDecodeOptions,
+    on_started: tauri::ipc::Channel<()>,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err("RAW decode request id is invalid.".into());
+    }
+    let cancelled = Arc::new(RawDecodeCancellation::default());
+    {
+        let mut active = jobs
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| "RAW decoder is unavailable.")?;
+        if active.contains_key(&request_id) {
+            return Err("RAW decode request id is already active.".into());
+        }
+        active.insert(request_id.clone(), cancelled.clone());
+    }
+    let job = RawDecodeJob {
+        id: request_id,
+        cancelled,
+        jobs: jobs.inner().clone(),
+    };
+    // Acknowledge registration before the caller can send cancellation.
+    on_started.send(()).map_err(|e| e.to_string())?;
+    let permit = tokio::select! {
+        biased;
+        _ = job.cancelled.queued.notified() => return Err("RAW decode was cancelled.".into()),
+        permit = NEF_DECODE_QUEUE.acquire() => permit.map_err(|e| e.to_string())?,
+    };
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        let job = job;
+        if job.cancelled.requested.load(Ordering::Relaxed) {
+            return Err("RAW decode was cancelled.".into());
+        }
+        let location = backend
+            .catalog
+            .lock()
+            .map_err(|_| "Catalog service is unavailable.")?
+            .resolve_asset(&request)?;
+        native::decode_libraw(&location, &options, &job.cancelled.requested)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn darkroom_libraw_cancel(
+    window: tauri::WebviewWindow,
+    jobs: tauri::State<'_, Arc<RawDecodeJobs>>,
+    request_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    let active = jobs
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| "RAW decoder is unavailable.")?;
+    if let Some(cancelled) = active.get(&request_id) {
+        cancelled.cancel();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn darkroom_decode(
     window: tauri::WebviewWindow,
@@ -618,6 +729,13 @@ pub fn run() {
         if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
             // Document reloads bypass the JavaScript renderer's normal disposal.
             reset_gpu_sessions();
+            if let Some(jobs) = webview.try_state::<Arc<RawDecodeJobs>>() {
+                if let Ok(active) = jobs.inner().0.lock() {
+                    for cancelled in active.values() {
+                        cancelled.cancel();
+                    }
+                }
+            }
         }
     });
     #[cfg(target_os = "macos")]
@@ -684,6 +802,7 @@ pub fn run() {
                 native: native::NativeContext::new(user_data, resources, emit),
             });
             app.manage(backend);
+            app.manage(Arc::new(RawDecodeJobs::default()));
             menu::install(app.handle())?;
             main_window(app.handle())?;
             Ok(())
@@ -693,6 +812,8 @@ pub fn run() {
             darkroom_read,
             darkroom_preview,
             darkroom_decode,
+            darkroom_libraw_decode,
+            darkroom_libraw_cancel,
             darkroom_export,
             darkroom_gpu,
             darkroom_gpu_info,

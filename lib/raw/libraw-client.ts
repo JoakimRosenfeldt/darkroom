@@ -136,7 +136,7 @@ async function buildFromEmbeddedThumbnail(
   };
 }
 
-async function buildFromImageData(
+export async function buildFromImageData(
   image: {
     data: Uint8Array | Uint16Array;
     width: number;
