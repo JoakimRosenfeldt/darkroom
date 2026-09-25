@@ -1,0 +1,596 @@
+{
+  "environment": "Linux WebKitGTK with Vulkan on RTX 3080; Tauri diagnostics development build with optimized application crate; Vite development frontend; 24 MP Nikon Z6 III and 21 MP D500 NEFs; 1440 by 873 CSS-pixel window at DPR 2",
+  "measurementNotes": [
+    "Only the initial open, single cached selection and edit release have recorded action start times. Fixed dwell durations are not preview latencies.",
+    "The cached selection targets sample.NEF after second.NEF. The second-cold phase repeats the already selected entry and is not included as a navigation timing.",
+    "One instrumented run per variant; macOS timing is unverified.",
+    "The main comparison measures stable tool identity, a single 2560-pixel preview decode, and active decode cancellation. The preloadScheduling follow-up measures delaying neighboring preloads until foreground pixels are ready."
+  ],
+  "variants": {
+    "baseline": {
+      "previewWorkerRequests": 1377,
+      "mainPaints": 575,
+      "javascriptErrors": [],
+      "phases": [
+        {
+          "phase": "open-first-ready",
+          "canvas": {
+            "width": 480,
+            "height": 720
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 2,
+          "sourceDimensions": null,
+          "fullSourceReady": false,
+          "firstActualPaintMs": 2203.0,
+          "firstActualSettledPaintMs": 2253.0,
+          "observationWindowMs": 2300.0
+        },
+        {
+          "phase": "early-switch-during-preload",
+          "canvas": {
+            "width": 815,
+            "height": 1225
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 19,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "open-first-5s",
+          "canvas": {
+            "width": 815,
+            "height": 1225
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 19,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "second-cold",
+          "canvas": {
+            "width": 816,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "first-cached",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 20,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true,
+          "firstActualPaintMs": 409.0,
+          "firstActualSettledPaintMs": null,
+          "observationWindowMs": 5005.0
+        },
+        {
+          "phase": "rapid-switches",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 19,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "slider-before-release",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 13,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "slider-released-5s",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 19,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true,
+          "firstActualPaintMs": 113.0,
+          "firstActualSettledPaintMs": null,
+          "observationWindowMs": 5005.0
+        },
+        {
+          "phase": "zoom-100-5s",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 16,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "fit-restored",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 19,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        }
+      ],
+      "decodes": [
+        {
+          "startMs": 1724,
+          "durationMs": 631,
+          "path": "second.NEF",
+          "maxEdge": 720,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 479,
+            "height": 720
+          }
+        },
+        {
+          "startMs": 1836,
+          "durationMs": 1033,
+          "path": "sample.NEF",
+          "maxEdge": 720,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 480,
+            "height": 720
+          }
+        },
+        {
+          "startMs": 3071,
+          "durationMs": 538,
+          "path": "sample.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 1706,
+            "height": 2560
+          }
+        },
+        {
+          "startMs": 3289,
+          "durationMs": 2036,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 3902,
+          "durationMs": 404,
+          "path": "second.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 4091,
+          "durationMs": 215,
+          "path": "second.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 4759,
+          "durationMs": 147,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 5054,
+          "durationMs": 782,
+          "path": "second.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 1704,
+            "height": 2560
+          }
+        },
+        {
+          "startMs": 5297,
+          "durationMs": 1948,
+          "path": "second.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": null,
+          "dimensions": {
+            "width": 3728,
+            "height": 5600
+          }
+        },
+        {
+          "startMs": 23352,
+          "durationMs": 1679,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": null,
+          "dimensions": {
+            "width": 4040,
+            "height": 6064
+          }
+        },
+        {
+          "startMs": 34006,
+          "durationMs": 572,
+          "path": "sample.NEF",
+          "maxEdge": 360,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 240,
+            "height": 360
+          }
+        }
+      ]
+    },
+    "final": {
+      "previewWorkerRequests": 70,
+      "mainPaints": 16,
+      "javascriptErrors": [],
+      "phases": [
+        {
+          "phase": "open-first-ready",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 2,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": false,
+          "firstActualPaintMs": 2029,
+          "firstActualSettledPaintMs": 2101.0,
+          "observationWindowMs": 2136
+        },
+        {
+          "phase": "early-switch-during-preload",
+          "canvas": {
+            "width": 816,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "open-first-5s",
+          "canvas": {
+            "width": 816,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "second-cold",
+          "canvas": {
+            "width": 816,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1704,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "first-cached",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true,
+          "firstActualPaintMs": 385.0,
+          "firstActualSettledPaintMs": 479.0,
+          "observationWindowMs": 5001.0
+        },
+        {
+          "phase": "rapid-switches",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "slider-before-release",
+          "canvas": {
+            "width": 816,
+            "height": 1224
+          },
+          "lastPaintMode": "interactive",
+          "mainPaintsInLastIdleSecond": 2,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "slider-released-5s",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true,
+          "firstActualPaintMs": 79,
+          "firstActualSettledPaintMs": 129,
+          "observationWindowMs": 5002
+        },
+        {
+          "phase": "zoom-100-5s",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        },
+        {
+          "phase": "fit-restored",
+          "canvas": {
+            "width": 817,
+            "height": 1226
+          },
+          "lastPaintMode": "settled",
+          "mainPaintsInLastIdleSecond": 0,
+          "sourceDimensions": {
+            "width": 1706,
+            "height": 2560
+          },
+          "fullSourceReady": true
+        }
+      ],
+      "decodes": [
+        {
+          "startMs": 1825,
+          "durationMs": 627,
+          "path": "second.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 1704,
+            "height": 2560
+          }
+        },
+        {
+          "startMs": 1926,
+          "durationMs": 1056,
+          "path": "sample.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 1706,
+            "height": 2560
+          }
+        },
+        {
+          "startMs": 3461,
+          "durationMs": 540.0000000000005,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 4382,
+          "durationMs": 194.0000000000009,
+          "path": "second.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 4985,
+          "durationMs": 196,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": "AbortError: The operation was aborted.",
+          "dimensions": null
+        },
+        {
+          "startMs": 5573,
+          "durationMs": 1579,
+          "path": "second.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": null,
+          "dimensions": {
+            "width": 3728,
+            "height": 5600
+          }
+        },
+        {
+          "startMs": 23670,
+          "durationMs": 1812,
+          "path": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "error": null,
+          "dimensions": {
+            "width": 4040,
+            "height": 6064
+          }
+        },
+        {
+          "startMs": 34358.00000000001,
+          "durationMs": 594.9999999999927,
+          "path": "sample.NEF",
+          "maxEdge": 360,
+          "fullResolution": null,
+          "error": null,
+          "dimensions": {
+            "width": 240,
+            "height": 360
+          }
+        }
+      ]
+    }
+  },
+  "baselineCommit": "8eeffc269f883982c913d4d52eecff034e95cad9",
+  "preloadScheduling": {
+    "before": {
+      "firstActualPaintMs": 2097.0,
+      "firstActualSettledPaintMs": 2158,
+      "sourceDimensions": {
+        "width": 1706,
+        "height": 2560
+      },
+      "decodes": [
+        {
+          "file": "second.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "startedAfterOpenMs": 317,
+          "durationMs": 671.0000000000005
+        },
+        {
+          "file": "sample.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "startedAfterOpenMs": 424,
+          "durationMs": 1110
+        },
+        {
+          "file": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "startedAfterOpenMs": 1996.0,
+          "durationMs": null
+        }
+      ]
+    },
+    "after": {
+      "firstActualPaintMs": 1838.0,
+      "firstActualSettledPaintMs": 1912.0,
+      "sourceDimensions": {
+        "width": 1706,
+        "height": 2560
+      },
+      "decodes": [
+        {
+          "file": "sample.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "startedAfterOpenMs": 323.0,
+          "durationMs": 921
+        },
+        {
+          "file": "second.NEF",
+          "maxEdge": 2560,
+          "fullResolution": null,
+          "startedAfterOpenMs": 1426.0,
+          "durationMs": 483
+        },
+        {
+          "file": "sample.NEF",
+          "maxEdge": null,
+          "fullResolution": true,
+          "startedAfterOpenMs": 1704.0,
+          "durationMs": null
+        }
+      ]
+    }
+  }
+}
