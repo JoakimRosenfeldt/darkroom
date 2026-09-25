@@ -31,7 +31,6 @@ export interface DetailTileRequest {
 export interface DetailTile extends DetailTileRequest {
   readonly canvas: HTMLCanvasElement;
   readonly byteLength: number;
-  readonly fadeStartedAt: number;
 }
 
 export interface DetailViewGeometry {
@@ -256,12 +255,7 @@ export class DetailTileCache {
   }
 
   canFitPrefetch(byteLength: number): boolean {
-    let projectedBytes = this.#bytes + byteLength;
-    for (const [key, tile] of this.#tiles) {
-      if (projectedBytes <= this.#budget) return true;
-      if (!this.#protectedKeys.has(key)) projectedBytes -= tile.byteLength;
-    }
-    return projectedBytes <= this.#budget;
+    return this.#bytes + byteLength <= this.#budget;
   }
 
   add(tile: DetailTile): boolean {

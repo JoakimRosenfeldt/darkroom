@@ -1,5 +1,5 @@
 {
-  "directory": "/tmp/darkroom-develop-smoke-ZEPSVD",
+  "directory": "/tmp/darkroom-develop-smoke-UOAkVx",
   "fixture": "/home/joakim/.t3/worktrees/darkroom/t3code-6779267f/public/demo/city-night.jpg",
   "checks": [
     "new photo, edit, undo, redo and delayed catalog save",
@@ -13,15 +13,15 @@
     "source files unchanged"
   ],
   "timingsMs": {
-    "openPhoto": 823,
+    "openPhoto": 587,
     "cachedDecode": 0,
-    "interactiveWorker": 22,
-    "actualSize": 238,
-    "export-all": 644,
-    "export-copyright": 283,
-    "export-none": 465
+    "interactiveWorker": 12,
+    "actualSize": 4,
+    "export-all": 208.9999999999991,
+    "export-copyright": 172,
+    "export-none": 154.9999999999991
   },
-  "cancelledBatchId": "769f0154-e751-40f5-9809-7780f94da923",
+  "cancelledBatchId": "8e72602b-3d58-4ca5-9d39-e659b5ffa220",
   "fullRegionMaxChannelDelta": 0,
   "renderBackends": {
     "preview": [
@@ -35,71 +35,45 @@
   "nativeGpu": {
     "activeSessions": 4,
     "maxColorAttachmentBytesPerSample": 128,
-    "lastPrepareMs": 1.33749,
+    "lastPrepareMs": 0.35484600000000005,
     "maxColorAttachments": 8,
-    "renderedPasses": 102,
-    "lastFrameMs": 2.731651,
-    "lastPackMs": 0.116282,
+    "renderedPasses": 46,
+    "lastFrameMs": 0.756691,
+    "lastPackMs": 0.00979,
     "backend": "Vulkan",
     "maxTextureDimension": 32768,
-    "textureBytes": 218739100,
-    "lastGpuWaitMs": 1.190388,
+    "textureBytes": 244327948,
+    "lastGpuWaitMs": 0.363505,
     "maxTextureArrayLayers": 2048,
     "adapter": "NVIDIA GeForce RTX 3080",
     "deviceType": "DiscreteGpu",
-    "renderedFrames": 34
+    "renderedFrames": 23
   },
   "processHighWaterMemoryMiB": [
     {
-      "pid": 1772789,
+      "pid": 1831720,
       "name": "tauri-driver",
-      "peakResident": 3.828125
+      "peakResident": 3.734375
     },
     {
-      "pid": 1772790,
+      "pid": 1831721,
       "name": "WebKitWebDriver",
-      "peakResident": 28.55078125
+      "peakResident": 21.38671875
     },
     {
-      "pid": 1772792,
+      "pid": 1831726,
       "name": "darkroom",
-      "peakResident": 611.58203125
+      "peakResident": 559.2265625
     },
     {
-      "pid": 1772810,
+      "pid": 1831745,
       "name": "WebKitNetworkPr",
-      "peakResident": 116.50390625
+      "peakResident": 96.2421875
     },
     {
-      "pid": 1772814,
+      "pid": 1831749,
       "name": "WebKitWebProces",
-      "peakResident": 794.87109375
+      "peakResident": 701.92578125
     }
-  ],
-  "nativeGpuAfterExports": {
-    "activeSessions": 4,
-    "maxColorAttachmentBytesPerSample": 128,
-    "lastPrepareMs": 3.047846,
-    "maxColorAttachments": 8,
-    "renderedPasses": 117,
-    "lastFrameMs": 11.434793,
-    "lastPackMs": 3.547053,
-    "backend": "Vulkan",
-    "maxTextureDimension": 32768,
-    "textureBytes": 226265500,
-    "lastGpuWaitMs": 4.508078,
-    "maxTextureArrayLayers": 2048,
-    "adapter": "NVIDIA GeForce RTX 3080",
-    "deviceType": "DiscreteGpu",
-    "renderedFrames": 39
-  },
-  "verificationEnvironment": {
-    "display": "Xvfb :97, 1600x1000x24",
-    "gtkBackend": "x11",
-    "webKitDmabufRendererDisabled": true,
-    "requiredNativeGpu": true,
-    "requiredGpuPreviewAndExport": true,
-    "recoveryReadiness": "Main canvas aria-busy=false before screenshot",
-    "concurrentWork": "A separate GPU correctness benchmark may have overlapped; workflow timings are diagnostic, not isolated performance measurements"
-  }
+  ]
 }

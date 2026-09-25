@@ -434,14 +434,14 @@
       "operation": "preview",
       "width": 1280,
       "height": 800,
-      "coldMs": 134.19999998807907,
+      "coldMs": 137.19999998807907,
       "warmMs": [
-        28.099999994039536,
-        29.900000005960464,
-        30.600000023841858,
-        29
+        24,
+        30.200000017881393,
+        25.19999998807907,
+        26.5
       ],
-      "medianWarmMs": 29.450000002980232,
+      "medianWarmMs": 25.849999994039536,
       "nativeFrames": [
         {
           "backend": "Vulkan",
@@ -452,13 +452,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 36,
-          "renderedPasses": 144,
+          "renderedPasses": 116,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 14.459859999999999,
-          "lastPrepareMs": 5.25991,
-          "lastGpuWaitMs": 7.1408879999999995,
-          "lastPackMs": 2.0077409999999998
+          "textureBytes": 49168388,
+          "lastFrameMs": 14.703645,
+          "lastPrepareMs": 6.748168,
+          "lastGpuWaitMs": 6.585855,
+          "lastPackMs": 1.3095109999999999
         },
         {
           "backend": "Vulkan",
@@ -469,13 +469,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 37,
-          "renderedPasses": 151,
+          "renderedPasses": 122,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 6.885554,
-          "lastPrepareMs": 0.23791400000000001,
-          "lastGpuWaitMs": 6.101072,
-          "lastPackMs": 0.530528
+          "textureBytes": 49168388,
+          "lastFrameMs": 7.267596,
+          "lastPrepareMs": 0.251453,
+          "lastGpuWaitMs": 6.258601,
+          "lastPackMs": 0.739781
         },
         {
           "backend": "Vulkan",
@@ -486,13 +486,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 38,
-          "renderedPasses": 158,
+          "renderedPasses": 128,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 6.855454000000001,
-          "lastPrepareMs": 0.21063300000000001,
-          "lastGpuWaitMs": 6.062782,
-          "lastPackMs": 0.564388
+          "textureBytes": 49168388,
+          "lastFrameMs": 6.3267310000000005,
+          "lastPrepareMs": 0.200074,
+          "lastGpuWaitMs": 5.471747,
+          "lastPackMs": 0.63755
         },
         {
           "backend": "Vulkan",
@@ -503,13 +503,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 39,
-          "renderedPasses": 165,
+          "renderedPasses": 134,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 7.026757,
-          "lastPrepareMs": 0.257423,
-          "lastGpuWaitMs": 6.127323,
-          "lastPackMs": 0.62376
+          "textureBytes": 49168388,
+          "lastFrameMs": 6.239599999999999,
+          "lastPrepareMs": 0.246264,
+          "lastGpuWaitMs": 5.5079780000000005,
+          "lastPackMs": 0.469028
         },
         {
           "backend": "Vulkan",
@@ -520,13 +520,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 40,
-          "renderedPasses": 172,
+          "renderedPasses": 140,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 6.853055,
-          "lastPrepareMs": 0.217803,
-          "lastGpuWaitMs": 6.149774,
-          "lastPackMs": 0.469036
+          "textureBytes": 49168388,
+          "lastFrameMs": 6.202719,
+          "lastPrepareMs": 0.224943,
+          "lastGpuWaitMs": 5.4972579999999995,
+          "lastPackMs": 0.466928
         },
         {
           "backend": "Vulkan",
@@ -537,13 +537,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 41,
-          "renderedPasses": 179,
+          "renderedPasses": 146,
           "activeSessions": 1,
-          "textureBytes": 49168404,
-          "lastFrameMs": 6.885425,
-          "lastPrepareMs": 0.198293,
-          "lastGpuWaitMs": 6.113513,
-          "lastPackMs": 0.560099
+          "textureBytes": 49168388,
+          "lastFrameMs": 6.163168,
+          "lastPrepareMs": 0.17544300000000002,
+          "lastGpuWaitMs": 5.4805280000000005,
+          "lastPackMs": 0.48040700000000003
         }
       ]
     },
@@ -552,28 +552,28 @@
       "operation": "preview",
       "width": 1280,
       "height": 800,
-      "coldMs": 67.7000000178814,
+      "coldMs": 59.69999998807907,
       "warmMs": [
-        0.4000000059604645,
-        0.29999998211860657,
-        0.29999998211860657,
-        0.19999998807907104
+        0.3999999761581421,
+        0.30000001192092896,
+        0.30000001192092896,
+        0.4000000059604645
       ],
-      "medianWarmMs": 0.29999998211860657
+      "medianWarmMs": 0.3499999940395355
     },
     {
       "backend": "native",
       "operation": "export",
       "width": 1280,
       "height": 800,
-      "coldMs": 192.90000000596046,
+      "coldMs": 181.19999998807907,
       "warmMs": [
-        39.900000005960464,
-        36.69999998807907,
-        39.099999994039536,
-        40.70000001788139
+        32.5,
+        32.70000001788139,
+        33.599999994039536,
+        32
       ],
-      "medianWarmMs": 39.5,
+      "medianWarmMs": 32.6000000089407,
       "nativeFrames": [
         {
           "backend": "Vulkan",
@@ -584,13 +584,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 43,
-          "renderedPasses": 193,
+          "renderedPasses": 158,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.474283,
-          "lastPrepareMs": 0.261483,
-          "lastGpuWaitMs": 2.983466,
-          "lastPackMs": 0.208613
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.338883,
+          "lastPrepareMs": 0.255844,
+          "lastGpuWaitMs": 2.815145,
+          "lastPackMs": 0.24756399999999998
         },
         {
           "backend": "Vulkan",
@@ -601,13 +601,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 45,
-          "renderedPasses": 207,
+          "renderedPasses": 170,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.563834,
-          "lastPrepareMs": 0.272025,
-          "lastGpuWaitMs": 2.941164,
-          "lastPackMs": 0.330955
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.194141,
+          "lastPrepareMs": 0.194623,
+          "lastGpuWaitMs": 2.738794,
+          "lastPackMs": 0.24422400000000002
         },
         {
           "backend": "Vulkan",
@@ -618,13 +618,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 47,
-          "renderedPasses": 221,
+          "renderedPasses": 182,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.173388,
-          "lastPrepareMs": 0.229684,
-          "lastGpuWaitMs": 2.687871,
-          "lastPackMs": 0.237493
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.1175,
+          "lastPrepareMs": 0.191573,
+          "lastGpuWaitMs": 2.747794,
+          "lastPackMs": 0.163553
         },
         {
           "backend": "Vulkan",
@@ -635,13 +635,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 49,
-          "renderedPasses": 235,
+          "renderedPasses": 194,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.128268,
-          "lastPrepareMs": 0.205093,
-          "lastGpuWaitMs": 2.703401,
-          "lastPackMs": 0.204803
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.14196,
+          "lastPrepareMs": 0.19603299999999999,
+          "lastGpuWaitMs": 2.737644,
+          "lastPackMs": 0.185553
         },
         {
           "backend": "Vulkan",
@@ -652,13 +652,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 51,
-          "renderedPasses": 249,
+          "renderedPasses": 206,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.666875,
-          "lastPrepareMs": 0.355315,
-          "lastGpuWaitMs": 2.9994959999999997,
-          "lastPackMs": 0.290774
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.189201,
+          "lastPrepareMs": 0.203184,
+          "lastGpuWaitMs": 2.798015,
+          "lastPackMs": 0.172622
         },
         {
           "backend": "Vulkan",
@@ -669,13 +669,13 @@
           "maxColorAttachments": 8,
           "maxColorAttachmentBytesPerSample": 128,
           "renderedFrames": 53,
-          "renderedPasses": 263,
+          "renderedPasses": 218,
           "activeSessions": 1,
-          "textureBytes": 94198804,
-          "lastFrameMs": 3.238709,
-          "lastPrepareMs": 0.211904,
-          "lastGpuWaitMs": 2.8162920000000002,
-          "lastPackMs": 0.19501300000000002
+          "textureBytes": 94198788,
+          "lastFrameMs": 3.14839,
+          "lastPrepareMs": 0.191913,
+          "lastGpuWaitMs": 2.765374,
+          "lastPackMs": 0.176203
         }
       ]
     },
@@ -684,21 +684,21 @@
       "operation": "export",
       "width": 1280,
       "height": 800,
-      "coldMs": 144.60000002384186,
+      "coldMs": 118.2000000178814,
       "warmMs": [
-        135.40000000596046,
-        120.7999999821186,
-        106.09999999403954,
-        109.59999999403954
+        110,
+        110.80000001192093,
+        110.19999998807907,
+        110.09999999403954
       ],
-      "medianWarmMs": 115.19999998807907
+      "medianWarmMs": 110.1499999910593
     }
   ],
   "passed": true,
   "webglAdapter": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3080/PCIe/SSE2, OpenGL ES 3.2)",
   "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
   "hardwareConcurrency": 24,
-  "measuredAt": "2026-09-24T22:56:30.719Z",
+  "measuredAt": "2026-09-24T23:57:52.690Z",
   "platform": "linux",
   "arch": "x64",
   "cpu": "AMD Ryzen 9 5900X 12-Core Processor",

@@ -98,9 +98,12 @@ struct Pass {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Read {
     texture: u32,
     format: String,
+    #[serde(default)]
+    flip_y: bool,
 }
 
 struct Texture {
@@ -683,6 +686,11 @@ impl NativeGpu {
             let start = output.len();
             output.resize(start + output_size, 0);
             let convert_row = |(row, destination): (usize, &mut [u8])| {
+                let row = if read.flip_y {
+                    texture.height as usize - 1 - row
+                } else {
+                    row
+                };
                 let source =
                     &mapped[offset + row * padded_row..offset + row * padded_row + row_bytes];
                 convert_pixels(source, destination, texture.format, output_bpp);

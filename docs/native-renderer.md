@@ -26,9 +26,33 @@ Rust image operations use one shared Rayon pool with one logical CPU reserved fo
 
 Native previews currently read GPU pixels back into memory and send them to the webview for display. This is a working POC, not a zero-copy native display implementation. That transfer can make interactive previews slower than a browser GPU canvas even when the shader execution is fast.
 
+## Editing and zooming
+
+Interactive frames render before histogram analysis. A separate worker updates the histogram at a smaller resolution during a drag; settled analysis retains the existing resolution and all analysis taps. Completed preview frames can appear while newer inputs are queued within the same gesture. Release, cancellation, source changes, and tool changes reject obsolete frames. Interactive analysis cannot enable Auto Tone from an earlier slider value.
+
+Zoom transforms and cached tiles appear without animation or fades. The main preview stays at Fit resolution while the detail viewer renders the visible region. Crop, mask, and point-color tools retain their existing enlarged preview resolution. Covered low-resolution tiles and offscreen prefetch completions no longer redraw the viewport. Prefetch uses spare cache space instead of repeatedly evicting other prefetched tiles.
+
+After a small region confirms GPU support for the current document, missing visible tiles share one bounded render request where possible. CPU fallback keeps progressive single-tile rendering. During slider changes, sharp detail waits for a 100 ms pause; release resumes it immediately. Native display readback also flips rows during packing and exposes buffer views, removing JavaScript pixel copies. Neutral grain and vignette skip their identity shader pass.
+
+The [paired interaction measurements](performance/native-interaction.json) compare the initial native POC (`d322123`) with these optimizations. Both used production frontend bundles and the same optimized diagnostics executable on a Ryzen 9 5900X and RTX 3080, with a 4000 by 2667 JPEG, an 896 by 613 CSS-pixel viewport, and DPR 2.
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Fit edit, median / p95 | 102 / 193 ms | 60 / 68 ms |
+| Zoomed edit, median / p95 | 95 / 102 ms | 82 / 92 ms |
+| Cached zoom, median / p95 | 45 / 149 ms | 19 / 20 ms |
+| Cached pan response, median / p95 | 17 / 19 ms | 17 / 20 ms |
+| Cold zoom to sharp detail | 3235 ms | 187 ms |
+| Sharp detail after edit release | 2267 ms | 239 ms |
+| Sharp detail while holding a slider still | 995 ms | 291 ms |
+
+Repeated phases contain 12 measured samples after three warmups. The existing adaptive preview resolution is unchanged; at the shared 309 by 206 raster size, Fit edits also measured 102 ms before and 60 ms after. Cold zoom and restoration times are single observations. A roughly half-second rapid drag painted zero frames before and five afterward, with three histogram updates. The optimized run restored exact pixels and document state after cancellation; the baseline timed out on cancellation readiness after its timing phases completed.
+
+These Linux Xvfb measurements record canvas submission followed by a paint opportunity, not physical display presentation. Cached navigation is near one frame in this setup. Edited previews still take several frames, and uncached detail takes longer. Native readback and webview scheduling remain costs; this POC does not claim instant rendering or measured Windows/macOS latency.
+
 ## Verification
 
-[Native pixel measurements](performance/native-renderer.json) passed all 29 cases covering source formats, edits, masks, geometry, analysis, and export-region agreement. Completed 1-megapixel export measured 39.5 ms on Vulkan versus 115.2 ms on hardware WebGL using the same RTX 3080. The benchmark reports preview timing, which can return before browser GPU work finishes, and export timing, which waits for pixel readback. Compare timings only after checking the recorded drivers and timing scope.
+[Native pixel measurements](performance/native-renderer.json) passed all 29 cases covering source formats, edits, masks, geometry, analysis, and export-region agreement. Completed 1-megapixel export measured 32.6 ms on Vulkan versus 110.1 ms on hardware WebGL using the same RTX 3080. The benchmark reports preview timing, which can return before browser GPU work finishes, and export timing, which waits for pixel readback. Compare timings only after checking the recorded drivers and timing scope.
 
 [CPU measurements](performance/cpu-parallelism.json) record the original and parallel kernel results on a Ryzen 9 5900X. The measured median speedups range from 3.47 to 17.26 times for the recorded 512 by 512 workloads. A temporary differential check compared 208 cases against the original code, with identical pixels on the shared pool and on one CPU. These are kernel measurements, not whole-app speedups.
 
@@ -59,3 +83,22 @@ DARKROOM_SMOKE_REQUIRE_NATIVE=1 npm run test:develop:desktop
 ```
 
 The workflow requires `tauri-driver` and a matching platform driver. Its report includes the native adapter and executed-frame counters, so a CPU fallback cannot satisfy the native requirement.
+
+For interaction timings, build an optimized diagnostics executable that retains the local development URL:
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml --release --features diagnostics \
+  --bin darkroom --locked --config 'profile.release.package.darkroom.debug-assertions=true'
+node scripts/serve-develop-benchmark.mjs
+```
+
+The second command serves a production frontend on port 3000 with temporary benchmark access to its modules. It accepts a source checkout path for before/after comparisons. These hooks are absent from the shipping bundle. With that server running, use a separate terminal:
+
+```sh
+DARKROOM_SMOKE_BINARY=src-tauri/target/release/darkroom \
+  DARKROOM_SMOKE_BENCHMARK=1 DARKROOM_BENCHMARK_MIN_DRAG_PAINTS=1 \
+  DARKROOM_SMOKE_BENCHMARK_OUTPUT=/tmp/darkroom-interaction.json \
+  node scripts/develop-workflow-smoke.mjs
+```
+
+Keep the benchmark executable separate if building the shipping app as well: `npm run build` replaces the release binary. The interaction runner records samples and optional latency budgets; `DARKROOM_BENCHMARK_EDIT_P95_MS`, `DARKROOM_BENCHMARK_ZOOM_P95_MS`, `DARKROOM_BENCHMARK_PAN_P95_MS`, and `DARKROOM_BENCHMARK_COLD_ZOOM_MS` make exceeded budgets fail the run. Stop the temporary frontend with Ctrl-C when finished.

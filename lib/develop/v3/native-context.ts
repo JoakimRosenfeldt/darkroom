@@ -5,7 +5,7 @@ type BinaryRange = { offset: number; length: number };
 type TextureUpload = { id: number; width: number; height: number; layers: number; format: string } & Partial<BinaryRange>;
 type Pass = { shader: number; targets: number[]; textures: number[]; uniforms: BinaryRange };
 type Program = { id: number; shader: NativeShader; values: Map<string, readonly number[]>; locations: Map<string, WebGLUniformLocation> };
-type Read = { texture: number; format: "rgba8" | "rgba32f" };
+type Read = { texture: number; format: "rgba8" | "rgba32f"; flipY?: boolean };
 
 export type NativeGpuTransport = (bytes: Uint8Array<ArrayBuffer>) => Promise<ArrayBuffer>;
 let workerTransport: NativeGpuTransport | null = null;
@@ -56,7 +56,7 @@ export class NativeGpuContext {
   readonly #programShaders = new Map<WebGLProgram, WebGLShader[]>();
   readonly #programs = new Map<WebGLProgram, Program>();
   readonly #locations = new WeakMap<WebGLUniformLocation, { program: Program; name: string }>();
-  readonly #readbacks = new Map<number, Uint8Array>();
+  readonly #readbacks = new Map<number, Uint8Array<ArrayBuffer>>();
   #shaders: { id: number; source: string }[] = [];
   #uploads: TextureUpload[] = [];
   #deleted: number[] = [];
@@ -216,7 +216,7 @@ export class NativeGpuContext {
   }
 
   async submit(floatTextures: readonly WebGLTexture[]): Promise<void> {
-    const reads: Read[] = [{ texture: 0, format: "rgba8" }, ...floatTextures.map((texture) => ({ texture: this.#id(texture), format: "rgba32f" as const }))];
+    const reads: Read[] = [{ texture: 0, format: "rgba8", flipY: true }, ...floatTextures.map((texture) => ({ texture: this.#id(texture), format: "rgba32f" as const }))];
     const metadata = new TextEncoder().encode(JSON.stringify({ session: this.#session, shaders: this.#shaders, textures: this.#uploads, deleteTextures: this.#deleted, passes: this.#passes, reads }));
     const request = new Uint8Array(4 + metadata.length + this.#byteLength);
     new DataView(request.buffer).setUint32(0, metadata.length, true);
@@ -233,6 +233,11 @@ export class NativeGpuContext {
       offset += length;
     }
     if (offset !== response.byteLength) throw new Error("Native GPU readback size does not match the frame.");
+  }
+  readback(texture: WebGLTexture | null): Uint8Array<ArrayBuffer> {
+    const bytes = this.#readbacks.get(texture ? this.#id(texture) : 0);
+    if (!bytes) throw new Error("Native GPU readback is unavailable.");
+    return bytes;
   }
   readPixels(_x: number, _y: number, _width: number, _height: number, _format: number, _type: number, target: ArrayBufferView): void {
     const id = this.#framebuffer ? this.#attachments.get(this.#framebuffer)?.[0] : 0;

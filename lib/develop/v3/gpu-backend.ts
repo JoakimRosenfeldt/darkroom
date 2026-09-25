@@ -1891,7 +1891,9 @@ function renderPostCrop(
   targets: GpuTargets,
   source: WebGLTexture,
   region: RenderRegion,
-): void {
+): WebGLTexture {
+  const postCrop = input.document.effects.postCrop;
+  if (postCrop.vignette === 0 && postCrop.grain === 0) return source;
   const gl = state.gl;
   const programValue = state.programs.postCrop;
   const grainCoordinates = grainCoordinatesTexture(state, input, region);
@@ -1907,7 +1909,6 @@ function renderPostCrop(
     region.x,
     dimensions.height - region.y - region.height,
   );
-  const postCrop = input.document.effects.postCrop;
   gl.uniform1f(gl.getUniformLocation(programValue, "uVignette"), postCrop.vignette);
   gl.uniform1f(gl.getUniformLocation(programValue, "uMidpoint"), postCrop.vignetteMidpoint);
   gl.uniform1f(gl.getUniformLocation(programValue, "uRoundness"), postCrop.vignetteRoundness);
@@ -1916,14 +1917,15 @@ function renderPostCrop(
   gl.uniform1f(gl.getUniformLocation(programValue, "uGrain"), postCrop.grain);
   gl.uniform1f(gl.getUniformLocation(programValue, "uGrainRoughness"), postCrop.grainRoughness);
   draw(gl);
+  return targets.postCrop;
 }
 
-function renderEncoded(state: GpuState, targets: GpuTargets): void {
+function renderEncoded(state: GpuState, source: WebGLTexture): void {
   const gl = state.gl;
   const programValue = state.programs.encode;
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.useProgram(programValue);
-  bindTexture(gl, programValue, "uImage", 0, targets.postCrop);
+  bindTexture(gl, programValue, "uImage", 0, source);
   draw(gl);
 }
 
@@ -1974,6 +1976,10 @@ function readFloatTexture(
   targets: GpuTargets,
   value: WebGLTexture,
 ): Float32Array {
+  if (gl instanceof NativeGpuContext) {
+    const bytes = gl.readback(value);
+    return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT);
+  }
   attach(gl, targets, [value]);
   const pixels = new Float32Array(targets.width * targets.height * 4);
   gl.readPixels(0, 0, targets.width, targets.height, gl.RGBA, gl.FLOAT, pixels);
@@ -2423,21 +2429,21 @@ export class V3GpuPreviewRenderer {
     const started = performance.now();
     renderPointwise(state, input, targets, map, localAdjustments, maskCoverage, region, identityGeometry);
     const spatial = renderSpatial(state, input, targets);
-    renderPostCrop(state, input, targets, spatial, region);
-    renderEncoded(state, targets);
+    const postCrop = renderPostCrop(state, input, targets, spatial, region);
+    renderEncoded(state, postCrop);
     if (state.gl instanceof NativeGpuContext) {
       const floatReads: WebGLTexture[] = [];
       if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
-      if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(targets.postCrop);
+      if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(postCrop);
       if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
       await state.gl.submit(floatReads);
-      const pixels = readOutputPixels(state.gl, dimensions.width, dimensions.height);
+      const pixels = state.gl.readback(null);
       const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
       const tone = floatRead(targets.toneInput);
-      const scene = floatRead(targets.postCrop);
+      const scene = floatRead(postCrop);
       const point = floatRead(targets.pointColorInput);
       return {
-        bitmap: readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels), dimensions.width, dimensions.height)),
+        bitmap: readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height)),
         pixels: readPixels ? pixels : null,
         pointColorInput: point ? pointColorInput(point, dimensions.width, dimensions.height) : null,
         analysis: includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [],
@@ -2476,7 +2482,7 @@ export class V3GpuPreviewRenderer {
       ? readFloatTexture(state.gl, targets, targets.toneInput)
       : null;
     const scene = wantsSceneHeadroom
-      ? readFloatTexture(state.gl, targets, targets.postCrop)
+      ? readFloatTexture(state.gl, targets, postCrop)
       : null;
     const pointInput = input.includePointColor === false ||
       input.request.plan.qualityAndDimensions.kind === "export"
