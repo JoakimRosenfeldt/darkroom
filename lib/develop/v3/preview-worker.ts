@@ -275,3 +275,5 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
   pendingRender = message;
   scheduleRender();
 };
+
+post({ kind: "ready" });

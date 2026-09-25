@@ -53,6 +53,7 @@ export type V3PreviewWorkerRequest =
     };
 
 export type V3PreviewWorkerResponse =
+  | { readonly kind: "ready" }
   | {
       readonly kind: "result";
       readonly requestId: number;
