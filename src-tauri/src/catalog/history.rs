@@ -658,6 +658,47 @@ fn latest_valid(db: &Connection, catalog_id: &str, entry_id: &str) -> Result<Val
     Ok(Value::Null)
 }
 
+fn repair_head_checkpoint(
+    db: &Connection,
+    catalog_id: &str,
+    entry_id: &str,
+    revision_id: &str,
+) -> Result<bool, String> {
+    let Some(row) = one(
+        db,
+        "SELECT m.develop_json AS developJson,r.document_sha256 AS documentHash,COALESCE(length(CAST(r.checkpoint_json AS BLOB)),0)+COALESCE(length(CAST(r.patch_json AS BLOB)),0) AS replacedBytes,(SELECT COALESCE(SUM(COALESCE(length(CAST(checkpoint_json AS BLOB)),0)+COALESCE(length(CAST(patch_json AS BLOB)),0)),0) FROM develop_history_revisions WHERE catalog_id=r.catalog_id AND entry_id=r.entry_id) AS entryBytes,(SELECT COALESCE(SUM(COALESCE(length(CAST(checkpoint_json AS BLOB)),0)+COALESCE(length(CAST(patch_json AS BLOB)),0)),0) FROM develop_history_revisions WHERE catalog_id=r.catalog_id) AS catalogBytes FROM develop_history_heads h JOIN develop_history_revisions r ON r.catalog_id=h.catalog_id AND r.entry_id=h.entry_id AND r.revision_id=h.revision_id JOIN entry_metadata m ON m.catalog_id=h.catalog_id AND m.entry_id=h.entry_id WHERE h.catalog_id=? AND h.entry_id=? AND h.revision_id=?",
+        values(&[&json!(catalog_id), &json!(entry_id), &json!(revision_id)]),
+    )?
+    else {
+        return Ok(false);
+    };
+    let raw = row["developJson"].as_str().unwrap_or("null");
+    if digest(raw) != row["documentHash"] || required_document(&json!(raw)).is_err() {
+        return Ok(false);
+    }
+    let replaced = number(&row, "replacedBytes")?;
+    let added = raw.len() as i64;
+    if number(&row, "entryBytes")? - replaced + added > 64 * 1024 * 1024
+        || number(&row, "catalogBytes")? - replaced + added > 1024 * 1024 * 1024
+    {
+        return Ok(false);
+    }
+    Ok(execute(
+        db,
+        "UPDATE develop_history_revisions SET checkpoint_json=?,patch_json=NULL WHERE catalog_id=? AND entry_id=? AND revision_id=? AND document_sha256=? AND EXISTS (SELECT 1 FROM develop_history_heads h WHERE h.catalog_id=? AND h.entry_id=? AND h.revision_id=?)",
+        values(&[
+            &json!(raw),
+            &json!(catalog_id),
+            &json!(entry_id),
+            &json!(revision_id),
+            &row["documentHash"],
+            &json!(catalog_id),
+            &json!(entry_id),
+            &json!(revision_id),
+        ]),
+    )? == 1)
+}
+
 pub(crate) fn loaded(
     db: &Connection,
     catalog_id: &str,
@@ -678,6 +719,12 @@ pub(crate) fn loaded(
     let document = match try_reconstruct(db, catalog_id, entry_id, requested) {
         Ok(document) => document,
         Err(failure) => {
+            if failure.kind == "hash"
+                && requested == head_id
+                && repair_head_checkpoint(db, catalog_id, entry_id, requested)?
+            {
+                return loaded(db, catalog_id, entry_id, revision_id);
+            }
             let last_valid = if let Some(id) = failure.last_valid.as_deref() {
                 recovery_revision(db, catalog_id, entry_id, id).unwrap_or(Value::Null)
             } else {
