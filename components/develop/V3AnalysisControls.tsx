@@ -6,10 +6,12 @@ import { currentV3AnalysisBinding } from "@/components/develop/DevelopCanvas";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
+import { metadataValue } from "@/lib/metadata/types";
 import { useDevelopStore } from "@/stores/develop-store";
+import { useLibraryStore } from "@/stores/library-store";
 
 const HISTOGRAM_WIDTH = 256;
-const HISTOGRAM_HEIGHT = 72;
+const HISTOGRAM_HEIGHT = 112;
 const MAX_DRAWN_BINS = 128;
 
 type ToneInputTap = Extract<CpuAnalysisTapResult, { readonly tap: "tone-input" }>;
@@ -25,6 +27,7 @@ export interface V3AutoToneControlProps {
 export interface V3HistogramPanelProps {
   readonly analysis: readonly CpuAnalysisTapResult[];
   readonly sourceIdentity: V3HistogramSourceIdentity;
+  readonly decodedMetadata: Record<string, unknown>;
 }
 
 export interface V3HistogramSourceIdentity {
@@ -178,12 +181,47 @@ function downsampleBins(input: ReadonlyArray<number>): readonly number[] {
 
 function histogramPath(bins: readonly number[], maximum: number): string {
   if (bins.length === 0 || maximum <= 0) return "";
-  return bins.map((count, index) => {
+  const line = bins.map((count, index) => {
     const x = bins.length === 1 ? 0 : index / (bins.length - 1) * HISTOGRAM_WIDTH;
     const normalized = Math.sqrt(Math.max(0, count) / maximum);
     const y = HISTOGRAM_HEIGHT - normalized * (HISTOGRAM_HEIGHT - 2);
     return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
   }).join(" ");
+  return `${line} L${HISTOGRAM_WIDTH} ${HISTOGRAM_HEIGHT} L0 ${HISTOGRAM_HEIGHT} Z`;
+}
+
+function positiveNumber(value: unknown): number | null {
+  const number = typeof value === "number" ? value :
+    typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function CameraSettings({ entryId, decodedMetadata }: {
+  readonly entryId: string;
+  readonly decodedMetadata: Record<string, unknown>;
+}) {
+  const capture = useLibraryStore((state) => state.libraryWorkspace.analysisByEntryId[entryId]?.source?.capture);
+  const iso = positiveNumber(metadataValue(capture?.iso ?? { kind: "absent" })) ??
+    positiveNumber(decodedMetadata.iso_speed ?? decodedMetadata.iso);
+  const focalLength = positiveNumber(metadataValue(capture?.focalLength ?? { kind: "absent" })) ??
+    positiveNumber(decodedMetadata.focal_len ?? decodedMetadata.focalLength);
+  const aperture = positiveNumber(metadataValue(capture?.aperture ?? { kind: "absent" })) ??
+    positiveNumber(decodedMetadata.aperture);
+  const shutter = positiveNumber(metadataValue(capture?.shutter ?? { kind: "absent" })) ??
+    positiveNumber(decodedMetadata.shutter);
+  const settings = [
+    iso === null ? "—" : `ISO ${iso}`,
+    focalLength === null ? "—" : `${focalLength} mm`,
+    aperture === null ? "—" : `f/${aperture.toFixed(1)}`,
+    shutter === null ? "—" : shutter >= 1 ? `${shutter} sec` : `1/${Math.round(1 / shutter)} sec`,
+  ];
+  return (
+    <div className="mt-1 grid grid-cols-4 gap-1 text-[10px] tabular-nums text-lr-text-muted" role="group" aria-label="Camera settings">
+      {settings.map((setting, index) => (
+        <span key={index} className={index === 3 ? "text-right" : undefined}>{setting}</span>
+      ))}
+    </div>
+  );
 }
 
 function HistogramGraphic({ tap }: { readonly tap: DisplayOutputTap }) {
@@ -212,29 +250,23 @@ function HistogramGraphic({ tap }: { readonly tap: DisplayOutputTap }) {
         viewBox={`0 0 ${HISTOGRAM_WIDTH} ${HISTOGRAM_HEIGHT}`}
         role="img"
         aria-label={`Full-frame RGB histogram with ${tap.state.value.binCount} bins`}
-        className="block h-[72px] w-full rounded-[6px] bg-lr-panel-raised/55"
+        className="isolate block h-[112px] w-full rounded-[6px] border border-lr-border-subtle bg-lr-panel-raised/55"
       >
         <title>Full-frame red, green, and blue channel histogram</title>
         {channels.map((channel) => (
           <path
             key={channel.id}
             d={channel.path}
-            fill="none"
+            fill={channel.color}
+            fillOpacity="0.85"
             stroke={channel.color}
-            strokeWidth="1.25"
+            strokeWidth="0.75"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
+            style={{ mixBlendMode: "screen" }}
           />
         ))}
       </svg>
-      <div className="mt-1 flex gap-3 text-[9px] font-medium leading-3" aria-hidden="true">
-        {channels.map((channel) => (
-          <span key={channel.id} style={{ color: channel.color }}>{channel.id}</span>
-        ))}
-        <span className="ml-auto text-lr-text-faint">
-          {tap.state.value.pixelCount.toLocaleString()} pixels
-        </span>
-      </div>
     </div>
   );
 }
@@ -303,7 +335,7 @@ function HeadroomSummary({ tap }: { readonly tap: SceneHeadroomTap | null }) {
   );
 }
 
-export function V3HistogramPanel({ analysis, sourceIdentity }: V3HistogramPanelProps) {
+export function V3HistogramPanel({ analysis, sourceIdentity, decodedMetadata }: V3HistogramPanelProps) {
   const binding = currentV3AnalysisBinding(analysis);
   const analysisMatchesSource = binding?.catalogId === sourceIdentity.catalogId &&
     binding.entryId === sourceIdentity.entryId &&
@@ -346,6 +378,7 @@ export function V3HistogramPanel({ analysis, sourceIdentity }: V3HistogramPanelP
           </StatusCard>
         )}
       </div>
+      <CameraSettings entryId={sourceIdentity.entryId} decodedMetadata={decodedMetadata} />
       <details className="text-xs text-lr-text-muted"><summary className="cursor-pointer">Clipping details</summary><div className="mt-2 space-y-2">{display ? <ClippingSummary tap={display} /> : null}<HeadroomSummary tap={headroom} /></div></details>
     </div>
   );
