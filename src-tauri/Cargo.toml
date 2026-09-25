@@ -72,6 +72,9 @@ name = "darkroom-backend"
 path = "src/bin/backend.rs"
 required-features = ["diagnostics"]
 
+[profile.dev.package.darkroom]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

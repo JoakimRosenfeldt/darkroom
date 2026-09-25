@@ -9,7 +9,10 @@ mod native;
 use serde_json::{Value, json};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tauri::{Emitter, Manager};
 
@@ -474,14 +477,52 @@ async fn darkroom_export(
     .map_err(|e| e.to_string())?
 }
 
-static GPU: std::sync::OnceLock<Mutex<Result<gpu::NativeGpu, String>>> = std::sync::OnceLock::new();
+struct GpuState {
+    generation: u64,
+    renderer: Result<gpu::NativeGpu, String>,
+}
+
+impl GpuState {
+    fn new() -> Self {
+        Self {
+            generation: GPU_GENERATION.load(Ordering::Acquire),
+            renderer: gpu::NativeGpu::new(),
+        }
+    }
+
+    fn sync_generation(&mut self) -> u64 {
+        let generation = GPU_GENERATION.load(Ordering::Acquire);
+        if self.generation != generation {
+            if let Ok(renderer) = self.renderer.as_mut() {
+                renderer.clear_sessions();
+            }
+            self.generation = generation;
+        }
+        generation
+    }
+}
+
+static GPU: std::sync::OnceLock<Mutex<GpuState>> = std::sync::OnceLock::new();
+static GPU_GENERATION: AtomicU64 = AtomicU64::new(0);
 static GPU_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+fn reset_gpu_sessions() {
+    GPU_GENERATION.fetch_add(1, Ordering::AcqRel);
+    if let Some(gpu) = GPU.get() {
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Ok(mut state) = gpu.lock() {
+                state.sync_generation();
+            }
+        });
+    }
+}
 
 #[tauri::command]
 async fn darkroom_gpu(
     window: tauri::WebviewWindow,
     request: tauri::ipc::Request<'_>,
 ) -> Result<tauri::ipc::Response, String> {
+    let generation = GPU_GENERATION.load(Ordering::Acquire);
     if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
         return Err("Untrusted desktop request.".into());
     }
@@ -492,16 +533,27 @@ async fn darkroom_gpu(
         return Err("Native render request size is invalid.".into());
     }
     let permit = GPU_QUEUE.acquire().await.map_err(|e| e.to_string())?;
+    if GPU_GENERATION.load(Ordering::Acquire) != generation {
+        return Err("Native render request belongs to a previous document.".into());
+    }
     let bytes = body.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut gpu = GPU
-            .get_or_init(|| Mutex::new(gpu::NativeGpu::new()))
+        let mut state = GPU
+            .get_or_init(|| Mutex::new(GpuState::new()))
             .lock()
             .map_err(|_| "Native renderer is unavailable.")?;
-        gpu.as_mut()
+        if state.sync_generation() != generation {
+            return Err("Native render request belongs to a previous document.".into());
+        }
+        let result = state
+            .renderer
+            .as_mut()
             .map_err(|e| e.clone())?
-            .execute(&bytes)
-            .map(tauri::ipc::Response::new)
+            .execute(&bytes);
+        if state.sync_generation() != generation {
+            return Err("Native render request belongs to a previous document.".into());
+        }
+        result.map(tauri::ipc::Response::new)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -515,18 +567,36 @@ async fn darkroom_gpu_info(window: tauri::WebviewWindow) -> Result<Value, String
         return Err("Untrusted desktop request.".into());
     }
     tauri::async_runtime::spawn_blocking(|| {
-        let gpu = GPU
-            .get_or_init(|| Mutex::new(gpu::NativeGpu::new()))
+        let mut state = GPU
+            .get_or_init(|| Mutex::new(GpuState::new()))
             .lock()
             .map_err(|_| "Native renderer is unavailable.")?;
-        serde_json::to_value(gpu.as_ref().map_err(|e| e.clone())?.info()).map_err(|e| e.to_string())
+        state.sync_generation();
+        serde_json::to_value(state.renderer.as_ref().map_err(|e| e.clone())?.info())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default().on_page_load(|webview, payload| {
+        if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
+            // Document reloads bypass the JavaScript renderer's normal disposal.
+            reset_gpu_sessions();
+        }
+    });
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(|webview| {
+        eprintln!(
+            "Darkroom web content process terminated; reloading {}.",
+            webview.label()
+        );
+        if let Err(error) = webview.reload() {
+            eprintln!("Could not reload Darkroom after web content process termination: {error}");
+        }
+    });
+    builder
         .on_menu_event(menu::handle_event)
         .register_asynchronous_uri_scheme_protocol(
             "darkroom-model",

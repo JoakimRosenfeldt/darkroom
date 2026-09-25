@@ -59,6 +59,8 @@ struct Batch {
     release: bool,
     #[serde(default)]
     info: bool,
+    #[serde(default)]
+    include_timing: bool,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +226,11 @@ impl NativeGpu {
         }
     }
 
+    pub fn clear_sessions(&mut self) {
+        self.sessions.clear();
+        self.texture_bytes = 0;
+    }
+
     pub fn execute(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         let started = Instant::now();
         if bytes.len() < 4 || bytes.len() > MAX_BATCH_BYTES {
@@ -266,13 +273,18 @@ impl NativeGpu {
         let result = self.execute_batch(&mut session, &batch, &bytes[4 + json_len..]);
         let validation = pollster::block_on(self.device.pop_error_scope());
         let memory = pollster::block_on(self.device.pop_error_scope());
-        let result = result.and_then(|bytes| match validation.or(memory) {
+        let mut result = result.and_then(|bytes| match validation.or(memory) {
             Some(error) => Err(format!("Native GPU: {error}")),
             None => Ok(bytes),
         });
         if result.is_ok() {
             if !batch.passes.is_empty() {
                 self.info.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if batch.include_timing
+                && let Ok(bytes) = &mut result
+            {
+                bytes.extend_from_slice(&(started.elapsed().as_secs_f64() * 1000.0).to_le_bytes());
             }
             self.info.rendered_frames += u64::from(!batch.passes.is_empty());
             self.info.rendered_passes += batch.passes.len() as u64;
@@ -678,7 +690,7 @@ impl NativeGpu {
         let mapped = slice.get_mapped_range();
         let gpu_wait_ms = wait_started.elapsed().as_secs_f64() * 1000.0;
         let pack_started = Instant::now();
-        let mut output = Vec::new();
+        let mut output = Vec::with_capacity(output_size + usize::from(batch.include_timing) * 8);
         for (read, (offset, row_bytes, padded_row)) in batch.reads.iter().zip(read_layouts) {
             let texture = &session.textures[&read.texture];
             let output_bpp = if read.format == "rgba8" { 4 } else { 16 };

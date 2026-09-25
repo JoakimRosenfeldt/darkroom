@@ -1,4 +1,4 @@
-import { setNativeGpuTransport } from "./native-context";
+import { nativeGpuAvailable, setNativeGpuTransport } from "./native-context";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
@@ -39,6 +39,7 @@ let fastFrames = 0;
 let cpuInteractivePixels = 16_000;
 let lastCpuDimensions = "";
 let fastCpuFrames = 0;
+const MAX_NATIVE_INTERACTIVE_PIXELS = 1_000_000;
 
 function post(response: V3PreviewWorkerResponse, transfer: Transferable[] = []): void {
   self.postMessage(response, { transfer });
@@ -157,13 +158,16 @@ async function renderLatest(): Promise<void> {
       }
       return result;
     };
+    const gpuPreviewPixels = nativeGpuAvailable() && message.previewMode === "interactive"
+      ? Math.min(interactivePixels, MAX_NATIVE_INTERACTIVE_PIXELS)
+      : interactivePixels;
     const gpuPreparation = await prepareV3RuntimeRender(
       message.document,
       gpuUnavailable ? runtimeRequest : {
         ...runtimeRequest,
         maximumPreviewPixels: message.previewMode === "settled"
           ? MAX_CPU_RENDER_PIXELS
-          : Math.min(MAX_CPU_RENDER_PIXELS, interactivePixels * (message.previewMode === "refined" ? 4 : 1)),
+          : Math.min(MAX_CPU_RENDER_PIXELS, gpuPreviewPixels * (message.previewMode === "refined" ? 4 : 1)),
       },
     );
     let backend: V3PreviewBackend = "gpu";
@@ -183,12 +187,13 @@ async function renderLatest(): Promise<void> {
           const dimensions = `${gpuResult.dimensions.width}x${gpuResult.dimensions.height}`;
           // Ignore allocation and shader warmup when sizing subsequent drag frames.
           if (message.previewMode === "interactive" && dimensions === lastGpuDimensions) {
-            const elapsed = gpuResult.renderDurationMs;
+            // Reducing pixels cannot remove native IPC and main-thread queue latency.
+            const elapsed = gpuResult.processingDurationMs ?? gpuResult.renderDurationMs;
             if (elapsed > 24) {
               interactivePixels = Math.max(64_000, Math.floor(interactivePixels / 2));
               fastFrames = 0;
             } else if (elapsed < 10 && ++fastFrames >= 3) {
-              interactivePixels = Math.min(MAX_CPU_RENDER_PIXELS, interactivePixels * 2);
+              interactivePixels = Math.min(nativeGpuAvailable() ? MAX_NATIVE_INTERACTIVE_PIXELS : MAX_CPU_RENDER_PIXELS, interactivePixels * 2);
               fastFrames = 0;
             } else if (elapsed >= 10) {
               fastFrames = 0;

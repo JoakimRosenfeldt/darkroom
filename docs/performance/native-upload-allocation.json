@@ -1,0 +1,59 @@
+{
+  "method": "Actual NativeGpuContext upload assembly. Count typed-array buffers >=1MB; source allocation excluded. Native transport captures packet only. Views do not count as buffers.",
+  "samePixels": true,
+  "report": [
+    {
+      "version": "before",
+      "sourceBytes": 12582912,
+      "packetBytes": 16777480,
+      "payloadHash": "b2b790d27c880f04edec4ad0b3b8dfe331c2bd85b8648c7c08fcebf6bbd4310c",
+      "allocations": [
+        {
+          "type": "Uint16Array",
+          "bytes": 16777216,
+          "newBuffer": true
+        },
+        {
+          "type": "Uint8Array",
+          "bytes": 16777216,
+          "newBuffer": false
+        },
+        {
+          "type": "Uint8Array",
+          "bytes": 16777480,
+          "newBuffer": true
+        }
+      ],
+      "newLargeBuffers": 2,
+      "newLargeBufferBytes": 33554696
+    },
+    {
+      "version": "after",
+      "sourceBytes": 12582912,
+      "packetBytes": 16777504,
+      "payloadHash": "b2b790d27c880f04edec4ad0b3b8dfe331c2bd85b8648c7c08fcebf6bbd4310c",
+      "allocations": [
+        {
+          "type": "Uint8Array",
+          "bytes": 16777504,
+          "newBuffer": true
+        },
+        {
+          "type": "Uint16Array",
+          "bytes": 16777216,
+          "newBuffer": false
+        }
+      ],
+      "newLargeBuffers": 1,
+      "newLargeBufferBytes": 16777504
+    }
+  ],
+  "date": "2026-09-25",
+  "dimensions": {
+    "width": 2048,
+    "height": 1024,
+    "channels": 3,
+    "bits": 16
+  },
+  "limits": "This isolates request-assembly allocations. A subsequent RAW navigation run did not demonstrate an additional process RSS reduction beyond LibRaw worker disposal."
+}

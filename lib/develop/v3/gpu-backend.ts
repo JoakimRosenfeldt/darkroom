@@ -804,12 +804,13 @@ interface GpuRenderedFrame {
   readonly pointColorInput: CpuPointColorInput | null;
   readonly analysis: readonly CpuAnalysisTapResult[];
   readonly renderDurationMs: number;
+  readonly processingDurationMs?: number;
 }
 
 export type V3GpuPreviewRenderResult =
   | (
       Omit<Extract<CpuRenderResult, { readonly kind: "rendered" }>, "pixels"> &
-      { readonly bitmap: ImageBitmap; readonly renderDurationMs: number }
+      { readonly bitmap: ImageBitmap; readonly renderDurationMs: number; readonly processingDurationMs?: number }
     )
   | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
 
@@ -2143,6 +2144,7 @@ export class V3GpuPreviewRenderer {
         dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
         bitmap,
         renderDurationMs: frame.renderDurationMs,
+        processingDurationMs: frame.processingDurationMs,
         pointColorInput: frame.pointColorInput,
         diagnostics: preparation.diagnostics,
         analysis: frame.analysis,
@@ -2420,6 +2422,7 @@ export class V3GpuPreviewRenderer {
     if (!gpuRegionWithinLimits(state, input, region)) {
       throw new Error("The GPU render region exceeds the maximum texture size.");
     }
+    const preparationStarted = performance.now();
     const dimensions = { width: region.width, height: region.height };
     const targets = this.#targets(state, dimensions.width, dimensions.height, precision);
     const identityGeometry = denoiseGeometryIsIdentity(input) && input.request.plan.qualityAndDimensions.kind !== "loupe";
@@ -2436,18 +2439,24 @@ export class V3GpuPreviewRenderer {
       if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
       if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(postCrop);
       if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
-      await state.gl.submit(floatReads);
+      const submitStarted = performance.now();
+      const nativeDurationMs = await state.gl.submit(floatReads);
+      const submitted = performance.now();
       const pixels = state.gl.readback(null);
       const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
       const tone = floatRead(targets.toneInput);
       const scene = floatRead(postCrop);
       const point = floatRead(targets.pointColorInput);
+      const bitmap = readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height));
+      const pointInput = point ? pointColorInput(point, dimensions.width, dimensions.height) : null;
+      const analysis = includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [];
       return {
-        bitmap: readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height)),
+        bitmap,
         pixels: readPixels ? pixels : null,
-        pointColorInput: point ? pointColorInput(point, dimensions.width, dimensions.height) : null,
-        analysis: includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [],
+        pointColorInput: pointInput,
+        analysis,
         renderDurationMs: performance.now() - started,
+        processingDurationMs: nativeDurationMs + submitStarted - preparationStarted + performance.now() - submitted,
       };
     }
     if (!includeAnalysis) {

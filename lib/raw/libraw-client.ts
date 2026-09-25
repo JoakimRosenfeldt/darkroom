@@ -35,12 +35,20 @@ function runLibRaw<T>(
 ): Promise<T> {
   return runWithRawLimit(async () => {
     const raw = await acquireLibRaw();
-    options.signal?.throwIfAborted();
-    const result = await operation(raw);
-    if (options.signal?.aborted && typeof result === "object" && result !== null &&
-        "objectUrl" in result && typeof result.objectUrl === "string") URL.revokeObjectURL(result.objectUrl);
-    options.signal?.throwIfAborted();
-    return result;
+    try {
+      options.signal?.throwIfAborted();
+      const result = await operation(raw);
+      if (options.signal?.aborted && typeof result === "object" && result !== null &&
+          "objectUrl" in result && typeof result.objectUrl === "string") URL.revokeObjectURL(result.objectUrl);
+      options.signal?.throwIfAborted();
+      return result;
+    } finally {
+      if (options.fullResolution) {
+        // Release the grown WASM heap; decoded pixels have their own cache.
+        raw.dispose();
+        librawInstance = null;
+      }
+    }
   }, options);
 }
 
