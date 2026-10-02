@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -268,7 +269,8 @@ function imageDataPixels(pixels: Uint8Array): Uint8ClampedArray<ArrayBuffer> {
     : new Uint8ClampedArray(pixels);
 }
 
-export function DevelopCanvas({
+// The viewer re-renders for histogram updates; the canvas subscribes to its own edit state.
+export const DevelopCanvas = memo(function DevelopCanvas({
   entry,
   image,
   alt,
@@ -1459,4 +1461,4 @@ export function DevelopCanvas({
       ) : null}
     </div>
   );
-}
+});
