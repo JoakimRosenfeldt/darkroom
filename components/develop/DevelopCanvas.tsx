@@ -59,6 +59,8 @@ import { useDevelopStore } from "@/stores/develop-store";
 
 export type { V3CanvasTool } from "@/components/develop/V3CanvasOverlay";
 
+const BEFORE_WORKER_IDLE_MS = 10_000;
+
 export type V3CanvasDiagnostic =
   | CpuBackendDiagnostic
   | CpuBackendBlockingDiagnostic;
@@ -292,6 +294,8 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   const detailRenderingRef = useRef(false);
   const analysisWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const beforeRendersRef = useRef(0);
+  const beforeIdleTimerRef = useRef(0);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
   const analyzedRequestRef = useRef(0);
@@ -464,6 +468,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     return () => {
       worker.dispose();
       detailWorkerRef.current?.dispose();
+      window.clearTimeout(beforeIdleTimerRef.current);
       beforeWorkerRef.current?.dispose();
       analysisWorkerRef.current?.dispose();
       pointColorInputRef.current = null;
@@ -928,6 +933,8 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         return;
       }
       beforeWorkerRef.current = beforeWorker;
+      window.clearTimeout(beforeIdleTimerRef.current);
+      beforeRendersRef.current += 1;
       void beforeWorker.render(renderDocument, {
         viewportDimensions: {
           width: Math.max(1, Math.round(width * previewRenderScale)),
@@ -982,6 +989,15 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         setBeforeReady(true);
       }).catch(() => {
         if (!disposed) setBeforeReady(false);
+      }).finally(() => {
+        // The before frame is kept on its canvas; free the worker's source copy and GPU session once idle.
+        beforeRendersRef.current -= 1;
+        if (beforeRendersRef.current > 0) return;
+        beforeIdleTimerRef.current = window.setTimeout(() => {
+          if (beforeRendersRef.current > 0 || beforeWorkerRef.current !== beforeWorker) return;
+          beforeWorker.dispose();
+          beforeWorkerRef.current = null;
+        }, BEFORE_WORKER_IDLE_MS);
       });
     }, 250);
 

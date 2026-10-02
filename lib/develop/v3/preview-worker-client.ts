@@ -69,9 +69,9 @@ export class V3PreviewWorkerClient {
   #workerReady = false;
   readonly #nativeSessions = new Set<string>();
   readonly #nativeGpu = isTauri();
-  readonly #mainGpu: Promise<MainThreadGpuPreview> | null;
-  readonly #entry: LibraryEntry;
-  readonly #image: DevelopImage;
+  #mainGpu: Promise<MainThreadGpuPreview> | null;
+  #entry: LibraryEntry;
+  #image: DevelopImage;
   readonly #pending = new Map<number, PendingRender>();
   #nextRequestId = 0;
   #disposed = false;
@@ -82,8 +82,29 @@ export class V3PreviewWorkerClient {
   constructor(entry: LibraryEntry, image: DevelopImage) {
     this.#entry = entry;
     this.#image = image;
+    this.#mainGpu = this.#createMainGpu(entry, image);
+  }
+
+  #createMainGpu(entry: LibraryEntry, image: DevelopImage): Promise<MainThreadGpuPreview> | null {
     const webkit = typeof navigator !== "undefined" && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
-    this.#mainGpu = webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+    return webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+  }
+
+  // Points an idle client at another photo so its worker and loaded modules can be reused.
+  retarget(entry: LibraryEntry, image: DevelopImage): void {
+    if (this.#disposed || this.#activePreview !== null || this.#queuedPreview || this.#pending.size > 0) {
+      throw new Error("Only an idle preview worker can change photos.");
+    }
+    this.#entry = entry;
+    this.#image = image;
+    this.#maskMattes = null;
+    void this.#mainGpu?.then((renderer) => renderer.dispose());
+    this.#mainGpu = this.#createMainGpu(entry, image);
+    if (!this.#worker || !this.#workerReady) return;
+    const source = sourceImage(image);
+    const buffer = source.rgb.buffer;
+    if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
+    this.#worker.postMessage({ kind: "initialize", entry, image: source, nativeGpu: this.#nativeGpu }, [buffer]);
   }
 
   #receive(response: Exclude<V3PreviewWorkerResponse, { readonly kind: "ready" }>): void {
