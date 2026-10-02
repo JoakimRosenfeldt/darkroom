@@ -384,7 +384,6 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       return null;
     }
   }, [document, fullSourceDimensions]);
-  const lastZoomRef = useRef<number | "actual">("actual");
   const actualScale = detailDimensions
     ? detailDimensions.width / (window.devicePixelRatio || 1) / displayDimensions.width
     : 1;
@@ -1050,7 +1049,6 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     };
     setZoomFocus(focus);
     const nextScale = Math.max(1, Math.min(maximumScale, current.scale * factor));
-    if (nextScale > 1) lastZoomRef.current = nextScale;
     setActualSize(false);
     const next = nextScale === 1 ? FIT_TRANSFORM : anchoredViewerTransform(
       current, nextScale, anchor, viewport,
@@ -1067,13 +1065,13 @@ export const DevelopCanvas = memo(function DevelopCanvas({
 
   function fit(): void {
     setWheelZoomDirectMode(false);
-    if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
     setZoomFocus(null);
     setActualSize(false);
     viewTransformRef.current = FIT_TRANSFORM;
     setViewTransform(FIT_TRANSFORM);
   }
 
+  // A click from Fit always zooms to 100%, centered on the clicked point.
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
     setWheelZoomDirectMode(false);
     const position = {
@@ -1081,32 +1079,17 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
     };
     setZoomFocus(position);
-    if (lastZoomRef.current === "actual") {
-      setActualPosition(position);
-      setActualSize(true);
-      const next = {
-        scale: actualScale,
-        ...clampViewerOffset(viewport, imageRect, actualScale, {
-          x: viewport.width / 2 - (imageRect.x + position.x * imageRect.width) * actualScale,
-          y: viewport.height / 2 - (imageRect.y + position.y * imageRect.height) * actualScale,
-        }),
-      };
-      viewTransformRef.current = next;
-      return next;
-    } else {
-      const scale = Math.min(maximumScale, lastZoomRef.current);
-      const next = {
-        scale,
-        ...clampViewerOffset(viewport, imageRect, scale, {
-          x: viewport.width / 2 - pointer.x * scale,
-          y: viewport.height / 2 - pointer.y * scale,
-        }),
-      };
-      setActualSize(false);
-      viewTransformRef.current = next;
-      setViewTransform(next);
-      return next;
-    }
+    setActualPosition(position);
+    setActualSize(true);
+    const next = {
+      scale: actualScale,
+      ...clampViewerOffset(viewport, imageRect, actualScale, {
+        x: viewport.width / 2 - (imageRect.x + position.x * imageRect.width) * actualScale,
+        y: viewport.height / 2 - (imageRect.y + position.y * imageRect.height) * actualScale,
+      }),
+    };
+    viewTransformRef.current = next;
+    return next;
   }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
@@ -1182,9 +1165,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
 
     const startedAtFit = !zoomed;
     const startTransform = startedAtFit ? zoomFromFit(pointer) : viewTransform;
-    const gestureActualSize = startedAtFit
-      ? lastZoomRef.current === "actual"
-      : actualSize;
+    const gestureActualSize = startedAtFit || actualSize;
     panRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
