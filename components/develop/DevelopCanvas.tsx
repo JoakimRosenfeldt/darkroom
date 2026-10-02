@@ -145,6 +145,7 @@ interface PaintedRasterDimensions extends DisplayDimensions {
   readonly cropActive: boolean;
   readonly entryId: string;
   readonly assetRevision: number;
+  readonly settled: boolean;
 }
 
 function positiveDimensions(width: unknown, height: unknown): DisplayDimensions | null {
@@ -678,12 +679,13 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           pointColorInputRef.current = result.pointColorInput;
         }
         const paintedDimensions = { width: canvas.width, height: canvas.height };
+        const paintedSettled = (keepExistingRaster && drawnFrame ? drawnFrame.mode : mode) === "settled";
         setPaintedRasterDimensions((current) =>
           current?.width === paintedDimensions.width && current.height === paintedDimensions.height
             && current.document === document &&
             current.documentRevision === renderSnapshot.documentRevision &&
             current.cropActive === cropActive && current.entryId === entry.id &&
-            current.assetRevision === entry.assetRevision
+            current.assetRevision === entry.assetRevision && current.settled === paintedSettled
             ? current
             : {
                 ...paintedDimensions,
@@ -692,6 +694,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
                 cropActive,
                 entryId: entry.id,
                 assetRevision: entry.assetRevision,
+                settled: paintedSettled,
               },
         );
         const scale = Math.min(width / paintedDimensions.width, height / paintedDimensions.height);
@@ -1286,10 +1289,16 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   const detailBaseDimensions = showBefore
     ? beforeRasterDimensions ?? currentPaintedRasterDimensions
     : currentPaintedRasterDimensions;
+  const detailBaseSettled = showBefore && beforeRasterDimensions
+    ? true
+    : currentPaintedRasterDimensions !== undefined && paintedRasterDimensions?.settled === true;
+  // At Fit, full-resolution detail only helps when the settled preview is visibly short of the display.
+  // Quick frames are smaller on purpose, and display sizes round to whole CSS pixels, so neither
+  // is a reason to load a full RAW.
   const detailActive = preview.kind === "rendered" && !canvasInteractionActive && (zoomed || (
-    previewMode !== "interactive" && detailBaseDimensions !== undefined && (
-      detailBaseDimensions.width < Math.round(displayDimensions.width * (window.devicePixelRatio || 1)) ||
-      detailBaseDimensions.height < Math.round(displayDimensions.height * (window.devicePixelRatio || 1))
+    previewMode !== "interactive" && detailBaseSettled && detailBaseDimensions !== undefined && (
+      detailBaseDimensions.width < (displayDimensions.width - 1) * (window.devicePixelRatio || 1) ||
+      detailBaseDimensions.height < (displayDimensions.height - 1) * (window.devicePixelRatio || 1)
     )
   ));
 
