@@ -124,7 +124,8 @@ async function renderLatest(): Promise<void> {
       viewportDimensions: message.viewportDimensions,
       devicePixelRatio: message.devicePixelRatio,
       previewMode: message.previewMode,
-      includeAnalysis: message.includeAnalysis,
+      includeAnalysis: message.includeAnalysis || message.includeHistogram === true,
+      histogramOnly: !message.includeAnalysis && message.includeHistogram === true,
       includePointColor: message.includePointColor,
       assets,
     } as const;
@@ -179,7 +180,7 @@ async function renderLatest(): Promise<void> {
     ) {
       const gpuResult = await (gpuRenderer ??= new V3GpuPreviewRenderer()).render(
         gpuPreparation.input,
-        { includeAnalysis: message.includeAnalysis },
+        { includeAnalysis: message.includeAnalysis || message.includeHistogram === true },
       );
       if (gpuResult) {
         result = gpuResult;

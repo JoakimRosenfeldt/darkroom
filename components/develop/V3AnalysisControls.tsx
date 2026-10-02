@@ -384,7 +384,17 @@ export function V3HistogramPanel({ analysis, sourceIdentity, decodedMetadata }: 
       ? cachedDisplay ?? incomingDisplay
       : incomingDisplay
   );
-  const headroom = analysisMatchesSource ? sceneHeadroomTap(analysis) : null;
+  // Drag histograms omit scene headroom; keep the last measured value until the settled analysis arrives.
+  const incomingHeadroom = analysisMatchesSource ? sceneHeadroomTap(analysis) : null;
+  const [lastHeadroom, setLastHeadroom] = useState<{
+    readonly sourceKey: string;
+    readonly tap: SceneHeadroomTap;
+  } | null>(null);
+  if (incomingHeadroom && (lastHeadroom?.sourceKey !== sourceKey || lastHeadroom.tap !== incomingHeadroom)) {
+    setLastHeadroom({ sourceKey, tap: incomingHeadroom });
+  }
+  const headroom = incomingHeadroom ??
+    (analysisMatchesSource && lastHeadroom?.sourceKey === sourceKey ? lastHeadroom.tap : null);
   return (
     <div className="space-y-2.5" aria-live="polite">
       <div className="h-[112px]">

@@ -2,6 +2,7 @@
 
 import {
   memo,
+  startTransition,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -708,7 +709,9 @@ export const DevelopCanvas = memo(function DevelopCanvas({
             documentRevision: renderSnapshot.documentRevision,
             planFingerprint: result.planFingerprint,
           });
-          analysisCallbackRef.current?.(result.analysis);
+          // Let the frame paint before the histogram re-renders the panels.
+          startTransition(() => analysisCallbackRef.current?.(result.analysis));
+          analyzedRequestRef.current = Math.max(analyzedRequestRef.current, requestId);
         }
         drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
         const requestedDimensions = requestedPreviewDimensions(
@@ -797,19 +800,23 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           analysisCallbackRef.current?.(analysis);
         };
         let backend = drawnFrame?.backend ?? null;
+        let quickHistogram = false;
         if (!interactionRelease && !sameContentSettledRender) {
+          // Drag frames carry a sampled histogram instead of a second render through the native queue.
           const quick = await quickWorker.render(renderDocument, {
             ...options,
             previewMode: "interactive",
             includeAnalysis: false,
+            includeHistogram: previewMode === "interactive" && !cropActive,
           });
+          quickHistogram = quick.result.kind === "rendered" && quick.result.analysis.length > 0;
           if (!applyResult(quick.result, "interactive", quick.backend)) return;
           backend = quick.backend;
           if ((disposed || requestId !== requestRef.current) && !isLiveInteraction()) return;
         }
 
         if (previewMode === "interactive") {
-          void renderAnalysis("interactive").catch(handleRenderError);
+          if (!quickHistogram) void renderAnalysis("interactive").catch(handleRenderError);
           if (disposed || requestId !== requestRef.current) return;
           refineTimer = setTimeout(() => {
             if (disposed || requestId !== requestRef.current) return;

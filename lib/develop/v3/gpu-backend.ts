@@ -1987,6 +1987,32 @@ function readFloatTexture(
   return pixels;
 }
 
+const MAX_HISTOGRAM_SAMPLES = 16_384;
+
+// A full 1 MP histogram costs about 18 ms; a strided sample keeps drag frames fast.
+function sampledPixels(
+  pixels: Uint8Array,
+  dimensions: { readonly width: number; readonly height: number },
+): [Uint8Array, { readonly width: number; readonly height: number }] {
+  const stride = Math.ceil(Math.sqrt(dimensions.width * dimensions.height / MAX_HISTOGRAM_SAMPLES));
+  if (stride <= 1) return [pixels, dimensions];
+  const width = Math.ceil(dimensions.width / stride);
+  const height = Math.ceil(dimensions.height / stride);
+  const sampled = new Uint8Array(width * height * 4);
+  let target = 0;
+  for (let y = 0; y < dimensions.height; y += stride) {
+    for (let x = 0; x < dimensions.width; x += stride) {
+      const source = (y * dimensions.width + x) * 4;
+      sampled[target] = pixels[source]!;
+      sampled[target + 1] = pixels[source + 1]!;
+      sampled[target + 2] = pixels[source + 2]!;
+      sampled[target + 3] = pixels[source + 3]!;
+      target += 4;
+    }
+  }
+  return [sampled, { width, height }];
+}
+
 function requestedAnalysis(
   input: CpuRenderInput,
   toneInput: Float32Array | null,
@@ -2008,7 +2034,9 @@ function requestedAnalysis(
         break;
       case "display-output":
         if (!pixels) break;
-        results.push(analyzeV3DisplayOutput(pixels, dimensions));
+        results.push(input.sampledHistogram
+          ? analyzeV3DisplayOutput(...sampledPixels(pixels, dimensions))
+          : analyzeV3DisplayOutput(pixels, dimensions));
         break;
       case "scene-headroom":
         if (!scene) break;

@@ -21,6 +21,7 @@ interface PreviewWorkerRenderOptions {
   readonly devicePixelRatio: number;
   readonly previewMode: V3PreviewRenderMode;
   readonly includeAnalysis: boolean;
+  readonly includeHistogram?: boolean;
   readonly includePointColor?: boolean;
   readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
 }
@@ -243,6 +244,7 @@ export class V3PreviewWorkerClient {
         devicePixelRatio: options.devicePixelRatio,
         previewMode: options.previewMode,
         includeAnalysis: options.includeAnalysis,
+        includeHistogram: options.includeHistogram,
         includePointColor: options.includePointColor,
         maskMattes: options.maskMattes ?? EMPTY_MASK_MATTES,
       } };
