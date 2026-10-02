@@ -1,5 +1,6 @@
 use super::*;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -211,6 +212,12 @@ fn run_root(
             };
             match receiver.recv_timeout(timeout) {
                 Ok(Ok(change)) => {
+                    // Reads don't change the folder. Reconcile's own read_dir reports an open,
+                    // which used to schedule the next reconcile forever.
+                    if matches!(change.kind, EventKind::Access(kind) if kind != AccessKind::Close(AccessMode::Write))
+                    {
+                        continue;
+                    }
                     if change.paths.iter().any(|path| {
                         path.components()
                             .any(|part| part.as_os_str().to_string_lossy().starts_with('.'))
