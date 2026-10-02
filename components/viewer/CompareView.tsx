@@ -1,6 +1,6 @@
 "use client";
 
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useEffect, useMemo, useState } from "react";
 import { loadThumbnailBlob } from "@/lib/cache/thumbnail-cache";
 import { COLOR_LABEL_HEX, getEntryMetadata } from "@/lib/catalog/defaults";
@@ -24,6 +24,8 @@ export function CompareView({
   entries: readonly LibraryEntry[];
 }) {
   const navigate = useNavigate();
+  // "default" means Compare was the first page loaded, so there is nothing to go back to.
+  const location = useLocation();
   const metadata = useLibraryStore((state) => state.entryMetadata);
   const applyMetadata = useLibraryStore((state) => state.applyMetadataToEntries);
   const [candidateId, setCandidateId] = useState(candidate.id);
@@ -64,8 +66,8 @@ export function CompareView({
       <ModuleSpine activeModule="develop" developPhotoId={select.id} />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-lr-border-subtle bg-lr-toolbar px-4">
-          <button type="button" onClick={() => navigate("/")} className="rounded border border-lr-border-subtle px-3 py-1.5 text-xs text-lr-text-muted hover:text-lr-text">
-            Back to Library
+          <button type="button" onClick={() => (location.key === "default" ? navigate("/") : navigate(-1))} className="rounded border border-lr-border-subtle px-3 py-1.5 text-xs text-lr-text-muted hover:text-lr-text">
+            Back
           </button>
           <span className="ml-2 text-sm font-semibold text-lr-text">Compare</span>
           <button type="button" onClick={() => updateWorkspacePreferences({ linkedCompare: !linked })} aria-pressed={linked} className={`rounded border px-2.5 py-1.5 text-xs ${linked ? "border-lr-accent bg-lr-selection text-lr-accent" : "border-lr-border-subtle text-lr-text-muted"}`}>

@@ -453,50 +453,6 @@ export function resolveLibraryResultSnapshot(input: {
   };
 }
 
-export function refreshLibraryResultSnapshot(input: {
-  readonly resultId: string;
-  readonly catalogId: CatalogId;
-  readonly catalogRevision: number;
-  readonly orderedEntryIds: readonly string[];
-  readonly activeEntryId: string;
-  readonly availableEntryIds: readonly string[];
-  readonly selectedEntryIds: readonly string[];
-}): LibraryResultSnapshot {
-  const state = loadState();
-  const current = state.snapshots.find((snapshot) => snapshot.id === input.resultId);
-  const query = state.queries.find((item) => item.id === input.resultId);
-  if (!current || !query || current.catalogId !== input.catalogId) {
-    throw new Error("This Library result can no longer be refreshed. Return to Library and open it again.");
-  }
-  const orderedEntryIds = validateEntryIds(input.orderedEntryIds, "Refreshed Library result");
-  const orderedEntryIdSet = new Set(orderedEntryIds);
-  const activeEntryId = nearestAvailableEntryId(
-    orderedEntryIds,
-    input.activeEntryId,
-    input.availableEntryIds,
-  );
-  if (activeEntryId === null) {
-    throw new Error("The refreshed Library result contains no available photos. Locate or re-link them in Library.");
-  }
-  const refreshedSelection = input.selectedEntryIds.filter((entryId) =>
-    orderedEntryIdSet.has(entryId)
-  );
-  return pinAndSave(state, {
-    ...current,
-    catalogRevision: input.catalogRevision,
-    orderedEntryIds,
-    missingEntryIds: missingIds(orderedEntryIds, input.availableEntryIds),
-    activeEntryId,
-    origin: {
-      selectedEntryIds: refreshedSelection.length > 0
-        ? refreshedSelection
-        : [activeEntryId],
-      focusedEntryId: activeEntryId,
-      scrollAnchorEntryId: activeEntryId,
-    },
-  });
-}
-
 export function updateLibraryResultActive(resultId: string, activeEntryId: string): void {
   const state = loadState();
   const current = state.snapshots.find((snapshot) => snapshot.id === resultId);

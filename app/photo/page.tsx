@@ -7,7 +7,6 @@ import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import { useLibraryResultForQuery } from "@/hooks/useLibraryResult";
 import { getEntryById, useLibraryStore } from "@/stores/library-store";
 import {
-  refreshViewerSession,
   resolveViewerSession,
   viewerPhotoHref,
 } from "@/lib/viewer/session";
@@ -59,7 +58,6 @@ function PhotoPageContent() {
     readonly key: string;
     readonly value: LibraryResultResolution;
   } | null>(null);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [redirectNotice, setRedirectNotice] = useState<{
     readonly resultId: string;
     readonly message: string;
@@ -163,41 +161,6 @@ function PhotoPageContent() {
     );
   }, [resolvedSession]);
 
-  function refreshResult() {
-    if (!resultId || !catalogId || !resolvedSession?.snapshot) return;
-    try {
-      const snapshot = refreshViewerSession({
-        resultId,
-        catalogId,
-        catalogRevision,
-        orderedEntryIds: reconstructedResult.viewerEntryIds,
-        activeEntryId: resolvedSession.snapshot.activeEntryId,
-        availableEntryIds,
-        selectedEntryIds,
-      });
-      const nextQuery = getLibraryResultQuery(resultId);
-      if (nextQuery === null) throw new Error("The saved Library filters are no longer available.");
-      setResolutionState({
-        key: resolutionKey,
-        value: {
-          status: "exact",
-          snapshot,
-          query: nextQuery,
-          message: snapshot.missingEntryIds.length > 0
-            ? `Result refreshed. ${snapshot.missingEntryIds.length} photos are missing.`
-            : "Library result refreshed.",
-        },
-      });
-      setRefreshError(null);
-      setRedirectNotice(null);
-      if (snapshot.activeEntryId !== photoId) {
-        navigate(viewerPhotoHref(snapshot.activeEntryId, resultId), { replace: true });
-      }
-    } catch (error) {
-      setRefreshError(error instanceof Error ? error.message : "The Library result could not be refreshed.");
-    }
-  }
-
   const resultEntries = useMemo(() => {
     const byId = new Map<string, (typeof entries)[number]>(
       entries.filter((entry) => entry.health === "present").map((entry) => [entry.id, entry]),
@@ -243,11 +206,9 @@ function PhotoPageContent() {
       resultEntryIds={resolvedSession.snapshot.orderedEntryIds}
       missingEntryIds={resolvedSession.snapshot.missingEntryIds}
       sessionMessage={
-        refreshError ??
         (redirectNotice?.resultId === resultId ? redirectNotice.message : null) ??
         resolvedSession.message
       }
-      onRefreshResult={refreshResult}
     />
   );
 }

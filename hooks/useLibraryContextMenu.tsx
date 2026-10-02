@@ -61,7 +61,6 @@ export function useLibraryContextMenu(
   const deleteEntriesFromDisk = useLibraryStore(
     (state) => state.deleteEntriesFromDisk,
   );
-  const createVirtualCopy = useLibraryStore((state) => state.createVirtualCopy);
   const renameVirtualCopy = useLibraryStore((state) => state.renameVirtualCopy);
   const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
   const catalogView = useLibraryStore((state) => state.catalogView);
@@ -236,19 +235,6 @@ export function useLibraryContextMenu(
               }}
             >
               Open in Develop
-            </ContextMenuItem>
-
-            <ContextMenuItem
-              onClick={() => {
-                const familyCount = menuEntry
-                  ? entries.filter((entry) => entry.sourceId === menuEntry.sourceId && entry.entryKind === "virtual").length
-                  : 0;
-                const name = window.prompt("Name this virtual copy", `Copy ${familyCount + 1}`);
-                if (name?.trim()) void createVirtualCopy(menu.entryId, name).catch(() => undefined);
-                closeMenu();
-              }}
-            >
-              Create virtual copy…
             </ContextMenuItem>
 
             {menuEntry?.entryKind === "virtual" ? (
