@@ -68,6 +68,8 @@ export class NativeGpuContext {
   #chunks: (Uint8Array | ConvertedChunk)[] = [];
   #byteLength = 0;
   #dummyArray: number | null = null;
+  #allSettled: Promise<unknown> = Promise.resolve();
+  #resourcesSettled: Promise<unknown> = Promise.resolve();
 
   async initialize(): Promise<void> {
     const metadata = new TextEncoder().encode(JSON.stringify({ session: this.#session, info: true }));
@@ -242,13 +244,22 @@ export class NativeGpuContext {
         offset += chunk.pixels.byteLength;
       }
     }
+    // Batches that only run passes may overlap; creating or deleting resources waits for every earlier batch.
+    const passesOnly = this.#shaders.length === 0 && this.#uploads.length === 0 && this.#deleted.length === 0;
     this.#shaders = []; this.#uploads = []; this.#deleted = []; this.#passes = []; this.#chunks = []; this.#byteLength = 0;
     const preparationMs = performance.now() - started;
-    const response = await transport(request);
+    // Another frame may record new dimensions while this one is in transport.
+    const width = this.#width;
+    const height = this.#height;
+    const sent = (passesOnly ? this.#resourcesSettled : this.#allSettled).then(() => transport(request));
+    const settled = sent.then(() => undefined, () => undefined);
+    this.#allSettled = passesOnly ? Promise.all([this.#allSettled, settled]) : settled;
+    if (!passesOnly) this.#resourcesSettled = settled;
+    const response = await sent;
     this.#readbacks.clear();
     offset = 0;
     for (const read of reads) {
-      const length = this.#width * this.#height * (read.format === "rgba8" ? 4 : 16);
+      const length = width * height * (read.format === "rgba8" ? 4 : 16);
       this.#readbacks.set(read.texture, new Uint8Array(response, offset, length));
       offset += length;
     }

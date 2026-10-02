@@ -36,6 +36,7 @@ interface QueuedPreview extends PendingRender {
 }
 
 const EMPTY_MASK_MATTES: readonly V3PreviewWorkerMaskMatte[] = [];
+const MAX_ACTIVE_PREVIEWS = 2;
 
 function workerFactory(): Worker {
   return new Worker(new URL("./preview-worker.ts", import.meta.url), {
@@ -76,7 +77,7 @@ export class V3PreviewWorkerClient {
   readonly #pending = new Map<number, PendingRender>();
   #nextRequestId = 0;
   #disposed = false;
-  #activePreview: number | null = null;
+  readonly #activePreviews = new Set<number>();
   #queuedPreview: QueuedPreview | null = null;
   #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
 
@@ -93,7 +94,7 @@ export class V3PreviewWorkerClient {
 
   // Points an idle client at another photo so its worker and loaded modules can be reused.
   retarget(entry: LibraryEntry, image: DevelopImage): void {
-    if (this.#disposed || this.#activePreview !== null || this.#queuedPreview || this.#pending.size > 0) {
+    if (this.#disposed || this.#activePreviews.size > 0 || this.#queuedPreview || this.#pending.size > 0) {
       throw new Error("Only an idle preview worker can change photos.");
     }
     this.#entry = entry;
@@ -115,8 +116,7 @@ export class V3PreviewWorkerClient {
       return;
     }
     this.#pending.delete(response.requestId);
-    if (this.#activePreview === response.requestId) {
-      this.#activePreview = null;
+    if (this.#activePreviews.delete(response.requestId)) {
       const queued = this.#queuedPreview;
       this.#queuedPreview = null;
       if (queued) this.#sendPreview(queued);
@@ -248,7 +248,7 @@ export class V3PreviewWorkerClient {
         includePointColor: options.includePointColor,
         maskMattes: options.maskMattes ?? EMPTY_MASK_MATTES,
       } };
-      if (this.#activePreview !== null) {
+      if (this.#activePreviews.size >= MAX_ACTIVE_PREVIEWS) {
         this.#queuedPreview?.resolve({ backend: "cpu", result: { kind: "cancelled" } });
         this.#queuedPreview = preview;
       } else {
@@ -259,7 +259,7 @@ export class V3PreviewWorkerClient {
 
   #sendPreview(preview: QueuedPreview): void {
     const { message } = preview;
-    this.#activePreview = message.requestId;
+    this.#activePreviews.add(message.requestId);
     this.#pending.set(message.requestId, preview);
     void this.#dispatch(message);
   }
