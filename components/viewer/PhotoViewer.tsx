@@ -616,23 +616,40 @@ export function PhotoViewer({
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={() => void createCopy()}
-              className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
-            >
-              Virtual copy…
-            </button>
             {entry.entryKind === "virtual" ? (
-              <>
-                <button type="button" onClick={() => void renameCopy()} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
-                  Rename
-                </button>
-                <button type="button" onClick={() => void removeCopy()} className="h-8 rounded-md border border-red-400/30 px-2.5 text-xs text-red-300 hover:bg-red-500/10">
-                  Delete copy
-                </button>
-              </>
-            ) : null}
+              <details className="relative">
+                <summary className="flex h-8 cursor-pointer list-none items-center rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
+                  Virtual copy
+                </summary>
+                <div className="absolute right-0 top-9 z-40 w-36 rounded-md border border-lr-border bg-lr-panel-raised p-1 shadow-xl">
+                  {([
+                    ["New copy…", createCopy, "text-lr-text-muted"],
+                    ["Rename…", renameCopy, "text-lr-text-muted"],
+                    ["Delete copy", removeCopy, "text-lr-danger"],
+                  ] as const).map(([label, action, tone]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={(event) => {
+                        event.currentTarget.closest("details")?.removeAttribute("open");
+                        void action();
+                      }}
+                      className={`block w-full rounded px-2 py-1.5 text-left text-[11px] hover:bg-lr-panel-hover ${tone}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void createCopy()}
+                className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
+              >
+                Virtual copy…
+              </button>
+            )}
             {developProcessKind === "v3" && activePanel === "masking" ? (
               <>
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { getEntryMetadata } from "@/lib/catalog/defaults";
 import { useLibraryViewSettings } from "@/hooks/useLibraryViewSettings";
 import type { CollectionNode, SmartRuleGroup } from "@/lib/library/model";
@@ -32,6 +32,7 @@ export function CollectionTree({ disabled }: { disabled: boolean }) {
   const [settings, updateSettings] = useLibraryViewSettings();
   const dialog = useLibraryDialog();
   const [smartEditor, setSmartEditor] = useState<SmartEditorState | null>(null);
+  const createMenuRef = useRef<HTMLDetailsElement>(null);
   const children = useMemo(() => {
     const grouped = new Map<string | null, CollectionNode[]>();
     for (const node of workspace.collections) {
@@ -108,11 +109,33 @@ export function CollectionTree({ disabled }: { disabled: boolean }) {
         <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-lr-text-faint">
           Collections
         </h3>
-        <div className="flex items-center gap-0.5">
-          <CreateButton label="New album" disabled={disabled} onClick={() => void create("album")} />
-          <CreateButton label="New set" disabled={disabled} onClick={() => void create("set")} />
-          <CreateButton label="New Smart Album" disabled={disabled} onClick={() => void create("smart")} />
-        </div>
+        <details ref={createMenuRef} className={`relative ${disabled ? "pointer-events-none opacity-40" : ""}`}>
+          <summary
+            className="flex h-6 w-6 cursor-pointer list-none items-center justify-center rounded-md text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text"
+            title="New collection"
+            aria-disabled={disabled}
+          >
+            <IconPlus className="h-3 w-3" />
+            <span className="sr-only">New collection</span>
+          </summary>
+          <div className="absolute right-0 top-7 z-40 w-36 rounded-md border border-lr-border bg-lr-panel-raised p-1 shadow-xl">
+            {([
+              ["album", "New album"],
+              ["set", "New set"],
+              ["smart", "New Smart Album"],
+            ] as const).map(([kind, label]) => (
+              <NodeAction
+                key={kind}
+                onClick={() => {
+                  createMenuRef.current?.removeAttribute("open");
+                  void create(kind);
+                }}
+              >
+                {label}
+              </NodeAction>
+            ))}
+          </div>
+        </details>
       </div>
       {(children.get(null)?.length ?? 0) > 0 ? (
         <ul role="tree" aria-label="Collections" className="space-y-px">
@@ -136,29 +159,6 @@ export function CollectionTree({ disabled }: { disabled: boolean }) {
         </p>
       )}
     </section>
-  );
-}
-
-function CreateButton({
-  label,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex h-6 w-6 items-center justify-center rounded-md text-lr-text-muted transition hover:bg-lr-panel-hover hover:text-lr-text disabled:opacity-40"
-      title={label}
-    >
-      <IconPlus className="h-3 w-3" />
-      <span className="sr-only">{label}</span>
-    </button>
   );
 }
 
