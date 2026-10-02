@@ -2,7 +2,6 @@ import type { CatalogId } from "../catalog/ids";
 import type { LibraryResultQuery, LibraryResultSnapshot } from "../library/result-contract";
 import {
   createLibraryResultSnapshot,
-  refreshLibraryResultSnapshot,
   resolveLibraryResultSnapshot,
   updateLibraryResultActive,
   type LibraryResultResolution,
@@ -32,18 +31,6 @@ export function resolveViewerSession(input: {
   readonly selectedEntryIds: readonly string[];
 }): ResolvedViewerSession {
   return resolveLibraryResultSnapshot(input);
-}
-
-export function refreshViewerSession(input: {
-  readonly resultId: string;
-  readonly catalogId: CatalogId;
-  readonly catalogRevision: number;
-  readonly orderedEntryIds: readonly string[];
-  readonly activeEntryId: string;
-  readonly availableEntryIds: readonly string[];
-  readonly selectedEntryIds: readonly string[];
-}): ViewerSession {
-  return refreshLibraryResultSnapshot(input);
 }
 
 export function updateViewerSessionActive(resultId: string, activeEntryId: string): void {

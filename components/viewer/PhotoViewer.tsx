@@ -35,7 +35,7 @@ import { ExportDialog } from "@/components/export/ExportDialog";
 import { Filmstrip } from "./Filmstrip";
 import { useEntryMetadataShortcuts } from "@/hooks/useEntryMetadataShortcuts";
 import { isEditableTarget } from "@/hooks/is-editable-target";
-import { refreshViewerSession, updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
+import { updateViewerSessionActive, viewerPhotoHref } from "@/lib/viewer/session";
 import { developDefaultFactsFromSource } from "@/lib/develop/defaults/matcher";
 import { buildV3SourceRecord } from "@/lib/develop/v3/runtime";
 import { useWorkspacePreferences } from "@/hooks/useWorkspacePreferences";
@@ -51,7 +51,6 @@ interface PhotoViewerProps {
   resultEntryIds: readonly string[];
   missingEntryIds: readonly string[];
   sessionMessage: string | null;
-  onRefreshResult: () => void;
 }
 
 function fileType(name: string): string {
@@ -97,7 +96,6 @@ export function PhotoViewer({
   resultEntryIds,
   missingEntryIds,
   sessionMessage,
-  onRefreshResult,
 }: PhotoViewerProps) {
   const navigate = useNavigate();
   const [workspacePreferences] = useWorkspacePreferences();
@@ -108,9 +106,6 @@ export function PhotoViewer({
   const reorderStackEntry = useLibraryStore((state) => state.reorderStackEntry);
   const removeEntriesFromStack = useLibraryStore((state) => state.removeEntriesFromStack);
   const selectEntry = useLibraryStore((state) => state.selectEntry);
-  const createVirtualCopy = useLibraryStore((state) => state.createVirtualCopy);
-  const renameVirtualCopy = useLibraryStore((state) => state.renameVirtualCopy);
-  const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
   const applyMetadataToEntries = useLibraryStore(
     (state) => state.applyMetadataToEntries,
   );
@@ -123,7 +118,6 @@ export function PhotoViewer({
     readonly loading: boolean;
   } | null>(null);
   const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
-  const [copyError, setCopyError] = useState<string | null>(null);
   const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
   const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [v3CanvasState, setV3CanvasState] = useState<{
@@ -273,84 +267,6 @@ export function PhotoViewer({
       ? compareSelectedPhotos : undefined,
     ...metadataMenuActions((patch) => applyMetadataToEntries(selectionTargets, patch)),
   });
-
-  async function createCopy() {
-    const familyCount = useLibraryStore.getState().entries.filter(
-      (item) => item.sourceId === entry.sourceId && item.entryKind === "virtual",
-    ).length;
-    const name = window.prompt("Name this virtual copy", `Copy ${familyCount + 1}`);
-    if (!name?.trim()) return;
-    try {
-      const entryId = await createVirtualCopy(entry.id, name);
-      const current = useLibraryStore.getState();
-      const nextEntry = current.entries.find((item) => item.id === entryId);
-      if (!nextEntry || current.catalogId === null) throw new Error("The virtual copy could not be opened.");
-      const availableEntryIds = current.entries.filter((item) => item.health === "present").map((item) => item.id);
-      const available = new Set<string>(availableEntryIds);
-      const orderedEntryIds = resultEntryIds.filter((id) => available.has(id));
-      const familyIndexes = orderedEntryIds.flatMap((id, index) => {
-        const item = current.entries.find((candidate) => candidate.id === id);
-        return item?.sourceId === nextEntry.sourceId ? [index] : [];
-      });
-      orderedEntryIds.splice((familyIndexes.at(-1) ?? orderedEntryIds.length - 1) + 1, 0, entryId);
-      refreshViewerSession({
-        resultId,
-        catalogId: current.catalogId,
-        catalogRevision: current.catalogRevision,
-        orderedEntryIds,
-        activeEntryId: entryId,
-        availableEntryIds,
-        selectedEntryIds: [entryId],
-      });
-      setCopyError(null);
-      navigate(viewerPhotoHref(entryId, resultId));
-    } catch (copyCreateError) {
-      setCopyError(copyCreateError instanceof Error ? copyCreateError.message : "Virtual copy could not be created.");
-    }
-  }
-
-  async function renameCopy() {
-    if (entry.entryKind !== "virtual") return;
-    const name = window.prompt("Rename virtual copy", entry.displayName);
-    if (!name?.trim() || name.trim() === entry.displayName) return;
-    try {
-      await renameVirtualCopy(entry.id, name);
-      setCopyError(null);
-    } catch (copyRenameError) {
-      setCopyError(copyRenameError instanceof Error ? copyRenameError.message : "Virtual copy could not be renamed.");
-    }
-  }
-
-  async function removeCopy() {
-    if (entry.entryKind !== "virtual") return;
-    if (!window.confirm(`Delete “${entry.displayName}”? The source file and other edits will stay in the catalog.`)) return;
-    try {
-      await deleteVirtualCopy(entry.id);
-      const current = useLibraryStore.getState();
-      const availableEntryIds = current.entries.filter((item) => item.health === "present").map((item) => item.id);
-      const available = new Set<string>(availableEntryIds);
-      const orderedEntryIds = resultEntryIds.filter((id) => id !== entry.id && available.has(id));
-      if (current.catalogId === null || orderedEntryIds.length === 0) {
-        navigate("/");
-        return;
-      }
-      const oldIndex = resultEntryIds.indexOf(entry.id);
-      const activeEntryId = orderedEntryIds[Math.min(Math.max(oldIndex, 0), orderedEntryIds.length - 1)]!;
-      refreshViewerSession({
-        resultId,
-        catalogId: current.catalogId,
-        catalogRevision: current.catalogRevision,
-        orderedEntryIds,
-        activeEntryId,
-        availableEntryIds,
-        selectedEntryIds: [activeEntryId],
-      });
-      setCopyError(null);
-      navigate(viewerPhotoHref(activeEntryId, resultId));
-    } catch (copyDeleteError) {
-      setCopyError(copyDeleteError instanceof Error ? copyDeleteError.message : "Virtual copy could not be deleted.");
-    }
-  }
 
   useEffect(() => {
     updateViewerSessionActive(resultId, entry.id);
@@ -581,8 +497,8 @@ export function PhotoViewer({
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1">
           <div className="relative flex min-w-0 flex-1 flex-col bg-[#131110]">
-          {copyError ?? sessionMessage ? (
-            <div role="status" className="border-b border-amber-300/20 bg-amber-950/25 px-4 py-1.5 text-[11px] text-amber-100/80">{copyError ?? sessionMessage}</div>
+          {sessionMessage ? (
+            <div role="status" className="border-b border-amber-300/20 bg-amber-950/25 px-4 py-1.5 text-[11px] text-amber-100/80">{sessionMessage}</div>
           ) : null}
           <div className="flex h-12 shrink-0 items-center gap-3 border-b border-lr-border-subtle bg-lr-toolbar px-4">
             <span className="font-mono text-xs text-lr-text">
@@ -616,23 +532,6 @@ export function PhotoViewer({
                   : "Preview unavailable"}
             </span>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={() => void createCopy()}
-              className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
-            >
-              Virtual copy…
-            </button>
-            {entry.entryKind === "virtual" ? (
-              <>
-                <button type="button" onClick={() => void renameCopy()} className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text">
-                  Rename
-                </button>
-                <button type="button" onClick={() => void removeCopy()} className="h-8 rounded-md border border-red-400/30 px-2.5 text-xs text-red-300 hover:bg-red-500/10">
-                  Delete copy
-                </button>
-              </>
-            ) : null}
             {developProcessKind === "v3" && activePanel === "masking" ? (
               <>
                 <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-lr-text-faint">
@@ -667,13 +566,6 @@ export function PhotoViewer({
                   className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-40"
                 >
                   Compare
-                </button>
-                <button
-                  type="button"
-                  onClick={onRefreshResult}
-                  className="h-8 rounded-md border border-lr-border-subtle px-2.5 text-xs text-lr-text-muted hover:bg-lr-panel-raised hover:text-lr-text"
-                >
-                  Refresh result
                 </button>
                 <button
                   type="button"
