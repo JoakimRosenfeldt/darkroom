@@ -5,7 +5,6 @@ import {
   startTransition,
   useCallback,
   useEffect,
-  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -273,6 +272,7 @@ function imageDataPixels(pixels: Uint8Array): Uint8ClampedArray<ArrayBuffer> {
 }
 
 // The viewer re-renders for histogram updates; the canvas subscribes to its own edit state.
+// React 19.2 does not refresh useEffectEvent inside memo components; use refs for listeners here.
 export const DevelopCanvas = memo(function DevelopCanvas({
   entry,
   image,
@@ -397,6 +397,9 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     }),
   } : previewTransform, [actualSize, actualScale, imageRect, actualPosition, viewport, previewTransform]);
   const viewTransformRef = useRef(viewTransform);
+  const transformElementRef = useRef<HTMLDivElement | null>(null);
+  const [wheelZoomDirect, setWheelZoomDirect] = useState(false);
+  const wheelZoomDirectRef = useRef(false);
   useLayoutEffect(() => {
     viewTransformRef.current = viewTransform;
   }, [viewTransform]);
@@ -1057,7 +1060,13 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     setViewTransform(next);
   }, [activeDisplayDimensions, imageRect, maximumScale, viewport]);
 
+  const setWheelZoomDirectMode = useCallback((direct: boolean): void => {
+    wheelZoomDirectRef.current = direct;
+    setWheelZoomDirect(direct);
+  }, []);
+
   function fit(): void {
+    setWheelZoomDirectMode(false);
     if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
     setZoomFocus(null);
     setActualSize(false);
@@ -1066,6 +1075,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   }
 
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
+    setWheelZoomDirectMode(false);
     const position = {
       x: Math.max(0, Math.min(1, (pointer.x - imageRect.x) / imageRect.width)),
       y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
@@ -1100,15 +1110,40 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
+    setWheelZoomDirectMode(false);
     applyZoom(1.25 ** direction);
-  }, [applyZoom]);
+  }, [applyZoom, setWheelZoomDirectMode]);
 
-  const onWheel = useEffectEvent((event: WheelEvent): void => {
+  const onWheel = (event: WheelEvent): void => {
     if ((maskingActive && maskTool === "brush") || previewMode === "interactive" ||
         panRef.current || preview.kind !== "rendered" || event.deltaY === 0 ||
         (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
     const bounds = containerRef.current!.getBoundingClientRect();
+    if (!wheelZoomDirectRef.current) {
+      // Take over from the visible point of an in-flight control zoom.
+      const transform = transformElementRef.current
+        ? window.getComputedStyle(transformElementRef.current).transform
+        : "none";
+      if (transform !== "none") {
+        try {
+          const matrix = new DOMMatrixReadOnly(transform);
+          if (matrix.is2D && Number.isFinite(matrix.a) && matrix.a > 0 &&
+              Number.isFinite(matrix.d) && Math.abs(matrix.a - matrix.d) < 1e-6 &&
+              Math.abs(matrix.b) < 1e-6 && Math.abs(matrix.c) < 1e-6 &&
+              Number.isFinite(matrix.e) && Number.isFinite(matrix.f)) {
+            viewTransformRef.current = {
+              scale: (matrix.a + matrix.d) / 2,
+              x: matrix.e,
+              y: matrix.f,
+            };
+          }
+        } catch {
+          // Keep the latest transform ref when the browser cannot parse the computed value.
+        }
+      }
+      setWheelZoomDirectMode(true);
+    }
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1;
     const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
@@ -1116,12 +1151,16 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
+  };
+  const onWheelRef = useRef(onWheel);
+  useLayoutEffect(() => {
+    onWheelRef.current = onWheel;
   });
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const wheel = (event: WheelEvent) => onWheel(event);
+    const wheel = (event: WheelEvent) => onWheelRef.current(event);
     container.addEventListener("wheel", wheel, { passive: false });
     return () => container.removeEventListener("wheel", wheel);
   }, []);
@@ -1131,6 +1170,8 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       Boolean(event.target.closest("button, input, select, [role=button]"));
     if (interactive || canvasInteractionActive || preview.kind !== "rendered" ||
         event.button !== 0 || !event.isPrimary) return;
+
+    setWheelZoomDirectMode(false);
 
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -1339,6 +1380,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
             type="button"
             aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)}
             onClick={() => {
+              setWheelZoomDirectMode(false);
               setActualPosition(detailPosition);
               setZoomFocus(detailPosition);
               setActualSize(true);
@@ -1402,9 +1444,13 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         />
       ) : null}
       <div
+        ref={transformElementRef}
         className={[
           "absolute inset-0 will-change-transform",
           preview.kind === "rendered" ? "" : "invisible",
+          panning || wheelZoomDirect
+            ? "transition-none"
+            : "transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         ].join(" ")}
         style={{
           transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
@@ -1463,7 +1509,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           ref={setDetailCanvasContainer}
           className="pointer-events-none absolute inset-0 transition-none"
           style={{
-            // Detail tiles already use viewport coordinates.
+            // Undo the target view so detail follows the shared outer animation.
             transform: `scale(${1 / viewTransform.scale}) translate(${-viewTransform.x}px, ${-viewTransform.y}px)`,
             transformOrigin: "0 0",
           }}
