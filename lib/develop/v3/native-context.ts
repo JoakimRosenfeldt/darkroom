@@ -87,7 +87,7 @@ export class NativeGpuContext {
   #append(data: ArrayBufferView | ConvertedChunk): BinaryRange {
     const chunk = "kind" in data ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     const length = chunk instanceof Uint8Array ? chunk.byteLength
-      : chunk.kind === "rgb16" ? chunk.width * chunk.height * chunk.layers * 8 : chunk.pixels.byteLength;
+      : chunk.kind === "rgb16" ? chunk.width * chunk.height * chunk.layers * 6 : chunk.pixels.byteLength;
     const padding = (4 - this.#byteLength % 4) % 4;
     if (this.#byteLength + padding + length > MAX_BATCH_BYTES) throw new Error("Native GPU upload exceeds the batch memory limit.");
     if (padding) { this.#chunks.push(new Uint8Array(padding)); this.#byteLength += padding; }
@@ -168,7 +168,9 @@ export class NativeGpuContext {
       : this.#flipY && pixels
         ? this.#append({ kind: "flip", pixels: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), rowBytes: pixels.byteLength / (height * layers), height, layers })
         : pixels ? this.#append(pixels) : {};
-    this.#uploads.push({ id: this.#id(texture), width, height, layers, format: name, ...range });
+    // Packed RGB16 sources are expanded to RGBA16 natively instead of in the webview.
+    const uploadFormat = format === this.RGB16UI && pixels instanceof Uint16Array ? "rgb16uint" : name;
+    this.#uploads.push({ id: this.#id(texture), width, height, layers, format: uploadFormat, ...range });
   }
   createFramebuffer(): WebGLFramebuffer { const framebuffer = {}; this.#attachments.set(framebuffer, []); return framebuffer; }
   bindFramebuffer(_target: number, framebuffer: WebGLFramebuffer | null): void { this.#framebuffer = framebuffer; }
@@ -226,16 +228,15 @@ export class NativeGpuContext {
         request.set(chunk, offset);
         offset += chunk.byteLength;
       } else if (chunk.kind === "rgb16") {
-        const rgba = new Uint16Array(request.buffer, offset, chunk.width * chunk.height * chunk.layers * 4);
-        for (let layer = 0; layer < chunk.layers; layer++) for (let y = 0; y < chunk.height; y++) {
-          const sourceRow = (layer * chunk.height + (chunk.flipY ? chunk.height - y - 1 : y)) * chunk.width;
-          for (let x = 0; x < chunk.width; x++) {
-            const source = (sourceRow + x) * 3;
-            const destination = ((layer * chunk.height + y) * chunk.width + x) * 4;
-            rgba[destination] = chunk.pixels[source]; rgba[destination + 1] = chunk.pixels[source + 1]; rgba[destination + 2] = chunk.pixels[source + 2]; rgba[destination + 3] = 65535;
-          }
+        const pixels = new Uint8Array(chunk.pixels.buffer, chunk.pixels.byteOffset, chunk.pixels.byteLength);
+        const rowBytes = chunk.width * 6;
+        const length = rowBytes * chunk.height * chunk.layers;
+        if (!chunk.flipY) request.set(pixels.subarray(0, length), offset);
+        else for (let layer = 0; layer < chunk.layers; layer++) for (let y = 0; y < chunk.height; y++) {
+          const start = (layer * chunk.height + chunk.height - y - 1) * rowBytes;
+          request.set(pixels.subarray(start, start + rowBytes), offset + (layer * chunk.height + y) * rowBytes);
         }
-        offset += rgba.byteLength;
+        offset += length;
       } else {
         for (let layer = 0; layer < chunk.layers; layer++) for (let y = 0; y < chunk.height; y++) {
           const start = (layer * chunk.height + chunk.height - y - 1) * chunk.rowBytes;

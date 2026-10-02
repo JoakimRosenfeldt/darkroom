@@ -343,7 +343,13 @@ impl NativeGpu {
             if !session.textures.contains_key(&spec.id) && session.textures.len() >= 512 {
                 return Err("Native texture cache exceeds size limit".into());
             }
-            let format = texture_format(&spec.format)?;
+            // Packed RGB16 sources arrive without alpha and are expanded here.
+            let packed_rgb16 = spec.format == "rgb16uint";
+            let format = texture_format(if packed_rgb16 {
+                "rgba16uint"
+            } else {
+                &spec.format
+            })?;
             let bpp = bytes_per_pixel(format);
             let size = u64::from(spec.width)
                 * u64::from(spec.height)
@@ -367,7 +373,8 @@ impl NativeGpu {
             }
             let input = match (spec.offset, spec.length) {
                 (Some(offset), Some(length)) => {
-                    if length as u64 != size {
+                    let expected = if packed_rgb16 { size / 8 * 6 } else { size };
+                    if length as u64 != expected {
                         return Err(format!(
                             "Texture {} requires {size} bytes, got {length}",
                             spec.id
@@ -397,6 +404,14 @@ impl NativeGpu {
                 usage,
                 view_formats: &[],
             });
+            let expanded;
+            let input = match input {
+                Some(input) if packed_rgb16 => {
+                    expanded = expand_rgb16(input);
+                    Some(expanded.as_slice())
+                }
+                input => input,
+            };
             if let Some(input) = input {
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -887,6 +902,28 @@ fn texture_format(name: &str) -> Result<wgpu::TextureFormat, String> {
         "r32float" => wgpu::TextureFormat::R32Float,
         _ => return Err(format!("Unknown native texture format {name}")),
     })
+}
+
+fn expand_rgb16(input: &[u8]) -> Vec<u8> {
+    let mut output = vec![0xff; input.len() / 6 * 8];
+    let expand = |(source, target): (&[u8], &mut [u8])| {
+        for (pixel, rgba) in source.chunks_exact(6).zip(target.chunks_exact_mut(8)) {
+            rgba[..6].copy_from_slice(pixel);
+        }
+    };
+    if input.len() >= 1 << 20
+        && let Some(pool) = crate::compute::pool()
+    {
+        pool.install(|| {
+            input
+                .par_chunks(6 * 4096)
+                .zip(output.par_chunks_mut(8 * 4096))
+                .for_each(expand)
+        });
+    } else {
+        expand((input, &mut output));
+    }
+    output
 }
 
 fn bytes_per_pixel(format: wgpu::TextureFormat) -> u32 {
