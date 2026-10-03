@@ -62,6 +62,7 @@ export interface DecodedImage {
   width: number;
   height: number;
   rgb: Uint8Array | Uint16Array | Uint8ClampedArray;
+  nativeSourceHandle?: string;
   bits: number;
   colors: number;
   pixelProvenance: PixelProvenance;

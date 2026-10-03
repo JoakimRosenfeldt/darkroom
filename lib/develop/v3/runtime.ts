@@ -68,6 +68,9 @@ const PREVIEW_ANALYSIS_TAPS = [
   "display-output",
   "scene-headroom",
 ] as const;
+// Drag histograms skip the tone-input readback; Auto Tone only uses settled analysis.
+const INTERACTIVE_ANALYSIS_TAPS = PREVIEW_ANALYSIS_TAPS.filter((tap) => tap !== "tone-input");
+const HISTOGRAM_ANALYSIS_TAPS = ["display-output"] as const;
 const EXPORT_ANALYSIS_TAPS = ["display-output", "scene-headroom"] as const;
 const EXPORT_TILE_EDGE = 1_024;
 const INTERACTIVE_PREVIEW_MAX_PIXELS = 16_000;
@@ -97,6 +100,8 @@ export interface V3PreviewSessionRenderRequest extends V3RuntimeRequestBase {
   readonly previewMode: V3PreviewRenderMode;
   readonly includeAnalysis?: boolean;
   readonly includePointColor?: boolean;
+  // Analyze only the display histogram, sampled from this frame's own pixels.
+  readonly histogramOnly?: boolean;
   readonly maximumPreviewPixels?: number;
 }
 
@@ -742,7 +747,11 @@ async function renderRequest(
           proofView: { kind: "disabled" },
         },
       },
-      requestedTaps: request.includeAnalysis === false ? [] : PREVIEW_ANALYSIS_TAPS,
+      requestedTaps: request.includeAnalysis === false
+        ? []
+        : request.histogramOnly
+          ? HISTOGRAM_ANALYSIS_TAPS
+          : request.previewMode === "interactive" ? INTERACTIVE_ANALYSIS_TAPS : PREVIEW_ANALYSIS_TAPS,
     };
   } catch (error) {
     return invalidResult(
@@ -782,6 +791,7 @@ export async function prepareV3RuntimeRender(
       includePointColor: request.kind === "v3-preview"
         ? request.includePointColor ?? request.includeAnalysis !== false
         : false,
+      sampledHistogram: request.kind === "v3-preview" && request.histogramOnly === true,
     },
   };
 }

@@ -21,6 +21,7 @@ interface PreviewWorkerRenderOptions {
   readonly devicePixelRatio: number;
   readonly previewMode: V3PreviewRenderMode;
   readonly includeAnalysis: boolean;
+  readonly includeHistogram?: boolean;
   readonly includePointColor?: boolean;
   readonly maskMattes?: readonly V3PreviewWorkerMaskMatte[];
 }
@@ -35,6 +36,7 @@ interface QueuedPreview extends PendingRender {
 }
 
 const EMPTY_MASK_MATTES: readonly V3PreviewWorkerMaskMatte[] = [];
+const MAX_ACTIVE_PREVIEWS = 2;
 
 function workerFactory(): Worker {
   return new Worker(new URL("./preview-worker.ts", import.meta.url), {
@@ -57,6 +59,7 @@ function sourceImage(image: DevelopImage): V3PreviewWorkerImage {
     orientation: image.orientation,
     metadata: image.metadata,
     rgb: clonePixels(image),
+    nativeSourceHandle: image.nativeSourceHandle,
     bits: image.bits,
     colors: image.colors,
     pixelProvenance: image.pixelProvenance,
@@ -69,21 +72,42 @@ export class V3PreviewWorkerClient {
   #workerReady = false;
   readonly #nativeSessions = new Set<string>();
   readonly #nativeGpu = isTauri();
-  readonly #mainGpu: Promise<MainThreadGpuPreview> | null;
-  readonly #entry: LibraryEntry;
-  readonly #image: DevelopImage;
+  #mainGpu: Promise<MainThreadGpuPreview> | null;
+  #entry: LibraryEntry;
+  #image: DevelopImage;
   readonly #pending = new Map<number, PendingRender>();
   #nextRequestId = 0;
   #disposed = false;
-  #activePreview: number | null = null;
+  readonly #activePreviews = new Set<number>();
   #queuedPreview: QueuedPreview | null = null;
   #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
 
   constructor(entry: LibraryEntry, image: DevelopImage) {
     this.#entry = entry;
     this.#image = image;
+    this.#mainGpu = this.#createMainGpu(entry, image);
+  }
+
+  #createMainGpu(entry: LibraryEntry, image: DevelopImage): Promise<MainThreadGpuPreview> | null {
     const webkit = typeof navigator !== "undefined" && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
-    this.#mainGpu = webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+    return webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+  }
+
+  // Points an idle client at another photo so its worker and loaded modules can be reused.
+  retarget(entry: LibraryEntry, image: DevelopImage): void {
+    if (this.#disposed || this.#activePreviews.size > 0 || this.#queuedPreview || this.#pending.size > 0) {
+      throw new Error("Only an idle preview worker can change photos.");
+    }
+    this.#entry = entry;
+    this.#image = image;
+    this.#maskMattes = null;
+    void this.#mainGpu?.then((renderer) => renderer.dispose());
+    this.#mainGpu = this.#createMainGpu(entry, image);
+    if (!this.#worker || !this.#workerReady) return;
+    const source = sourceImage(image);
+    const buffer = source.rgb.buffer;
+    if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
+    this.#worker.postMessage({ kind: "initialize", entry, image: source, nativeGpu: this.#nativeGpu }, [buffer]);
   }
 
   #receive(response: Exclude<V3PreviewWorkerResponse, { readonly kind: "ready" }>): void {
@@ -93,8 +117,7 @@ export class V3PreviewWorkerClient {
       return;
     }
     this.#pending.delete(response.requestId);
-    if (this.#activePreview === response.requestId) {
-      this.#activePreview = null;
+    if (this.#activePreviews.delete(response.requestId)) {
       const queued = this.#queuedPreview;
       this.#queuedPreview = null;
       if (queued) this.#sendPreview(queued);
@@ -222,10 +245,11 @@ export class V3PreviewWorkerClient {
         devicePixelRatio: options.devicePixelRatio,
         previewMode: options.previewMode,
         includeAnalysis: options.includeAnalysis,
+        includeHistogram: options.includeHistogram,
         includePointColor: options.includePointColor,
         maskMattes: options.maskMattes ?? EMPTY_MASK_MATTES,
       } };
-      if (this.#activePreview !== null) {
+      if (this.#activePreviews.size >= MAX_ACTIVE_PREVIEWS) {
         this.#queuedPreview?.resolve({ backend: "cpu", result: { kind: "cancelled" } });
         this.#queuedPreview = preview;
       } else {
@@ -236,7 +260,7 @@ export class V3PreviewWorkerClient {
 
   #sendPreview(preview: QueuedPreview): void {
     const { message } = preview;
-    this.#activePreview = message.requestId;
+    this.#activePreviews.add(message.requestId);
     this.#pending.set(message.requestId, preview);
     void this.#dispatch(message);
   }

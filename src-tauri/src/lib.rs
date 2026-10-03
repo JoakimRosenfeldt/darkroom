@@ -8,7 +8,7 @@ mod native;
 
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -627,6 +627,61 @@ struct GpuState {
     renderer: Result<gpu::NativeGpu, String>,
 }
 
+const RAW_SOURCE_LIMIT: usize = 384 * 1024 * 1024;
+
+pub(crate) struct RawSource {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgb16: Vec<u8>,
+}
+
+#[derive(Default)]
+pub(crate) struct RawSources {
+    entries: HashMap<String, Arc<RawSource>>,
+    lru: VecDeque<String>,
+    bytes: usize,
+}
+
+impl RawSources {
+    pub(crate) fn insert(&mut self, handle: String, source: RawSource) {
+        let size = source.rgb16.len();
+        if let Some(old) = self.entries.remove(&handle) {
+            self.bytes -= old.rgb16.len();
+            self.lru.retain(|key| key != &handle);
+        }
+        while self.bytes + size > RAW_SOURCE_LIMIT {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(old) = self.entries.remove(&oldest) {
+                self.bytes -= old.rgb16.len();
+            }
+        }
+        self.bytes += size;
+        self.entries.insert(handle.clone(), Arc::new(source));
+        self.lru.push_back(handle);
+    }
+
+    pub(crate) fn get(&mut self, handle: &str) -> Option<Arc<RawSource>> {
+        let source = Arc::clone(self.entries.get(handle)?);
+        self.lru.retain(|key| key != handle);
+        self.lru.push_back(handle.to_owned());
+        Some(source)
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru.clear();
+        self.bytes = 0;
+    }
+}
+
+static RAW_SOURCES: std::sync::OnceLock<Mutex<RawSources>> = std::sync::OnceLock::new();
+
+pub(crate) fn raw_sources() -> &'static Mutex<RawSources> {
+    RAW_SOURCES.get_or_init(|| Mutex::new(RawSources::default()))
+}
+
 impl GpuState {
     fn new() -> Self {
         Self {
@@ -653,6 +708,9 @@ static GPU_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 fn reset_gpu_sessions() {
     GPU_GENERATION.fetch_add(1, Ordering::AcqRel);
+    if let Ok(mut sources) = raw_sources().lock() {
+        sources.clear();
+    }
     if let Some(gpu) = GPU.get() {
         tauri::async_runtime::spawn_blocking(move || {
             if let Ok(mut state) = gpu.lock() {
@@ -694,7 +752,7 @@ async fn darkroom_gpu(
             .renderer
             .as_mut()
             .map_err(|e| e.clone())?
-            .execute(&bytes);
+            .execute(&bytes, raw_sources());
         if state.sync_generation() != generation {
             return Err("Native render request belongs to a previous document.".into());
         }
@@ -904,4 +962,31 @@ pub fn run_backend_console() -> Result<(), String> {
         std::io::stdout().flush().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_sources_evict_oldest_and_reset_with_gpu_sessions() {
+        let mut sources = raw_sources().lock().unwrap();
+        sources.clear();
+        for index in 0..4 {
+            sources.insert(
+                index.to_string(),
+                RawSource {
+                    width: 1,
+                    height: 1,
+                    rgb16: vec![index as u8; 128 * 1024 * 1024],
+                },
+            );
+        }
+        assert!(sources.get("0").is_none());
+        assert!(sources.get("1").is_some());
+
+        drop(sources);
+        reset_gpu_sessions();
+        assert!(raw_sources().lock().unwrap().entries.is_empty());
+    }
 }

@@ -121,7 +121,10 @@ export interface DevelopRepositoryAdapters {
 }
 
 interface PendingWrite {
-  readonly snapshot: Extract<DevelopSessionSnapshot, { readonly processKind: "v2" | "v3" }>;
+  readonly snapshot: Pick<
+    DevelopSessionSnapshot,
+    "documentRevision" | "metadataRevision" | "persistedMetadataRevision"
+  >;
   readonly metadata: Pick<EntryMetadata, "rating" | "colorLabel">;
   readonly ready: Promise<void>;
 }
@@ -960,7 +963,12 @@ export class DevelopRepository {
       );
     }
     this.#pending = {
-      snapshot: structuredClone(snapshot),
+      // Writes only compare revisions; cloning the document and history here was wasted work.
+      snapshot: {
+        documentRevision: snapshot.documentRevision,
+        metadataRevision: snapshot.metadataRevision,
+        persistedMetadataRevision: snapshot.persistedMetadataRevision,
+      },
       metadata: {
         rating: metadata.rating,
         colorLabel: metadata.colorLabel,

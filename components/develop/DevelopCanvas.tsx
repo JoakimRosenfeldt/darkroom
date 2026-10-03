@@ -1,9 +1,10 @@
 "use client";
 
 import {
+  memo,
+  startTransition,
   useCallback,
   useEffect,
-  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -57,6 +58,8 @@ import {
 import { useDevelopStore } from "@/stores/develop-store";
 
 export type { V3CanvasTool } from "@/components/develop/V3CanvasOverlay";
+
+const BEFORE_WORKER_IDLE_MS = 10_000;
 
 export type V3CanvasDiagnostic =
   | CpuBackendDiagnostic
@@ -142,6 +145,7 @@ interface PaintedRasterDimensions extends DisplayDimensions {
   readonly cropActive: boolean;
   readonly entryId: string;
   readonly assetRevision: number;
+  readonly settled: boolean;
 }
 
 function positiveDimensions(width: unknown, height: unknown): DisplayDimensions | null {
@@ -268,7 +272,9 @@ function imageDataPixels(pixels: Uint8Array): Uint8ClampedArray<ArrayBuffer> {
     : new Uint8ClampedArray(pixels);
 }
 
-export function DevelopCanvas({
+// The viewer re-renders for histogram updates; the canvas subscribes to its own edit state.
+// React 19.2 does not refresh useEffectEvent inside memo components; use refs for listeners here.
+export const DevelopCanvas = memo(function DevelopCanvas({
   entry,
   image,
   alt,
@@ -290,6 +296,8 @@ export function DevelopCanvas({
   const detailRenderingRef = useRef(false);
   const analysisWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
   const beforeWorkerRef = useRef<V3PreviewWorkerClient | null>(null);
+  const beforeRendersRef = useRef(0);
+  const beforeIdleTimerRef = useRef(0);
   const hasRenderedRef = useRef(false);
   const drawnRequestRef = useRef(0);
   const analyzedRequestRef = useRef(0);
@@ -377,7 +385,6 @@ export function DevelopCanvas({
       return null;
     }
   }, [document, fullSourceDimensions]);
-  const lastZoomRef = useRef<number | "actual">("actual");
   const actualScale = detailDimensions
     ? detailDimensions.width / (window.devicePixelRatio || 1) / displayDimensions.width
     : 1;
@@ -390,6 +397,9 @@ export function DevelopCanvas({
     }),
   } : previewTransform, [actualSize, actualScale, imageRect, actualPosition, viewport, previewTransform]);
   const viewTransformRef = useRef(viewTransform);
+  const transformElementRef = useRef<HTMLDivElement | null>(null);
+  const [wheelZoomDirect, setWheelZoomDirect] = useState(false);
+  const wheelZoomDirectRef = useRef(false);
   useLayoutEffect(() => {
     viewTransformRef.current = viewTransform;
   }, [viewTransform]);
@@ -462,6 +472,7 @@ export function DevelopCanvas({
     return () => {
       worker.dispose();
       detailWorkerRef.current?.dispose();
+      window.clearTimeout(beforeIdleTimerRef.current);
       beforeWorkerRef.current?.dispose();
       analysisWorkerRef.current?.dispose();
       pointColorInputRef.current = null;
@@ -668,12 +679,13 @@ export function DevelopCanvas({
           pointColorInputRef.current = result.pointColorInput;
         }
         const paintedDimensions = { width: canvas.width, height: canvas.height };
+        const paintedSettled = (keepExistingRaster && drawnFrame ? drawnFrame.mode : mode) === "settled";
         setPaintedRasterDimensions((current) =>
           current?.width === paintedDimensions.width && current.height === paintedDimensions.height
             && current.document === document &&
             current.documentRevision === renderSnapshot.documentRevision &&
             current.cropActive === cropActive && current.entryId === entry.id &&
-            current.assetRevision === entry.assetRevision
+            current.assetRevision === entry.assetRevision && current.settled === paintedSettled
             ? current
             : {
                 ...paintedDimensions,
@@ -682,6 +694,7 @@ export function DevelopCanvas({
                 cropActive,
                 entryId: entry.id,
                 assetRevision: entry.assetRevision,
+                settled: paintedSettled,
               },
         );
         const scale = Math.min(width / paintedDimensions.width, height / paintedDimensions.height);
@@ -701,7 +714,9 @@ export function DevelopCanvas({
             documentRevision: renderSnapshot.documentRevision,
             planFingerprint: result.planFingerprint,
           });
-          analysisCallbackRef.current?.(result.analysis);
+          // Let the frame paint before the histogram re-renders the panels.
+          startTransition(() => analysisCallbackRef.current?.(result.analysis));
+          analyzedRequestRef.current = Math.max(analyzedRequestRef.current, requestId);
         }
         drawnRequestRef.current = Math.max(drawnRequestRef.current, requestId);
         const requestedDimensions = requestedPreviewDimensions(
@@ -790,19 +805,23 @@ export function DevelopCanvas({
           analysisCallbackRef.current?.(analysis);
         };
         let backend = drawnFrame?.backend ?? null;
+        let quickHistogram = false;
         if (!interactionRelease && !sameContentSettledRender) {
+          // Drag frames carry a sampled histogram instead of a second render through the native queue.
           const quick = await quickWorker.render(renderDocument, {
             ...options,
             previewMode: "interactive",
             includeAnalysis: false,
+            includeHistogram: previewMode === "interactive" && !cropActive,
           });
+          quickHistogram = quick.result.kind === "rendered" && quick.result.analysis.length > 0;
           if (!applyResult(quick.result, "interactive", quick.backend)) return;
           backend = quick.backend;
           if ((disposed || requestId !== requestRef.current) && !isLiveInteraction()) return;
         }
 
         if (previewMode === "interactive") {
-          void renderAnalysis("interactive").catch(handleRenderError);
+          if (!quickHistogram) void renderAnalysis("interactive").catch(handleRenderError);
           if (disposed || requestId !== requestRef.current) return;
           refineTimer = setTimeout(() => {
             if (disposed || requestId !== requestRef.current) return;
@@ -926,6 +945,8 @@ export function DevelopCanvas({
         return;
       }
       beforeWorkerRef.current = beforeWorker;
+      window.clearTimeout(beforeIdleTimerRef.current);
+      beforeRendersRef.current += 1;
       void beforeWorker.render(renderDocument, {
         viewportDimensions: {
           width: Math.max(1, Math.round(width * previewRenderScale)),
@@ -980,6 +1001,15 @@ export function DevelopCanvas({
         setBeforeReady(true);
       }).catch(() => {
         if (!disposed) setBeforeReady(false);
+      }).finally(() => {
+        // The before frame is kept on its canvas; free the worker's source copy and GPU session once idle.
+        beforeRendersRef.current -= 1;
+        if (beforeRendersRef.current > 0) return;
+        beforeIdleTimerRef.current = window.setTimeout(() => {
+          if (beforeRendersRef.current > 0 || beforeWorkerRef.current !== beforeWorker) return;
+          beforeWorker.dispose();
+          beforeWorkerRef.current = null;
+        }, BEFORE_WORKER_IDLE_MS);
       });
     }, 250);
 
@@ -1022,7 +1052,6 @@ export function DevelopCanvas({
     };
     setZoomFocus(focus);
     const nextScale = Math.max(1, Math.min(maximumScale, current.scale * factor));
-    if (nextScale > 1) lastZoomRef.current = nextScale;
     setActualSize(false);
     const next = nextScale === 1 ? FIT_TRANSFORM : anchoredViewerTransform(
       current, nextScale, anchor, viewport,
@@ -1032,58 +1061,75 @@ export function DevelopCanvas({
     setViewTransform(next);
   }, [activeDisplayDimensions, imageRect, maximumScale, viewport]);
 
+  const setWheelZoomDirectMode = useCallback((direct: boolean): void => {
+    wheelZoomDirectRef.current = direct;
+    setWheelZoomDirect(direct);
+  }, []);
+
   function fit(): void {
-    if (zoomed) lastZoomRef.current = actualSize ? "actual" : viewTransform.scale;
+    setWheelZoomDirectMode(false);
     setZoomFocus(null);
     setActualSize(false);
     viewTransformRef.current = FIT_TRANSFORM;
     setViewTransform(FIT_TRANSFORM);
   }
 
+  // A click from Fit always zooms to 100%, centered on the clicked point.
   function zoomFromFit(pointer: { x: number; y: number }): ViewerTransform {
+    setWheelZoomDirectMode(false);
     const position = {
       x: Math.max(0, Math.min(1, (pointer.x - imageRect.x) / imageRect.width)),
       y: Math.max(0, Math.min(1, (pointer.y - imageRect.y) / imageRect.height)),
     };
     setZoomFocus(position);
-    if (lastZoomRef.current === "actual") {
-      setActualPosition(position);
-      setActualSize(true);
-      const next = {
-        scale: actualScale,
-        ...clampViewerOffset(viewport, imageRect, actualScale, {
-          x: viewport.width / 2 - (imageRect.x + position.x * imageRect.width) * actualScale,
-          y: viewport.height / 2 - (imageRect.y + position.y * imageRect.height) * actualScale,
-        }),
-      };
-      viewTransformRef.current = next;
-      return next;
-    } else {
-      const scale = Math.min(maximumScale, lastZoomRef.current);
-      const next = {
-        scale,
-        ...clampViewerOffset(viewport, imageRect, scale, {
-          x: viewport.width / 2 - pointer.x * scale,
-          y: viewport.height / 2 - pointer.y * scale,
-        }),
-      };
-      setActualSize(false);
-      viewTransformRef.current = next;
-      setViewTransform(next);
-      return next;
-    }
+    setActualPosition(position);
+    setActualSize(true);
+    const next = {
+      scale: actualScale,
+      ...clampViewerOffset(viewport, imageRect, actualScale, {
+        x: viewport.width / 2 - (imageRect.x + position.x * imageRect.width) * actualScale,
+        y: viewport.height / 2 - (imageRect.y + position.y * imageRect.height) * actualScale,
+      }),
+    };
+    viewTransformRef.current = next;
+    return next;
   }
 
   const stepZoom = useCallback((direction: -1 | 1): void => {
+    setWheelZoomDirectMode(false);
     applyZoom(1.25 ** direction);
-  }, [applyZoom]);
+  }, [applyZoom, setWheelZoomDirectMode]);
 
-  const onWheel = useEffectEvent((event: WheelEvent): void => {
+  const onWheel = (event: WheelEvent): void => {
     if ((maskingActive && maskTool === "brush") || previewMode === "interactive" ||
         panRef.current || preview.kind !== "rendered" || event.deltaY === 0 ||
         (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
     const bounds = containerRef.current!.getBoundingClientRect();
+    if (!wheelZoomDirectRef.current) {
+      // Take over from the visible point of an in-flight control zoom.
+      const transform = transformElementRef.current
+        ? window.getComputedStyle(transformElementRef.current).transform
+        : "none";
+      if (transform !== "none") {
+        try {
+          const matrix = new DOMMatrixReadOnly(transform);
+          if (matrix.is2D && Number.isFinite(matrix.a) && matrix.a > 0 &&
+              Number.isFinite(matrix.d) && Math.abs(matrix.a - matrix.d) < 1e-6 &&
+              Math.abs(matrix.b) < 1e-6 && Math.abs(matrix.c) < 1e-6 &&
+              Number.isFinite(matrix.e) && Number.isFinite(matrix.f)) {
+            viewTransformRef.current = {
+              scale: (matrix.a + matrix.d) / 2,
+              x: matrix.e,
+              y: matrix.f,
+            };
+          }
+        } catch {
+          // Keep the latest transform ref when the browser cannot parse the computed value.
+        }
+      }
+      setWheelZoomDirectMode(true);
+    }
     const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
       : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? bounds.height : 1;
     const delta = Math.max(-100, Math.min(100, event.deltaY * unit));
@@ -1091,12 +1137,16 @@ export function DevelopCanvas({
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
+  };
+  const onWheelRef = useRef(onWheel);
+  useLayoutEffect(() => {
+    onWheelRef.current = onWheel;
   });
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const wheel = (event: WheelEvent) => onWheel(event);
+    const wheel = (event: WheelEvent) => onWheelRef.current(event);
     container.addEventListener("wheel", wheel, { passive: false });
     return () => container.removeEventListener("wheel", wheel);
   }, []);
@@ -1107,6 +1157,8 @@ export function DevelopCanvas({
     if (interactive || canvasInteractionActive || preview.kind !== "rendered" ||
         event.button !== 0 || !event.isPrimary) return;
 
+    setWheelZoomDirectMode(false);
+
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
     const imageX = (pointer.x - viewTransform.x) / viewTransform.scale;
@@ -1116,9 +1168,7 @@ export function DevelopCanvas({
 
     const startedAtFit = !zoomed;
     const startTransform = startedAtFit ? zoomFromFit(pointer) : viewTransform;
-    const gestureActualSize = startedAtFit
-      ? lastZoomRef.current === "actual"
-      : actualSize;
+    const gestureActualSize = startedAtFit || actualSize;
     panRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -1239,10 +1289,16 @@ export function DevelopCanvas({
   const detailBaseDimensions = showBefore
     ? beforeRasterDimensions ?? currentPaintedRasterDimensions
     : currentPaintedRasterDimensions;
+  const detailBaseSettled = showBefore && beforeRasterDimensions
+    ? true
+    : currentPaintedRasterDimensions !== undefined && paintedRasterDimensions?.settled === true;
+  // At Fit, full-resolution detail only helps when the settled preview is visibly short of the display.
+  // Quick frames are smaller on purpose, and display sizes round to whole CSS pixels, so neither
+  // is a reason to load a full RAW.
   const detailActive = preview.kind === "rendered" && !canvasInteractionActive && (zoomed || (
-    previewMode !== "interactive" && detailBaseDimensions !== undefined && (
-      detailBaseDimensions.width < Math.round(displayDimensions.width * (window.devicePixelRatio || 1)) ||
-      detailBaseDimensions.height < Math.round(displayDimensions.height * (window.devicePixelRatio || 1))
+    previewMode !== "interactive" && detailBaseSettled && detailBaseDimensions !== undefined && (
+      detailBaseDimensions.width < (displayDimensions.width - 1) * (window.devicePixelRatio || 1) ||
+      detailBaseDimensions.height < (displayDimensions.height - 1) * (window.devicePixelRatio || 1)
     )
   ));
 
@@ -1314,6 +1370,7 @@ export function DevelopCanvas({
             type="button"
             aria-pressed={actualSize || (zoomed && Math.abs(viewTransform.scale - actualScale) < 0.001)}
             onClick={() => {
+              setWheelZoomDirectMode(false);
               setActualPosition(detailPosition);
               setZoomFocus(detailPosition);
               setActualSize(true);
@@ -1377,9 +1434,13 @@ export function DevelopCanvas({
         />
       ) : null}
       <div
+        ref={transformElementRef}
         className={[
           "absolute inset-0 will-change-transform",
           preview.kind === "rendered" ? "" : "invisible",
+          panning || wheelZoomDirect
+            ? "transition-none"
+            : "transition-transform duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
         ].join(" ")}
         style={{
           transform: `translate(${viewTransform.x}px, ${viewTransform.y}px) scale(${viewTransform.scale})`,
@@ -1438,7 +1499,7 @@ export function DevelopCanvas({
           ref={setDetailCanvasContainer}
           className="pointer-events-none absolute inset-0 transition-none"
           style={{
-            // Detail tiles already use viewport coordinates.
+            // Undo the target view so detail follows the shared outer animation.
             transform: `scale(${1 / viewTransform.scale}) translate(${-viewTransform.x}px, ${-viewTransform.y}px)`,
             transformOrigin: "0 0",
           }}
@@ -1459,4 +1520,4 @@ export function DevelopCanvas({
       ) : null}
     </div>
   );
-}
+});

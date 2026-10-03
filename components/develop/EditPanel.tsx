@@ -39,7 +39,7 @@ import { MaskExpressionEditor } from "@/components/develop/MaskExpressionEditor"
 import { PrototypeOperations } from "@/components/develop/PrototypeOperations";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import { V3CleanupComponentEditor } from "@/components/develop/V3CleanupComponentEditor";
-import { SliderRow, COLOR_SLIDER_TRACKS } from "@/components/develop/SliderRow";
+import { SliderRow, COLOR_SLIDER_TRACKS, useSliderHandlers } from "@/components/develop/SliderRow";
 import { ToneCurveEditor } from "@/components/develop/ToneCurveEditor";
 import {
   ActionButton,
@@ -324,6 +324,17 @@ function LightTab({
     group: "tone",
     value: { ...document.tone, basic: { ...basic, [field]: value } },
   }, "Adjust tone");
+  const slider = useSliderHandlers({
+    exposure: (value) => updateBasic("exposure", value),
+    contrast: (value) => updateBasic("contrast", value),
+    highlights: (value) => updateBasic("highlights", value),
+    shadows: (value) => updateBasic("shadows", value),
+    whites: (value) => updateBasic("whites", value),
+    blacks: (value) => updateBasic("blacks", value),
+    texture: (texture) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, texture } }, "Adjust texture"),
+    clarity: (clarity) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, clarity } }, "Adjust clarity"),
+    dehaze: (dehaze) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, dehaze } }, "Adjust dehaze"),
+  });
 
   return (
     <>
@@ -332,18 +343,18 @@ function LightTab({
         headerActions={<V3AutoToneControl analysis={analysis} document={document} />}
         onReset={() => reset("tone")}
       >
-        <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} suffix=" EV" onChange={(value) => updateBasic("exposure", value)} />
-        <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={(value) => updateBasic("contrast", value)} />
-        <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={(value) => updateBasic("highlights", value)} />
-        <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={(value) => updateBasic("shadows", value)} />
-        <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={(value) => updateBasic("whites", value)} />
-        <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={(value) => updateBasic("blacks", value)} />
+        <SliderRow label="Exposure" value={basic.exposure} min={-5} max={5} step={0.05} suffix=" EV" onChange={slider("exposure")} />
+        <SliderRow label="Contrast" value={basic.contrast} min={-100} max={100} onChange={slider("contrast")} />
+        <SliderRow label="Highlights" value={basic.highlights} min={-100} max={100} onChange={slider("highlights")} />
+        <SliderRow label="Shadows" value={basic.shadows} min={-100} max={100} onChange={slider("shadows")} />
+        <SliderRow label="Whites" value={basic.whites} min={-100} max={100} onChange={slider("whites")} />
+        <SliderRow label="Blacks" value={basic.blacks} min={-100} max={100} onChange={slider("blacks")} />
       </PanelSection>
 
       <PanelSection title="Presence" onReset={() => reset("presence")}>
-        <SliderRow label="Texture" value={document.presence.texture} min={-100} max={100} onChange={(texture) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, texture } }, "Adjust texture")} />
-        <SliderRow label="Clarity" value={document.presence.clarity} min={-100} max={100} onChange={(clarity) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, clarity } }, "Adjust clarity")} />
-        <SliderRow label="Dehaze" value={document.presence.dehaze} min={-100} max={100} onChange={(dehaze) => dispatch({ kind: "replace-v3-semantic-group", group: "presence", value: { ...document.presence, dehaze } }, "Adjust dehaze")} />
+        <SliderRow label="Texture" value={document.presence.texture} min={-100} max={100} onChange={slider("texture")} />
+        <SliderRow label="Clarity" value={document.presence.clarity} min={-100} max={100} onChange={slider("clarity")} />
+        <SliderRow label="Dehaze" value={document.presence.dehaze} min={-100} max={100} onChange={slider("dehaze")} />
       </PanelSection>
 
       <PanelSection title="Tone curve">
@@ -454,6 +465,10 @@ function WhiteBalanceControls({
       },
     }, "Adjust white balance");
   };
+  const slider = useSliderHandlers({
+    temperature: (value) => updateWhiteBalance("temperature", value),
+    tint: (value) => updateWhiteBalance("tint", value),
+  });
 
   return <PanelSection title="White balance">
       <SelectRow label="Mode" value={color.whiteBalance.mode} onChange={setWhiteBalanceMode}>
@@ -464,8 +479,8 @@ function WhiteBalanceControls({
         <option value="auto">Auto</option>
         <option value="legacy-custom">Imported custom</option>
       </SelectRow>
-      <SliderRow label="Warmth" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000}  track={COLOR_SLIDER_TRACKS.temperature} onChange={(value) => updateWhiteBalance("temperature", value)} />
-      <SliderRow label="Tint" value={color.whiteBalance.adjustment.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={(value) => updateWhiteBalance("tint", value)} />
+      <SliderRow label="Warmth" value={color.whiteBalance.adjustment.temperature} min={-3000} max={3000}  track={COLOR_SLIDER_TRACKS.temperature} onChange={slider("temperature")} />
+      <SliderRow label="Tint" value={color.whiteBalance.adjustment.tint} min={-150} max={150} track={COLOR_SLIDER_TRACKS.tint} onChange={slider("tint")} />
       <div className="mt-2 flex items-center gap-2">
         <ActionButton onClick={() => onCanvasToolChange(canvasTool.kind === "white-balance" ? { kind: "none" } : { kind: "white-balance" })}>
           {canvasTool.kind === "white-balance" ? "Cancel sampler" : "Sample neutral"}
@@ -498,12 +513,16 @@ function ColorTab({
 
   const replaceColor = (value: DevelopDocumentV3["color"], label: string) =>
     dispatch({ kind: "replace-v3-semantic-group", group: "color", value }, label);
+  const slider = useSliderHandlers({
+    vibrance: (vibrance) => replaceColor({ ...color, global: { ...color.global, vibrance } }, "Adjust vibrance"),
+    saturation: (saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation"),
+  });
 
   return (
     <PanelSection title="Color" onReset={() => reset("color")}>
       <SectionLabel>Global color</SectionLabel>
-      <SliderRow label="Vibrance" value={color.global.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={(vibrance) => replaceColor({ ...color, global: { ...color.global, vibrance } }, "Adjust vibrance")} />
-      <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={(saturation) => replaceColor({ ...color, global: { ...color.global, saturation } }, "Adjust saturation")} />
+      <SliderRow label="Vibrance" value={color.global.vibrance} min={-100} max={100} track={COLOR_SLIDER_TRACKS.vibrance} onChange={slider("vibrance")} />
+      <SliderRow label="Saturation" value={color.global.saturation} min={-100} max={100} track={COLOR_SLIDER_TRACKS.saturation} onChange={slider("saturation")} />
 
       <details className="my-3 text-xs"><summary className="cursor-pointer text-lr-text-muted">Camera profile</summary>
         <StatusCard title="Profile">{profileDescription(document, image.pixelProvenance)}</StatusCard>
@@ -544,6 +563,11 @@ function PointColorControls({
         ),
       },
     }, "Adjust Point Color");
+  const slider = useSliderHandlers(Object.fromEntries(settings.adjustments.flatMap((adjustment) =>
+    POINT_COLOR_SLIDERS.map(([field]) => [
+      `${adjustment.id}:${field}`,
+      (value: number) => update(adjustment.id, { [field]: value }),
+    ]))));
 
   return (
     <>
@@ -598,21 +622,27 @@ function PointColorControls({
             <div className="flex-1" />
             <button type="button" onClick={() => replaceColor({ ...document.color, pointColor: { adjustments: settings.adjustments.filter((item) => item.id !== adjustment.id) } }, "Remove Point Color")} className="text-xs text-lr-text-faint hover:text-lr-danger">Remove</button>
           </div>
-          <SliderRow label="Source hue" value={adjustment.sourceHueDegrees} min={0} max={360} onChange={(sourceHueDegrees) => update(adjustment.id, { sourceHueDegrees })} />
-          <SliderRow label="Source sat." value={adjustment.sourceSaturation} min={0} max={1} step={0.01} onChange={(sourceSaturation) => update(adjustment.id, { sourceSaturation })} />
-          <SliderRow label="Source lum." value={adjustment.sourceLuminance} min={0} max={1} step={0.01} onChange={(sourceLuminance) => update(adjustment.id, { sourceLuminance })} />
-          <SliderRow label="Hue range" value={adjustment.hueRangeDegrees} min={1} max={180} onChange={(hueRangeDegrees) => update(adjustment.id, { hueRangeDegrees })} />
-          <SliderRow label="Sat. range" value={adjustment.saturationRange} min={0.01} max={1} step={0.01} onChange={(saturationRange) => update(adjustment.id, { saturationRange })} />
-          <SliderRow label="Lum. range" value={adjustment.luminanceRange} min={0.01} max={1} step={0.01} onChange={(luminanceRange) => update(adjustment.id, { luminanceRange })} />
-          <SliderRow label="Falloff" value={adjustment.falloff} min={0} max={1} step={0.01} onChange={(falloff) => update(adjustment.id, { falloff })} />
-          <SliderRow label="Hue shift" value={adjustment.hueShiftDegrees} min={-180} max={180} onChange={(hueShiftDegrees) => update(adjustment.id, { hueShiftDegrees })} />
-          <SliderRow label="Sat. shift" value={adjustment.saturationShift} min={-1} max={1} step={0.01} onChange={(saturationShift) => update(adjustment.id, { saturationShift })} />
-          <SliderRow label="Lum. shift" value={adjustment.luminanceShift} min={-1} max={1} step={0.01} onChange={(luminanceShift) => update(adjustment.id, { luminanceShift })} />
+          {POINT_COLOR_SLIDERS.map(([field, label, min, max, step]) => (
+            <SliderRow key={field} label={label} value={adjustment[field]} min={min} max={max} step={step} onChange={slider(`${adjustment.id}:${field}`)} />
+          ))}
         </div>
       ))}
     </>
   );
 }
+
+const POINT_COLOR_SLIDERS = [
+  ["sourceHueDegrees", "Source hue", 0, 360, 1],
+  ["sourceSaturation", "Source sat.", 0, 1, 0.01],
+  ["sourceLuminance", "Source lum.", 0, 1, 0.01],
+  ["hueRangeDegrees", "Hue range", 1, 180, 1],
+  ["saturationRange", "Sat. range", 0.01, 1, 0.01],
+  ["luminanceRange", "Lum. range", 0.01, 1, 0.01],
+  ["falloff", "Falloff", 0, 1, 0.01],
+  ["hueShiftDegrees", "Hue shift", -180, 180, 1],
+  ["saturationShift", "Sat. shift", -1, 1, 0.01],
+  ["luminanceShift", "Lum. shift", -1, 1, 0.01],
+] as const;
 
 function MixerControls({
   document,
@@ -626,6 +656,13 @@ function MixerControls({
   replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
 }) {
   const mixer = document.color.mixer;
+  const slider = useSliderHandlers(Object.fromEntries(MIXER_COLORS.map((color) => [
+    color,
+    (value: number) => replaceColor({
+      ...document.color,
+      mixer: { ...mixer, [color]: { ...mixer[color], [mode]: value } },
+    }, `Adjust ${MIXER_LABELS[color]} ${mode}`),
+  ])));
   return (
     <>
       <SectionLabel>Color mixer</SectionLabel>
@@ -644,10 +681,7 @@ function MixerControls({
           min={-100}
           max={100}
           track={mode === "hue" ? HUE_TRACKS[color] : undefined}
-          onChange={(value) => replaceColor({
-            ...document.color,
-            mixer: { ...mixer, [color]: { ...mixer[color], [mode]: value } },
-          }, `Adjust ${MIXER_LABELS[color]} ${mode}`)}
+          onChange={slider(color)}
         />
       ))}
     </>
@@ -662,16 +696,22 @@ function MonochromeControls({
   replaceColor: (value: DevelopDocumentV3["color"], label: string) => void;
 }) {
   const monochrome = document.color.monochrome;
+  const slider = useSliderHandlers(Object.fromEntries(MIXER_COLORS.map((channel) => [
+    channel,
+    (value: number) => replaceColor({ ...document.color, monochrome: { ...monochrome, mixer: { ...monochrome.mixer, [channel]: value } } }, `Adjust monochrome ${channel}`),
+  ])));
   return (
     <>
       <SectionLabel>Monochrome</SectionLabel>
       <ToggleRow label="Black & white" checked={monochrome.enabled} detail="Neutral built-in profile" onChange={(enabled) => replaceColor({ ...document.color, monochrome: { ...monochrome, enabled } }, "Toggle monochrome")} />
       {monochrome.enabled ? MIXER_COLORS.map((channel) => (
-        <SliderRow key={channel} label={MIXER_LABELS[channel]} value={monochrome.mixer[channel]} min={-100} max={100} onChange={(value) => replaceColor({ ...document.color, monochrome: { ...monochrome, mixer: { ...monochrome.mixer, [channel]: value } } }, `Adjust monochrome ${channel}`)} />
+        <SliderRow key={channel} label={MIXER_LABELS[channel]} value={monochrome.mixer[channel]} min={-100} max={100} onChange={slider(channel)} />
       )) : null}
     </>
   );
 }
+
+const GRADING_RANGES = ["shadows", "midtones", "highlights"] as const;
 
 function ColorGradingControls({
   document,
@@ -686,19 +726,28 @@ function ColorGradingControls({
       ...document.color,
       grading: { ...grading, [range]: { ...grading[range], ...patch } },
     }, `Adjust ${range} grading`);
+  const slider = useSliderHandlers({
+    ...Object.fromEntries(GRADING_RANGES.flatMap((range) => [
+      [`${range}:hue`, (hueDegrees: number) => updateWheel(range, { hueDegrees })],
+      [`${range}:saturation`, (saturation: number) => updateWheel(range, { saturation })],
+      [`${range}:luminance`, (luminance: number) => updateWheel(range, { luminance })],
+    ])),
+    blending: (blending) => replaceColor({ ...document.color, grading: { ...grading, blending } }, "Adjust grading blending"),
+    balance: (balance) => replaceColor({ ...document.color, grading: { ...grading, balance } }, "Adjust grading balance"),
+  });
   return (
     <>
       <SectionLabel>Color grading</SectionLabel>
-      {(["shadows", "midtones", "highlights"] as const).map((range) => (
+      {GRADING_RANGES.map((range) => (
         <div key={range} className="mb-1.5">
           <p className="text-[11px] font-medium capitalize text-lr-text-faint">{range}</p>
-          <SliderRow label="Hue" value={grading[range].hueDegrees} min={0} max={360} onChange={(hueDegrees) => updateWheel(range, { hueDegrees })} />
-          <SliderRow label="Saturation" value={grading[range].saturation} min={0} max={100} onChange={(saturation) => updateWheel(range, { saturation })} />
-          <SliderRow label="Luminance" value={grading[range].luminance} min={-100} max={100} onChange={(luminance) => updateWheel(range, { luminance })} />
+          <SliderRow label="Hue" value={grading[range].hueDegrees} min={0} max={360} onChange={slider(`${range}:hue`)} />
+          <SliderRow label="Saturation" value={grading[range].saturation} min={0} max={100} onChange={slider(`${range}:saturation`)} />
+          <SliderRow label="Luminance" value={grading[range].luminance} min={-100} max={100} onChange={slider(`${range}:luminance`)} />
         </div>
       ))}
-      <SliderRow label="Blending" value={grading.blending} min={0} max={100} onChange={(blending) => replaceColor({ ...document.color, grading: { ...grading, blending } }, "Adjust grading blending")} />
-      <SliderRow label="Balance" value={grading.balance} min={-100} max={100} onChange={(balance) => replaceColor({ ...document.color, grading: { ...grading, balance } }, "Adjust grading balance")} />
+      <SliderRow label="Blending" value={grading.blending} min={0} max={100} onChange={slider("blending")} />
+      <SliderRow label="Balance" value={grading.balance} min={-100} max={100} onChange={slider("balance")} />
     </>
   );
 }
@@ -710,6 +759,26 @@ function opticsProfileStatus(document: DevelopDocumentV3): string {
   return `${profile.profileId} is stored, but this build cannot verify it against a lens profile registry.`;
 }
 
+const NOISE_SLIDERS = [
+  ["noiseReduction", "Luminance"],
+  ["noiseDetail", "Detail"],
+  ["noiseContrast", "Contrast"],
+  ["colorNoiseReduction", "Color"],
+  ["colorNoiseDetail", "Color detail"],
+  ["colorNoiseSmoothness", "Smoothness"],
+] as const;
+
+const POST_CROP_SLIDERS = [
+  ["vignette", "Vignette", -100, 100],
+  ["vignetteMidpoint", "Midpoint", 0, 100],
+  ["vignetteRoundness", "Roundness", -100, 100],
+  ["vignetteFeather", "Feather", 0, 100],
+  ["vignetteHighlights", "Highlights", 0, 100],
+  ["grain", "Grain", 0, 100],
+  ["grainSize", "Size", 0, 100],
+  ["grainRoughness", "Roughness", 0, 100],
+] as const;
+
 function DetailTab({ document }: { document: DevelopDocumentV3 }) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
@@ -717,6 +786,25 @@ function DetailTab({ document }: { document: DevelopDocumentV3 }) {
   const noise = document.detail.noiseReduction;
   const sharpening = document.detail.sharpening;
   const postCrop = document.effects.postCrop;
+  const slider = useSliderHandlers({
+    distortion: (manualDistortion) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, manualDistortion } }, "Adjust distortion"),
+    defringe: (amount) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, amount } } }, "Adjust defringe"),
+    purpleHue: (purpleHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, purpleHueDegrees } } }, "Adjust purple defringe hue"),
+    greenHue: (greenHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, greenHueDegrees } } }, "Adjust green defringe hue"),
+    hueRange: (hueRangeDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, hueRangeDegrees } } }, "Adjust defringe range"),
+    sharpenAmount: (value) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpening: value } } }, "Adjust sharpening"),
+    sharpenRadius: (sharpenRadius) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenRadius } } }, "Adjust sharpen radius"),
+    sharpenDetail: (sharpenDetail) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenDetail } } }, "Adjust sharpen detail"),
+    sharpenMasking: (sharpenMasking) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenMasking } } }, "Adjust sharpen masking"),
+    ...Object.fromEntries(NOISE_SLIDERS.map(([field, label]) => [
+      field,
+      (value: number) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, noiseReduction: { ...noise, [field]: value } } }, `Adjust ${label.toLowerCase()} noise reduction`),
+    ])),
+    ...Object.fromEntries(POST_CROP_SLIDERS.map(([field, label]) => [
+      field,
+      (value: number) => dispatch({ kind: "replace-v3-semantic-group", group: "effects", value: { postCrop: { ...postCrop, [field]: value } } }, `Adjust ${label.toLowerCase()}`),
+    ])),
+  });
 
   return (
     <>
@@ -725,44 +813,28 @@ function DetailTab({ document }: { document: DevelopDocumentV3 }) {
           {opticsProfileStatus(document)}
         </StatusCard>
         <SectionLabel>Manual correction</SectionLabel>
-        <SliderRow label="Distortion" value={optics.manualDistortion} min={-100} max={100} onChange={(manualDistortion) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, manualDistortion } }, "Adjust distortion")} />
-        <SliderRow label="Defringe" value={optics.defringe.amount} min={0} max={100} onChange={(amount) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, amount } } }, "Adjust defringe")} />
-        <SliderRow label="Purple hue" value={optics.defringe.purpleHueDegrees} min={0} max={360} onChange={(purpleHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, purpleHueDegrees } } }, "Adjust purple defringe hue")} />
-        <SliderRow label="Green hue" value={optics.defringe.greenHueDegrees} min={0} max={360} onChange={(greenHueDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, greenHueDegrees } } }, "Adjust green defringe hue")} />
-        <SliderRow label="Hue range" value={optics.defringe.hueRangeDegrees} min={1} max={60} onChange={(hueRangeDegrees) => dispatch({ kind: "replace-v3-semantic-group", group: "optics", value: { ...optics, defringe: { ...optics.defringe, hueRangeDegrees } } }, "Adjust defringe range")} />
+        <SliderRow label="Distortion" value={optics.manualDistortion} min={-100} max={100} onChange={slider("distortion")} />
+        <SliderRow label="Defringe" value={optics.defringe.amount} min={0} max={100} onChange={slider("defringe")} />
+        <SliderRow label="Purple hue" value={optics.defringe.purpleHueDegrees} min={0} max={360} onChange={slider("purpleHue")} />
+        <SliderRow label="Green hue" value={optics.defringe.greenHueDegrees} min={0} max={360} onChange={slider("greenHue")} />
+        <SliderRow label="Hue range" value={optics.defringe.hueRangeDegrees} min={1} max={60} onChange={slider("hueRange")} />
       </PanelSection>
 
       <PanelSection title="Detail" onReset={() => reset("detail")}>
         <SectionLabel>Noise reduction</SectionLabel>
-        {([
-          ["noiseReduction", "Luminance"],
-          ["noiseDetail", "Detail"],
-          ["noiseContrast", "Contrast"],
-          ["colorNoiseReduction", "Color"],
-          ["colorNoiseDetail", "Color detail"],
-          ["colorNoiseSmoothness", "Smoothness"],
-        ] as const).map(([field, label]) => (
-          <SliderRow key={field} label={label} value={noise[field]} min={0} max={100} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, noiseReduction: { ...noise, [field]: value } } }, `Adjust ${label.toLowerCase()} noise reduction`)} />
+        {NOISE_SLIDERS.map(([field, label]) => (
+          <SliderRow key={field} label={label} value={noise[field]} min={0} max={100} onChange={slider(field)} />
         ))}
         <SectionLabel>Sharpening</SectionLabel>
-        <SliderRow label="Amount" value={sharpening.sharpening} min={0} max={100} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpening: value } } }, "Adjust sharpening")} />
-        <SliderRow label="Radius" value={sharpening.sharpenRadius} min={0.5} max={3} step={0.1} onChange={(sharpenRadius) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenRadius } } }, "Adjust sharpen radius")} />
-        <SliderRow label="Detail" value={sharpening.sharpenDetail} min={0} max={100} onChange={(sharpenDetail) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenDetail } } }, "Adjust sharpen detail")} />
-        <SliderRow label="Masking" value={sharpening.sharpenMasking} min={0} max={100} onChange={(sharpenMasking) => dispatch({ kind: "replace-v3-semantic-group", group: "detail", value: { ...document.detail, sharpening: { ...sharpening, sharpenMasking } } }, "Adjust sharpen masking")} />
+        <SliderRow label="Amount" value={sharpening.sharpening} min={0} max={100} onChange={slider("sharpenAmount")} />
+        <SliderRow label="Radius" value={sharpening.sharpenRadius} min={0.5} max={3} step={0.1} onChange={slider("sharpenRadius")} />
+        <SliderRow label="Detail" value={sharpening.sharpenDetail} min={0} max={100} onChange={slider("sharpenDetail")} />
+        <SliderRow label="Masking" value={sharpening.sharpenMasking} min={0} max={100} onChange={slider("sharpenMasking")} />
       </PanelSection>
 
       <PanelSection title="Post-crop effects" onReset={() => reset("effects")}>
-        {([
-          ["vignette", "Vignette", -100, 100],
-          ["vignetteMidpoint", "Midpoint", 0, 100],
-          ["vignetteRoundness", "Roundness", -100, 100],
-          ["vignetteFeather", "Feather", 0, 100],
-          ["vignetteHighlights", "Highlights", 0, 100],
-          ["grain", "Grain", 0, 100],
-          ["grainSize", "Size", 0, 100],
-          ["grainRoughness", "Roughness", 0, 100],
-        ] as const).map(([field, label, minimum, maximum]) => (
-          <SliderRow key={field} label={label} value={postCrop[field]} min={minimum} max={maximum} onChange={(value) => dispatch({ kind: "replace-v3-semantic-group", group: "effects", value: { postCrop: { ...postCrop, [field]: value } } }, `Adjust ${label.toLowerCase()}`)} />
+        {POST_CROP_SLIDERS.map(([field, label, minimum, maximum]) => (
+          <SliderRow key={field} label={label} value={postCrop[field]} min={minimum} max={maximum} onChange={slider(field)} />
         ))}
       </PanelSection>
     </>
@@ -827,6 +899,17 @@ function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
       ),
     },
   }, label);
+  const slider = useSliderHandlers({
+    fineAngle: (fineAngleDegrees) => replace({ ...geometry, orientation: { ...geometry.orientation, fineAngleDegrees } }, "Adjust fine angle"),
+    horizontal: (horizontal) => replacePerspective(horizontal, verticalPerspective, "Adjust horizontal perspective"),
+    vertical: (vertical) => replacePerspective(horizontalPerspective, vertical, "Adjust vertical perspective"),
+    cropLeft: (x) => replace({ ...geometry, crop: { ...crop, x } }, "Adjust crop left"),
+    cropTop: (y) => replace({ ...geometry, crop: { ...crop, y } }, "Adjust crop top"),
+    cropWidth: (width) => replace({ ...geometry, crop: { ...crop, width } }, "Adjust crop width"),
+    cropHeight: (height) => replace({ ...geometry, crop: { ...crop, height } }, "Adjust crop height"),
+    customWidth: (customAspectWidth) => replace({ ...geometry, crop: { ...crop, customAspectWidth } }, "Adjust custom crop width"),
+    customHeight: (customAspectHeight) => replace({ ...geometry, crop: { ...crop, customAspectHeight } }, "Adjust custom crop height"),
+  });
 
   return (
     <PanelSection title="Geometry" onReset={() => reset("geometry")}>
@@ -837,11 +920,11 @@ function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
       </div>
       <ToggleRow label="Flip horizontal" checked={geometry.orientation.flipHorizontal} onChange={(flipHorizontal) => replace({ ...geometry, orientation: { ...geometry.orientation, flipHorizontal } }, "Flip horizontal")} />
       <ToggleRow label="Flip vertical" checked={geometry.orientation.flipVertical} onChange={(flipVertical) => replace({ ...geometry, orientation: { ...geometry.orientation, flipVertical } }, "Flip vertical")} />
-      <SliderRow label="Fine angle" value={geometry.orientation.fineAngleDegrees} min={-180} max={180} step={0.1} suffix="°" onChange={(fineAngleDegrees) => replace({ ...geometry, orientation: { ...geometry.orientation, fineAngleDegrees } }, "Adjust fine angle")} />
+      <SliderRow label="Fine angle" value={geometry.orientation.fineAngleDegrees} min={-180} max={180} step={0.1} suffix="°" onChange={slider("fineAngle")} />
 
       <SectionLabel>Perspective</SectionLabel>
-      <SliderRow label="Horizontal" value={horizontalPerspective} min={-100} max={100} onChange={(horizontal) => replacePerspective(horizontal, verticalPerspective, "Adjust horizontal perspective")} />
-      <SliderRow label="Vertical" value={verticalPerspective} min={-100} max={100} onChange={(vertical) => replacePerspective(horizontalPerspective, vertical, "Adjust vertical perspective")} />
+      <SliderRow label="Horizontal" value={horizontalPerspective} min={-100} max={100} onChange={slider("horizontal")} />
+      <SliderRow label="Vertical" value={verticalPerspective} min={-100} max={100} onChange={slider("vertical")} />
       <StatusCard title="Upright unavailable">
         Automatic and guided Upright require a transform provider. Use manual perspective controls.
       </StatusCard>
@@ -860,14 +943,14 @@ function GeometryTab({ document }: { document: DevelopDocumentV3 }) {
       >
         {ASPECT_RATIO_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
       </SelectRow>
-      <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} disabled={!crop.enabled} onChange={(x) => replace({ ...geometry, crop: { ...crop, x } }, "Adjust crop left")} />
-      <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} disabled={!crop.enabled} onChange={(y) => replace({ ...geometry, crop: { ...crop, y } }, "Adjust crop top")} />
-      <SliderRow label="Width" value={crop.width} min={0.05} max={1 - crop.x} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(width) => replace({ ...geometry, crop: { ...crop, width } }, "Adjust crop width")} />
-      <SliderRow label="Height" value={crop.height} min={0.05} max={1 - crop.y} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(height) => replace({ ...geometry, crop: { ...crop, height } }, "Adjust crop height")} />
+      <SliderRow label="Left" value={crop.x} min={0} max={1 - crop.width} step={0.01} disabled={!crop.enabled} onChange={slider("cropLeft")} />
+      <SliderRow label="Top" value={crop.y} min={0} max={1 - crop.height} step={0.01} disabled={!crop.enabled} onChange={slider("cropTop")} />
+      <SliderRow label="Width" value={crop.width} min={0.05} max={1 - crop.x} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={slider("cropWidth")} />
+      <SliderRow label="Height" value={crop.height} min={0.05} max={1 - crop.y} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={slider("cropHeight")} />
       {crop.aspectPreset === "custom" ? (
         <>
-          <SliderRow label="Custom width" value={crop.customAspectWidth} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(customAspectWidth) => replace({ ...geometry, crop: { ...crop, customAspectWidth } }, "Adjust custom crop width")} />
-          <SliderRow label="Custom height" value={crop.customAspectHeight} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={(customAspectHeight) => replace({ ...geometry, crop: { ...crop, customAspectHeight } }, "Adjust custom crop height")} />
+          <SliderRow label="Custom width" value={crop.customAspectWidth} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={slider("customWidth")} />
+          <SliderRow label="Custom height" value={crop.customAspectHeight} min={0.01} max={10000} step={0.01} resetValue={1} disabled={!crop.enabled} onChange={slider("customHeight")} />
         </>
       ) : null}
       <p className="mt-2 text-xs leading-4 text-lr-text-faint">

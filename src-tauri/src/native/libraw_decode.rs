@@ -243,11 +243,16 @@ pub fn decode_libraw(
     let width = (source_width as f64 * scale).round().max(1.0) as usize;
     let height = (source_height as f64 * scale).round().max(1.0) as usize;
     let byte_count = width * height * 6;
-    let mut header = serde_json::to_vec(&json!({
+    let source_handle = (!preview && byte_count <= crate::RAW_SOURCE_LIMIT)
+        .then(|| uuid::Uuid::new_v4().to_string());
+    let mut header_value = json!({
         "version": 1, "width": width, "height": height, "bits": 16, "colors": 3,
         "byteCount": byte_count, "decoderRevision": DECODER_REVISION, "metadata": metadata,
-    }))
-    .map_err(|error| error.to_string())?;
+    });
+    if let Some(handle) = &source_handle {
+        header_value["sourceHandle"] = json!(handle);
+    }
+    let mut header = serde_json::to_vec(&header_value).map_err(|error| error.to_string())?;
     header.resize(header.len().next_multiple_of(4), b' ');
     let mut response = Vec::with_capacity(4 + header.len() + byte_count);
     response.extend_from_slice(&(header.len() as u32).to_le_bytes());
@@ -281,5 +286,17 @@ pub fn decode_libraw(
         }
     }
     check_cancelled(cancelled)?;
+    if let Some(handle) = source_handle {
+        if let Ok(mut sources) = crate::raw_sources().lock() {
+            sources.insert(
+                handle,
+                crate::RawSource {
+                    width: width as u32,
+                    height: height as u32,
+                    rgb16: response[response.len() - byte_count..].to_vec(),
+                },
+            );
+        }
+    }
     Ok(response)
 }
