@@ -14,6 +14,7 @@ export interface DevelopImage {
   orientation: number;
   metadata: Record<string, unknown>;
   rgb: Uint8Array | Uint16Array | Uint8ClampedArray;
+  nativeSourceHandle?: string;
   bits: number;
   colors: number;
   pixelProvenance: PixelProvenance;
@@ -87,6 +88,7 @@ function toDevelopImage(decoded: Awaited<ReturnType<typeof decodeEntry>>): Devel
     orientation,
     metadata: decoded.metadata,
     rgb: decoded.rgb,
+    nativeSourceHandle: decoded.nativeSourceHandle,
     bits: decoded.bits,
     colors: decoded.colors,
     pixelProvenance: decoded.pixelProvenance,

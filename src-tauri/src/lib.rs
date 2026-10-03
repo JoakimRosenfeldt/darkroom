@@ -530,11 +530,47 @@ async fn darkroom_libraw_decode(
             .lock()
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&request)?;
-        native::decode_libraw(&location, &options, &job.cancelled.requested)
-            .map(tauri::ipc::Response::new)
+        let response = native::decode_libraw(&location, &options, &job.cancelled.requested)?;
+        retain_decoded_raw_source(&response)?;
+        Ok(tauri::ipc::Response::new(response))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn retain_decoded_raw_source(response: &[u8]) -> Result<(), String> {
+    if response.len() < 4 {
+        return Err("Native RAW response is invalid.".into());
+    }
+    let header_len = u32::from_le_bytes(response[..4].try_into().unwrap()) as usize;
+    let pixel_offset = 4 + header_len;
+    if pixel_offset > response.len() {
+        return Err("Native RAW response is invalid.".into());
+    }
+    let header: Value = serde_json::from_slice(&response[4..pixel_offset])
+        .map_err(|_| "Native RAW response is invalid.")?;
+    let Some(handle) = header.get("sourceHandle").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let width = header["width"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or("Native RAW dimensions are invalid.")?;
+    let height = header["height"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or("Native RAW dimensions are invalid.")?;
+    raw_sources()
+        .lock()
+        .map_err(|_| "Native RAW source store is unavailable.")?
+        .insert(
+            handle.to_owned(),
+            RawSource {
+                width,
+                height,
+                rgb16: response[pixel_offset..].to_vec(),
+            },
+        )
 }
 
 #[tauri::command]
