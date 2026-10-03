@@ -252,8 +252,7 @@ pub fn decode_libraw(
     if let Some(handle) = source_handle {
         header_value["sourceHandle"] = json!(handle);
     }
-    let mut header = serde_json::to_vec(&header_value)
-    .map_err(|error| error.to_string())?;
+    let mut header = serde_json::to_vec(&header_value).map_err(|error| error.to_string())?;
     header.resize(header.len().next_multiple_of(4), b' ');
     let mut response = Vec::with_capacity(4 + header.len() + byte_count);
     response.extend_from_slice(&(header.len() as u32).to_le_bytes());

@@ -665,21 +665,21 @@ struct GpuState {
 
 const RAW_SOURCE_LIMIT: usize = 384 * 1024 * 1024;
 
-struct RawSource {
-    width: u32,
-    height: u32,
-    rgb16: Vec<u8>,
+pub(crate) struct RawSource {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgb16: Vec<u8>,
 }
 
 #[derive(Default)]
-struct RawSources {
+pub(crate) struct RawSources {
     entries: HashMap<String, Arc<RawSource>>,
     lru: VecDeque<String>,
     bytes: usize,
 }
 
 impl RawSources {
-    fn insert(&mut self, handle: String, source: RawSource) -> Result<(), String> {
+    pub(crate) fn insert(&mut self, handle: String, source: RawSource) -> Result<(), String> {
         let size = source.rgb16.len();
         if size > RAW_SOURCE_LIMIT {
             return Err("Native RAW source exceeds the storage limit.".into());
@@ -702,7 +702,7 @@ impl RawSources {
         Ok(())
     }
 
-    fn get(&mut self, handle: &str) -> Option<Arc<RawSource>> {
+    pub(crate) fn get(&mut self, handle: &str) -> Option<Arc<RawSource>> {
         let source = Arc::clone(self.entries.get(handle)?);
         self.lru.retain(|key| key != handle);
         self.lru.push_back(handle.to_owned());
@@ -718,7 +718,7 @@ impl RawSources {
 
 static RAW_SOURCES: std::sync::OnceLock<Mutex<RawSources>> = std::sync::OnceLock::new();
 
-fn raw_sources() -> &'static Mutex<RawSources> {
+pub(crate) fn raw_sources() -> &'static Mutex<RawSources> {
     RAW_SOURCES.get_or_init(|| Mutex::new(RawSources::default()))
 }
 
@@ -792,7 +792,7 @@ async fn darkroom_gpu(
             .renderer
             .as_mut()
             .map_err(|e| e.clone())?
-            .execute(&bytes);
+            .execute(&bytes, raw_sources());
         if state.sync_generation() != generation {
             return Err("Native render request belongs to a previous document.".into());
         }
