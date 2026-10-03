@@ -530,47 +530,11 @@ async fn darkroom_libraw_decode(
             .lock()
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&request)?;
-        let response = native::decode_libraw(&location, &options, &job.cancelled.requested)?;
-        retain_decoded_raw_source(&response)?;
-        Ok(tauri::ipc::Response::new(response))
+        native::decode_libraw(&location, &options, &job.cancelled.requested)
+            .map(tauri::ipc::Response::new)
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-fn retain_decoded_raw_source(response: &[u8]) -> Result<(), String> {
-    if response.len() < 4 {
-        return Err("Native RAW response is invalid.".into());
-    }
-    let header_len = u32::from_le_bytes(response[..4].try_into().unwrap()) as usize;
-    let pixel_offset = 4 + header_len;
-    if pixel_offset > response.len() {
-        return Err("Native RAW response is invalid.".into());
-    }
-    let header: Value = serde_json::from_slice(&response[4..pixel_offset])
-        .map_err(|_| "Native RAW response is invalid.")?;
-    let Some(handle) = header.get("sourceHandle").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    let width = header["width"]
-        .as_u64()
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or("Native RAW dimensions are invalid.")?;
-    let height = header["height"]
-        .as_u64()
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or("Native RAW dimensions are invalid.")?;
-    raw_sources()
-        .lock()
-        .map_err(|_| "Native RAW source store is unavailable.")?
-        .insert(
-            handle.to_owned(),
-            RawSource {
-                width,
-                height,
-                rgb16: response[pixel_offset..].to_vec(),
-            },
-        )
 }
 
 #[tauri::command]
@@ -679,11 +643,8 @@ pub(crate) struct RawSources {
 }
 
 impl RawSources {
-    pub(crate) fn insert(&mut self, handle: String, source: RawSource) -> Result<(), String> {
+    pub(crate) fn insert(&mut self, handle: String, source: RawSource) {
         let size = source.rgb16.len();
-        if size > RAW_SOURCE_LIMIT {
-            return Err("Native RAW source exceeds the storage limit.".into());
-        }
         if let Some(old) = self.entries.remove(&handle) {
             self.bytes -= old.rgb16.len();
             self.lru.retain(|key| key != &handle);
@@ -699,7 +660,6 @@ impl RawSources {
         self.bytes += size;
         self.entries.insert(handle.clone(), Arc::new(source));
         self.lru.push_back(handle);
-        Ok(())
     }
 
     pub(crate) fn get(&mut self, handle: &str) -> Option<Arc<RawSource>> {
@@ -1013,16 +973,14 @@ mod tests {
         let mut sources = raw_sources().lock().unwrap();
         sources.clear();
         for index in 0..4 {
-            sources
-                .insert(
-                    index.to_string(),
-                    RawSource {
-                        width: 1,
-                        height: 1,
-                        rgb16: vec![index as u8; 128 * 1024 * 1024],
-                    },
-                )
-                .unwrap();
+            sources.insert(
+                index.to_string(),
+                RawSource {
+                    width: 1,
+                    height: 1,
+                    rgb16: vec![index as u8; 128 * 1024 * 1024],
+                },
+            );
         }
         assert!(sources.get("0").is_none());
         assert!(sources.get("1").is_some());

@@ -2351,7 +2351,6 @@ export class V3GpuPreviewRenderer {
       maskCoverage: new Map(),
     };
     this.#state = state;
-    if (gl instanceof NativeGpuContext) await gl.submit([], false);
     return state;
   }
 

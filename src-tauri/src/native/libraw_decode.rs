@@ -249,7 +249,7 @@ pub fn decode_libraw(
         "version": 1, "width": width, "height": height, "bits": 16, "colors": 3,
         "byteCount": byte_count, "decoderRevision": DECODER_REVISION, "metadata": metadata,
     });
-    if let Some(handle) = source_handle {
+    if let Some(handle) = &source_handle {
         header_value["sourceHandle"] = json!(handle);
     }
     let mut header = serde_json::to_vec(&header_value).map_err(|error| error.to_string())?;
@@ -286,5 +286,17 @@ pub fn decode_libraw(
         }
     }
     check_cancelled(cancelled)?;
+    if let Some(handle) = source_handle {
+        if let Ok(mut sources) = crate::raw_sources().lock() {
+            sources.insert(
+                handle,
+                crate::RawSource {
+                    width: width as u32,
+                    height: height as u32,
+                    rgb16: response[response.len() - byte_count..].to_vec(),
+                },
+            );
+        }
+    }
     Ok(response)
 }
