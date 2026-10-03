@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { translateNativeFragmentShader, packNativeUniforms, type NativeShader } from "./native-shader";
 
 type BinaryRange = { offset: number; length: number };
-type TextureUpload = { id: number; width: number; height: number; layers: number; format: string } & Partial<BinaryRange>;
+type TextureUpload = { id: number; width: number; height: number; layers: number; format: string; source?: string; flipY?: boolean } & Partial<BinaryRange>;
 type Pass = { shader: number; targets: number[]; textures: number[]; uniforms: BinaryRange };
 type Program = { id: number; shader: NativeShader; values: Map<string, readonly number[]>; locations: Map<string, WebGLUniformLocation> };
 type Read = { texture: number; format: "rgba8" | "rgba32f"; flipY?: boolean };
@@ -13,6 +13,15 @@ const MAX_BATCH_BYTES = 512 * 1024 * 1024;
 
 export type NativeGpuTransport = (bytes: Uint8Array<ArrayBuffer>) => Promise<ArrayBuffer>;
 let workerTransport: NativeGpuTransport | null = null;
+const nativeSources = new WeakMap<Uint16Array, string>();
+
+export function registerNativeSource(pixels: Uint16Array, handle: string): void {
+  nativeSources.set(pixels, handle);
+}
+
+function dropNativeSource(pixels: Uint16Array): void {
+  nativeSources.delete(pixels);
+}
 
 export function setNativeGpuTransport(transport: NativeGpuTransport): void {
   workerTransport = transport;
@@ -63,6 +72,7 @@ export class NativeGpuContext {
   readonly #readbacks = new Map<number, Uint8Array<ArrayBuffer>>();
   #shaders: { id: number; source: string }[] = [];
   #uploads: TextureUpload[] = [];
+  #sourcePixels = new Map<string, Uint16Array>();
   #deleted: number[] = [];
   #passes: Pass[] = [];
   #chunks: (Uint8Array | ConvertedChunk)[] = [];
@@ -163,14 +173,24 @@ export class NativeGpuContext {
     const formats = new Map([[this.RGBA8, "rgba8unorm"], [this.RGB16UI, "rgba16uint"], [this.RGBA32UI, "rgba32uint"], [this.RGBA32F, "rgba32float"], [this.RGBA16F, "rgba16float"], [this.R32F, "r32float"]]);
     const name = formats.get(format);
     if (!name) throw new Error("Unsupported native texture format.");
-    const range = format === this.RGB16UI && pixels instanceof Uint16Array
-      ? this.#append({ kind: "rgb16", pixels, width, height, layers, flipY: this.#flipY })
-      : this.#flipY && pixels
-        ? this.#append({ kind: "flip", pixels: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), rowBytes: pixels.byteLength / (height * layers), height, layers })
-        : pixels ? this.#append(pixels) : {};
+    const handle = format === this.RGB16UI && pixels instanceof Uint16Array
+      ? nativeSources.get(pixels)
+      : undefined;
+    const range = handle
+      ? {}
+      : format === this.RGB16UI && pixels instanceof Uint16Array
+        ? this.#append({ kind: "rgb16", pixels, width, height, layers, flipY: this.#flipY })
+        : this.#flipY && pixels
+          ? this.#append({ kind: "flip", pixels: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), rowBytes: pixels.byteLength / (height * layers), height, layers })
+          : pixels ? this.#append(pixels) : {};
+    if (handle && pixels instanceof Uint16Array) this.#sourcePixels.set(handle, pixels);
     // Packed RGB16 sources are expanded to RGBA16 natively instead of in the webview.
     const uploadFormat = format === this.RGB16UI && pixels instanceof Uint16Array ? "rgb16uint" : name;
-    this.#uploads.push({ id: this.#id(texture), width, height, layers, format: uploadFormat, ...range });
+    this.#uploads.push({
+      id: this.#id(texture), width, height, layers, format: uploadFormat,
+      ...(handle ? { source: handle, flipY: this.#flipY } : {}),
+      ...range,
+    });
   }
   createFramebuffer(): WebGLFramebuffer { const framebuffer = {}; this.#attachments.set(framebuffer, []); return framebuffer; }
   bindFramebuffer(_target: number, framebuffer: WebGLFramebuffer | null): void { this.#framebuffer = framebuffer; }
@@ -211,10 +231,13 @@ export class NativeGpuContext {
     this.#passes.push({ shader: program.id, targets: [...targets], textures, uniforms: this.#append(packNativeUniforms(program.shader, program.values)) });
   }
 
-  async submit(floatTextures: readonly WebGLTexture[]): Promise<number> {
+  async submit(floatTextures: readonly WebGLTexture[], readback = true): Promise<number> {
     const started = performance.now();
-    const reads: Read[] = [{ texture: 0, format: "rgba8", flipY: true }, ...floatTextures.map((texture) => ({ texture: this.#id(texture), format: "rgba32f" as const }))];
-    const metadata = new TextEncoder().encode(JSON.stringify({ session: this.#session, shaders: this.#shaders, textures: this.#uploads, deleteTextures: this.#deleted, passes: this.#passes, reads, includeTiming: true }));
+    const reads: Read[] = readback
+      ? [{ texture: 0, format: "rgba8", flipY: true }, ...floatTextures.map((texture) => ({ texture: this.#id(texture), format: "rgba32f" as const }))]
+      : [];
+    const batch = { session: this.#session, shaders: this.#shaders, textures: this.#uploads, deleteTextures: this.#deleted, passes: this.#passes, reads, includeTiming: readback };
+    const metadata = new TextEncoder().encode(JSON.stringify(batch));
     // JSON whitespace aligns typed pixel views inside the final packet.
     const metadataLength = Math.ceil(metadata.length / 4) * 4;
     if (4 + metadataLength + this.#byteLength > MAX_BATCH_BYTES) throw new Error("Native GPU upload exceeds the batch memory limit.");
@@ -247,12 +270,91 @@ export class NativeGpuContext {
     }
     // Batches that only run passes may overlap; creating or deleting resources waits for every earlier batch.
     const passesOnly = this.#shaders.length === 0 && this.#uploads.length === 0 && this.#deleted.length === 0;
+    const chunks = this.#chunks;
+    const byteLength = this.#byteLength;
     this.#shaders = []; this.#uploads = []; this.#deleted = []; this.#passes = []; this.#chunks = []; this.#byteLength = 0;
     const preparationMs = performance.now() - started;
     // Another frame may record new dimensions while this one is in transport.
     const width = this.#width;
     const height = this.#height;
-    const sent = (passesOnly ? this.#resourcesSettled : this.#allSettled).then(() => transport(request));
+    const sourcePixels = new Map(this.#sourcePixels);
+    const sent = (passesOnly ? this.#resourcesSettled : this.#allSettled).then(async () => {
+      let response: ArrayBuffer;
+      try {
+        response = await transport(request);
+      } catch (error) {
+        if (!String(error).includes("Native source is unavailable")) throw error;
+        const appended: Uint8Array[] = [];
+        let offset = byteLength;
+        const textures = batch.textures.map((upload) => {
+          if (!upload.source) return upload;
+          const pixels = sourcePixels.get(upload.source);
+          if (!pixels) throw error;
+          dropNativeSource(pixels);
+          const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+          const rowBytes = upload.width * 6;
+          const length = rowBytes * upload.height * upload.layers;
+          const flipped = new Uint8Array(length);
+          if (!upload.flipY) flipped.set(bytes.subarray(0, length));
+          else for (let layer = 0; layer < upload.layers; layer++) for (let y = 0; y < upload.height; y++) {
+            const start = (layer * upload.height + upload.height - y - 1) * rowBytes;
+            flipped.set(bytes.subarray(start, start + rowBytes), (layer * upload.height + y) * rowBytes);
+          }
+          appended.push(flipped);
+          const fallback = { ...upload, offset, length };
+          delete fallback.source;
+          delete fallback.flipY;
+          offset += length;
+          return fallback;
+        });
+        if (appended.length === 0) throw error;
+        const fallbackMetadata = new TextEncoder().encode(JSON.stringify({ ...batch, textures }));
+        const fallbackMetadataLength = Math.ceil(fallbackMetadata.length / 4) * 4;
+        const originalData = new Uint8Array(byteLength);
+        let dataOffset = 0;
+        for (const chunk of chunks) {
+          if (chunk instanceof Uint8Array) {
+            originalData.set(chunk, dataOffset);
+            dataOffset += chunk.byteLength;
+          } else if (chunk.kind === "rgb16") {
+            const pixels = new Uint8Array(chunk.pixels.buffer, chunk.pixels.byteOffset, chunk.pixels.byteLength);
+            const rowBytes = chunk.width * 6;
+            const length = rowBytes * chunk.height * chunk.layers;
+            if (!chunk.flipY) originalData.set(pixels.subarray(0, length), dataOffset);
+            else for (let layer = 0; layer < chunk.layers; layer++) for (let y = 0; y < chunk.height; y++) {
+              const start = (layer * chunk.height + chunk.height - y - 1) * rowBytes;
+              originalData.set(pixels.subarray(start, start + rowBytes), dataOffset + (layer * chunk.height + y) * rowBytes);
+            }
+            dataOffset += length;
+          } else {
+            for (let layer = 0; layer < chunk.layers; layer++) for (let y = 0; y < chunk.height; y++) {
+              const start = (layer * chunk.height + chunk.height - y - 1) * chunk.rowBytes;
+              originalData.set(chunk.pixels.subarray(start, start + chunk.rowBytes), dataOffset + (layer * chunk.height + y) * chunk.rowBytes);
+            }
+            dataOffset += chunk.pixels.byteLength;
+          }
+        }
+        const fallbackDataLength = originalData.length + offset - byteLength;
+        if (4 + fallbackMetadataLength + fallbackDataLength > MAX_BATCH_BYTES) {
+          throw new Error("Native GPU upload exceeds the batch memory limit.");
+        }
+        const fallbackRequest = new Uint8Array(4 + fallbackMetadataLength + fallbackDataLength);
+        new DataView(fallbackRequest.buffer).setUint32(0, fallbackMetadataLength, true);
+        fallbackRequest.set(fallbackMetadata, 4);
+        fallbackRequest.fill(32, 4 + fallbackMetadata.length, 4 + fallbackMetadataLength);
+        fallbackRequest.set(originalData, 4 + fallbackMetadataLength);
+        let appendedOffset = 4 + fallbackMetadataLength + originalData.length;
+        for (const bytes of appended) {
+          fallbackRequest.set(bytes, appendedOffset);
+          appendedOffset += bytes.length;
+        }
+        response = await transport(fallbackRequest);
+      }
+      for (const [handle, pixels] of sourcePixels) {
+        if (this.#sourcePixels.get(handle) === pixels) this.#sourcePixels.delete(handle);
+      }
+      return response;
+    });
     const settled = sent.then(() => undefined, () => undefined);
     this.#allSettled = passesOnly ? Promise.all([this.#allSettled, settled]) : settled;
     if (!passesOnly) this.#resourcesSettled = settled;

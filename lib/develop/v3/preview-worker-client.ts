@@ -59,6 +59,7 @@ function sourceImage(image: DevelopImage): V3PreviewWorkerImage {
     orientation: image.orientation,
     metadata: image.metadata,
     rgb: clonePixels(image),
+    nativeSourceHandle: image.nativeSourceHandle,
     bits: image.bits,
     colors: image.colors,
     pixelProvenance: image.pixelProvenance,

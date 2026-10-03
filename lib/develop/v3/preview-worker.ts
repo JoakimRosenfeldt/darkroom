@@ -1,4 +1,4 @@
-import { nativeGpuAvailable, setNativeGpuTransport } from "./native-context";
+import { nativeGpuAvailable, registerNativeSource, setNativeGpuTransport } from "./native-context";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
@@ -263,6 +263,9 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     }));
     entry = message.entry;
     image = message.image;
+    if (image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
+      registerNativeSource(image.rgb, image.nativeSourceHandle);
+    }
     gpuRenderer?.dispose();
     gpuRenderer = new V3GpuPreviewRenderer();
     cpuCache = new V3CpuPreviewCache();
