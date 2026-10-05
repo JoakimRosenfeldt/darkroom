@@ -116,6 +116,7 @@ async function decodeDevelopedNef(
             protocolVersion: result.version,
             sourceWidth: result.width,
             sourceHeight: result.height,
+            ...(result.fullWidth ? { originalWidth: result.fullWidth, originalHeight: result.fullHeight } : {}),
             width: result.width,
             height: result.height,
             channels: result.channels,

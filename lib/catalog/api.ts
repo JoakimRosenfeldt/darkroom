@@ -199,6 +199,9 @@ export interface CatalogDecodeSuccess {
   readonly colorSpace: "srgb";
   readonly transferFunction: "srgb";
   readonly pixels: ArrayBuffer;
+  /** Full-resolution size from the RAW header, sent with previews. */
+  readonly fullWidth?: number;
+  readonly fullHeight?: number;
 }
 
 export type CatalogDecodeResult = CatalogDecodeFailure | CatalogDecodeSuccess;
@@ -773,6 +776,10 @@ export function parseCatalogDecodeResult(value: unknown): CatalogDecodeResult {
     colorSpace: input.colorSpace === "srgb" ? "srgb" : (() => { throw new Error("decode color space is invalid."); })(),
     transferFunction: input.transferFunction === "srgb" ? "srgb" : (() => { throw new Error("decode transfer function is invalid."); })(),
     pixels: input.pixels,
+    ...(input.fullWidth === undefined ? {} : {
+      fullWidth: integer(input.fullWidth, "decode fullWidth", 1),
+      fullHeight: integer(input.fullHeight, "decode fullHeight", 1),
+    }),
   };
 }
 

@@ -48,6 +48,7 @@ import type {
 } from "@/lib/develop/v3/cpu-backend";
 import { MAX_CPU_RENDER_PIXELS } from "@/lib/develop/v3/cpu-backend";
 import type { Sha256Digest } from "@/lib/develop/render-contract";
+import { isNikonDecoderProvenance } from "@/lib/formats/registry";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isEditableTarget } from "@/hooks/is-editable-target";
 import {
@@ -185,7 +186,8 @@ function initialFullSourceDimensions(
   const cached = getCachedDevelopExportImage(entry, { rawColorMode: "libraw-camera-matrix" });
   if (cached) return positiveDimensions(cached.width, cached.height);
   if (image.pixelProvenance.decoderPath !== "processed-standard" &&
-      image.pixelProvenance.decoderPath !== "libraw") return null;
+      image.pixelProvenance.decoderPath !== "libraw" &&
+      !isNikonDecoderProvenance(image.pixelProvenance.decoderPath)) return null;
   return positiveDimensions(image.metadata.originalWidth, image.metadata.originalHeight);
 }
 

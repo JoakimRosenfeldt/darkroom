@@ -59,6 +59,21 @@ unsafe extern "C" fn progress(
     i32::from(cancelled.load(Ordering::Relaxed))
 }
 
+/// Reads the oriented full-resolution size from the RAW header without unpacking pixels.
+pub fn raw_dimensions(path: &std::path::Path) -> Option<(u16, u16)> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    let handle = RawHandle(unsafe { raw::libraw_init(0) });
+    if handle.0.is_null() || unsafe { raw::libraw_open_file(handle.0, path.as_ptr()) } != 0 {
+        return None;
+    }
+    let sizes = unsafe { &(*handle.0).sizes };
+    Some(if matches!(sizes.flip, 5..=7) {
+        (sizes.height, sizes.width)
+    } else {
+        (sizes.width, sizes.height)
+    })
+}
+
 pub fn decode_libraw(
     location: &Value,
     options: &LibRawDecodeOptions,

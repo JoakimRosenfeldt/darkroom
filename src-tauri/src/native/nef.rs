@@ -466,10 +466,15 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         (decoded_at - copied_at).as_millis(),
         decoded_at.elapsed().as_millis()
     ));
-    Ok(DecodedAsset {
-        metadata: json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb"}),
-        pixels,
-    })
+    let mut metadata = json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb"});
+    // Lets the viewer zoom a preview before the slower full-resolution decode finishes.
+    if mode == "preview"
+        && let Some((full_width, full_height)) = super::raw_dimensions(&input)
+    {
+        metadata["fullWidth"] = json!(full_width);
+        metadata["fullHeight"] = json!(full_height);
+    }
+    Ok(DecodedAsset { metadata, pixels })
 }
 
 pub fn decode_asset_binary(args: &[Value], ctx: &NativeContext) -> Result<Vec<u8>, String> {

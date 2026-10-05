@@ -22,7 +22,7 @@ pub use assets::read_asset_bytes;
 pub(crate) use assets::resolve_asset as resolve_asset_path;
 pub use embedded_preview::read_embedded_preview;
 pub use export::encode_export_raw;
-pub use libraw_decode::{LibRawDecodeOptions, decode_libraw};
+pub use libraw_decode::{LibRawDecodeOptions, decode_libraw, raw_dimensions};
 pub use libraw_profile::verify_libraw_profile;
 pub use metadata::analyze_file;
 pub(crate) use metadata::{analyze_file_with_digest, sha256 as metadata_sha256};
