@@ -18,14 +18,14 @@ const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024 * 1024;
 const DECODER_REVISION: &str = "libraw-native-0.22.1-compat-v1";
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibRawDecodeOptions {
     mode: DecodeMode,
     max_edge: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum DecodeMode {
     Preview,
@@ -59,11 +59,26 @@ unsafe extern "C" fn progress(
     i32::from(cancelled.load(Ordering::Relaxed))
 }
 
+/// Reads the oriented full-resolution size from the RAW header without unpacking pixels.
+pub fn raw_dimensions(path: &std::path::Path) -> Option<(u16, u16)> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    let handle = RawHandle(unsafe { raw::libraw_init(0) });
+    if handle.0.is_null() || unsafe { raw::libraw_open_file(handle.0, path.as_ptr()) } != 0 {
+        return None;
+    }
+    let sizes = unsafe { &(*handle.0).sizes };
+    Some(if matches!(sizes.flip, 5..=7) {
+        (sizes.height, sizes.width)
+    } else {
+        (sizes.width, sizes.height)
+    })
+}
+
 pub fn decode_libraw(
     location: &Value,
     options: &LibRawDecodeOptions,
     cancelled: &AtomicBool,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, Option<String>), String> {
     check_cancelled(cancelled)?;
     if options.max_edge == 0 || options.max_edge > 2560 {
         return Err("RAW preview size is invalid.".into());
@@ -243,11 +258,16 @@ pub fn decode_libraw(
     let width = (source_width as f64 * scale).round().max(1.0) as usize;
     let height = (source_height as f64 * scale).round().max(1.0) as usize;
     let byte_count = width * height * 6;
-    let mut header = serde_json::to_vec(&json!({
+    let source_handle = (!preview && byte_count <= crate::RAW_SOURCE_LIMIT)
+        .then(|| uuid::Uuid::new_v4().to_string());
+    let mut header_value = json!({
         "version": 1, "width": width, "height": height, "bits": 16, "colors": 3,
         "byteCount": byte_count, "decoderRevision": DECODER_REVISION, "metadata": metadata,
-    }))
-    .map_err(|error| error.to_string())?;
+    });
+    if let Some(handle) = &source_handle {
+        header_value["sourceHandle"] = json!(handle);
+    }
+    let mut header = serde_json::to_vec(&header_value).map_err(|error| error.to_string())?;
     header.resize(header.len().next_multiple_of(4), b' ');
     let mut response = Vec::with_capacity(4 + header.len() + byte_count);
     response.extend_from_slice(&(header.len() as u32).to_le_bytes());
@@ -281,5 +301,19 @@ pub fn decode_libraw(
         }
     }
     check_cancelled(cancelled)?;
-    Ok(response)
+    let source_handle = source_handle.filter(|handle| {
+        let Ok(mut sources) = crate::raw_sources().lock() else {
+            return false;
+        };
+        sources.insert(
+            handle.clone(),
+            crate::RawSource {
+                width: width as u32,
+                height: height as u32,
+                rgb16: response[response.len() - byte_count..].to_vec(),
+            },
+        );
+        true
+    });
+    Ok((response, source_handle))
 }

@@ -1,4 +1,4 @@
-import { nativeGpuAvailable, setNativeGpuTransport } from "./native-context";
+import { nativeGpuAvailable, registerNativeSource, setNativeGpuTransport } from "./native-context";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
@@ -28,7 +28,12 @@ let entry: LibraryEntry | null = null;
 let image: DevelopImage | null = null;
 let pendingRender: RenderMessage | null = null;
 let renderScheduled = false;
-let rendering = false;
+let rendering = 0;
+let exporting = false;
+// Once the GPU renderer is warm, a second preview may record and submit while the first is in transport.
+let gpuWarm = false;
+// The CPU path shares its cache, so CPU previews never overlap.
+let cpuQueue: Promise<unknown> = Promise.resolve();
 let gpuRenderer: V3GpuPreviewRenderer | null = null;
 let cpuCache = new V3CpuPreviewCache();
 let maskMattes: readonly V3PreviewWorkerMaskMatte[] = [];
@@ -71,7 +76,8 @@ function assetsFor(): CpuAssetAvailability | undefined {
 }
 
 function scheduleRender(): void {
-  if (renderScheduled || rendering) return;
+  const limit = gpuWarm && !exporting && pendingRender?.kind === "render" ? 2 : 1;
+  if (renderScheduled || rendering >= limit) return;
   renderScheduled = true;
   setTimeout(() => {
     void renderLatest();
@@ -92,7 +98,8 @@ async function renderLatest(): Promise<void> {
     return;
   }
 
-  rendering = true;
+  rendering += 1;
+  if (message.kind === "export") exporting = true;
   try {
     const assets = assetsFor();
     if (message.kind === "export") {
@@ -124,11 +131,17 @@ async function renderLatest(): Promise<void> {
       viewportDimensions: message.viewportDimensions,
       devicePixelRatio: message.devicePixelRatio,
       previewMode: message.previewMode,
-      includeAnalysis: message.includeAnalysis,
+      includeAnalysis: message.includeAnalysis || message.includeHistogram === true,
+      histogramOnly: !message.includeAnalysis && message.includeHistogram === true,
       includePointColor: message.includePointColor,
       assets,
     } as const;
-    const renderCpuPreview = async (): Promise<V3PreviewRenderOutput> => {
+    const renderCpuPreview = (): Promise<V3PreviewRenderOutput> => {
+      const run = cpuQueue.then(renderCpuPreviewNow);
+      cpuQueue = run.catch(() => undefined);
+      return run;
+    };
+    const renderCpuPreviewNow = async (): Promise<V3PreviewRenderOutput> => {
       const prepared = await prepareV3RuntimeRender(message.document, {
         ...runtimeRequest,
         maximumPreviewPixels: message.previewMode === "settled"
@@ -179,7 +192,7 @@ async function renderLatest(): Promise<void> {
     ) {
       const gpuResult = await (gpuRenderer ??= new V3GpuPreviewRenderer()).render(
         gpuPreparation.input,
-        { includeAnalysis: message.includeAnalysis },
+        { includeAnalysis: message.includeAnalysis || message.includeHistogram === true },
       );
       if (gpuResult) {
         result = gpuResult;
@@ -214,6 +227,7 @@ async function renderLatest(): Promise<void> {
         ? await renderCpuPreview()
         : gpuPreparation;
     }
+    gpuWarm = backend === "gpu" && result.kind === "rendered";
     post(
       { kind: "result", requestId: message.requestId, backend, result },
       transferList(result),
@@ -225,7 +239,8 @@ async function renderLatest(): Promise<void> {
       message: error instanceof Error ? error.message : "Could not render the preview.",
     });
   } finally {
-    rendering = false;
+    rendering -= 1;
+    if (message.kind === "export") exporting = false;
     if (pendingRender) scheduleRender();
   }
 }
@@ -248,11 +263,15 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     }));
     entry = message.entry;
     image = message.image;
+    if (image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
+      registerNativeSource(image.rgb, image.nativeSourceHandle);
+    }
     gpuRenderer?.dispose();
     gpuRenderer = new V3GpuPreviewRenderer();
     cpuCache = new V3CpuPreviewCache();
     maskMattes = [];
     gpuUnavailable = false;
+    gpuWarm = false;
     interactivePixels = 1_000_000;
     lastGpuDimensions = "";
     fastFrames = 0;

@@ -5,8 +5,33 @@ import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
 import { loadV3PreviewMaskMattes } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
 import { FrozenV2Renderer, renderFrozenV2 } from "@/lib/develop/frozen-v2-backend";
-import { loadDevelopImage } from "./develop-image-cache";
+import { loadDevelopImage, type DevelopImage } from "./develop-image-cache";
 import { runWithPreviewLimit } from "./concurrency";
+
+// Thumbnails reuse idle workers instead of loading the worker modules for every photo.
+const IDLE_WORKER_MS = 15_000;
+const idleWorkers: V3PreviewWorkerClient[] = [];
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+function takeWorker(entry: LibraryEntry, image: DevelopImage): V3PreviewWorkerClient {
+  for (let worker = idleWorkers.pop(); worker; worker = idleWorkers.pop()) {
+    try {
+      worker.retarget(entry, image);
+      return worker;
+    } catch {
+      worker.dispose();
+    }
+  }
+  return new V3PreviewWorkerClient(entry, image);
+}
+
+function releaseWorker(worker: V3PreviewWorkerClient): void {
+  idleWorkers.push(worker);
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    for (const idle of idleWorkers.splice(0)) idle.dispose();
+  }, IDLE_WORKER_MS);
+}
 
 export function renderEditedPreview(
   entry: LibraryEntry,
@@ -48,7 +73,8 @@ export function renderEditedPreview(
         return await previewBlob(outputCanvas);
       } finally { renderer.dispose(); }
     }
-    const worker = new V3PreviewWorkerClient(entry, image);
+    const worker = takeWorker(entry, image);
+    let reusable = false;
     const abort = () => worker.dispose();
     options.signal?.addEventListener("abort", abort, { once: true });
     try {
@@ -58,6 +84,7 @@ export function renderEditedPreview(
         viewportDimensions: { width: maxEdge, height: maxEdge },
         devicePixelRatio: 1, previewMode: "settled", includeAnalysis: false, maskMattes,
       });
+      reusable = true;
       if (result.kind !== "rendered") {
         options.signal?.throwIfAborted();
         throw new Error("The saved edit could not be rendered. Open the photo to check its edit and source files.");
@@ -76,7 +103,8 @@ export function renderEditedPreview(
       return await previewBlob(canvas);
     } finally {
       options.signal?.removeEventListener("abort", abort);
-      worker.dispose();
+      if (reusable && !options.signal?.aborted) releaseWorker(worker);
+      else worker.dispose();
     }
   }, options);
 }

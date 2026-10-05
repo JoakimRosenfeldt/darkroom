@@ -10,6 +10,7 @@ import type {
 } from "@/lib/cache/develop-image-cache";
 import {
   getCachedDevelopImage,
+  loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
 } from "@/lib/cache/develop-image-cache";
@@ -119,6 +120,11 @@ export function PhotoViewer({
   } | null>(null);
   const [activePanel, setActivePanel] = useState<DevelopPanelId | null>("edit");
   const [v3RenderDiagnostics, setV3RenderDiagnostics] = useState<readonly V3CanvasDiagnostic[]>([]);
+  // Every rendered frame reports a fresh array; keep the old one so frames don't re-render the viewer.
+  const reportV3RenderDiagnostics = useCallback((next: readonly V3CanvasDiagnostic[]) => {
+    setV3RenderDiagnostics((current) =>
+      JSON.stringify(current) === JSON.stringify(next) ? current : next);
+  }, []);
   const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [v3CanvasState, setV3CanvasState] = useState<{
     readonly entryId: string;
@@ -220,7 +226,7 @@ export function PhotoViewer({
     const session = state.sessions[entry.id];
     const document = session?.previewDocument ?? session?.persistedDocument;
     return {
-      document: session?.processKind === "v3" && document?.version === 3 ? document : null,
+      editable: session?.processKind === "v3" && document?.version === 3,
       disabled: state.activeCatalogId !== entry.catalogId ||
         state.activeEntryId !== entry.id ||
         session?.ui.projection.kind === "divergent" ||
@@ -323,9 +329,17 @@ export function PhotoViewer({
     }
 
     void loadImage();
+    // Start the full-resolution decode for 1:1 zoom without waiting for the preview.
+    // The delay skips photos passed while browsing, as Nikon SDK decodes cannot be cancelled.
+    const fullTimer = developProcessKind === "v3" && entry.formatAvailability.status === "supported"
+      ? setTimeout(() => {
+        loadDevelopExportImage(entry, { rawColorMode, signal: controller.signal }).catch(() => undefined);
+      }, 250)
+      : undefined;
 
     return () => {
       active = false;
+      clearTimeout(fullTimer);
       controller.abort();
     };
   }, [entry, developProcessKind, rawColorMode]);
@@ -597,7 +611,7 @@ export function PhotoViewer({
                   entry={entry}
                   image={decoded}
                   alt={entry.name}
-                  onRenderDiagnostics={setV3RenderDiagnostics}
+                  onRenderDiagnostics={reportV3RenderDiagnostics}
                   onAnalysis={setV3Analysis}
                   cropActive={!defaultsPending && activePanel === "crop"}
                   maskingActive={
@@ -616,10 +630,9 @@ export function PhotoViewer({
           <EntryMetadataBar
             entryId={entry.id}
             metadata={metadata}
-            actions={decoded && clipboardSession.document ? (
+            actions={decoded && clipboardSession.editable ? (
               <DevelopClipboardControls
                 key={entry.id}
-                document={clipboardSession.document}
                 image={decoded}
                 entry={entry}
                 disabled={defaultsPending || clipboardSession.disabled}

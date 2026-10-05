@@ -70,6 +70,7 @@ struct ShaderSpec {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TextureSpec {
     id: u32,
     width: u32,
@@ -77,6 +78,9 @@ struct TextureSpec {
     #[serde(default = "one")]
     layers: u32,
     format: String,
+    source: Option<String>,
+    #[serde(default)]
+    flip_y: bool,
     offset: Option<usize>,
     length: Option<usize>,
 }
@@ -144,6 +148,7 @@ pub struct NativeGpu {
     sessions: HashMap<String, Session>,
     shader_cache: HashMap<Arc<str>, Shader>,
     texture_bytes: u64,
+    prepared_source: Option<(String, bool, u32, u32, wgpu::Texture)>,
 }
 
 impl NativeGpu {
@@ -215,6 +220,7 @@ impl NativeGpu {
             sessions: HashMap::new(),
             shader_cache: HashMap::new(),
             texture_bytes: 0,
+            prepared_source: None,
         })
     }
 
@@ -228,10 +234,85 @@ impl NativeGpu {
 
     pub fn clear_sessions(&mut self) {
         self.sessions.clear();
+        self.prepared_source = None;
         self.texture_bytes = 0;
     }
 
-    pub fn execute(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    pub fn prepare_source(
+        &mut self,
+        handle: String,
+        source: &crate::RawSource,
+        flip_y: bool,
+    ) -> Result<(), String> {
+        if let Some((_, _, width, height, _)) = self.prepared_source.take() {
+            self.texture_bytes -= u64::from(width) * u64::from(height) * 8;
+        }
+        let bytes = u64::from(source.width) * u64::from(source.height) * 8;
+        if source.width == 0
+            || source.height == 0
+            || source.width > self.info.max_texture_dimension
+            || source.height > self.info.max_texture_dimension
+            || self.texture_bytes + bytes > MAX_TEXTURE_BYTES
+        {
+            return Ok(());
+        }
+        self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let extent = wgpu::Extent3d {
+            width: source.width,
+            height: source.height,
+            depth_or_array_layers: 1,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Darkroom prepared source"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let expanded = expand_rgb16(
+            &source.rgb16,
+            source.width as usize,
+            source.height as usize,
+            flip_y,
+        );
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &expanded,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(source.width * 8),
+                rows_per_image: Some(source.height),
+            },
+            extent,
+        );
+        self.queue.submit([]);
+        let validation = pollster::block_on(self.device.pop_error_scope());
+        let memory = pollster::block_on(self.device.pop_error_scope());
+        if let Some(error) = validation.or(memory) {
+            return Err(format!("Native GPU: {error}"));
+        }
+        self.prepared_source = Some((handle, flip_y, source.width, source.height, texture));
+        self.texture_bytes += bytes;
+        Ok(())
+    }
+
+    pub fn execute(
+        &mut self,
+        bytes: &[u8],
+        raw_sources: &std::sync::Mutex<crate::RawSources>,
+    ) -> Result<Vec<u8>, String> {
         let started = Instant::now();
         if bytes.len() < 4 || bytes.len() > MAX_BATCH_BYTES {
             return Err("Invalid native GPU batch length".into());
@@ -267,10 +348,34 @@ impl NativeGpu {
         if !self.sessions.contains_key(&batch.session) && self.sessions.len() >= MAX_SESSIONS {
             return Err("Too many native GPU sessions".into());
         }
+        let sources = {
+            let mut store = raw_sources
+                .lock()
+                .map_err(|_| "Native source is unavailable")?;
+            let mut sources = HashMap::new();
+            for spec in &batch.textures {
+                let Some(handle) = &spec.source else {
+                    continue;
+                };
+                if spec.format != "rgb16uint" || spec.layers != 1 {
+                    return Err("Native source texture format or layers are invalid".into());
+                }
+                let source = store.get(handle).ok_or("Native source is unavailable")?;
+                let expected = u64::from(spec.width) * u64::from(spec.height) * 6;
+                if spec.width != source.width
+                    || spec.height != source.height
+                    || source.rgb16.len() as u64 != expected
+                {
+                    return Err("Native source dimensions are invalid".into());
+                }
+                sources.insert(handle.clone(), source);
+            }
+            sources
+        };
         let mut session = self.sessions.remove(&batch.session).unwrap_or_default();
         self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = self.execute_batch(&mut session, &batch, &bytes[4 + json_len..]);
+        let result = self.execute_batch(&mut session, &batch, &bytes[4 + json_len..], &sources);
         let validation = pollster::block_on(self.device.pop_error_scope());
         let memory = pollster::block_on(self.device.pop_error_scope());
         let mut result = result.and_then(|bytes| match validation.or(memory) {
@@ -307,6 +412,7 @@ impl NativeGpu {
         session: &mut Session,
         batch: &Batch,
         data: &[u8],
+        sources: &HashMap<String, Arc<crate::RawSource>>,
     ) -> Result<Vec<u8>, String> {
         let started = Instant::now();
         for id in &batch.delete_textures {
@@ -343,7 +449,13 @@ impl NativeGpu {
             if !session.textures.contains_key(&spec.id) && session.textures.len() >= 512 {
                 return Err("Native texture cache exceeds size limit".into());
             }
-            let format = texture_format(&spec.format)?;
+            // Packed RGB16 sources arrive without alpha and are expanded here.
+            let packed_rgb16 = spec.format == "rgb16uint";
+            let format = texture_format(if packed_rgb16 {
+                "rgba16uint"
+            } else {
+                &spec.format
+            })?;
             let bpp = bytes_per_pixel(format);
             let size = u64::from(spec.width)
                 * u64::from(spec.height)
@@ -362,12 +474,31 @@ impl NativeGpu {
                 .textures
                 .get(&spec.id)
                 .map_or(0, |texture| texture.bytes);
-            if self.texture_bytes - old_size + size > MAX_TEXTURE_BYTES {
+            let use_prepared =
+                self.prepared_source
+                    .as_ref()
+                    .is_some_and(|(handle, flip_y, width, height, _)| {
+                        spec.source.as_ref() == Some(handle)
+                            && spec.flip_y == *flip_y
+                            && spec.width == *width
+                            && spec.height == *height
+                    });
+            let added = if use_prepared { 0 } else { size };
+            if self.texture_bytes - old_size + added > MAX_TEXTURE_BYTES {
                 return Err("Native texture memory limit exceeded".into());
             }
+            if spec.source.is_some() && (spec.offset.is_some() || spec.length.is_some()) {
+                return Err("Native texture needs either a source or byte range".into());
+            }
+            let source = spec
+                .source
+                .as_ref()
+                .and_then(|handle| sources.get(handle))
+                .filter(|_| !use_prepared);
             let input = match (spec.offset, spec.length) {
                 (Some(offset), Some(length)) => {
-                    if length as u64 != size {
+                    let expected = if packed_rgb16 { size / 8 * 6 } else { size };
+                    if length as u64 != expected {
                         return Err(format!(
                             "Texture {} requires {size} bytes, got {length}",
                             spec.id
@@ -387,16 +518,38 @@ impl NativeGpu {
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::RENDER_ATTACHMENT;
-            let value = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Darkroom image"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            });
+            let value = if use_prepared {
+                self.prepared_source.take().unwrap().4
+            } else {
+                self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Darkroom image"),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+            };
+            let expanded;
+            let input = match (source, input) {
+                (Some(source), _) => {
+                    expanded = expand_rgb16(
+                        &source.rgb16,
+                        spec.width as usize,
+                        spec.height as usize,
+                        spec.flip_y,
+                    );
+                    Some(expanded.as_slice())
+                }
+                (None, Some(input)) if packed_rgb16 => {
+                    expanded =
+                        expand_rgb16(input, spec.width as usize, spec.height as usize, false);
+                    Some(expanded.as_slice())
+                }
+                (None, input) => input,
+            };
             if let Some(input) = input {
                 self.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -436,7 +589,7 @@ impl NativeGpu {
                     bytes: size,
                 },
             );
-            self.texture_bytes = self.texture_bytes - old_size + size;
+            self.texture_bytes = self.texture_bytes - old_size + added;
         }
         let uniform_alignment = self.device.limits().min_uniform_buffer_offset_alignment as usize;
         let mut uniform_data = Vec::new();
@@ -889,6 +1042,40 @@ fn texture_format(name: &str) -> Result<wgpu::TextureFormat, String> {
     })
 }
 
+fn expand_rgb16(input: &[u8], width: usize, height: usize, flip_y: bool) -> Vec<u8> {
+    let mut output = vec![0xff; input.len() / 6 * 8];
+    let rows_per_chunk = (4096 / width.max(1)).max(1);
+    let expand = |(chunk, target): (usize, &mut [u8])| {
+        let first_row = chunk * rows_per_chunk;
+        let rows = target.len() / (width * 8);
+        for row in 0..rows {
+            let y = first_row + row;
+            let source_y = if flip_y { height - 1 - y } else { y };
+            let source = &input[source_y * width * 6..(source_y + 1) * width * 6];
+            let target = &mut target[row * width * 8..(row + 1) * width * 8];
+            for (pixel, rgba) in source.chunks_exact(6).zip(target.chunks_exact_mut(8)) {
+                rgba[..6].copy_from_slice(pixel);
+            }
+        }
+    };
+    if input.len() >= 1 << 20
+        && let Some(pool) = crate::compute::pool()
+    {
+        pool.install(|| {
+            output
+                .par_chunks_mut(width * 8 * rows_per_chunk)
+                .enumerate()
+                .for_each(expand)
+        });
+    } else {
+        output
+            .chunks_mut(width * 8 * rows_per_chunk)
+            .enumerate()
+            .for_each(expand);
+    }
+    output
+}
+
 fn bytes_per_pixel(format: wgpu::TextureFormat) -> u32 {
     match format {
         wgpu::TextureFormat::Rgba16Uint | wgpu::TextureFormat::Rgba16Float => 8,
@@ -1004,4 +1191,107 @@ fn target_groups(
     }
     groups.push(current);
     groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RawSource, RawSources};
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    fn gpu_or_skip() -> Option<NativeGpu> {
+        match NativeGpu::new() {
+            Ok(gpu) => Some(gpu),
+            Err(error) if error.starts_with("Native GPU unavailable:") => {
+                eprintln!("Skipping native GPU test without an adapter: {error}");
+                None
+            }
+            Err(error) => panic!("Could not create native GPU for test: {error}"),
+        }
+    }
+
+    fn request(textures: Vec<serde_json::Value>, reads: serde_json::Value, data: &[u8]) -> Vec<u8> {
+        let metadata = serde_json::to_vec(&json!({
+            "session": "test",
+            "textures": textures,
+            "reads": reads,
+        }))
+        .unwrap();
+        let mut bytes = Vec::with_capacity(4 + metadata.len() + data.len());
+        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&metadata);
+        bytes.extend_from_slice(data);
+        bytes
+    }
+
+    fn byte_texture(data: &[u8]) -> serde_json::Value {
+        json!({
+            "id": 1, "width": 3, "height": 2, "layers": 1, "format": "rgb16uint",
+            "offset": 0, "length": data.len(),
+        })
+    }
+
+    #[test]
+    fn byte_and_handle_uploads_read_back_identically() {
+        let Some(mut gpu) = gpu_or_skip() else { return };
+        let pixels: Vec<u8> = (1_u16..=18).flat_map(u16::to_le_bytes).collect();
+        let mut flipped = pixels[18..].to_vec();
+        flipped.extend_from_slice(&pixels[..18]);
+        let mut sources = RawSources::default();
+        sources.insert(
+            "source".into(),
+            RawSource {
+                width: 3,
+                height: 2,
+                rgb16: pixels,
+            },
+        );
+        let sources = Mutex::new(sources);
+
+        let byte_upload = request(
+            vec![byte_texture(&flipped)],
+            json!([{"texture": 1, "format": "rgba32f"}]),
+            &flipped,
+        );
+        let byte_result = gpu.execute(&byte_upload, &sources).unwrap();
+        let source = sources.lock().unwrap().get("source").unwrap();
+        gpu.prepare_source("source".into(), &source, true).unwrap();
+        assert_eq!(gpu.info().texture_bytes, 2 * 3 * 2 * 8);
+        let handle_upload = request(
+            vec![json!({
+                "id": 1, "width": 3, "height": 2, "layers": 1, "format": "rgb16uint",
+                "source": "source", "flipY": true,
+            })],
+            json!([{"texture": 1, "format": "rgba32f"}]),
+            &[],
+        );
+        let handle_result = gpu.execute(&handle_upload, &sources).unwrap();
+        assert_eq!(byte_result, handle_result);
+        assert!(gpu.prepared_source.is_none());
+        assert_eq!(gpu.info().texture_bytes, 3 * 2 * 8);
+    }
+
+    #[test]
+    fn missing_source_handle_returns_exact_error() {
+        let Some(mut gpu) = gpu_or_skip() else { return };
+        let sources = Mutex::new(RawSources::default());
+        let pixels: Vec<u8> = (1_u16..=18).flat_map(u16::to_le_bytes).collect();
+        let initial = request(vec![byte_texture(&pixels)], json!([]), &pixels);
+        gpu.execute(&initial, &sources).unwrap();
+        let upload = request(
+            vec![json!({
+                "id": 2, "width": 3, "height": 2, "layers": 1, "format": "rgb16uint",
+                "source": "missing",
+            })],
+            json!([]),
+            &[],
+        );
+        assert_eq!(
+            gpu.execute(&upload, &sources).unwrap_err(),
+            "Native source is unavailable"
+        );
+        let readback = request(vec![], json!([{"texture": 1, "format": "rgba32f"}]), &[]);
+        assert_eq!(gpu.execute(&readback, &sources).unwrap().len(), 3 * 2 * 16);
+    }
 }

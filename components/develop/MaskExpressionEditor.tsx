@@ -22,7 +22,7 @@ import {
 } from "@/lib/develop/v3/masking";
 import { AiMaskActions } from "./AiMaskActions";
 import { ActionButton, SectionLabel, StatusCard, ToggleRow } from "./V3PanelControls";
-import { SliderRow } from "./SliderRow";
+import { SliderRow, useSliderHandlers } from "./SliderRow";
 import { useDevelopStore } from "@/stores/develop-store";
 
 interface Props {
@@ -308,6 +308,19 @@ export function MaskExpressionEditor({ document, entry }: Props) {
     ? selectedSource.autoMask
     : null;
 
+
+  const slider = useSliderHandlers(selectedMask ? Object.fromEntries(localAdjustmentDefinitions().map((definition) => [
+    definition.field,
+    (next: number) => {
+      const basic = basicField(definition.field);
+      const adjustments = definition.field === "colorizeAmount"
+        ? { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, amount: next } }
+        : basic
+          ? { ...selectedMask.adjustments, basic: { ...selectedMask.adjustments.basic, [basic]: next } }
+          : { ...selectedMask.adjustments, [definition.field]: next };
+      writeMask({ ...selectedMask, adjustments }, `Adjust mask ${definition.field}`);
+    },
+  ])) : {});
   return (
     <div>
       <AiMaskActions entry={entry} document={document} />
@@ -385,14 +398,7 @@ export function MaskExpressionEditor({ document, entry }: Props) {
                     : definition.field === "noise" ? selectedMask.adjustments.noise
                       : definition.field === "moire" ? selectedMask.adjustments.moire
                         : definition.field === "defringe" ? selectedMask.adjustments.defringe : 0;
-          return <SliderRow key={definition.field} label={`${definition.label}${prototype ? ", Prototype" : ""}`} value={value} min={definition.minimum} max={definition.maximum} step={definition.field === "exposure" ? 0.05 : 1} onChange={(next) => {
-            const adjustments = definition.field === "colorizeAmount"
-              ? { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, amount: next } }
-              : basic
-                ? { ...selectedMask.adjustments, basic: { ...selectedMask.adjustments.basic, [basic]: next } }
-                : { ...selectedMask.adjustments, [definition.field]: next };
-            writeMask({ ...selectedMask, adjustments }, `Adjust mask ${definition.field}`);
-          }} />;
+          return <SliderRow key={definition.field} label={`${definition.label}${prototype ? ", Prototype" : ""}`} value={value} min={definition.minimum} max={definition.maximum} step={definition.field === "exposure" ? 0.05 : 1} onChange={slider(definition.field)} />;
         })}
         <label className="mt-1 flex items-center justify-between text-[10px] text-lr-text-muted">Colorize color <PreviewColorInput key={`${entry.id}:${selectedMask.id}:colorize`} catalogId={entry.catalogId} entryId={entry.id} label="Adjust mask colorize color" value={hexColor(selectedMask.adjustments.colorize.color)} onPreview={(value) => writeMask({ ...selectedMask, adjustments: { ...selectedMask.adjustments, colorize: { ...selectedMask.adjustments.colorize, color: colorFromHex(value) } } }, "Adjust mask colorize color")} /></label>
       </div> : null}

@@ -766,6 +766,7 @@ interface GpuPrograms {
 }
 
 interface GpuTargets {
+  inUse: number;
   readonly width: number;
   readonly height: number;
   readonly precision: "half" | "float";
@@ -1077,6 +1078,7 @@ function createTargets(
   precision: "half" | "float",
 ): GpuTargets {
   return {
+    inUse: 0,
     width,
     height,
     precision,
@@ -1987,6 +1989,32 @@ function readFloatTexture(
   return pixels;
 }
 
+const MAX_HISTOGRAM_SAMPLES = 16_384;
+
+// A full 1 MP histogram costs about 18 ms; a strided sample keeps drag frames fast.
+function sampledPixels(
+  pixels: Uint8Array,
+  dimensions: { readonly width: number; readonly height: number },
+): [Uint8Array, { readonly width: number; readonly height: number }] {
+  const stride = Math.ceil(Math.sqrt(dimensions.width * dimensions.height / MAX_HISTOGRAM_SAMPLES));
+  if (stride <= 1) return [pixels, dimensions];
+  const width = Math.ceil(dimensions.width / stride);
+  const height = Math.ceil(dimensions.height / stride);
+  const sampled = new Uint8Array(width * height * 4);
+  let target = 0;
+  for (let y = 0; y < dimensions.height; y += stride) {
+    for (let x = 0; x < dimensions.width; x += stride) {
+      const source = (y * dimensions.width + x) * 4;
+      sampled[target] = pixels[source]!;
+      sampled[target + 1] = pixels[source + 1]!;
+      sampled[target + 2] = pixels[source + 2]!;
+      sampled[target + 3] = pixels[source + 3]!;
+      target += 4;
+    }
+  }
+  return [sampled, { width, height }];
+}
+
 function requestedAnalysis(
   input: CpuRenderInput,
   toneInput: Float32Array | null,
@@ -2008,7 +2036,9 @@ function requestedAnalysis(
         break;
       case "display-output":
         if (!pixels) break;
-        results.push(analyzeV3DisplayOutput(pixels, dimensions));
+        results.push(input.sampledHistogram
+          ? analyzeV3DisplayOutput(...sampledPixels(pixels, dimensions))
+          : analyzeV3DisplayOutput(pixels, dimensions));
         break;
       case "scene-headroom":
         if (!scene) break;
@@ -2337,6 +2367,7 @@ export class V3GpuPreviewRenderer {
     if (current) {
       state.targets.delete(key);
       state.targets.set(key, current);
+      current.inUse += 1;
       if (state.canvas) {
         if (state.canvas.width !== width) state.canvas.width = width;
         if (state.canvas.height !== height) state.canvas.height = height;
@@ -2345,14 +2376,27 @@ export class V3GpuPreviewRenderer {
       return current;
     }
     const targets = createTargets(state.gl, width, height, precision);
+    targets.inUse += 1;
     state.targets.set(key, targets);
+    this.#evictTargets(state);
+    if (state.canvas) {
+      if (state.canvas.width !== width) state.canvas.width = width;
+      if (state.canvas.height !== height) state.canvas.height = height;
+    }
+    state.gl.viewport(0, 0, width, height);
+    return targets;
+  }
+
+  #evictTargets(state: GpuState): void {
     const targetBytes = (value: GpuTargets): number =>
       value.width * value.height * 5 * (value.precision === "half" ? 8 : 16);
     let bytes = [...state.targets.values()].reduce((total, value) => total + targetBytes(value), 0);
     while (state.targets.size > 1 && (
       state.targets.size > MAX_CACHED_TARGETS || bytes > MAX_CACHED_TARGET_BYTES
     )) {
-      const oldestKey = state.targets.keys().next().value;
+      const oldestKey = [...state.targets.keys()].find((candidate) =>
+        (state.targets.get(candidate)?.inUse ?? 0) === 0,
+      );
       if (oldestKey === undefined) break;
       const oldest = state.targets.get(oldestKey);
       state.targets.delete(oldestKey);
@@ -2361,12 +2405,6 @@ export class V3GpuPreviewRenderer {
         deleteTargets(state.gl, oldest);
       }
     }
-    if (state.canvas) {
-      if (state.canvas.width !== width) state.canvas.width = width;
-      if (state.canvas.height !== height) state.canvas.height = height;
-    }
-    state.gl.viewport(0, 0, width, height);
-    return targets;
   }
 
   #geometryMap(
@@ -2425,88 +2463,93 @@ export class V3GpuPreviewRenderer {
     const preparationStarted = performance.now();
     const dimensions = { width: region.width, height: region.height };
     const targets = this.#targets(state, dimensions.width, dimensions.height, precision);
-    const identityGeometry = denoiseGeometryIsIdentity(input) && input.request.plan.qualityAndDimensions.kind !== "loupe";
-    const map = identityGeometry ? targets.scratch : this.#geometryMap(state, input, region);
-    const maskCoverage = maskCoverageTexture(state, input, region);
-    const localAdjustments = maskCoverage ? null : localAdjustmentTexture(state, input, region);
-    const started = performance.now();
-    renderPointwise(state, input, targets, map, localAdjustments, maskCoverage, region, identityGeometry);
-    const spatial = renderSpatial(state, input, targets);
-    const postCrop = renderPostCrop(state, input, targets, spatial, region);
-    renderEncoded(state, postCrop);
-    if (state.gl instanceof NativeGpuContext) {
-      const floatReads: WebGLTexture[] = [];
-      if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
-      if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(postCrop);
-      if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
-      const submitStarted = performance.now();
-      const nativeDurationMs = await state.gl.submit(floatReads);
-      const submitted = performance.now();
-      const pixels = state.gl.readback(null);
-      const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
-      const tone = floatRead(targets.toneInput);
-      const scene = floatRead(postCrop);
-      const point = floatRead(targets.pointColorInput);
-      const bitmap = readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height));
-      const pointInput = point ? pointColorInput(point, dimensions.width, dimensions.height) : null;
-      const analysis = includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [];
-      return {
-        bitmap,
-        pixels: readPixels ? pixels : null,
-        pointColorInput: pointInput,
-        analysis,
-        renderDurationMs: performance.now() - started,
-        processingDurationMs: nativeDurationMs + submitStarted - preparationStarted + performance.now() - submitted,
-      };
-    }
-    if (!includeAnalysis) {
-      const pixels = readPixels
+    try {
+      const identityGeometry = denoiseGeometryIsIdentity(input) && input.request.plan.qualityAndDimensions.kind !== "loupe";
+      const map = identityGeometry ? targets.scratch : this.#geometryMap(state, input, region);
+      const maskCoverage = maskCoverageTexture(state, input, region);
+      const localAdjustments = maskCoverage ? null : localAdjustmentTexture(state, input, region);
+      const started = performance.now();
+      renderPointwise(state, input, targets, map, localAdjustments, maskCoverage, region, identityGeometry);
+      const spatial = renderSpatial(state, input, targets);
+      const postCrop = renderPostCrop(state, input, targets, spatial, region);
+      renderEncoded(state, postCrop);
+      if (state.gl instanceof NativeGpuContext) {
+        const floatReads: WebGLTexture[] = [];
+        if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
+        if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(postCrop);
+        if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
+        const submitStarted = performance.now();
+        const nativeDurationMs = await state.gl.submit(floatReads);
+        const submitted = performance.now();
+        const pixels = state.gl.readback(null);
+        const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
+        const tone = floatRead(targets.toneInput);
+        const scene = floatRead(postCrop);
+        const point = floatRead(targets.pointColorInput);
+        const bitmap = readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height));
+        const pointInput = point ? pointColorInput(point, dimensions.width, dimensions.height) : null;
+        const analysis = includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [];
+        return {
+          bitmap,
+          pixels: readPixels ? pixels : null,
+          pointColorInput: pointInput,
+          analysis,
+          renderDurationMs: performance.now() - started,
+          processingDurationMs: nativeDurationMs + submitStarted - preparationStarted + performance.now() - submitted,
+        };
+      }
+      if (!includeAnalysis) {
+        const pixels = readPixels
+          ? readOutputPixels(state.gl, dimensions.width, dimensions.height)
+          : null;
+        const wantsPointColor = !readPixels &&
+          input.includePointColor !== false &&
+          input.request.plan.qualityAndDimensions.kind !== "export";
+        const pointInput = wantsPointColor
+          ? readFloatTexture(state.gl, targets, targets.pointColorInput)
+          : null;
+        const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
+        return {
+          bitmap,
+          renderDurationMs: performance.now() - started,
+          pixels,
+          pointColorInput: pointInput
+            ? pointColorInput(pointInput, dimensions.width, dimensions.height)
+            : null,
+          analysis: [],
+        };
+      }
+
+      const wantsToneInput = input.request.requestedTaps.includes("tone-input");
+      const wantsDisplayOutput = input.request.requestedTaps.includes("display-output");
+      const wantsSceneHeadroom = input.request.requestedTaps.includes("scene-headroom");
+      const pixels = wantsDisplayOutput || readPixels
         ? readOutputPixels(state.gl, dimensions.width, dimensions.height)
         : null;
-      const wantsPointColor = !readPixels &&
-        input.includePointColor !== false &&
-        input.request.plan.qualityAndDimensions.kind !== "export";
-      const pointInput = wantsPointColor
-        ? readFloatTexture(state.gl, targets, targets.pointColorInput)
+      const toneInput = wantsToneInput
+        ? readFloatTexture(state.gl, targets, targets.toneInput)
         : null;
+      const scene = wantsSceneHeadroom
+        ? readFloatTexture(state.gl, targets, postCrop)
+        : null;
+      const pointInput = input.includePointColor === false ||
+        input.request.plan.qualityAndDimensions.kind === "export"
+        ? null
+        : readFloatTexture(state.gl, targets, targets.pointColorInput);
+      const analysis = requestedAnalysis(input, toneInput, scene, pixels);
       const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
       return {
         bitmap,
         renderDurationMs: performance.now() - started,
-        pixels,
+        pixels: readPixels ? pixels : null,
         pointColorInput: pointInput
           ? pointColorInput(pointInput, dimensions.width, dimensions.height)
           : null,
-        analysis: [],
+        analysis,
       };
+    } finally {
+      targets.inUse -= 1;
+      this.#evictTargets(state);
     }
-
-    const wantsToneInput = input.request.requestedTaps.includes("tone-input");
-    const wantsDisplayOutput = input.request.requestedTaps.includes("display-output");
-    const wantsSceneHeadroom = input.request.requestedTaps.includes("scene-headroom");
-    const pixels = wantsDisplayOutput || readPixels
-      ? readOutputPixels(state.gl, dimensions.width, dimensions.height)
-      : null;
-    const toneInput = wantsToneInput
-      ? readFloatTexture(state.gl, targets, targets.toneInput)
-      : null;
-    const scene = wantsSceneHeadroom
-      ? readFloatTexture(state.gl, targets, postCrop)
-      : null;
-    const pointInput = input.includePointColor === false ||
-      input.request.plan.qualityAndDimensions.kind === "export"
-      ? null
-      : readFloatTexture(state.gl, targets, targets.pointColorInput);
-    const analysis = requestedAnalysis(input, toneInput, scene, pixels);
-    const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
-    return {
-      bitmap,
-      renderDurationMs: performance.now() - started,
-      pixels: readPixels ? pixels : null,
-      pointColorInput: pointInput
-        ? pointColorInput(pointInput, dimensions.width, dimensions.height)
-        : null,
-      analysis,
-    };
   }
 }

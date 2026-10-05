@@ -321,6 +321,7 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             "Nikon decoder is not installed.",
         ));
     }
+    let started = Instant::now();
     let digest = checksum(&helper)?;
     // Local development helpers retain test-only provenance, as in Electron.
     if !development_helper_allowed(state) && !runtime_approved(ctx, state, &digest) {
@@ -350,6 +351,7 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
     }
     target.sync_all().map_err(|e| e.to_string())?;
+    let copied_at = Instant::now();
     let stderr = work.path().join("stderr");
     let mut command = Command::new(&helper);
     command
@@ -369,7 +371,9 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         .stderr(Stdio::from(
             File::create(&stderr).map_err(|e| e.to_string())?,
         ));
-    match run_with_timeout(command, Duration::from_secs(60)) {
+    let status = run_with_timeout(command, Duration::from_secs(60));
+    let decoded_at = Instant::now();
+    match status {
         Ok(status) if status.success() => (),
         Ok(_) => {
             let text = fs::read_to_string(stderr).unwrap_or_default();
@@ -456,10 +460,21 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             "Nikon decoder changed during decoding.",
         ));
     }
-    Ok(DecodedAsset {
-        metadata: json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb"}),
-        pixels,
-    })
+    crate::timing(format_args!(
+        "nikon {mode} {width}x{height}: checksum+copy {} ms, helper {} ms, read {} ms",
+        (copied_at - started).as_millis(),
+        (decoded_at - copied_at).as_millis(),
+        decoded_at.elapsed().as_millis()
+    ));
+    let mut metadata = json!({"available":true,"provenance":if state=="packaged"{"nikon-sdk"}else{"nikon-test-only"},"version":1,"width":width,"height":height,"channels":3,"bitDepth":16,"byteCount":byte_count,"pixelFormat":"rgb16le","orientation":orientation,"colorSpace":"srgb","transferFunction":"srgb"});
+    // Lets the viewer zoom a preview before the slower full-resolution decode finishes.
+    if mode == "preview"
+        && let Some((full_width, full_height)) = super::raw_dimensions(&input)
+    {
+        metadata["fullWidth"] = json!(full_width);
+        metadata["fullHeight"] = json!(full_height);
+    }
+    Ok(DecodedAsset { metadata, pixels })
 }
 
 pub fn decode_asset_binary(args: &[Value], ctx: &NativeContext) -> Result<Vec<u8>, String> {

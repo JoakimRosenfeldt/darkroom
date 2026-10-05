@@ -269,6 +269,7 @@ export interface CpuRenderInput {
   readonly cancellation?: CancellationProbe;
   readonly assets?: CpuAssetAvailability;
   readonly includePointColor?: boolean;
+  readonly sampledHistogram?: boolean;
 }
 
 interface FloatRgbImage extends ReadonlyRgbImage {

@@ -5,6 +5,7 @@ import type { DecodeOptions, DecodedImage } from "./types";
 
 const DECODER_REVISION = "libraw-native-0.22.1-compat-v1";
 const MAX_PIXEL_BYTES = 512 * 1024 * 1024;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -24,15 +25,18 @@ function decodeResponse(response: ArrayBuffer) {
   }
   const header = record(JSON.parse(new TextDecoder().decode(new Uint8Array(response, 4, metadataLength))));
   const { width, height, byteCount } = header;
+  const sourceHandle = header.sourceHandle;
   if (header.version !== 1 || header.bits !== 16 || header.colors !== 3 || header.decoderRevision !== DECODER_REVISION ||
       typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 || width > 65_535 ||
       typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 || height > 65_535 ||
       typeof byteCount !== "number" || byteCount !== width * height * 6 || byteCount > MAX_PIXEL_BYTES ||
-      byteCount !== response.byteLength - pixelOffset) {
+      byteCount !== response.byteLength - pixelOffset ||
+      (sourceHandle !== undefined && (typeof sourceHandle !== "string" || !UUID_PATTERN.test(sourceHandle)))) {
     throw new Error("Native RAW pixels are invalid.");
   }
   return {
     image: { width, height, bits: 16, colors: 3, data: new Uint16Array(response, pixelOffset, byteCount / 2) },
+    nativeSourceHandle: typeof sourceHandle === "string" ? sourceHandle : undefined,
     metadata: record(header.metadata),
   };
 }
@@ -65,13 +69,14 @@ export async function decodeWithNativeLibRaw(
       onStarted,
     });
     options.signal?.throwIfAborted();
-    const { image, metadata } = decodeResponse(response);
+    const { image, metadata, nativeSourceHandle } = decodeResponse(response);
     if (typeof metadata.timestamp === "number") metadata.timestamp = new Date(metadata.timestamp * 1_000);
     const decoded = await buildFromImageData(image, metadata, options);
     if (options.signal?.aborted && decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
     options.signal?.throwIfAborted();
     return {
       ...decoded,
+      nativeSourceHandle,
       // Preserve the decoder family used by existing Develop default rules.
       pixelProvenance: { ...decoded.pixelProvenance, decoderRevision: DECODER_REVISION },
       metadata: {

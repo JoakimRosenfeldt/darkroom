@@ -120,12 +120,10 @@ function sameSourceRevision(payload: DevelopClipboardPayload, source: LibraryEnt
 }
 
 export function DevelopClipboardControls({
-  document,
   image,
   entry,
   disabled = false,
 }: {
-  readonly document: DevelopDocumentV3;
   readonly image: DevelopImage;
   readonly entry: LibraryEntry;
   readonly disabled?: boolean;
@@ -142,6 +140,13 @@ export function DevelopClipboardControls({
   const [pasteGroups, setPasteGroups] = useState<readonly DevelopClipboardGroup[]>([]);
   const [copyOpen, setCopyOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
+  // Only the open paste chooser follows live edits; otherwise slider drags would re-render this.
+  const document = useDevelopStore((state) => {
+    if (!pasteOpen) return null;
+    const session = state.sessions[entry.id];
+    const current = session?.previewDocument ?? session?.persistedDocument;
+    return session?.processKind === "v3" && current?.version === 3 ? current : null;
+  });
   const [reportOpen, setReportOpen] = useState(false);
   const [requestRegeneration, setRequestRegeneration] = useState(false);
   const initialCameraProfileBinding: CameraProfileBinding = {
@@ -286,7 +291,7 @@ export function DevelopClipboardControls({
   }, [entry.id, image, publishCameraProfile]);
 
   const chooserReport = (() => {
-    if (!readyPayload || pasteGroups.length === 0) return null;
+    if (!document || !readyPayload || pasteGroups.length === 0) return null;
     try {
       const result = calculateDevelopClipboardApplication({
         document,
