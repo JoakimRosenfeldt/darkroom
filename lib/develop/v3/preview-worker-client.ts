@@ -185,7 +185,7 @@ export class V3PreviewWorkerClient {
       const bytes = await invoke<ArrayBuffer>("darkroom_gpu", request.bytes);
       if (release && session) this.#nativeSessions.delete(session);
       if (this.#disposed) {
-        if (session) this.#nativeSessions.add(session);
+        if (session && !release) this.#nativeSessions.add(session);
         await this.#releaseNativeSessions();
         return;
       }
