@@ -63,7 +63,7 @@ pub fn decode_libraw(
     location: &Value,
     options: &LibRawDecodeOptions,
     cancelled: &AtomicBool,
-) -> Result<Vec<u8>, String> {
+) -> Result<(Vec<u8>, Option<String>), String> {
     check_cancelled(cancelled)?;
     if options.max_edge == 0 || options.max_edge > 2560 {
         return Err("RAW preview size is invalid.".into());
@@ -286,17 +286,19 @@ pub fn decode_libraw(
         }
     }
     check_cancelled(cancelled)?;
-    if let Some(handle) = source_handle {
-        if let Ok(mut sources) = crate::raw_sources().lock() {
-            sources.insert(
-                handle,
-                crate::RawSource {
-                    width: width as u32,
-                    height: height as u32,
-                    rgb16: response[response.len() - byte_count..].to_vec(),
-                },
-            );
-        }
-    }
-    Ok(response)
+    let source_handle = source_handle.filter(|handle| {
+        let Ok(mut sources) = crate::raw_sources().lock() else {
+            return false;
+        };
+        sources.insert(
+            handle.clone(),
+            crate::RawSource {
+                width: width as u32,
+                height: height as u32,
+                rgb16: response[response.len() - byte_count..].to_vec(),
+            },
+        );
+        true
+    });
+    Ok((response, source_handle))
 }

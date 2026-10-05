@@ -519,7 +519,8 @@ async fn darkroom_libraw_decode(
         permit = NEF_DECODE_QUEUE.acquire() => permit.map_err(|e| e.to_string())?,
     };
     let backend = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let generation = GPU_GENERATION.load(Ordering::Acquire);
+    let (bytes, handle) = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let job = job;
         if job.cancelled.requested.load(Ordering::Relaxed) {
@@ -531,10 +532,32 @@ async fn darkroom_libraw_decode(
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&request)?;
         native::decode_libraw(&location, &options, &job.cancelled.requested)
-            .map(tauri::ipc::Response::new)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    if let Some(handle) = handle {
+        tauri::async_runtime::spawn_blocking(move || {
+            let Ok(mut state) = GPU.get_or_init(|| Mutex::new(GpuState::new())).lock() else {
+                return;
+            };
+            if state.sync_generation() != generation {
+                return;
+            }
+            let source = raw_sources()
+                .lock()
+                .ok()
+                .and_then(|mut sources| sources.get(&handle));
+            let Some(source) = source else {
+                return;
+            };
+            if let Ok(renderer) = state.renderer.as_mut()
+                && let Err(error) = renderer.prepare_source(handle, &source, true)
+            {
+                eprintln!("Could not prepare native RAW source: {error}");
+            }
+        });
+    }
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
