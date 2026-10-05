@@ -41,7 +41,6 @@ export function SidePanel() {
   const setCatalogView = useLibraryStore((state) => state.setCatalogView);
   const clearQuickCollection = useLibraryStore((state) => state.clearQuickCollection);
   const restoreExcludedEntries = useLibraryStore((state) => state.restoreExcludedEntries);
-  const clearLibrary = useLibraryStore((state) => state.clearLibrary);
   const openCatalogManager = useLibraryStore((state) => state.openCatalogManager);
   const filteredLibrary = useLibraryResult(ALL_LIBRARY_SCOPE, false);
 
@@ -184,22 +183,6 @@ export function SidePanel() {
               className="text-[11px] text-lr-text-muted transition-colors hover:text-lr-text"
             >
               Manage
-            </button>
-            {folderName ? (
-              <FolderPickerButton
-                mode="restore"
-                className="text-[11px] text-lr-text-muted transition-colors hover:text-lr-text"
-              >
-                Re-link
-              </FolderPickerButton>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void clearLibrary()}
-              className="text-[11px] text-lr-text-faint transition-colors hover:text-lr-danger"
-              title="Clear saved library and reset folder access"
-            >
-              Reset
             </button>
             {workspace.quickEntryIds.length > 0 ? (
               <button type="button" onClick={clearQuickCollection} className="text-[11px] text-lr-text-faint hover:text-lr-text">

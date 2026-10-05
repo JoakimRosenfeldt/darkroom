@@ -65,7 +65,6 @@ export default function HomePage() {
     facets,
     thumbSize,
     viewMode,
-    autoAdvance,
   } = viewSettings;
   const [gridRows, setGridRows] = useState<string[][]>([]);
   const [exportEntryIds, setExportEntryIds] = useState<string[] | null>(null);
@@ -183,7 +182,6 @@ export default function HomePage() {
             curationFilter={curationFilter}
             textQuery={textQuery}
             facets={facets}
-            facetCounts={libraryResult.facetCounts}
             thumbSize={thumbSize}
             viewMode={viewMode}
             onSortChange={(next) => updateViewSettings({ sort: next })}
@@ -200,8 +198,6 @@ export default function HomePage() {
             onViewModeChange={(next) =>
               updateViewSettings({ viewMode: next })
             }
-            autoAdvance={autoAdvance}
-            onAutoAdvanceChange={(next) => updateViewSettings({ autoAdvance: next })}
             onCompare={compareSelected}
             onExport={() => setExportEntryIds(selectedEntryIds)}
           />
