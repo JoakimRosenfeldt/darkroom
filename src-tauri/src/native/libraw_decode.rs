@@ -18,14 +18,14 @@ const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024 * 1024;
 const DECODER_REVISION: &str = "libraw-native-0.22.1-compat-v1";
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LibRawDecodeOptions {
     mode: DecodeMode,
     max_edge: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum DecodeMode {
     Preview,

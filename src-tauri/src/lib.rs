@@ -14,6 +14,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 use tauri::{Emitter, Manager};
 
@@ -286,7 +287,10 @@ async fn invoke_backend(
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&args[0])?;
         args.as_array_mut().unwrap().push(location);
-        return native::handle(&channel, args, &backend.native).await;
+        let started = Instant::now();
+        let result = native::handle(&channel, args, &backend.native).await;
+        timing(format_args!("{channel}: {} ms", started.elapsed().as_millis()));
+        return result;
     }
     if channel == "darkroom:choose-export-destination" {
         let source_backend = backend.clone();
@@ -447,6 +451,16 @@ async fn darkroom_preview(
 
 static NEF_DECODE_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+/// Prints stage timings to stderr when DARKROOM_TIMING is set.
+pub(crate) fn timing(message: std::fmt::Arguments) {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    if let Some(start) =
+        START.get_or_init(|| std::env::var_os("DARKROOM_TIMING").map(|_| Instant::now()))
+    {
+        eprintln!("[{:>7} ms] {message}", start.elapsed().as_millis());
+    }
+}
+
 #[derive(Default)]
 struct RawDecodeJobs(Mutex<HashMap<String, Arc<RawDecodeCancellation>>>);
 
@@ -513,14 +527,17 @@ async fn darkroom_libraw_decode(
     };
     // Acknowledge registration before the caller can send cancellation.
     on_started.send(()).map_err(|e| e.to_string())?;
+    let queued = Instant::now();
     let permit = tokio::select! {
         biased;
         _ = job.cancelled.queued.notified() => return Err("RAW decode was cancelled.".into()),
         permit = NEF_DECODE_QUEUE.acquire() => permit.map_err(|e| e.to_string())?,
     };
+    let started = Instant::now();
+    let label = format!("{:?} {}", options, request["assetId"]);
     let backend = state.inner().clone();
     let generation = GPU_GENERATION.load(Ordering::Acquire);
-    let (bytes, handle) = tauri::async_runtime::spawn_blocking(move || {
+    let decoded = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
         let job = job;
         if job.cancelled.requested.load(Ordering::Relaxed) {
@@ -534,9 +551,20 @@ async fn darkroom_libraw_decode(
         native::decode_libraw(&location, &options, &job.cancelled.requested)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
+    timing(format_args!(
+        "libraw {label}: queued {} ms, decode {} ms, {}",
+        (started - queued).as_millis(),
+        started.elapsed().as_millis(),
+        match &decoded {
+            Ok((bytes, _)) => format!("{} MB", bytes.len() >> 20),
+            Err(error) => error.clone(),
+        }
+    ));
+    let (bytes, handle) = decoded?;
     if let Some(handle) = handle {
         tauri::async_runtime::spawn_blocking(move || {
+            let started = Instant::now();
             let Ok(mut state) = GPU.get_or_init(|| Mutex::new(GpuState::new())).lock() else {
                 return;
             };
@@ -555,6 +583,10 @@ async fn darkroom_libraw_decode(
             {
                 eprintln!("Could not prepare native RAW source: {error}");
             }
+            timing(format_args!(
+                "prepare source texture: {} ms",
+                started.elapsed().as_millis()
+            ));
         });
     }
     Ok(tauri::ipc::Response::new(bytes))
@@ -592,10 +624,17 @@ async fn darkroom_decode(
     if args.as_array().is_none_or(|items| items.len() != 2) {
         return Err("Asset decode arguments are invalid.".into());
     }
+    let queued = Instant::now();
     let permit = NEF_DECODE_QUEUE
         .acquire()
         .await
         .map_err(|e| e.to_string())?;
+    timing(format_args!(
+        "nikon {} {}: queued {} ms",
+        args[1]["mode"],
+        args[0]["assetId"],
+        queued.elapsed().as_millis()
+    ));
     let backend = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
@@ -758,6 +797,7 @@ async fn darkroom_gpu(
     if body.len() < 4 || body.len() > 512 * 1024 * 1024 {
         return Err("Native render request size is invalid.".into());
     }
+    let queued = Instant::now();
     let permit = GPU_QUEUE.acquire().await.map_err(|e| e.to_string())?;
     if GPU_GENERATION.load(Ordering::Acquire) != generation {
         return Err("Native render request belongs to a previous document.".into());
@@ -771,11 +811,18 @@ async fn darkroom_gpu(
         if state.sync_generation() != generation {
             return Err("Native render request belongs to a previous document.".into());
         }
+        let started = Instant::now();
         let result = state
             .renderer
             .as_mut()
             .map_err(|e| e.clone())?
             .execute(&bytes, raw_sources());
+        timing(format_args!(
+            "gpu {} KB: waited {} ms, execute {} ms",
+            bytes.len() >> 10,
+            (started - queued).as_millis(),
+            started.elapsed().as_millis()
+        ));
         if state.sync_generation() != generation {
             return Err("Native render request belongs to a previous document.".into());
         }
@@ -806,6 +853,7 @@ async fn darkroom_gpu_info(window: tauri::WebviewWindow) -> Result<Value, String
 }
 
 pub fn run() {
+    timing(format_args!("Darkroom started"));
     let builder = tauri::Builder::default().on_page_load(|webview, payload| {
         if webview.label() == "main" && payload.event() == tauri::webview::PageLoadEvent::Started {
             // Document reloads bypass the JavaScript renderer's normal disposal.
