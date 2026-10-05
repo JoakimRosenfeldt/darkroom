@@ -177,11 +177,13 @@ export class V3PreviewWorkerClient {
     try {
       const length = new DataView(request.bytes.buffer).getUint32(0, true);
       const metadata: unknown = JSON.parse(new TextDecoder().decode(request.bytes.subarray(4, 4 + length)));
+      const release = metadata && typeof metadata === "object" && "release" in metadata && metadata.release === true;
       if (metadata && typeof metadata === "object" && "session" in metadata && typeof metadata.session === "string") {
         session = metadata.session;
         this.#nativeSessions.add(session);
       }
       const bytes = await invoke<ArrayBuffer>("darkroom_gpu", request.bytes);
+      if (release && session) this.#nativeSessions.delete(session);
       if (this.#disposed) {
         if (session) this.#nativeSessions.add(session);
         await this.#releaseNativeSessions();
