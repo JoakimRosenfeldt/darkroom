@@ -10,13 +10,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
+    NativeContext,
     assets::{check_open_regular, open_regular, resolve_asset},
     libraw_profile::{ProcessedImage, RawHandle, c_text},
+    raw_preview_cache::PreviewCache,
 };
 
 const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024 * 1024;
-const DECODER_REVISION: &str = "libraw-native-0.22.1-compat-v1";
+pub(super) const DECODER_REVISION: &str = "libraw-native-0.22.1-compat-v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -78,6 +80,7 @@ pub fn decode_libraw(
     location: &Value,
     options: &LibRawDecodeOptions,
     cancelled: &AtomicBool,
+    ctx: &NativeContext,
 ) -> Result<(Vec<u8>, Option<String>), String> {
     check_cancelled(cancelled)?;
     if options.max_edge == 0 || options.max_edge > 2560 {
@@ -95,6 +98,23 @@ pub fn decode_libraw(
     if opened.len() == 0 || opened.len() > MAX_INPUT {
         return Err("RAW input is empty or exceeds the native decode limit.".into());
     }
+    let cache = if preview {
+        PreviewCache::new(
+            ctx.app_cache.as_deref(),
+            &path,
+            &opened,
+            DECODER_REVISION,
+            u64::from(options.max_edge),
+        )
+    } else {
+        None
+    };
+    if let Some(bytes) = cache.as_ref().and_then(|cache| cache.load(Some(cancelled))) {
+        check_cancelled(cancelled)?;
+        check_open_regular(&path, &file, &opened)?;
+        return Ok((bytes, None));
+    }
+    check_cancelled(cancelled)?;
     let mut bytes = Vec::with_capacity(opened.len() as usize);
     let mut chunk = [0_u8; 64 * 1024];
     loop {
@@ -315,5 +335,10 @@ pub fn decode_libraw(
         );
         true
     });
+    check_open_regular(&path, &file, &opened)?;
+    if let Some(cache) = cache {
+        cache.store(&response, Some(cancelled));
+    }
+    check_cancelled(cancelled)?;
     Ok((response, source_handle))
 }

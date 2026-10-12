@@ -548,7 +548,7 @@ async fn darkroom_libraw_decode(
             .lock()
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&request)?;
-        native::decode_libraw(&location, &options, &job.cancelled.requested)
+        native::decode_libraw(&location, &options, &job.cancelled.requested, &backend.native)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -804,6 +804,7 @@ async fn darkroom_gpu(
     }
     let bytes = body.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
         let mut state = GPU
             .get_or_init(|| Mutex::new(GpuState::new()))
             .lock()
@@ -812,25 +813,44 @@ async fn darkroom_gpu(
             return Err("Native render request belongs to a previous document.".into());
         }
         let started = Instant::now();
-        let result = state
+        let submission = state
             .renderer
             .as_mut()
             .map_err(|e| e.clone())?
-            .execute(&bytes, raw_sources());
+            .submit(&bytes, raw_sources())?;
+        drop(state);
+        let result = match submission {
+            gpu::NativeGpuSubmission::Complete(bytes) => Ok(bytes),
+            gpu::NativeGpuSubmission::Readback(mut readback) => {
+                let result = readback.read();
+                let mut state = GPU
+                    .get()
+                    .unwrap()
+                    .lock()
+                    .map_err(|_| "Native renderer is unavailable.")?;
+                if state.sync_generation() != generation {
+                    return Err("Native render request belongs to a previous document.".into());
+                }
+                state
+                    .renderer
+                    .as_mut()
+                    .map_err(|e| e.clone())?
+                    .complete_readback(readback, result)
+            }
+        };
         timing(format_args!(
             "gpu {} KB: waited {} ms, execute {} ms",
             bytes.len() >> 10,
             (started - queued).as_millis(),
             started.elapsed().as_millis()
         ));
-        if state.sync_generation() != generation {
+        if GPU_GENERATION.load(Ordering::Acquire) != generation {
             return Err("Native render request belongs to a previous document.".into());
         }
         result.map(tauri::ipc::Response::new)
     })
     .await
     .map_err(|e| e.to_string())?;
-    drop(permit);
     result
 }
 
@@ -928,7 +948,12 @@ pub fn run() {
                 catalog: Mutex::new(catalog),
                 develop: Mutex::new(develop),
                 batch: Mutex::new(develop::batch::BatchService::new(emit.clone())),
-                native: native::NativeContext::new(user_data, resources, emit),
+                native: native::NativeContext::new(
+                    user_data,
+                    app.path().app_cache_dir().ok(),
+                    resources,
+                    emit,
+                ),
             });
             app.manage(backend);
             app.manage(Arc::new(RawDecodeJobs::default()));
@@ -1006,6 +1031,7 @@ pub fn run_backend_console() -> Result<(), String> {
         batch: Mutex::new(develop::batch::BatchService::new(emit.clone())),
         native: native::NativeContext::new(
             app_data,
+            None,
             std::env::current_dir().map_err(|e| e.to_string())?,
             emit,
         ),

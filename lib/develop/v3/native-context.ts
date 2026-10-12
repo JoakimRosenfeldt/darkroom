@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { translateNativeFragmentShader, packNativeUniforms, type NativeShader } from "./native-shader";
 
 type BinaryRange = { offset: number; length: number };
-type TextureUpload = { id: number; width: number; height: number; layers: number; format: string; source?: string; flipY?: boolean } & Partial<BinaryRange>;
+type TextureUpload = { id: number; width: number; height: number; layers: number; format: string; source?: string; flipY?: boolean; pyramid?: { source: number; maximum: number; linear: boolean } } & Partial<BinaryRange>;
 type Pass = { shader: number; targets: number[]; textures: number[]; uniforms: BinaryRange };
 type Program = { id: number; shader: NativeShader; values: Map<string, readonly number[]>; locations: Map<string, WebGLUniformLocation> };
 type Read = { texture: number; format: "rgba8" | "rgba32f"; flipY?: boolean };
@@ -190,6 +190,14 @@ export class NativeGpuContext {
     this.#uniform(location, Array.from(values));
   }
   createTexture(): WebGLTexture { const texture = {}; this.#textureIds.set(texture, this.#nextId++); return texture; }
+  createSourcePyramid(source: WebGLTexture, width: number, height: number, maximum: number, linear: boolean): WebGLTexture {
+    const texture = this.createTexture();
+    this.#uploads.push({
+      id: this.#id(texture), width: Math.max(1, Math.floor(width / 2)), height: Math.max(1, Math.floor(height / 2)),
+      layers: 1, format: "rgba16float", pyramid: { source: this.#id(source), maximum, linear },
+    });
+    return texture;
+  }
   deleteTexture(texture: WebGLTexture | null): void { if (texture) { this.#deleted.push(this.#id(texture)); this.#textureIds.delete(texture); } }
   activeTexture(unit: number): void { this.#unit = unit - this.TEXTURE0; }
   bindTexture(target: number, texture: WebGLTexture | null): void { this.#bindings.set(`${this.#unit}:${target}`, texture); }
