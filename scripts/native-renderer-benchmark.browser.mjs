@@ -47,9 +47,9 @@ function image(width = 80, height = 64, bits = 8, orientation = 1) {
   };
 }
 
-async function prepare(document, source, preview = false) {
+async function prepare(document, source, preview = false, viewport = null) {
   const request = preview ? {
-    kind: "v3-preview", viewportDimensions: { width: source.width, height: source.height },
+    kind: "v3-preview", viewportDimensions: viewport ?? { width: source.width, height: source.height },
     devicePixelRatio: 1, previewMode: "settled", includeAnalysis: true, includePointColor: true,
   } : { kind: "v3-export", size: { mode: "original" }, format: "jpeg", includeAnalysis: false };
   const prepared = await prepareV3RuntimeRender(document, { ...request, entry, image: source });
@@ -243,6 +243,69 @@ window.runNativeRendererBenchmark = async function () {
         criterion: "Native output must match the CPU reference within 2/255 per channel; export regions must match exactly.",
         passed: cpuDelta.maximum <= 2 && regionDelta.maximum === 0 });
     } finally { native.dispose(); webgl.dispose(); }
+  }
+  {
+    // Downscaled previews are the pyramid's whole purpose: a smooth
+    // gradient must match the WebGL reference, and 1px stripes must
+    // average to linear mid-gray instead of aliasing to black or white.
+    const native = new V3GpuPreviewRenderer("native");
+    const webgl = new V3GpuPreviewRenderer("webgl");
+    try {
+      const smooth = image(320, 256);
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 320; x++) {
+        smooth.rgb.set([
+          Math.round(255 * x / 319),
+          Math.round(255 * y / 255),
+          Math.round(255 * (x + y) / 574),
+        ], (y * 320 + x) * 3);
+      }
+      const input = await prepare(createDefaultV3DevelopDocument(), smooth, true, { width: 80, height: 64 });
+      // Start the native session with a full-res export so the pyramid
+      // has to be built lazily by the downscaled preview that follows.
+      await native.renderExport(await prepare(createDefaultV3DevelopDocument(), smooth));
+      const delta = difference(
+        pixels(await native.render(input, { includeAnalysis: false })),
+        pixels(await webgl.render(input, { includeAnalysis: false })),
+      );
+      checks.push({ name: "downscaled-preview", nativeVsWebgl: delta, passed: delta.maximum <= 2 });
+      console.info(JSON.stringify(checks.at(-1)));
+    } finally { native.dispose(); webgl.dispose(); }
+  }
+  {
+    const native = new V3GpuPreviewRenderer("native");
+    try {
+      const stripes = image(256, 256);
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
+        const value = x % 2 ? 255 : 0;
+        stripes.rgb.set([value, value, value], (y * 256 + x) * 3);
+      }
+      const input = await prepare(createDefaultV3DevelopDocument(), stripes, true, { width: 64, height: 64 });
+      const result = pixels(await native.render(input, { includeAnalysis: false }));
+      let sum = 0;
+      let minimum = 255;
+      let maximum = 0;
+      for (let index = 0; index < result.length; index += 4) {
+        sum += result[index];
+        minimum = Math.min(minimum, result[index]);
+        maximum = Math.max(maximum, result[index]);
+      }
+      const mean = sum / (result.length / 4);
+      // Linear average of black/white is 0.5, which encodes to sRGB ~188.
+      checks.push({ name: "downscaled-stripes", mean, minimum, maximum, passed: mean >= 160 && mean <= 215 && maximum - minimum <= 32 });
+      console.info(JSON.stringify(checks.at(-1)));
+      // The same session at full size must sample the original stripes,
+      // not the pyramid: extremes survive instead of averaging out.
+      const full = await prepare(createDefaultV3DevelopDocument(), stripes, true, { width: 256, height: 256 });
+      const fullResult = pixels(await native.render(full, { includeAnalysis: false }));
+      let fullMinimum = 255;
+      let fullMaximum = 0;
+      for (let index = 0; index < fullResult.length; index += 4) {
+        fullMinimum = Math.min(fullMinimum, fullResult[index]);
+        fullMaximum = Math.max(fullMaximum, fullResult[index]);
+      }
+      checks.push({ name: "fullsize-after-downscale", minimum: fullMinimum, maximum: fullMaximum, passed: fullMinimum <= 10 && fullMaximum >= 245 });
+      console.info(JSON.stringify(checks.at(-1)));
+    } finally { native.dispose(); }
   }
   const timings = [];
   for (const operation of ["preview", "export"]) for (const backend of ["native", "webgl"]) {

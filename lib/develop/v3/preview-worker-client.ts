@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { computeV3DocumentSync } from "./preview-worker-types";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { PixelDimensions } from "@/lib/develop/process";
@@ -32,8 +33,20 @@ interface PendingRender {
   readonly reject: (error: Error) => void;
 }
 
+// Internal messages carry the whole document; the wire sync payload is
+// computed at dispatch time against the destination actually used.
+type ClientRenderMessage = Omit<
+  Extract<V3PreviewWorkerRequest, { readonly kind: "render" }>,
+  "documentSync"
+> & { readonly document: DevelopDocumentV3 };
+type ClientExportMessage = Omit<
+  Extract<V3PreviewWorkerRequest, { readonly kind: "export" }>,
+  "documentSync"
+> & { readonly document: DevelopDocumentV3 };
+type ClientMessage = ClientRenderMessage | ClientExportMessage;
+
 interface QueuedPreview extends PendingRender {
-  readonly message: Extract<V3PreviewWorkerRequest, { readonly kind: "render" }>;
+  readonly message: ClientRenderMessage;
 }
 
 const EMPTY_MASK_MATTES: readonly V3PreviewWorkerMaskMatte[] = [];
@@ -82,6 +95,15 @@ export class V3PreviewWorkerClient {
   readonly #activePreviews = new Set<number>();
   #queuedPreview: QueuedPreview | null = null;
   #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
+  // Last document dispatched per destination, paired with the instance
+  // it was sent to. A patch is only valid against that instance's
+  // resident document, so a dispatch to a different instance (a
+  // recreated renderer or worker) falls back to a full sync. The
+  // pairing also makes a stale dispatch harmless: if it writes its
+  // pair after the destination was replaced, the next dispatch sees a
+  // target mismatch and sends full.
+  #workerSync: { readonly target: Worker; readonly document: DevelopDocumentV3 } | null = null;
+  #mainSync: { readonly target: MainThreadGpuPreview; readonly document: DevelopDocumentV3 } | null = null;
 
   constructor(entry: LibraryEntry, image: DevelopImage) {
     this.#entry = entry;
@@ -102,6 +124,8 @@ export class V3PreviewWorkerClient {
     this.#entry = entry;
     this.#image = image;
     this.#maskMattes = null;
+    this.#workerSync = null;
+    this.#mainSync = null;
     void this.#mainGpu?.then((renderer) => renderer.dispose());
     this.#mainGpu = this.#createMainGpu(entry, image);
     if (!this.#worker || !this.#workerReady) return;
@@ -112,6 +136,14 @@ export class V3PreviewWorkerClient {
   }
 
   #receive(response: Exclude<V3PreviewWorkerResponse, { readonly kind: "ready" }>): void {
+    if (response.kind === "error") {
+      // An error can mean a destination lost its resident document (a
+      // patch with nothing to patch). Clearing both pairs costs one
+      // full resync on the next dispatch and self-recovers; this also
+      // covers the #dispatch catch, which funnels through here.
+      this.#workerSync = null;
+      this.#mainSync = null;
+    }
     const pending = this.#pending.get(response.requestId);
     if (!pending) {
       if (response.kind === "result" && response.result.kind === "rendered" && "bitmap" in response.result) response.result.bitmap.close();
@@ -129,6 +161,8 @@ export class V3PreviewWorkerClient {
 
   #ensureWorker(): Promise<Worker> {
     if (this.#workerPromise) return this.#workerPromise;
+    this.#workerSync = null;
+    this.#maskMattes = null;
     const worker = this.#worker = workerFactory();
     this.#workerPromise = new Promise((resolve, reject) => {
       const fail = (error: Error): void => {
@@ -160,6 +194,8 @@ export class V3PreviewWorkerClient {
             const image = sourceImage(this.#image);
             const buffer = image.rgb.buffer;
             if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
+            this.#workerSync = null;
+            this.#maskMattes = null;
             worker.postMessage({ kind: "initialize", entry: this.#entry, image, nativeGpu: this.#nativeGpu }, [buffer]);
             resolve(worker);
           } catch (error) {
@@ -215,19 +251,39 @@ export class V3PreviewWorkerClient {
     }));
   }
 
-  async #dispatch(message: Exclude<V3PreviewWorkerRequest, { kind: "initialize" }>): Promise<void> {
+  async #dispatch(message: ClientMessage): Promise<void> {
     try {
+      // Depth-masked documents must render in the worker: the main-thread
+      // GPU preview has no depthMap supply (HH-12).
       const hasDepthMasks = message.document.local.masks.some((mask) =>
         maskSourceNodes(mask.expression).some((node) => node.source.kind === "depth-range"),
       );
       if (this.#mainGpu && !hasDepthMasks) {
-        const result = await (await this.#mainGpu).render(message);
+        const renderer = await this.#mainGpu;
+        // Compute, advance, and hand off with no await in between so
+        // concurrent dispatches stay in order. The renderer applies the
+        // sync at the start of its render even when it returns null and
+        // this dispatch falls through to the worker, so its last-sent
+        // document advances either way; the worker sync below is then
+        // computed separately against worker state. The stored base is
+        // used only if it was sent to this same renderer instance: a
+        // dispatch that captured a since-replaced renderer writes a
+        // pair the next dispatch will not match, forcing a full sync.
+        const { document, ...rest } = message;
+        const base = this.#mainSync?.target === renderer ? this.#mainSync.document : null;
+        const documentSync = computeV3DocumentSync(base, document);
+        this.#mainSync = { target: renderer, document };
+        const result = await renderer.render({ ...rest, documentSync });
         if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
       }
       if (this.#disposed) return;
       const worker = await this.#ensureWorker();
       if (this.#disposed) return;
-      worker.postMessage({ ...message, maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes });
+      const { document, ...rest } = message;
+      const base = this.#workerSync?.target === worker ? this.#workerSync.document : null;
+      const documentSync = computeV3DocumentSync(base, document);
+      worker.postMessage({ ...rest, documentSync, maskMattes: message.maskMattes === this.#maskMattes ? undefined : message.maskMattes });
+      this.#workerSync = { target: worker, document };
       this.#maskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
     } catch (error) {
       this.#receive({ kind: "error", requestId: message.requestId, message: error instanceof Error ? error.message : "Could not render preview." });
@@ -274,6 +330,8 @@ export class V3PreviewWorkerClient {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#workerSync = null;
+    this.#mainSync = null;
     // Avoid tearing down WebKit module loaders while the worker is still starting.
     if (this.#workerReady) this.#worker?.terminate();
     void this.#releaseNativeSessions();

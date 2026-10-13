@@ -398,7 +398,172 @@ function clamp(value: number, minimum: number, maximum: number): number { return
 function smoothstep(minimum: number, maximum: number, value: number): number { if (minimum === maximum) return value < minimum ? 0 : 1; const position = clamp((value - minimum) / (maximum - minimum), 0, 1); return position * position * (3 - 2 * position); }
 function sourceOver(destination: number, source: number): number { return source + destination * (1 - source); }
 function pointSegmentDistance(pointX: number, pointY: number, startX: number, startY: number, endX: number, endY: number): number { const dx = endX - startX; const dy = endY - startY; const lengthSquared = dx * dx + dy * dy; const amount = lengthSquared <= Number.EPSILON ? 0 : clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSquared, 0, 1); return Math.hypot(pointX - (startX + dx * amount), pointY - (startY + dy * amount)); }
-function strokeCoverage(stroke: BrushStroke, point: GeometryPoint, dimensions: MaskRasterDimensions): number { const width = Math.max(1, dimensions.width - 1); const height = Math.max(1, dimensions.height - 1); const x = point.x * width; const y = point.y * height; const radius = Math.max(0.5, stroke.size * Math.max(dimensions.width, dimensions.height) * 0.5); let distance = Number.POSITIVE_INFINITY; stroke.points.forEach((current, index) => { const previous = stroke.points[Math.max(0, index - 1)] ?? current; distance = Math.min(distance, pointSegmentDistance(x, y, previous.x * width, previous.y * height, current.x * width, current.y * height)); }); const inner = radius * (1 - clamp(stroke.feather, 0, 1)); return clamp((distance <= inner ? 1 : 1 - smoothstep(inner, radius, distance)) * stroke.flow * stroke.density, 0, 1); }
+interface PreparedStroke {
+  readonly dimensionsWidth: number;
+  readonly dimensionsHeight: number;
+  readonly points: BrushStroke["points"];
+  readonly pointCount: number;
+  readonly size: number;
+  readonly radius: number;
+  readonly scaledX: Float64Array;
+  readonly scaledY: Float64Array;
+  readonly cellSize: number;
+  readonly minCellX: number;
+  readonly minCellY: number;
+  readonly numCols: number;
+  readonly numRows: number;
+  readonly cells: ReadonlyMap<number, readonly number[]> | null;
+}
+
+const preparedStrokes = new WeakMap<BrushStroke, PreparedStroke>();
+
+function prepareStroke(stroke: BrushStroke, dimensions: MaskRasterDimensions): PreparedStroke {
+  const cached = preparedStrokes.get(stroke);
+  if (
+    cached &&
+    cached.dimensionsWidth === dimensions.width &&
+    cached.dimensionsHeight === dimensions.height &&
+    cached.points === stroke.points &&
+    cached.pointCount === stroke.points.length &&
+    cached.size === stroke.size
+  ) return cached;
+
+  const width = Math.max(1, dimensions.width - 1);
+  const height = Math.max(1, dimensions.height - 1);
+  const radius = Math.max(0.5, stroke.size * Math.max(dimensions.width, dimensions.height) * 0.5);
+  const count = stroke.points.length;
+  const scaledX = new Float64Array(count);
+  const scaledY = new Float64Array(count);
+  let finite = Number.isFinite(radius);
+  stroke.points.forEach((current, index) => {
+    const sx = current.x * width;
+    const sy = current.y * height;
+    scaledX[index] = sx;
+    scaledY[index] = sy;
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) finite = false;
+  });
+
+  let cellSize = Math.max(1, radius);
+  let cells: Map<number, number[]> | null = null;
+  let minCellX = 0;
+  let minCellY = 0;
+  let numCols = 0;
+  let numRows = 0;
+  if (finite && count > 0) {
+    const expand = radius + Math.abs(radius) * 1e-9 + 1e-7;
+    const boxLoX = new Float64Array(count);
+    const boxHiX = new Float64Array(count);
+    const boxLoY = new Float64Array(count);
+    const boxHiY = new Float64Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const previous = Math.max(0, index - 1);
+      boxLoX[index] = Math.min(scaledX[previous]!, scaledX[index]!) - expand;
+      boxHiX[index] = Math.max(scaledX[previous]!, scaledX[index]!) + expand;
+      boxLoY[index] = Math.min(scaledY[previous]!, scaledY[index]!) - expand;
+      boxHiY[index] = Math.max(scaledY[previous]!, scaledY[index]!) + expand;
+    }
+    const loX = new Float64Array(count);
+    const hiX = new Float64Array(count);
+    const loY = new Float64Array(count);
+    const hiY = new Float64Array(count);
+    // Per-point budget with no floor, so many small strokes cannot add up
+    // to an unbounded total across an expression.
+    const insertionBudget = 16 * count;
+    // Termination: once cellSize exceeds a segment's expanded bbox width and
+    // height, that segment spans at most 3 cells per axis even allowing for
+    // floating-point rounding, so insertions are at most 9 * count, below
+    // the budget for any count. Doubling reaches that size for any finite
+    // extent; the step cap only guards non-finite arithmetic.
+    let fits = false;
+    for (let step = 0; step < 1_200; step += 1) {
+      let maxCellX = Number.NEGATIVE_INFINITY;
+      let maxCellY = Number.NEGATIVE_INFINITY;
+      minCellX = Number.POSITIVE_INFINITY;
+      minCellY = Number.POSITIVE_INFINITY;
+      let insertions = 0;
+      for (let index = 0; index < count; index += 1) {
+        const x0 = Math.floor(boxLoX[index]! / cellSize);
+        const x1 = Math.floor(boxHiX[index]! / cellSize);
+        const y0 = Math.floor(boxLoY[index]! / cellSize);
+        const y1 = Math.floor(boxHiY[index]! / cellSize);
+        loX[index] = x0; hiX[index] = x1; loY[index] = y0; hiY[index] = y1;
+        if (x0 < minCellX) minCellX = x0;
+        if (y0 < minCellY) minCellY = y0;
+        if (x1 > maxCellX) maxCellX = x1;
+        if (y1 > maxCellY) maxCellY = y1;
+        insertions += (x1 - x0 + 1) * (y1 - y0 + 1);
+        if (insertions > insertionBudget) break;
+      }
+      numCols = maxCellX - minCellX + 1;
+      numRows = maxCellY - minCellY + 1;
+      if (insertions <= insertionBudget && numCols * numRows <= Number.MAX_SAFE_INTEGER) { fits = true; break; }
+      cellSize *= 2;
+      if (!Number.isFinite(cellSize)) break;
+    }
+    if (fits) {
+      cells = new Map<number, number[]>();
+      for (let index = 0; index < count; index += 1) {
+        for (let cy = loY[index]!; cy <= hiY[index]!; cy += 1) {
+          const rowBase = (cy - minCellY) * numCols - minCellX;
+          for (let cx = loX[index]!; cx <= hiX[index]!; cx += 1) {
+            const key = rowBase + cx;
+            const bucket = cells.get(key);
+            if (bucket) bucket.push(index);
+            else cells.set(key, [index]);
+          }
+        }
+      }
+    }
+  }
+
+  const prepared: PreparedStroke = {
+    dimensionsWidth: dimensions.width,
+    dimensionsHeight: dimensions.height,
+    points: stroke.points,
+    pointCount: count,
+    size: stroke.size,
+    radius,
+    scaledX,
+    scaledY,
+    cellSize,
+    minCellX: cells ? minCellX : 0,
+    minCellY: cells ? minCellY : 0,
+    numCols: cells ? numCols : 0,
+    numRows: cells ? numRows : 0,
+    cells,
+  };
+  preparedStrokes.set(stroke, prepared);
+  return prepared;
+}
+
+function strokeCoverage(stroke: BrushStroke, point: GeometryPoint, dimensions: MaskRasterDimensions): number {
+  const width = Math.max(1, dimensions.width - 1);
+  const height = Math.max(1, dimensions.height - 1);
+  const x = point.x * width;
+  const y = point.y * height;
+  const prepared = prepareStroke(stroke, dimensions);
+  const radius = prepared.radius;
+  const { scaledX, scaledY } = prepared;
+  let distance = Number.POSITIVE_INFINITY;
+  const testSegment = (index: number): void => {
+    const previous = Math.max(0, index - 1);
+    distance = Math.min(distance, pointSegmentDistance(x, y, scaledX[previous]!, scaledY[previous]!, scaledX[index]!, scaledY[index]!));
+  };
+  let noCandidate = false;
+  if (prepared.cells && Number.isFinite(x) && Number.isFinite(y)) {
+    const localX = Math.floor(x / prepared.cellSize) - prepared.minCellX;
+    const localY = Math.floor(y / prepared.cellSize) - prepared.minCellY;
+    const bucket = localX >= 0 && localX < prepared.numCols && localY >= 0 && localY < prepared.numRows
+      ? prepared.cells.get(localY * prepared.numCols + localX)
+      : undefined;
+    if (bucket) for (const index of bucket) testSegment(index);
+    else noCandidate = true;
+  } else {
+    for (let index = 0; index < scaledX.length; index += 1) testSegment(index);
+  }
+  const inner = radius * (1 - clamp(stroke.feather, 0, 1));
+  return clamp((noCandidate ? 0 : distance <= inner ? 1 : 1 - smoothstep(inner, radius, distance)) * stroke.flow * stroke.density, 0, 1);
+}
 function sampleRaster(matte: MaskRasterMatte, point: GeometryPoint): number { const x = clamp(point.x, 0, 1) * (matte.width - 1); const y = (1 - clamp(point.y, 0, 1)) * (matte.height - 1); const lx = Math.floor(x); const ly = Math.floor(y); const hx = Math.min(matte.width - 1, lx + 1); const hy = Math.min(matte.height - 1, ly + 1); const wx = x - lx; const wy = y - ly; const top = (matte.pixels[ly * matte.width + lx] ?? 0) * (1 - wx) + (matte.pixels[ly * matte.width + hx] ?? 0) * wx; const bottom = (matte.pixels[hy * matte.width + lx] ?? 0) * (1 - wx) + (matte.pixels[hy * matte.width + hx] ?? 0) * wx; return (top * (1 - wy) + bottom * wy) / 255; }
 function rangeCoverage(value: number, minimum: number, maximum: number, feather: number): number { if (minimum > maximum) return 0; const edge = Math.max(0.0001, feather); return smoothstep(minimum - edge, minimum, value) * (1 - smoothstep(maximum, maximum + edge, value)); }
 

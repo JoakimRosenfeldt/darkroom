@@ -13,6 +13,7 @@ use super::{
     NativeContext,
     assets::{check_open_regular, open_regular, resolve_asset},
     binary_value,
+    raw_preview_cache::PreviewCache,
 };
 
 fn platform() -> &'static str {
@@ -263,6 +264,16 @@ struct DecodedAsset {
 }
 
 impl DecodedAsset {
+    fn from_binary(mut bytes: Vec<u8>) -> Option<Self> {
+        let length = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+        let metadata: Value = serde_json::from_slice(bytes.get(4..4 + length)?).ok()?;
+        let pixels = bytes.split_off(4 + length);
+        if metadata["available"] != true || metadata["byteCount"].as_u64()? != pixels.len() as u64 {
+            return None;
+        }
+        Some(Self { metadata, pixels })
+    }
+
     fn into_json(mut self) -> Value {
         if self.metadata["available"] == true {
             self.metadata["pixels"] = binary_value(&self.pixels);
@@ -270,7 +281,7 @@ impl DecodedAsset {
         self.metadata
     }
 
-    fn into_binary(self) -> Result<Vec<u8>, String> {
+    fn to_binary(&self) -> Result<Vec<u8>, String> {
         let metadata = serde_json::to_vec(&self.metadata).map_err(|e| e.to_string())?;
         let mut response = Vec::with_capacity(4 + metadata.len() + self.pixels.len());
         response.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
@@ -334,20 +345,43 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             },
         ));
     }
-    let work = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let input = work.path().join("input.nef");
-    let output = work.path().join("output");
-    fs::create_dir(&output).map_err(|e| e.to_string())?;
-    let (mut source, metadata) = open_regular(&path).map_err(|_| "NEF file is unavailable.")?;
-    if metadata.len() > 2 * 1024 * 1024 * 1024 {
+    let (mut source, source_metadata) = open_regular(&path).map_err(|_| "NEF file is unavailable.")?;
+    if source_metadata.len() > 2 * 1024 * 1024 * 1024 {
         return Ok(failure(
             "LIMIT_EXCEEDED",
             "NEF input exceeds the supported size.",
         ));
     }
+    let cache = PreviewCache::if_enabled(
+        mode == "preview",
+        ctx.app_cache.as_deref(),
+        &path,
+        &source_metadata,
+        &format!(
+            "nikon-native-rgb16le-v1:{digest}:{state}:{}",
+            super::libraw_decode::DECODER_REVISION,
+        ),
+        max_edge,
+    );
+    if let Some(decoded) = cache
+        .as_ref()
+        .and_then(|cache| cache.load(None))
+        .and_then(DecodedAsset::from_binary)
+    {
+        if check_open_regular(&path, &source, &source_metadata).is_err() {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+        return Ok(decoded);
+    }
+    let work = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let input = work.path().join("input.nef");
+    let output = work.path().join("output");
+    fs::create_dir(&output).map_err(|e| e.to_string())?;
     let mut target = File::create(&input).map_err(|e| e.to_string())?;
     let copied = std::io::copy(&mut source, &mut target).map_err(|e| e.to_string())?;
-    if copied != metadata.len() || check_open_regular(&path, &source, &metadata).is_err() {
+    if copied != source_metadata.len()
+        || check_open_regular(&path, &source, &source_metadata).is_err()
+    {
         return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
     }
     target.sync_all().map_err(|e| e.to_string())?;
@@ -474,11 +508,20 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         metadata["fullWidth"] = json!(full_width);
         metadata["fullHeight"] = json!(full_height);
     }
-    Ok(DecodedAsset { metadata, pixels })
+    if check_open_regular(&path, &source, &source_metadata).is_err() {
+        return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+    }
+    let decoded = DecodedAsset { metadata, pixels };
+    if let Some(cache) = cache
+        && let Ok(bytes) = decoded.to_binary()
+    {
+        cache.store(&bytes, None);
+    }
+    Ok(decoded)
 }
 
 pub fn decode_asset_binary(args: &[Value], ctx: &NativeContext) -> Result<Vec<u8>, String> {
-    decode(args, ctx)?.into_binary()
+    decode(args, ctx)?.to_binary()
 }
 
 pub fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Value, String> {

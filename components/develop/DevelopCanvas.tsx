@@ -61,6 +61,7 @@ import { useDevelopStore } from "@/stores/develop-store";
 export type { V3CanvasTool } from "@/components/develop/V3CanvasOverlay";
 
 const BEFORE_WORKER_IDLE_MS = 10_000;
+const SETTLED_ANALYSIS_LONG_EDGE = 1_024;
 
 export type V3CanvasDiagnostic =
   | CpuBackendDiagnostic
@@ -777,7 +778,10 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           const analysisScale = mode === "interactive"
             ? Math.min(1, 256 / (Math.max(options.viewportDimensions.width, options.viewportDimensions.height) *
                 Math.min(2, Math.max(0.5, options.devicePixelRatio))))
-            : 1;
+            : includePointColor
+              ? 1
+              : Math.min(1, SETTLED_ANALYSIS_LONG_EDGE / (Math.max(options.viewportDimensions.width, options.viewportDimensions.height) *
+                  Math.min(2, Math.max(0.5, options.devicePixelRatio))));
           const analyzed = await analysisWorker.render(renderDocument, {
             ...options,
             viewportDimensions: {

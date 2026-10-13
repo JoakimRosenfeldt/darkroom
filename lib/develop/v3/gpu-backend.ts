@@ -16,6 +16,7 @@ import {
   IDENTITY_HOMOGRAPHY,
   geometryCacheIdentity,
   createOutputToStoredMapper,
+  resolveConstrainedCrop,
   type CanonicalGeometry,
 } from "@/lib/develop/v3/geometry";
 import {
@@ -52,6 +53,19 @@ const GPU_TILE_EDGE = 512;
 const NATIVE_GPU_TILE_EDGE = 1_024;
 const MAX_GPU_MASK_LAYERS = 8;
 const MAX_CACHED_MASK_COVERAGE_BYTES = 64 * 1024 * 1024;
+// Ids are unique per object and never reused, so identity keys cannot false-hit.
+const objectIdentityIds = new WeakMap<object, number>();
+let nextObjectIdentityId = 1;
+
+function objectIdentityId(value: object): number {
+  const existing = objectIdentityIds.get(value);
+  if (existing !== undefined) return existing;
+  const id = nextObjectIdentityId;
+  nextObjectIdentityId += 1;
+  objectIdentityIds.set(value, id);
+  return id;
+}
+
 const MIXER_BANDS = [
   { id: "red", center: 0 },
   { id: "orange", center: 30 },
@@ -99,6 +113,13 @@ uniform ivec2 uOutputSize;
 uniform int uTransfer;
 uniform float uSourceMaximum;
 uniform vec2 uSourceSize;
+#ifdef NATIVE_SOURCE_PYRAMID
+uniform sampler2D uSourcePyramid;
+uniform bool uSourceReductionEnabled;
+uniform float uSourceReduction;
+uniform int uSourcePyramidLevels;
+int sourcePyramidLevel = -1;
+#endif
 uniform float uCurvesIdentity;
 uniform vec3 uWhiteBalance;
 uniform vec3 uChannelScale;
@@ -174,6 +195,9 @@ float decodeSrgb(float value) {
 }
 
 vec3 decodedSourceTexel(ivec2 pixel) {
+#ifdef NATIVE_SOURCE_PYRAMID
+  if (sourcePyramidLevel >= 0) return texelFetch(uSourcePyramid, pixel, sourcePyramidLevel).rgb;
+#endif
 #ifdef INTEGER_SOURCE
   vec3 decoded = vec3(texelFetch(uSource, pixel, 0).rgb) / uSourceMaximum;
 #else
@@ -191,6 +215,9 @@ vec3 decodedSourceTexel(ivec2 pixel) {
 
 vec3 sourceColor(vec2 uv) {
   ivec2 size = textureSize(uSource, 0);
+#ifdef NATIVE_SOURCE_PYRAMID
+  if (sourcePyramidLevel >= 0) size = textureSize(uSourcePyramid, sourcePyramidLevel);
+#endif
   vec2 coordinate = clamp(
     uv * vec2(size) - 0.5,
     vec2(0.0),
@@ -576,6 +603,27 @@ void main() {
   vec4 mapping = uIdentityGeometry
     ? vec4((gl_FragCoord.xy + uRegionOrigin) / uFullOutputSize, 0.0, 1.0)
     : texelFetch(uMap, mapPixel, 0);
+#ifdef NATIVE_SOURCE_PYRAMID
+  vec2 dx = dFdx(mapping.xy) * uSourceSize;
+  vec2 dy = dFdy(mapping.xy) * uSourceSize;
+  vec2 validityGradient = vec2(dFdx(mapping.a), dFdy(mapping.a));
+  float trace = dot(dx, dx) + dot(dy, dy);
+  float determinant = dx.x * dy.y - dx.y * dy.x;
+  float largest = 0.5 * (trace + sqrt(max(0.0, trace * trace - 4.0 * determinant * determinant)));
+  float footprint = sqrt(determinant * determinant / max(largest, 0.000001));
+  // Invalid map neighbours cannot supply a source footprint at geometry borders.
+  if (any(notEqual(validityGradient, vec2(0.0))) || isnan(footprint) || isinf(footprint)) {
+    footprint = uSourceReduction;
+  }
+  if (uSourceReductionEnabled) {
+    for (int level = 0; level < 16; ++level) {
+      if (level >= uSourcePyramidLevels) break;
+      vec2 reduction = uSourceSize / vec2(textureSize(uSourcePyramid, level));
+      if (max(reduction.x, reduction.y) > footprint * 1.000001) break;
+      sourcePyramidLevel = level;
+    }
+  }
+#endif
   if (mapping.a < 0.5) {
     outColor = vec4(0.0);
     outToneInput = vec4(0.0);
@@ -789,6 +837,8 @@ interface GpuState {
   readonly gl: GpuContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
+  sourcePyramid: WebGLTexture | null;
+  pointwisePyramid: WebGLProgram | null;
   readonly sourceIsInteger: boolean;
   readonly maximumTextureSize: number;
   curves: { readonly key: string; readonly texture: WebGLTexture } | null;
@@ -945,11 +995,15 @@ function program(
   gl: GpuContext,
   fragmentSource: string,
   integerSourceProgram = false,
+  sourcePyramid = false,
 ): WebGLProgram {
   const vertex = shader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const source = integerSourceProgram
+  let source = integerSourceProgram
     ? fragmentSource.replace("#version 300 es\n", "#version 300 es\n#define INTEGER_SOURCE\n")
     : fragmentSource;
+  if (sourcePyramid && gl instanceof NativeGpuContext && fragmentSource === POINTWISE_SHADER) {
+    source = source.replace("#version 300 es\n", "#version 300 es\n#define NATIVE_SOURCE_PYRAMID\n");
+  }
   const fragment = shader(gl, gl.FRAGMENT_SHADER, source);
   const value = gl.createProgram();
   if (!value) throw new Error("Could not create a GPU program.");
@@ -1120,6 +1174,30 @@ function orientedDimensions(input: CpuRenderInput): { readonly width: number; re
     : input.source.dimensions;
 }
 
+function fullOutputDimensions(input: CpuRenderInput): { readonly width: number; readonly height: number } {
+  const crop = resolveConstrainedCrop(geometryStages(input).user);
+  const oriented = orientedDimensions(input);
+  const swapsAxes = input.document.geometry.orientation.quarterTurns % 2 === 1;
+  return {
+    width: Math.max(1, Math.round((swapsAxes ? oriented.height : oriented.width) * crop.width)),
+    height: Math.max(1, Math.round((swapsAxes ? oriented.width : oriented.height) * crop.height)),
+  };
+}
+
+function isDownscaled(input: CpuRenderInput): boolean {
+  const full = fullOutputDimensions(input);
+  const output = input.request.plan.qualityAndDimensions.outputDimensions;
+  return output.width < full.width || output.height < full.height;
+}
+
+function buildSourcePyramid(gl: NativeGpuContext, source: WebGLTexture, input: CpuRenderInput): WebGLTexture {
+  return gl.createSourcePyramid(
+    source, input.image.sourceWidth, input.image.sourceHeight,
+    2 ** clamp(input.image.bits, 8, 16) - 1,
+    input.source.color.kind !== "uncharacterized" && input.source.color.transfer.kind === "linear",
+  );
+}
+
 function geometryStages(input: CpuRenderInput): {
   readonly user: CanonicalGeometry;
   readonly optics: CanonicalGeometry;
@@ -1259,7 +1337,7 @@ function maskCoverageTexture(
     geometry: geometryMapKey(input, region),
     source: input.source.signature,
     frame: input.document.local.geometryFrame,
-    expressions: masks.map((mask) => mask.expression),
+    expressions: masks.map((mask) => objectIdentityId(mask.expression)),
     assets: input.document.local.maskAssetRefs,
   });
   const cached = state.maskCoverage.get(key);
@@ -1322,7 +1400,7 @@ function localAdjustmentCacheKey(input: CpuRenderInput, region: RenderRegion): s
       geometryCacheIdentity(stages.user),
       geometryCacheIdentity(stages.optics),
     ],
-    local: input.document.local,
+    local: objectIdentityId(input.document.local),
   });
 }
 
@@ -1573,13 +1651,37 @@ function renderPointwise(
   identityGeometry: boolean,
 ): void {
   const gl = state.gl;
-  const programValue = state.programs.pointwise;
+  // The pyramid follows the current render, not the session's first one: a
+  // full-res render drops it, a later downscaled render rebuilds it.
+  if (gl instanceof NativeGpuContext) {
+    if (isDownscaled(input)) {
+      state.sourcePyramid ??= buildSourcePyramid(gl, state.source, input);
+      state.pointwisePyramid ??= program(gl, POINTWISE_SHADER, integerSource(input), true);
+    } else if (state.sourcePyramid) {
+      gl.deleteTexture(state.sourcePyramid);
+      state.sourcePyramid = null;
+    }
+  }
+  const programValue = state.sourcePyramid && state.pointwisePyramid
+    ? state.pointwisePyramid
+    : state.programs.pointwise;
   const curves = curveTexture(state, input.document);
   attach(gl, targets, input.includePointColor !== false || input.request.requestedTaps.includes("tone-input")
     ? [targets.pointwise, targets.toneInput, targets.pointColorInput]
     : [targets.pointwise]);
   gl.useProgram(programValue);
   bindTexture(gl, programValue, "uSource", 0, state.source);
+  if (state.sourcePyramid) {
+    bindTexture(gl, programValue, "uSourcePyramid", 5, state.sourcePyramid);
+    const quality = input.request.plan.qualityAndDimensions;
+    const full = fullOutputDimensions(input);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uSourceReductionEnabled"),
+      isDownscaled(input) ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uSourceReduction"),
+      Math.max(1, Math.min(full.width / quality.outputDimensions.width, full.height / quality.outputDimensions.height)));
+    gl.uniform1i(gl.getUniformLocation(programValue, "uSourcePyramidLevels"),
+      Math.floor(Math.log2(Math.max(1, Math.floor(Math.max(input.image.sourceWidth, input.image.sourceHeight) / 2)))) + 1);
+  }
   bindTexture(gl, programValue, "uMap", 1, map);
   const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
   gl.uniform1i(gl.getUniformLocation(programValue, "uIdentityGeometry"), identityGeometry ? 1 : 0);
@@ -2131,9 +2233,11 @@ export class V3GpuPreviewRenderer {
       state.gl.deleteTexture(map.texture);
     }
     state.gl.deleteTexture(state.source);
+    if (state.sourcePyramid) state.gl.deleteTexture(state.sourcePyramid);
     if (state.curves) state.gl.deleteTexture(state.curves.texture);
     if (state.grainCoordinates) state.gl.deleteTexture(state.grainCoordinates.texture);
     state.gl.deleteProgram(state.programs.pointwise);
+    if (state.pointwisePyramid) state.gl.deleteProgram(state.pointwisePyramid);
     state.gl.deleteProgram(state.programs.spatial);
     state.gl.deleteProgram(state.programs.postCrop);
     state.gl.deleteProgram(state.programs.encode);
@@ -2333,6 +2437,10 @@ export class V3GpuPreviewRenderer {
     ) {
       throw new Error("The GPU source exceeds the maximum texture size.");
     }
+    const source = sourceTexture(gl, input);
+    const sourcePyramid = gl instanceof NativeGpuContext && isDownscaled(input)
+      ? buildSourcePyramid(gl, source, input)
+      : null;
     const state: GpuState = {
       canvas,
       gl,
@@ -2342,7 +2450,9 @@ export class V3GpuPreviewRenderer {
         postCrop: program(gl, POST_CROP_SHADER),
         encode: program(gl, ENCODE_SHADER),
       },
-      source: sourceTexture(gl, input),
+      source,
+      sourcePyramid,
+      pointwisePyramid: null,
       sourceIsInteger: integerSource(input),
       maximumTextureSize,
       curves: null,
