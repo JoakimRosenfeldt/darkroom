@@ -53,6 +53,19 @@ const GPU_TILE_EDGE = 512;
 const NATIVE_GPU_TILE_EDGE = 1_024;
 const MAX_GPU_MASK_LAYERS = 8;
 const MAX_CACHED_MASK_COVERAGE_BYTES = 64 * 1024 * 1024;
+// Ids are unique per object and never reused, so identity keys cannot false-hit.
+const objectIdentityIds = new WeakMap<object, number>();
+let nextObjectIdentityId = 1;
+
+function objectIdentityId(value: object): number {
+  const existing = objectIdentityIds.get(value);
+  if (existing !== undefined) return existing;
+  const id = nextObjectIdentityId;
+  nextObjectIdentityId += 1;
+  objectIdentityIds.set(value, id);
+  return id;
+}
+
 const MIXER_BANDS = [
   { id: "red", center: 0 },
   { id: "orange", center: 30 },
@@ -1324,7 +1337,7 @@ function maskCoverageTexture(
     geometry: geometryMapKey(input, region),
     source: input.source.signature,
     frame: input.document.local.geometryFrame,
-    expressions: masks.map((mask) => mask.expression),
+    expressions: masks.map((mask) => objectIdentityId(mask.expression)),
     assets: input.document.local.maskAssetRefs,
   });
   const cached = state.maskCoverage.get(key);
@@ -1387,7 +1400,7 @@ function localAdjustmentCacheKey(input: CpuRenderInput, region: RenderRegion): s
       geometryCacheIdentity(stages.user),
       geometryCacheIdentity(stages.optics),
     ],
-    local: input.document.local,
+    local: objectIdentityId(input.document.local),
   });
 }
 

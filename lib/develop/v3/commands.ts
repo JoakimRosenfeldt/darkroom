@@ -163,17 +163,124 @@ function groupValue(
   }
 }
 
+function withGroupValue(
+  document: DevelopDocumentV3,
+  group: V3SemanticGroupId,
+  value: DevelopDocumentV3[V3SemanticGroupId],
+): DevelopDocumentV3 {
+  switch (group) {
+    case "tone": return { ...document, tone: value as DevelopDocumentV3["tone"] };
+    case "color": return { ...document, color: value as DevelopDocumentV3["color"] };
+    case "optics": return { ...document, optics: value as DevelopDocumentV3["optics"] };
+    case "geometry": return { ...document, geometry: value as DevelopDocumentV3["geometry"] };
+    case "local": return { ...document, local: value as DevelopDocumentV3["local"] };
+    case "cleanup": return { ...document, cleanup: value as DevelopDocumentV3["cleanup"] };
+    case "presence": return { ...document, presence: value as DevelopDocumentV3["presence"] };
+    case "detail": return { ...document, detail: value as DevelopDocumentV3["detail"] };
+    case "effects": return { ...document, effects: value as DevelopDocumentV3["effects"] };
+    case "lensBlur": return { ...document, lensBlur: value as DevelopDocumentV3["lensBlur"] };
+    case "hdr": return { ...document, hdr: value as DevelopDocumentV3["hdr"] };
+    default: {
+      const exhaustive: never = group;
+      return exhaustive;
+    }
+  }
+}
+
+// Reuse before's compatibility only when the re-parsed copy is proven
+// equal to it. Compatibility is tiny on typical documents, so the
+// stringify comparison is negligible; a key-order false negative only
+// loses reuse. A non-null legacyV2 on either side skips reuse to avoid
+// stringifying a whole legacy document per edit.
+function reuseCompatibility(
+  before: DevelopDocumentV3,
+  after: DevelopDocumentV3,
+): DevelopDocumentV3 {
+  const previous = before.compatibility;
+  const next = after.compatibility;
+  const reusable = previous.legacyV2 === null &&
+    next.legacyV2 === null &&
+    equal(previous, next);
+  return reusable && next !== previous
+    ? { ...after, compatibility: previous }
+    : after;
+}
+
+// Keeps `source`'s group objects in `document`, which was produced by
+// parsing a document that differs from `source` only outside the semantic
+// groups. Parsing is idempotent on its own output, so the re-parsed groups
+// are deep-equal to source's and only their identity was lost.
+function reuseDocumentGroups(
+  source: DevelopDocumentV3,
+  document: DevelopDocumentV3,
+): DevelopDocumentV3 {
+  let result = document;
+  for (const group of V3_SEMANTIC_GROUP_IDS) {
+    result = withGroupValue(result, group, groupValue(source, group));
+  }
+  return reuseCompatibility(source, result);
+}
+
+// Substitutes `source`'s group objects into `validated` (a fresh parse of
+// `source`) so validation does not drop group identity. Unlike
+// reuseDocumentGroups, each group is substituted only when JSON-equal to
+// the validated group, so this is safe for externally built documents
+// whose groups may not be parse-normalized: fields the codec strips or
+// rewrites make the JSON differ and keep the validated objects. (Keys
+// JSON cannot represent, e.g. undefined-valued ones, are invisible to
+// this comparison just as they are to persistence and hashing.)
+export function reuseValidatedDocumentGroups(
+  source: DevelopDocumentV3,
+  validated: DevelopDocumentV3,
+): DevelopDocumentV3 {
+  let result = validated;
+  for (const group of V3_SEMANTIC_GROUP_IDS) {
+    const sourceGroup = groupValue(source, group);
+    const validatedGroup = groupValue(validated, group);
+    if (sourceGroup !== validatedGroup && equal(sourceGroup, validatedGroup)) {
+      result = withGroupValue(result, group, sourceGroup);
+    }
+  }
+  if (
+    source.appliedPreset !== validated.appliedPreset &&
+    equal(source.appliedPreset, validated.appliedPreset)
+  ) {
+    result = { ...result, appliedPreset: source.appliedPreset };
+  }
+  return reuseCompatibility(source, result);
+}
+
 function changedResult(
   before: DevelopDocumentV3,
   after: DevelopDocumentV3,
   groups: readonly V3SemanticGroupId[],
+  derivedFromBefore: boolean,
 ): V3CommandResult {
-  const patches: V3GroupPatch[] = groups.flatMap((group) =>
-    equal(groupValue(before, group), groupValue(after, group))
-      ? []
-      : [groupPatch(before, after, group)],
-  );
-  if (!equal(before.appliedPreset, after.appliedPreset)) {
+  let document = after;
+  const patches: V3GroupPatch[] = [];
+  for (const group of groups) {
+    if (equal(groupValue(before, group), groupValue(after, group))) {
+      document = withGroupValue(document, group, groupValue(before, group));
+    } else {
+      patches.push(groupPatch(before, after, group));
+    }
+  }
+  if (derivedFromBefore) {
+    // `after` came from parsing `before` with only `groups` replaced, and
+    // parsing is idempotent on its own output, so every other group in
+    // `after` is a deep-equal re-parse of before's. Reuse before's objects.
+    for (const group of V3_SEMANTIC_GROUP_IDS) {
+      if (!groups.includes(group)) {
+        document = withGroupValue(document, group, groupValue(before, group));
+      }
+    }
+    document = reuseCompatibility(before, document);
+  }
+  if (equal(before.appliedPreset, after.appliedPreset)) {
+    if (document.appliedPreset !== before.appliedPreset) {
+      document = { ...document, appliedPreset: before.appliedPreset };
+    }
+  } else {
     patches.push({
       kind: "v3-applied-preset",
       group: "appliedPreset",
@@ -183,7 +290,7 @@ function changedResult(
   }
   const first = patches[0];
   return first
-    ? { changed: true, document: after, patches: [first, ...patches.slice(1)] }
+    ? { changed: true, document, patches: [first, ...patches.slice(1)] }
     : { changed: false, document: before };
 }
 
@@ -194,7 +301,7 @@ function applyDirectV3Command(
   switch (command.kind) {
     case "replace-v3-semantic-group": {
       const next = replaceGroup(document, command.group, command.value);
-      return changedResult(document, next, [command.group]);
+      return changedResult(document, next, [command.group], true);
     }
     case "patch-v3-semantic-group": {
       const current = groupValue(document, command.group);
@@ -203,7 +310,7 @@ function applyDirectV3Command(
         command.group,
         Object.assign({}, current, command.patch),
       );
-      return changedResult(document, next, [command.group]);
+      return changedResult(document, next, [command.group], true);
     }
     case "reset-v3-semantic-group": {
       const defaults = createDefaultV3DevelopDocument();
@@ -211,7 +318,7 @@ function applyDirectV3Command(
         ? { ...defaults.local, geometryFrame: document.local.geometryFrame }
         : groupValue(defaults, command.group);
       const next = replaceGroup(document, command.group, value);
-      return changedResult(document, next, [command.group]);
+      return changedResult(document, next, [command.group], true);
     }
     case "reset-v3-all": {
       const defaults = createDefaultV3DevelopDocument();
@@ -219,19 +326,19 @@ function applyDirectV3Command(
         ...defaults,
         compatibility: document.compatibility,
       });
-      return changedResult(document, next, V3_SEMANTIC_GROUP_IDS);
+      return changedResult(document, next, V3_SEMANTIC_GROUP_IDS, true);
     }
     case "commit-v3-crop-draft": {
       const next = replaceGroup(document, "geometry", {
         ...document.geometry,
         crop: command.crop,
       });
-      return changedResult(document, next, ["geometry"]);
+      return changedResult(document, next, ["geometry"], true);
     }
     case "replace-v3-complete-state": {
       const next = validateV3CommandDocument(command.document);
       if (equal(document, next)) return { changed: false, document };
-      const result = changedResult(document, next, V3_SEMANTIC_GROUP_IDS);
+      const result = changedResult(document, next, V3_SEMANTIC_GROUP_IDS, false);
       return result.changed
         ? result
         : { changed: true, document: next, patches: [] };
@@ -243,6 +350,35 @@ function applyDirectV3Command(
   }
 }
 
+// Re-validating after markAppliedPresetModified re-parses every group;
+// reuseDocumentGroups restores the edited document's group objects so the
+// re-parse does not drop their identity. Only appliedPreset can differ.
+function markPresetModifiedResult(
+  document: DevelopDocumentV3,
+  edited: Extract<V3CommandResult, { readonly changed: true }>,
+): V3CommandResult {
+  const validated = validateV3CommandDocument(
+    markAppliedPresetModified(document, edited.document),
+  );
+  const reused = reuseDocumentGroups(edited.document, validated);
+  if (equal(edited.document.appliedPreset, reused.appliedPreset)) {
+    const next = reused.appliedPreset === edited.document.appliedPreset
+      ? reused
+      : { ...reused, appliedPreset: edited.document.appliedPreset };
+    return { ...edited, document: next };
+  }
+  return {
+    ...edited,
+    document: reused,
+    patches: [...edited.patches, {
+      kind: "v3-applied-preset",
+      group: "appliedPreset",
+      before: edited.document.appliedPreset,
+      after: reused.appliedPreset,
+    }],
+  };
+}
+
 export function applyV3EditCommand(
   document: DevelopDocumentV3,
   command: V3EditCommand,
@@ -250,19 +386,7 @@ export function applyV3EditCommand(
   if (command.kind !== "accept-v3-job-result") {
     const edited = applyDirectV3Command(document, command);
     if (!edited.changed || command.kind === "replace-v3-complete-state") return edited;
-    const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
-    return equal(edited.document.appliedPreset, next.appliedPreset)
-      ? { ...edited, document: next }
-      : {
-          ...edited,
-          document: next,
-          patches: [...edited.patches, {
-            kind: "v3-applied-preset",
-            group: "appliedPreset",
-            before: edited.document.appliedPreset,
-            after: next.appliedPreset,
-          }],
-        };
+    return markPresetModifiedResult(document, edited);
   }
   const edited = applyDirectV3Command(document, command.edit);
   const referenced = new Map(
@@ -294,19 +418,7 @@ export function applyV3EditCommand(
     }
   }
   if (!edited.changed || command.edit.kind === "replace-v3-complete-state") return edited;
-  const next = validateV3CommandDocument(markAppliedPresetModified(document, edited.document));
-  return equal(edited.document.appliedPreset, next.appliedPreset)
-    ? { ...edited, document: next }
-    : {
-        ...edited,
-        document: next,
-        patches: [...edited.patches, {
-          kind: "v3-applied-preset",
-          group: "appliedPreset",
-          before: edited.document.appliedPreset,
-          after: next.appliedPreset,
-        }],
-      };
+  return markPresetModifiedResult(document, edited);
 }
 
 export function replayV3Patches(

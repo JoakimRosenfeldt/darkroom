@@ -3,6 +3,8 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import { MAX_CPU_RENDER_PIXELS } from "./cpu-backend";
 import { V3GpuPreviewRenderer } from "./gpu-backend";
 import { prepareV3RuntimeRender } from "./runtime";
+import type { DevelopDocumentV3 } from "./document";
+import { applyV3DocumentSync } from "./preview-worker-types";
 import type { V3PreviewWorkerRequest, V3PreviewWorkerRenderResult } from "./preview-worker-types";
 
 type RenderMessage = Exclude<V3PreviewWorkerRequest, { kind: "initialize" }>;
@@ -16,6 +18,7 @@ export class MainThreadGpuPreview {
   #interactivePixels = 1_000_000;
   #lastDimensions = "";
   #fastFrames = 0;
+  #residentDocument: DevelopDocumentV3 | null = null;
 
   constructor(readonly entry: LibraryEntry, readonly image: DevelopImage) {}
 
@@ -26,6 +29,13 @@ export class MainThreadGpuPreview {
   }
 
   async #render(message: RenderMessage): Promise<V3PreviewWorkerRenderResult | null> {
+    // Applied first, on this serialized queue, so the resident document
+    // advances in dispatch order even when this render returns null.
+    const renderDocument = applyV3DocumentSync(this.#residentDocument, message.documentSync);
+    if (!renderDocument) {
+      throw new Error("The main-thread preview received a document patch with no resident document.");
+    }
+    this.#residentDocument = renderDocument;
     if (this.#disposed) return { backend: "gpu", result: { kind: "cancelled" } };
     const mattes = new Map((message.maskMattes ?? []).map((matte) => [matte.assetId, matte]));
     const assets = mattes.size ? {
@@ -33,7 +43,7 @@ export class MainThreadGpuPreview {
       maskMatte: (id: string) => mattes.get(id),
     } : undefined;
     const source = { entry: this.entry, image: this.image, assets, cancellation: { isCancelled: () => this.#disposed, reason: () => this.#disposed ? "Preview disposed" : null } };
-    const prepared = await prepareV3RuntimeRender(message.document, message.kind === "export" ? {
+    const prepared = await prepareV3RuntimeRender(renderDocument, message.kind === "export" ? {
       ...source, kind: "v3-export", size: message.size, format: "jpeg", includeAnalysis: false,
     } : {
       ...source, kind: "v3-preview", viewportDimensions: message.viewportDimensions,
@@ -71,6 +81,8 @@ export class MainThreadGpuPreview {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    // Resident document stays: renders still queued on the chain apply
+    // their sync, then hit the disposed check and return cancelled.
     void this.#pending.finally(() => {
       // Let the next view paint before releasing the WebGL context.
       const release = () => this.#renderer.dispose();
