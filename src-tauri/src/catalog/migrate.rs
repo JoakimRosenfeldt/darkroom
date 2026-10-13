@@ -321,18 +321,6 @@ fn path_for(root: &Path, relative: &str) -> PathBuf {
         })
 }
 
-fn sidecar_for(root: &Path, relative: &str) -> PathBuf {
-    let source = path_for(root, relative);
-    if source
-        .extension()
-        .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("nef"))
-    {
-        source.with_extension("xmp")
-    } else {
-        PathBuf::from(format!("{}.xmp", source.to_string_lossy()))
-    }
-}
-
 fn read_xmp(path: &Path) -> Result<(&'static str, Option<(String, f64, String)>), String> {
     let Some(bytes) = regular(path)? else {
         return Ok(("absent", None));
@@ -629,7 +617,7 @@ fn build_assets(
                 item.observation = found.get("observation").cloned();
             }
             for (relative, item) in &mut assets {
-                let sidecar = sidecar_for(root, relative);
+                let sidecar = crate::native::sidecar_path_for(&path_for(root, relative));
                 match read_xmp(&sidecar) {
                     Ok((state, xmp)) => {
                         item.xmp_state = state;

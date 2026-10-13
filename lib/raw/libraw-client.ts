@@ -52,21 +52,23 @@ function runLibRaw<T>(
   }, options);
 }
 
-function buildSettings(
+export function buildSettings(
   options: DecodeOptions,
   halfSize: boolean,
 ): LibRawSettings {
   if (options.cameraProfile?.kind === "libraw-camera-matrix") {
-    return {
+    const settings: LibRawSettings = {
       halfSize,
       outputBps: 16,
       outputColor: 0,
-      gamm: [1, 1],
       noAutoBright: true,
       useCameraMatrix: 0,
       useCameraWb: true,
       userQual: options.thumbnail ? 0 : halfSize ? 1 : 2,
     };
+    // libraw_wrapper.cpp requires length 6 for gamm; the published type incorrectly requires two.
+    Reflect.set(settings, "gamm", [1, 1, 0, 0, 0, 0]);
+    return settings;
   }
   return {
     halfSize,
@@ -188,7 +190,7 @@ export async function buildFromImageData(
     pixelProvenance: cameraProfile
       ? {
           decoderPath: "libraw",
-          decoderRevision: "darkroom-libraw-linear-camera-v1",
+          decoderRevision: "darkroom-libraw-linear-camera-v2",
           colorSpace: "camera-rgb",
           transfer: "linear",
           bitDepth: 16,

@@ -1062,8 +1062,7 @@ fn prepare_auto_plan(
     }
     let format =
         scan::format_id(&source_relative).ok_or("Auto Import source format is unavailable.")?;
-    let xmp_relative = Path::new(&source_relative)
-        .with_extension("xmp")
+    let xmp_relative = crate::native::sidecar_path_for(Path::new(&source_relative))
         .to_string_lossy()
         .replace('\\', "/");
     let xmp_path = safe_path(&ingress_root, &xmp_relative)?;
@@ -1124,8 +1123,7 @@ fn prepare_auto_plan(
         let path = safe_path(&destination_root, candidate)?;
         let xmp = safe_path(
             &destination_root,
-            &Path::new(candidate)
-                .with_extension("xmp")
+            &crate::native::sidecar_path_for(Path::new(candidate))
                 .to_string_lossy()
                 .replace('\\', "/"),
         )?;
@@ -1215,8 +1213,7 @@ fn prepare_auto_plan(
         .unwrap_or(&destination_relative);
     let xmp_destination = if xmp_state == "present" {
         json!(
-            Path::new(final_destination)
-                .with_extension("xmp")
+            crate::native::sidecar_path_for(Path::new(final_destination))
                 .to_string_lossy()
                 .replace('\\', "/")
         )

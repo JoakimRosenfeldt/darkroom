@@ -24,6 +24,7 @@ import {
   MAX_V3_PAYLOAD_BYTES,
 } from "@/lib/develop/v3/codec";
 import type {
+  DevelopDocumentV3,
   PersistedDevelopDocument,
   StoredDevelopDocument,
 } from "@/lib/develop/v3/document";
@@ -58,6 +59,97 @@ function collectDevelopProps(settings: DevelopSettings): XmpProps {
   }
   return props;
 }
+
+function collectV3DevelopProps(document: DevelopDocumentV3): XmpProps {
+  const defaults = createDevelopSettings();
+  const props = collectDevelopProps({
+    ...defaults,
+    basic: {
+      ...document.tone.basic,
+      ...document.color.global,
+      temperature: document.color.whiteBalance.resolved.temperatureKelvin - 5500,
+      tint: document.color.whiteBalance.resolved.tint,
+    },
+    crop: {
+      ...defaults.crop,
+      ...document.geometry.crop,
+      angle: document.geometry.orientation.fineAngleDegrees,
+    },
+    curve: document.tone.curves,
+    mixer: document.color.mixer,
+    effects: {
+      ...document.effects.postCrop,
+      ...document.detail.sharpening,
+      ...document.detail.noiseReduction,
+    },
+  });
+  // These transforms have no faithful mapping through the v2 XMP adapter.
+  delete props["crs:PerspectiveHorizontal"];
+  delete props["crs:PerspectiveVertical"];
+  delete props["crs:LensManualDistortionAmount"];
+  const { orientation, upright, constrainCrop } = document.geometry;
+  if (orientation.quarterTurns !== 0 || orientation.flipHorizontal || orientation.flipVertical || upright.enabled || constrainCrop) {
+    for (const key of Object.keys(props)) {
+      if (key === "crs:HasCrop" || key.startsWith("crs:Crop")) delete props[key];
+    }
+  }
+  // Presence and color grading have no v2 plugin fields; write their Adobe
+  // crs properties directly so the projection is not silently incomplete.
+  const presence = document.presence;
+  if (presence.texture !== 0 || presence.clarity !== 0 || presence.dehaze !== 0) {
+    props["crs:Texture"] = String(Math.round(presence.texture));
+    props["crs:Clarity2012"] = String(Math.round(presence.clarity));
+    props["crs:Dehaze"] = String(Math.round(presence.dehaze));
+  }
+  const grading = document.color.grading;
+  const wheels = [
+    ["Shadow", grading.shadows],
+    ["Midtone", grading.midtones],
+    ["Highlight", grading.highlights],
+  ] as const;
+  if (wheels.some(([, wheel]) => wheel.saturation !== 0 || wheel.luminance !== 0) || grading.blending !== 50) {
+    for (const [name, wheel] of wheels) {
+      props[`crs:ColorGrade${name}Hue`] = String(Math.round(wheel.hueDegrees));
+      props[`crs:ColorGrade${name}Sat`] = String(Math.round(wheel.saturation));
+      props[`crs:ColorGrade${name}Lum`] = String(Math.round(wheel.luminance));
+    }
+    props["crs:ColorGradeBlending"] = String(Math.round(grading.blending));
+  }
+  return props;
+}
+
+// crs properties Darkroom's writers own (v2 plugins + the v3 projection
+// above) plus transform keys the v3 projection deliberately omits. On a v3
+// save only these are purged before rewriting; Lightroom-only crs data
+// Darkroom does not model (CameraProfile, lens profiles, Look) is kept.
+const PROJECTED_CRS_LOCAL_NAMES: ReadonlySet<string> = new Set([
+  "Blacks2012", "ColorNoiseReduction", "ColorNoiseReductionDetail", "ColorNoiseReductionSmoothness",
+  "Contrast2012", "CropAngle", "CropBottom", "CropLeft", "CropRight", "CropTop", "Exposure2012",
+  "GrainAmount", "GrainFrequency", "GrainSize", "HasCrop", "Highlights2012", "LensManualDistortionAmount",
+  "LuminanceNoiseReductionContrast", "LuminanceNoiseReductionDetail", "LuminanceSmoothing",
+  "PerspectiveHorizontal", "PerspectiveVertical", "PostCropVignetteAmount", "PostCropVignetteFeather",
+  "PostCropVignetteHighlightContrast", "PostCropVignetteMidpoint", "PostCropVignetteRoundness",
+  "ProcessVersion", "Saturation", "Shadows2012", "SharpenDetail", "SharpenEdgeMasking", "SharpenRadius",
+  "Sharpness", "Temperature", "Tint", "ToneCurveName2012", "ToneCurvePV2012", "ToneCurvePV2012Blue",
+  "ToneCurvePV2012Green", "ToneCurvePV2012Red", "Vibrance", "Whites2012",
+  "Texture", "Clarity2012", "Dehaze",
+  "ColorGradeShadowHue", "ColorGradeShadowSat", "ColorGradeShadowLum",
+  "ColorGradeMidtoneHue", "ColorGradeMidtoneSat", "ColorGradeMidtoneLum",
+  "ColorGradeHighlightHue", "ColorGradeHighlightSat", "ColorGradeHighlightLum",
+  "ColorGradeGlobalHue", "ColorGradeGlobalSat", "ColorGradeGlobalLum", "ColorGradeBlending",
+  "PerspectiveUpright", "PerspectiveRotate", "PerspectiveAspect", "PerspectiveScale",
+  "PerspectiveX", "PerspectiveY", "CropConstrainToWarp",
+  "UprightVersion", "UprightCenterMode", "UprightCenterNormX", "UprightCenterNormY",
+  "UprightFocalLength35mm", "UprightPreview", "UprightTransformCount",
+  "HueAdjustmentRed", "HueAdjustmentOrange", "HueAdjustmentYellow", "HueAdjustmentGreen",
+  "HueAdjustmentAqua", "HueAdjustmentBlue", "HueAdjustmentPurple", "HueAdjustmentMagenta",
+  "SaturationAdjustmentRed", "SaturationAdjustmentOrange", "SaturationAdjustmentYellow",
+  "SaturationAdjustmentGreen", "SaturationAdjustmentAqua", "SaturationAdjustmentBlue",
+  "SaturationAdjustmentPurple", "SaturationAdjustmentMagenta",
+  "LuminanceAdjustmentRed", "LuminanceAdjustmentOrange", "LuminanceAdjustmentYellow",
+  "LuminanceAdjustmentGreen", "LuminanceAdjustmentAqua", "LuminanceAdjustmentBlue",
+  "LuminanceAdjustmentPurple", "LuminanceAdjustmentMagenta",
+]);
 
 function propNamespace(key: string): string {
   return key.startsWith("xmp:") ? XMP_NS : CRS_NS;
@@ -227,7 +319,10 @@ export function parseMetadataXmp(xml: string): MetadataOverrides {
   const copyright = languageAlternative(description, DC_NS, "rights");
   const keywords = arrayProperty(description, DC_NS, "subject");
   const capture = attributeValue(description, PHOTOSHOP_NS, "DateCreated");
-  const captureKey = capture === null ? null : Date.parse(capture);
+  const captureOffset = capture?.match(/(?:Z|[+-]\d{2}:\d{2})$/u)?.[0] ?? null;
+  // Offset-less wall times sort as UTC, matching metadata analysis
+  // (lib/metadata/normalize.ts and the Rust analyzer), not local time.
+  const captureKey = capture === null ? null : Date.parse(captureOffset === null ? `${capture}Z` : capture);
   const latitude = numericText(attributeValue(description, EXIF_NS, "GPSLatitude"));
   const longitude = numericText(attributeValue(description, EXIF_NS, "GPSLongitude"));
   return {
@@ -237,7 +332,7 @@ export function parseMetadataXmp(xml: string): MetadataOverrides {
     ...(keywords.length === 0 ? {} : { keywords: { kind: "set", value: keywords } }),
     ...(capture === null || captureKey === null || !Number.isFinite(captureKey)
       ? {}
-      : { captureTime: { kind: "set", value: { value: capture.replace(/Z$/u, "").slice(0, 19), offset: capture.endsWith("Z") ? "Z" : null, sortKey: captureKey } } }),
+      : { captureTime: { kind: "set", value: { value: captureOffset === null ? capture : capture.slice(0, -captureOffset.length), offset: captureOffset, sortKey: captureKey } } }),
     ...(latitude === null ? {} : { latitude: { kind: "set", value: latitude } }),
     ...(longitude === null ? {} : { longitude: { kind: "set", value: longitude } }),
   };
@@ -410,13 +505,23 @@ export function serializeDevelopXmp(
   description.setAttributeNS(XMLNS_NS, "xmlns:crs", CRS_NS);
   description.setAttributeNS(XMLNS_NS, "xmlns:xmp", XMP_NS);
   description.setAttributeNS(XMLNS_NS, "xmlns:darkroom", DARKROOM_NS);
-  const v2Projection = document.version === 2
-    ? document
-    : document.compatibility.legacyV2;
-  if (v2Projection) {
-    for (const [key, value] of Object.entries(collectDevelopProps(v2Projection.settings))) {
-      setProp(doc, description, key, value);
+  if (document.version === 3) {
+    for (const attribute of Array.from(description.attributes)) {
+      if (attribute.namespaceURI === CRS_NS && PROJECTED_CRS_LOCAL_NAMES.has(attribute.localName)) {
+        description.removeAttributeNS(CRS_NS, attribute.localName);
+      }
     }
+    for (const child of Array.from(description.children)) {
+      if (child.namespaceURI === CRS_NS && PROJECTED_CRS_LOCAL_NAMES.has(child.localName)) child.remove();
+    }
+    removeProperty(description, DARKROOM_NS, MASKING_LOCAL_NAME);
+    removeProperty(description, DARKROOM_NS, LIGHTROOM_MASK_MANIFEST_LOCAL_NAME);
+  }
+  const props = document.version === 2
+    ? collectDevelopProps(document.settings)
+    : collectV3DevelopProps(document);
+  for (const [key, value] of Object.entries(props)) {
+    setProp(doc, description, key, value);
   }
   description.setAttributeNS(XMP_NS, "xmp:Rating", String(metadata.rating));
   if (metadata.colorLabel) description.setAttributeNS(XMP_NS, "xmp:Label", metadata.colorLabel);
@@ -424,16 +529,16 @@ export function serializeDevelopXmp(
     description.removeAttributeNS(XMP_NS, "Label");
     description.removeAttribute("xmp:Label");
   }
-  if (v2Projection) {
+  if (document.version === 2) {
     description.setAttributeNS(
       DARKROOM_NS,
       "darkroom:MaskingData",
-      maskingPayload(v2Projection),
+      maskingPayload(document),
     );
     description.setAttributeNS(
       DARKROOM_NS,
       `darkroom:${LIGHTROOM_MASK_MANIFEST_LOCAL_NAME}`,
-      utf8ToBase64(serializeLightroomMaskInterchangeManifest(v2Projection)),
+      utf8ToBase64(serializeLightroomMaskInterchangeManifest(document)),
     );
   }
   if (document.version === 3) {

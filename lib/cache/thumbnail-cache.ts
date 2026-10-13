@@ -8,7 +8,7 @@ import { assetCacheKey, type AssetCacheIdentity } from "./asset-cache-key";
 import type { StoredDevelopDocument } from "@/lib/develop/v3/document";
 import { renderEditedPreview } from "./render-edited-preview";
 
-const CACHE_PREFIX = "darkroom-thumb-v3:";
+const CACHE_PREFIX = "darkroom-thumb-v4:";
 const MAX_MEMORY_THUMBNAILS = 300;
 
 export interface ThumbnailCacheKey {
@@ -117,7 +117,7 @@ const documentHashes = new WeakMap<StoredDevelopDocument, Promise<string>>();
 
 function editHash(document: StoredDevelopDocument | null | undefined): Promise<string> {
   if (document === undefined) return Promise.resolve("source");
-  if (document === null) return Promise.resolve("neutral-v3");
+  if (document === null) return Promise.resolve("neutral-v4");
   let digest = documentHashes.get(document);
   if (!digest) {
     digest = crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(document)))

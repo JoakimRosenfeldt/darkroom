@@ -206,24 +206,24 @@ fn read_asset(value: &Value, head: Option<usize>) -> Result<Value, String> {
     Ok(binary_value(&read_asset_bytes(value, head)?))
 }
 
+pub(crate) fn sidecar_path_for(asset: &Path) -> PathBuf {
+    if asset
+        .extension()
+        .and_then(|v| v.to_str())
+        .is_some_and(|v| v.eq_ignore_ascii_case("nef"))
+    {
+        asset.with_extension("xmp")
+    } else {
+        let mut path = asset.as_os_str().to_os_string();
+        path.push(".xmp");
+        PathBuf::from(path)
+    }
+}
+
 fn sidecar_path(value: &Value) -> Result<PathBuf, String> {
     let (root, relative) = location(value)?;
     resolve_asset(value)?;
-    let ext_is_nef = relative
-        .extension()
-        .and_then(|v| v.to_str())
-        .is_some_and(|v| v.eq_ignore_ascii_case("nef"));
-    let name = if ext_is_nef {
-        relative.file_stem()
-    } else {
-        relative.file_name()
-    }
-    .ok_or("Asset path is invalid.")?;
-    let sidecar = relative
-        .parent()
-        .unwrap_or(Path::new(""))
-        .join(format!("{}.xmp", name.to_string_lossy()));
-    validated_path(&root, &sidecar, false)
+    validated_path(&root, &sidecar_path_for(&relative), false)
 }
 
 fn modified_ms(metadata: &fs::Metadata) -> Result<f64, String> {
@@ -467,5 +467,24 @@ pub fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Valu
             )
         }
         _ => Err(format!("Unknown asset command: {command}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_names_keep_standard_extensions_and_replace_nef_extensions() {
+        for (asset, sidecar) in [
+            ("photo.jpg", "photo.jpg.xmp"),
+            ("album.v1/photo.JPEG", "album.v1/photo.JPEG.xmp"),
+            ("album/photo.png", "album/photo.png.xmp"),
+            ("album/photo.webp", "album/photo.webp.xmp"),
+            ("album/photo.nef", "album/photo.xmp"),
+            ("album/photo.NEF", "album/photo.xmp"),
+        ] {
+            assert_eq!(sidecar_path_for(Path::new(asset)), Path::new(sidecar));
+        }
     }
 }

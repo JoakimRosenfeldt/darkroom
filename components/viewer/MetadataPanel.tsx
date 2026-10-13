@@ -134,9 +134,17 @@ export function MetadataPanel({ entry, decodedMetadata }: MetadataPanelProps) {
         ? { kind: "clear" }
         : (() => {
             const normalized = draft.captureTime.length === 16 ? `${draft.captureTime}:00` : draft.captureTime;
-            const sortKey = Date.parse(`${normalized}Z`);
+            const offset = captureTime?.offset ?? null;
+            // The datetime input cannot edit fractional seconds; keep the
+            // original fraction when the wall seconds are unchanged.
+            const fraction = captureTime && normalized === captureTime.value.slice(0, 19)
+              ? captureTime.value.slice(19)
+              : "";
+            const value = `${normalized}${fraction}`;
+            // Offset-less wall times sort as UTC, matching metadata analysis.
+            const sortKey = Date.parse(`${value}${offset ?? "Z"}`);
             if (!Number.isFinite(sortKey)) throw new Error("Capture time is invalid.");
-            return { kind: "set", value: { value: normalized, offset: null, sortKey } };
+            return { kind: "set", value: { value, offset, sortKey } };
           })();
       applyOverrides([entry.id], {
         title: textOverride(draft.title),

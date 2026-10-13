@@ -20,6 +20,7 @@ pub(crate) use windows_file::{windows_handle_identity, windows_path_identity};
 pub use ai_models::verified_model_path;
 pub use assets::read_asset_bytes;
 pub(crate) use assets::resolve_asset as resolve_asset_path;
+pub(crate) use assets::sidecar_path_for;
 pub use embedded_preview::read_embedded_preview;
 pub use export::encode_export_raw;
 pub use libraw_decode::{LibRawDecodeOptions, decode_libraw, raw_dimensions};

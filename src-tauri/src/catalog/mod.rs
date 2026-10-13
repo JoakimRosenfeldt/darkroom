@@ -316,13 +316,7 @@ impl CatalogService {
                 self.set_last_catalog(None)?;
                 Ok(Value::Null)
             }
-            "darkroom:catalog-trash-asset" => {
-                self.require_session(first(&args)?)?;
-                Err(
-                    "Removing files from disk is unavailable until recovery can be guaranteed."
-                        .into(),
-                )
-            }
+            "darkroom:catalog-trash-asset" => self.trash_asset(first(&args)?),
             "darkroom:catalog-remove" => self.remove(first(&args)?),
             "darkroom:catalog-query" => {
                 self.require_session(first(&args)?)?;
@@ -641,6 +635,62 @@ impl CatalogService {
         )
     }
 
+    fn trash_asset(&mut self, request: &Value) -> Result<Value, String> {
+        self.trash_asset_with(request, |path| {
+            trash::delete(path).map_err(|e| e.to_string())
+        })
+    }
+
+    fn trash_asset_with(
+        &mut self,
+        request: &Value,
+        trash_file: impl FnOnce(&Path) -> Result<(), String>,
+    ) -> Result<Value, String> {
+        let location = self.resolve_asset(request)?;
+        let path = crate::native::resolve_asset_path(&location)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("Trash source is not a regular file.".into());
+        }
+        let id = string(request, "catalogId")?;
+        let asset_id = string(request, "assetId")?;
+        let db = self.db()?;
+        db.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
+        let result = (|| -> Result<(), String> {
+            let timestamp = now();
+            db.execute("UPDATE edit_entries SET tombstoned_at=?,updated_at=? WHERE catalog_id=? AND source_id=? AND tombstoned_at IS NULL", params![timestamp,timestamp,id,asset_id]).map_err(|e| e.to_string())?;
+            db.execute(
+                "UPDATE assets SET health='missing' WHERE catalog_id=? AND asset_id=?",
+                params![id, asset_id],
+            )
+            .map_err(|e| e.to_string())?;
+            db.execute(
+                "UPDATE catalog_meta SET revision=revision+1,updated_at=? WHERE catalog_id=?",
+                params![timestamp, id],
+            )
+            .map_err(|e| e.to_string())?;
+            db.execute("INSERT INTO audit_log (catalog_id,event,payload_json,created_at) VALUES (?,'trash-asset',?,?)", params![id,json!({"assetId":asset_id}).to_string(),timestamp]).map_err(|e| e.to_string())?;
+            trash_file(&path)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                if let Err(error) = db.execute_batch("COMMIT") {
+                    let _ = db.execute_batch("ROLLBACK");
+                    return Err(format!(
+                        "File moved to Trash but catalog update failed: {error}"
+                    ));
+                }
+                Ok(Value::Null)
+            }
+            Err(error) => {
+                let _ = db.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     fn remove(&mut self, input: &Value) -> Result<Value, String> {
         let id = string(input, "catalogId")?.to_string();
         if self
@@ -731,5 +781,100 @@ impl CatalogService {
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(super) fn fixture() -> (tempfile::TempDir, CatalogService, Value) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("photos");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("photo.png"), b"source").unwrap();
+        let id = Uuid::new_v4().to_string();
+        let asset = Uuid::new_v4().to_string();
+        let root_id = Uuid::new_v4().to_string();
+        let path = directory.path().join("source.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        db.pragma_update(None, "foreign_keys", "ON").unwrap();
+        db.execute(
+            "INSERT INTO catalog_meta VALUES (?,1,'Test',3,'0.1.0','ready',1,0,0)",
+            [&id],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO roots VALUES (?,?,'Photos',?,?,'online','unknown','disabled',1)",
+            params![id, root_id, root.to_string_lossy(), root.to_string_lossy()],
+        )
+        .unwrap();
+        db.execute("INSERT INTO assets (catalog_id,asset_id,root_id,relative_path,observed_byte_length,observed_modified_at,observed_at,revision,health,format_id) VALUES (?,?,?,'photo.png',6,0,0,1,'present','png')", params![id,asset,root_id]).unwrap();
+        db.execute("INSERT INTO asset_metadata (catalog_id,asset_id,pick,rating,develop_updated_at,updated_at,keywords_json,xmp_state) VALUES (?,?,'none',0,0,0,'[]','unknown')", params![id,asset]).unwrap();
+        history::install(&db).unwrap();
+        history::ensure_roots(&db, &id).unwrap();
+        let mut service = CatalogService::new(directory.path().to_path_buf()).unwrap();
+        service.registry["catalogs"] = json!([{"catalogId":id,"displayName":"Test","databasePath":path,"health":"healthy","lastOpenedAt":0}]);
+        service.active = Some(ActiveCatalog {
+            catalog_id: id.clone(),
+            session_id: "test-session".into(),
+            database_path: path,
+        });
+        service.db = Some(db);
+        let request = json!({"catalogId":id,"sessionId":"test-session","assetId":asset});
+        (directory, service, request)
+    }
+
+    #[test]
+    fn trash_removes_all_linked_edits_only_after_success() {
+        let (_directory, mut service, request) = fixture();
+        let copy_id = Uuid::new_v4().to_string();
+        service.db().unwrap().execute("INSERT INTO edit_entries (catalog_id,entry_id,source_id,is_original,created_at,updated_at) VALUES (?,?,?,0,0,0)", params![request["catalogId"].as_str().unwrap(),copy_id,request["assetId"].as_str().unwrap()]).unwrap();
+        assert!(
+            service
+                .trash_asset_with(&request, |_| Err("Trash failed".into()))
+                .is_err()
+        );
+        let count = |service: &CatalogService| {
+            service
+                .db()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM edit_entries WHERE tombstoned_at IS NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(count(&service), 2);
+        assert_eq!(
+            service
+                .revision(request["catalogId"].as_str().unwrap())
+                .unwrap(),
+            1
+        );
+        service
+            .trash_asset_with(&request, |path| {
+                assert_eq!(fs::read(path).unwrap(), b"source");
+                fs::remove_file(path).map_err(|e| e.to_string())
+            })
+            .unwrap();
+        assert_eq!(count(&service), 0);
+        assert_eq!(
+            service
+                .db()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM entry_metadata", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            service
+                .revision(request["catalogId"].as_str().unwrap())
+                .unwrap(),
+            2
+        );
     }
 }

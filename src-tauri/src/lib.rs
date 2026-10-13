@@ -21,9 +21,63 @@ use tauri::{Emitter, Manager};
 struct Backend {
     native_catalog_work: Arc<tokio::sync::Mutex<()>>,
     catalog: Mutex<catalog::CatalogService>,
+    backup_timer: Mutex<Option<BackupTimer>>,
     develop: Mutex<develop::DevelopService>,
     batch: Mutex<develop::batch::BatchService>,
     native: native::NativeContext,
+}
+
+struct BackupTimer {
+    stop: std::sync::mpsc::Sender<()>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl BackupTimer {
+    fn stop(self) {
+        let _ = self.stop.send(());
+        let _ = self.handle.join();
+    }
+}
+
+fn sync_backup_timer(backend: &Arc<Backend>) -> Result<(), String> {
+    let active = backend
+        .catalog
+        .lock()
+        .map_err(|_| "Catalog service is unavailable.")?
+        .active_path()
+        .is_some();
+    let mut timer = backend
+        .backup_timer
+        .lock()
+        .map_err(|_| "Backup timer is unavailable.")?;
+    if !active {
+        if let Some(timer) = timer.take() {
+            timer.stop();
+        }
+    } else if timer.is_none() {
+        let (stop, receiver) = std::sync::mpsc::channel();
+        let weak = Arc::downgrade(backend);
+        let handle = std::thread::spawn(move || {
+            while matches!(
+                receiver.recv_timeout(std::time::Duration::from_secs(60)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ) {
+                let Some(backend) = weak.upgrade() else {
+                    break;
+                };
+                let result = backend
+                    .catalog
+                    .lock()
+                    .map_err(|_| "Catalog service is unavailable.".to_string())
+                    .and_then(|mut catalog| catalog.run_due_backup());
+                if let Err(error) = result {
+                    eprintln!("Scheduled catalog backup failed: {error}");
+                }
+            }
+        });
+        *timer = Some(BackupTimer { stop, handle });
+    }
+    Ok(())
 }
 
 fn user_data_path() -> Result<PathBuf, String> {
@@ -366,7 +420,16 @@ async fn invoke_backend(
                     .map_err(|_| "Develop service is unavailable.")?
                     .profiles
                     .list();
-                batch.resume(&catalog, registry)?;
+                let resumed = batch.resume(&catalog, registry);
+                drop(catalog);
+                drop(batch);
+                // The timer must follow the catalog state even when resume
+                // fails, and a successful dispatch keeps its own result.
+                let synced = sync_backup_timer(&backend);
+                if result.is_ok() {
+                    resumed?;
+                    synced?;
+                }
                 result
             } else {
                 let result = backend
@@ -926,6 +989,7 @@ pub fn run() {
             let backend = Arc::new(Backend {
                 native_catalog_work: Arc::new(tokio::sync::Mutex::new(())),
                 catalog: Mutex::new(catalog),
+                backup_timer: Mutex::new(None),
                 develop: Mutex::new(develop),
                 batch: Mutex::new(develop::batch::BatchService::new(emit.clone())),
                 native: native::NativeContext::new(user_data, resources, emit),
@@ -980,6 +1044,11 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 if let Some(backend) = app.try_state::<Arc<Backend>>() {
+                    if let Ok(mut timer) = backend.backup_timer.lock() {
+                        if let Some(timer) = timer.take() {
+                            timer.stop();
+                        }
+                    }
                     if let Ok(mut batch) = backend.batch.lock() {
                         batch.stop();
                     }
@@ -1002,6 +1071,7 @@ pub fn run_backend_console() -> Result<(), String> {
     let backend = Arc::new(Backend {
         native_catalog_work: Arc::new(tokio::sync::Mutex::new(())),
         catalog: Mutex::new(catalog),
+        backup_timer: Mutex::new(None),
         develop: Mutex::new(develop),
         batch: Mutex::new(develop::batch::BatchService::new(emit.clone())),
         native: native::NativeContext::new(
@@ -1031,6 +1101,11 @@ pub fn run_backend_console() -> Result<(), String> {
         };
         println!("{response}");
         std::io::stdout().flush().map_err(|e| e.to_string())?;
+    }
+    if let Ok(mut timer) = backend.backup_timer.lock() {
+        if let Some(timer) = timer.take() {
+            timer.stop();
+        }
     }
     Ok(())
 }

@@ -315,6 +315,109 @@ fn policy_file(user_data: &Path) -> PathBuf {
     user_data.join("catalog-backup-policies.json")
 }
 
+fn backup_due(state: &Value, timestamp: i64) -> Result<bool, String> {
+    if state["policy"]["schedule"]["kind"] == "off" {
+        return Ok(false);
+    }
+    let interval = state["policy"]["schedule"]["intervalMs"]
+        .as_i64()
+        .ok_or("Backup policy interval is invalid.")?;
+    // A failing backup must not retry on every timer tick: after a failure,
+    // wait at least the schedule interval (capped at one hour) before due again.
+    let failure_backoff = interval.min(3_600_000);
+    Ok(state["lastSuccessAt"]
+        .as_i64()
+        .is_none_or(|last| timestamp.saturating_sub(last) >= interval)
+        && state["lastFailureAt"]
+            .as_i64()
+            .is_none_or(|last| timestamp.saturating_sub(last) >= failure_backoff))
+}
+
+fn rebind_documents(db: &Connection, source_id: &str, target_id: &str) -> Result<(), String> {
+    let revisions = if one(
+        db,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='develop_history_revisions'",
+        vec![],
+    )?
+    .is_some()
+    {
+        rows(
+            db,
+            "SELECT entry_id AS entryId,revision_id AS revisionId,parent_revision_id AS parentId,operation_id AS operationId,label,created_at AS createdAt FROM develop_history_revisions WHERE catalog_id=?",
+            vec![SqlValue::Text(source_id.into())],
+        )?
+    } else {
+        vec![]
+    };
+    let mut rebound = Vec::new();
+    for row in revisions {
+        let mut document = history::reconstruct(
+            db,
+            source_id,
+            string(&row, "entryId")?,
+            string(&row, "revisionId")?,
+        )?;
+        let before = document.clone();
+        crate::develop::assets::rebind_catalog(&mut document, source_id, target_id);
+        if document != before {
+            rebound.push((row, document));
+        }
+    }
+    // Rebind reconstructed revisions so patches and document hashes stay consistent.
+    for (row, document) in rebound {
+        let checkpoint = history::canonical_json(&document);
+        let request = if row["parentId"].is_null() {
+            json!({"kind":"root","revisionId":row["revisionId"],"document":document,"createdAt":row["createdAt"]})
+        } else {
+            json!({"revisionId":row["revisionId"],"expectedParentRevisionId":row["parentId"],"operationId":row["operationId"],"label":row["label"],"document":document,"createdAt":row["createdAt"]})
+        };
+        db.execute("UPDATE develop_history_revisions SET checkpoint_json=?,patch_json=NULL,document_sha256=?,request_sha256=? WHERE catalog_id=? AND entry_id=? AND revision_id=?", params![checkpoint,sha_bytes(checkpoint.as_bytes()),sha_bytes(history::canonical_json(&request).as_bytes()),source_id,string(&row,"entryId")?,string(&row,"revisionId")?]).map_err(|e| e.to_string())?;
+    }
+    let tables = rows(
+        db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        vec![],
+    )?;
+    for table in tables {
+        let table = string(&table, "name")?;
+        let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+        let columns = rows(db, &format!("PRAGMA table_info({quoted})"), vec![])?;
+        if table == "develop_history_revisions"
+            || !columns.iter().any(|column| column["name"] == "catalog_id")
+        {
+            continue;
+        }
+        for column in columns {
+            let name = string(&column, "name")?;
+            if !name.ends_with("_json") {
+                continue;
+            }
+            let column = format!("\"{}\"", name.replace('"', "\"\""));
+            let records = rows(
+                db,
+                &format!(
+                    "SELECT rowid AS id,{column} AS document FROM {quoted} WHERE catalog_id=? AND {column} IS NOT NULL"
+                ),
+                vec![SqlValue::Text(source_id.into())],
+            )?;
+            for record in records {
+                let raw = string(&record, "document")?;
+                let mut document: Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+                let before = document.clone();
+                crate::develop::assets::rebind_catalog(&mut document, source_id, target_id);
+                if document != before {
+                    db.execute(
+                        &format!("UPDATE {quoted} SET {column}=? WHERE rowid=?"),
+                        params![history::canonical_json(&document), number(&record, "id")?],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CatalogService {
     pub(super) fn admin_dispatch(&mut self, command: &str, args: &Value) -> Result<Value, String> {
         if command == "darkroom:catalog-admin-validate-package" {
@@ -383,6 +486,19 @@ impl CatalogService {
         result
     }
 
+    pub(crate) fn run_due_backup(&mut self) -> Result<Value, String> {
+        let Some(active) = self.active.clone() else {
+            return Ok(Value::Null);
+        };
+        if !backup_due(&self.get_policy(&active.catalog_id)?, now())? {
+            return Ok(Value::Null);
+        }
+        self.admin_dispatch(
+            "darkroom:catalog-admin-run-scheduled-backup",
+            &json!([{"catalogId":active.catalog_id,"sessionId":active.session_id}]),
+        )
+    }
+
     fn get_policy(&self, id: &str) -> Result<Value, String> {
         let all = fs::read_to_string(policy_file(&self.user_data))
             .ok()
@@ -421,16 +537,7 @@ impl CatalogService {
 
     fn run_scheduled_backup(&mut self, id: &str) -> Result<Value, String> {
         let mut state = self.get_policy(id)?;
-        if state["policy"]["schedule"]["kind"] == "off" {
-            return Ok(Value::Null);
-        }
-        let interval = state["policy"]["schedule"]["intervalMs"]
-            .as_i64()
-            .ok_or("Backup policy interval is invalid.")?;
-        if state["lastSuccessAt"]
-            .as_i64()
-            .is_some_and(|last| now() - last < interval)
-        {
+        if !backup_due(&state, now())? {
             return Ok(Value::Null);
         }
         let backup = match self.backup_package(id, None) {
@@ -528,18 +635,44 @@ impl CatalogService {
             if verified["clean"] != true || verified["catalogId"] != id {
                 return Err("Catalog backup validation failed.".into());
             }
-            let (length, hash) = sha_file(&database)?;
             let roots = rows(
                 self.db()?,
                 "SELECT root_id AS rootId,label,configured_path AS configuredPath FROM roots WHERE catalog_id=? ORDER BY root_id",
                 vec![SqlValue::Text(id.into())],
             )?;
-            let manifest = json!({"kind":"darkroom-catalog-package","version":1,"catalogId":id,"schemaVersion":3,"appVersion":"0.1.0","createdAt":timestamp,"roots":roots,"files":[{"name":"catalog.sqlite","byteLength":length,"sha256":hash}]});
+            let snapshot = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| e.to_string())?;
+            let required = if one(
+                &snapshot,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='develop_revision_assets'",
+                vec![],
+            )?
+            .is_some()
+            {
+                rows(&snapshot, "SELECT DISTINCT asset_sha256 AS hash FROM develop_revision_assets WHERE catalog_id=?", vec![SqlValue::Text(id.into())])?
+                    .into_iter().filter_map(|row| row["hash"].as_str().map(str::to_string)).collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+            crate::develop::assets::DevelopAssets::new(&self.user_data)?
+                .package_catalog(id, &required, &staged)?;
+            let mut names = Vec::new();
+            package_entries(&staged, Path::new(""), &mut names)?;
+            names.sort();
+            let mut files = Vec::new();
+            let mut total_bytes = 0_u64;
+            for name in names {
+                let (byte_length, sha256) = sha_file(&staged.join(&name))?;
+                total_bytes += byte_length;
+                files.push(json!({"name":name,"byteLength":byte_length,"sha256":sha256}));
+            }
+            let manifest = json!({"kind":"darkroom-catalog-package","version":2,"catalogId":id,"schemaVersion":3,"appVersion":"0.1.0","createdAt":timestamp,"roots":roots,"files":files});
             let text = format!("{}\n", canonical(&manifest));
             fs::write(staged.join("manifest.json"), &text).map_err(|e| e.to_string())?;
+            self.validate_package(&json!([staged]))?;
             fs::rename(&staged, &directory).map_err(|e| e.to_string())?;
             Ok(
-                json!({"operationId":operation_id,"catalogId":id,"createdAt":timestamp,"sourceSha256":before["sourceSha256"],"packageSha256":sha_bytes(text.as_bytes()),"byteLength":length}),
+                json!({"operationId":operation_id,"catalogId":id,"createdAt":timestamp,"sourceSha256":before["sourceSha256"],"packageSha256":sha_bytes(text.as_bytes()),"byteLength":total_bytes}),
             )
         })();
         if result.is_err() {
@@ -599,7 +732,7 @@ impl CatalogService {
         if !manifest.as_object().is_some_and(|m| {
             m.len() == fields.len() && fields.iter().all(|key| m.contains_key(*key))
         }) || manifest["kind"] != "darkroom-catalog-package"
-            || manifest["version"] != 1
+            || ![json!(1), json!(2)].contains(&manifest["version"])
             || manifest["schemaVersion"] != 3
             || manifest["appVersion"].as_str().is_none_or(str::is_empty)
             || !manifest["createdAt"].is_number()
@@ -641,6 +774,24 @@ impl CatalogService {
             {
                 return Err("Catalog package file name is invalid.".into());
             }
+            if manifest["version"] == 2 && name != "catalog.sqlite" {
+                let parts = name.split('/').collect::<Vec<_>>();
+                let valid = parts.len() == 4
+                    && parts[0] == "develop-assets-v3"
+                    && matches!(parts[1], "objects" | "manifests")
+                    && parts[3]
+                        .strip_suffix(if parts[1] == "objects" {
+                            ".asset"
+                        } else {
+                            ".json"
+                        })
+                        .is_some_and(|id| {
+                            crate::develop::assets::valid_hash(id) && parts[2] == &id[..2]
+                        });
+                if !valid {
+                    return Err("Catalog package asset path is invalid.".into());
+                }
+            }
             let (length, hash) = sha_file(&directory.join(name))?;
             if file["byteLength"] != length || file["sha256"] != hash {
                 return Err("Catalog package checksum mismatch.".into());
@@ -656,6 +807,32 @@ impl CatalogService {
         }
         let db = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| e.to_string())?;
+        if manifest["version"] == 2
+            && one(
+                &db,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='develop_revision_assets'",
+                vec![],
+            )?
+            .is_some()
+        {
+            for row in rows(
+                &db,
+                "SELECT DISTINCT asset_sha256 AS hash FROM develop_revision_assets WHERE catalog_id=?",
+                vec![SqlValue::Text(catalog_id.into())],
+            )? {
+                let hash = string(&row, "hash")?;
+                if !crate::develop::assets::valid_hash(hash)
+                    || [
+                        format!("develop-assets-v3/objects/{}/{hash}.asset", &hash[..2]),
+                        format!("develop-assets-v3/manifests/{}/{hash}.json", &hash[..2]),
+                    ]
+                    .iter()
+                    .any(|name| !expected.contains(name))
+                {
+                    return Err("Catalog package is missing referenced Develop assets.".into());
+                }
+            }
+        }
         let actual = rows(
             &db,
             "SELECT root_id AS rootId,label,configured_path AS configuredPath FROM roots WHERE catalog_id=? ORDER BY root_id",
@@ -740,6 +917,7 @@ impl CatalogService {
             let db = Connection::open(&destination).map_err(|e| e.to_string())?;
             db.execute_batch("PRAGMA foreign_keys=OFF;BEGIN IMMEDIATE")
                 .map_err(|e| e.to_string())?;
+            rebind_documents(&db, &source_id, &target_id)?;
             db.execute("UPDATE catalog_meta SET catalog_id=?,display_name=?,app_version='0.1.0',revision=revision+1 WHERE catalog_id=?",params![target_id,name,source_id]).map_err(|e|e.to_string())?;
             for table in [
                 "migration_runs",
@@ -791,6 +969,11 @@ impl CatalogService {
             .map_err(|e| e.to_string())?;
             db.execute_batch("COMMIT;PRAGMA foreign_keys=ON")
                 .map_err(|e| e.to_string())?;
+            crate::develop::assets::DevelopAssets::new(&self.user_data)?.restore_catalog(
+                Path::new(package),
+                &source_id,
+                &target_id,
+            )?;
             let checked = inspect(&destination)?;
             if checked["clean"] != true {
                 return Err("Cloned catalog validation failed.".into());
@@ -798,6 +981,7 @@ impl CatalogService {
             if sha_file(&source)? != before {
                 return Err("Source catalog changed while it was cloned.".into());
             }
+            self.validate_package(&json!([package]))?;
             Ok(
                 json!({"operationId":Uuid::new_v4().to_string(),"sourceCatalogId":source_id,"catalogId":target_id,"displayName":name,"rootCount":checked["roots"].as_array().map_or(0,Vec::len),"assetCount":checked["counts"]["assets"]}),
             )
@@ -880,5 +1064,161 @@ impl CatalogService {
             let _ = fs::remove_file(temporary);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scheduled_backups_obey_due_policy_and_close() {
+        let (_directory, mut service, request) = super::super::tests::fixture();
+        let id = request["catalogId"].as_str().unwrap();
+        assert!(service.run_due_backup().unwrap().is_null());
+        service
+            .set_policy(
+                id,
+                &json!({"schedule":{"kind":"interval","intervalMs":60_000},"retentionCount":3}),
+            )
+            .unwrap();
+        assert!(!service.run_due_backup().unwrap().is_null());
+        assert!(service.get_policy(id).unwrap()["lastSuccessAt"].is_number());
+        assert!(service.run_due_backup().unwrap().is_null());
+        service.stop_watchers();
+        service.stop_auto();
+        service.active = None;
+        assert!(service.run_due_backup().unwrap().is_null());
+        let state = json!({"policy":{"schedule":{"kind":"interval","intervalMs":60_000}},"lastSuccessAt":100});
+        assert!(!backup_due(&state, 60_099).unwrap());
+        assert!(backup_due(&state, 60_100).unwrap());
+        let failed = json!({"policy":{"schedule":{"kind":"interval","intervalMs":60_000}},"lastSuccessAt":100,"lastFailureAt":60_100});
+        assert!(!backup_due(&failed, 120_099).unwrap());
+        assert!(backup_due(&failed, 120_100).unwrap());
+        let daily_failed = json!({"policy":{"schedule":{"kind":"interval","intervalMs":86_400_000}},"lastFailureAt":0});
+        assert!(!backup_due(&daily_failed, 3_599_999).unwrap());
+        assert!(backup_due(&daily_failed, 3_600_000).unwrap());
+    }
+
+    #[test]
+    fn package_restores_assets_and_rebinds_edit_history() {
+        use crate::develop::{assets, store_io};
+        let (directory, service, request) = super::super::tests::fixture();
+        let id = request["catalogId"].as_str().unwrap();
+        let entry = request["assetId"].as_str().unwrap();
+        let mut bytes = b"DRDEPTH\0".to_vec();
+        bytes.extend([1, 0, 1, 1]);
+        for number in [1_u32, 1, 4] {
+            bytes.extend(number.to_le_bytes());
+        }
+        bytes.extend(0.5_f32.to_le_bytes());
+        let hash = store_io::digest(&bytes);
+        let signature = json!({"catalogId":id,"entryId":entry,"assetRevision":1,"relativePath":"photo.png","size":6,"lastModified":0});
+        let candidate = json!({"kind":"candidate","candidateId":"test-candidate","descriptor":{"kind":"depth-map","sha256":hash,"byteLength":bytes.len(),"dimensions":{"width":1,"height":1},"mimeType":"application/x-darkroom-depth","producerId":"test","producerRevision":"test-v1","coordinateFrameRevision":assets::FRAME,"colorStageId":"decode-and-orientation","sourceSignature":signature}});
+        let reference = assets::accepted_ref(&candidate);
+        let mut store = assets::DevelopAssets::new(directory.path()).unwrap();
+        assert_eq!(
+            store
+                .put(
+                    &json!({"candidate":candidate,"nowMs":0,"recoveryUntilMs":100}),
+                    &bytes
+                )
+                .unwrap()["kind"],
+            "stored"
+        );
+        assert_eq!(store.transition(&json!({"candidate":candidate,"reference":reference,"lifecycle":"accepted","nowMs":0,"recoveryUntilMs":100})).unwrap()["kind"], "changed");
+        let db = service.db().unwrap();
+        let root = history::head(db, id, entry).unwrap();
+        let mut document = json!({"version":3,"process":"darkroom-v3","schemaRevision":"test","mask":{"source":signature,"asset":reference}});
+        for key in [
+            "tone",
+            "color",
+            "optics",
+            "geometry",
+            "local",
+            "cleanup",
+            "presence",
+            "detail",
+            "effects",
+            "hdr",
+            "compatibility",
+        ] {
+            document[key] = json!({});
+        }
+        let revision = Uuid::new_v4().to_string();
+        history::commit(db, &json!({"catalogId":id,"entryId":entry,"revisionId":revision,"expectedParentRevisionId":root,"operationId":Uuid::new_v4().to_string(),"label":"Depth","document":document,"createdAt":1})).unwrap();
+        document["exposure"] = json!(1);
+        let next_revision = Uuid::new_v4().to_string();
+        history::commit(db, &json!({"catalogId":id,"entryId":entry,"revisionId":next_revision,"expectedParentRevisionId":revision,"operationId":Uuid::new_v4().to_string(),"label":"Edited depth","document":document,"createdAt":2})).unwrap();
+        let package = directory.path().join("package");
+        service.backup_package(id, Some(&package)).unwrap();
+        assert!(service.validate_package(&json!([package])).unwrap()["clean"] == true);
+        let receiver = tempfile::tempdir().unwrap();
+        let mut importer = CatalogService::new(receiver.path().to_path_buf()).unwrap();
+        let imported = importer
+            .import_package(&json!([{"displayName":"Imported"},package]))
+            .unwrap();
+        let target = imported["catalogId"].as_str().unwrap();
+        let imported_db = Connection::open(
+            receiver
+                .path()
+                .join("catalogs")
+                .join(format!("{target}.sqlite")),
+        )
+        .unwrap();
+        for revision_id in [&revision, &next_revision] {
+            let document = history::reconstruct(&imported_db, target, entry, revision_id).unwrap();
+            assert_eq!(document["mask"]["source"]["catalogId"], target);
+        }
+        let mut restored_signature = signature;
+        restored_signature["catalogId"] = json!(target);
+        assert_eq!(
+            assets::DevelopAssets::new(receiver.path())
+                .unwrap()
+                .read(&json!({"reference":reference,"sourceSignature":restored_signature}))
+                .unwrap()["kind"],
+            "ready"
+        );
+        assert_eq!(store.read(&json!({"reference":reference,"sourceSignature":candidate["descriptor"]["sourceSignature"]})).unwrap()["kind"], "ready");
+        let manifest_path = package.join("manifest.json");
+        let original = fs::read(&manifest_path).unwrap();
+        let mut manifest: Value = serde_json::from_slice(&original).unwrap();
+        manifest["files"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|file| file["name"] == "catalog.sqlite");
+        fs::remove_dir_all(package.join("develop-assets-v3")).unwrap();
+        fs::write(&manifest_path, canonical(&manifest)).unwrap();
+        assert!(
+            service
+                .validate_package(&json!([package]))
+                .unwrap_err()
+                .contains("missing referenced Develop assets")
+        );
+        manifest["version"] = json!(1);
+        fs::write(&manifest_path, canonical(&manifest)).unwrap();
+        assert!(
+            importer
+                .import_package(&json!([{"displayName":"Legacy"},package]))
+                .is_ok()
+        );
+        fs::remove_file(
+            directory
+                .path()
+                .join("develop-assets-v3/objects")
+                .join(&hash[..2])
+                .join(format!("{hash}.asset")),
+        )
+        .unwrap();
+        let incomplete = directory.path().join("incomplete");
+        assert!(service.backup_package(id, Some(&incomplete)).is_err());
+        assert!(!incomplete.exists());
+        fs::write(package.join("catalog.sqlite"), b"corrupt").unwrap();
+        assert!(
+            service
+                .validate_package(&json!([package]))
+                .unwrap_err()
+                .contains("checksum")
+        );
     }
 }

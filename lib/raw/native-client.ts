@@ -3,7 +3,7 @@ import type { CatalogAssetRequest } from "@/lib/catalog/api";
 import { buildFromImageData } from "./libraw-client";
 import type { DecodeOptions, DecodedImage } from "./types";
 
-const DECODER_REVISION = "libraw-native-0.22.1-compat-v1";
+const DECODER_REVISION = "libraw-native-0.22.1-linear-v2";
 const MAX_PIXEL_BYTES = 512 * 1024 * 1024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

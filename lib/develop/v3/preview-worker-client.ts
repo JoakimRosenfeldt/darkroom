@@ -15,6 +15,7 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import type { ExportSizeOptions } from "@/lib/export/types";
 import type { MainThreadGpuPreview } from "./main-thread-preview";
 import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
+import { maskSourceNodes } from "./masking";
 
 interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
@@ -216,7 +217,10 @@ export class V3PreviewWorkerClient {
 
   async #dispatch(message: Exclude<V3PreviewWorkerRequest, { kind: "initialize" }>): Promise<void> {
     try {
-      if (this.#mainGpu) {
+      const hasDepthMasks = message.document.local.masks.some((mask) =>
+        maskSourceNodes(mask.expression).some((node) => node.source.kind === "depth-range"),
+      );
+      if (this.#mainGpu && !hasDepthMasks) {
         const result = await (await this.#mainGpu).render(message);
         if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
       }
