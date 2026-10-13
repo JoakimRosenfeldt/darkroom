@@ -61,8 +61,7 @@ impl PreviewCache {
         #[cfg(windows)]
         {
             use std::os::windows::fs::MetadataExt;
-            hash.update(metadata.volume_serial_number().unwrap_or(0).to_le_bytes());
-            hash.update(metadata.file_index().unwrap_or(0).to_le_bytes());
+            hash.update(metadata.file_attributes().to_le_bytes());
             hash.update(metadata.creation_time().to_le_bytes());
             hash.update(metadata.last_write_time().to_le_bytes());
         }

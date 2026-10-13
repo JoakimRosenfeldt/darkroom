@@ -824,7 +824,8 @@ interface GpuState {
   readonly gl: GpuContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
-  readonly sourcePyramid: WebGLTexture | null;
+  sourcePyramid: WebGLTexture | null;
+  pointwisePyramid: WebGLProgram | null;
   readonly sourceIsInteger: boolean;
   readonly maximumTextureSize: number;
   curves: { readonly key: string; readonly texture: WebGLTexture } | null;
@@ -1174,6 +1175,14 @@ function isDownscaled(input: CpuRenderInput): boolean {
   const full = fullOutputDimensions(input);
   const output = input.request.plan.qualityAndDimensions.outputDimensions;
   return output.width < full.width || output.height < full.height;
+}
+
+function buildSourcePyramid(gl: NativeGpuContext, source: WebGLTexture, input: CpuRenderInput): WebGLTexture {
+  return gl.createSourcePyramid(
+    source, input.image.sourceWidth, input.image.sourceHeight,
+    2 ** clamp(input.image.bits, 8, 16) - 1,
+    input.source.color.kind !== "uncharacterized" && input.source.color.transfer.kind === "linear",
+  );
 }
 
 function geometryStages(input: CpuRenderInput): {
@@ -1629,7 +1638,20 @@ function renderPointwise(
   identityGeometry: boolean,
 ): void {
   const gl = state.gl;
-  const programValue = state.programs.pointwise;
+  // The pyramid follows the current render, not the session's first one: a
+  // full-res render drops it, a later downscaled render rebuilds it.
+  if (gl instanceof NativeGpuContext) {
+    if (isDownscaled(input)) {
+      state.sourcePyramid ??= buildSourcePyramid(gl, state.source, input);
+      state.pointwisePyramid ??= program(gl, POINTWISE_SHADER, integerSource(input), true);
+    } else if (state.sourcePyramid) {
+      gl.deleteTexture(state.sourcePyramid);
+      state.sourcePyramid = null;
+    }
+  }
+  const programValue = state.sourcePyramid && state.pointwisePyramid
+    ? state.pointwisePyramid
+    : state.programs.pointwise;
   const curves = curveTexture(state, input.document);
   attach(gl, targets, input.includePointColor !== false || input.request.requestedTaps.includes("tone-input")
     ? [targets.pointwise, targets.toneInput, targets.pointColorInput]
@@ -2202,6 +2224,7 @@ export class V3GpuPreviewRenderer {
     if (state.curves) state.gl.deleteTexture(state.curves.texture);
     if (state.grainCoordinates) state.gl.deleteTexture(state.grainCoordinates.texture);
     state.gl.deleteProgram(state.programs.pointwise);
+    if (state.pointwisePyramid) state.gl.deleteProgram(state.pointwisePyramid);
     state.gl.deleteProgram(state.programs.spatial);
     state.gl.deleteProgram(state.programs.postCrop);
     state.gl.deleteProgram(state.programs.encode);
@@ -2402,24 +2425,21 @@ export class V3GpuPreviewRenderer {
       throw new Error("The GPU source exceeds the maximum texture size.");
     }
     const source = sourceTexture(gl, input);
-    // Full-resolution renders never sample the pyramid, so skip its build
-    // and texture-budget cost unless this session starts downscaled.
-    const sourcePyramid = gl instanceof NativeGpuContext && isDownscaled(input) ? gl.createSourcePyramid(
-      source, input.image.sourceWidth, input.image.sourceHeight,
-      2 ** clamp(input.image.bits, 8, 16) - 1,
-      input.source.color.kind !== "uncharacterized" && input.source.color.transfer.kind === "linear",
-    ) : null;
+    const sourcePyramid = gl instanceof NativeGpuContext && isDownscaled(input)
+      ? buildSourcePyramid(gl, source, input)
+      : null;
     const state: GpuState = {
       canvas,
       gl,
       programs: {
-        pointwise: program(gl, POINTWISE_SHADER, integerSource(input), sourcePyramid !== null),
+        pointwise: program(gl, POINTWISE_SHADER, integerSource(input)),
         spatial: program(gl, SPATIAL_SHADER),
         postCrop: program(gl, POST_CROP_SHADER),
         encode: program(gl, ENCODE_SHADER),
       },
       source,
       sourcePyramid,
+      pointwisePyramid: null,
       sourceIsInteger: integerSource(input),
       maximumTextureSize,
       curves: null,
