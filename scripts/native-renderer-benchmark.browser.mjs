@@ -272,6 +272,43 @@ window.runNativeRendererBenchmark = async function () {
     } finally { native.dispose(); webgl.dispose(); }
   }
   {
+    // A period-8 sine survives a correct 2x/3x reduction with most of
+    // its amplitude; sampling a too-deep pyramid level averages it away.
+    const native = new V3GpuPreviewRenderer("native");
+    const webgl = new V3GpuPreviewRenderer("webgl");
+    try {
+      const sine = image(512, 256);
+      for (let y = 0; y < 256; y++) for (let x = 0; x < 512; x++) {
+        const value = Math.round(127.5 + 127.5 * Math.sin(2 * Math.PI * x / 8));
+        sine.rgb.set([value, value, value], (y * 512 + x) * 3);
+      }
+      const amplitude = (result) => {
+        let sum = 0;
+        let count = 0;
+        for (let index = 0; index < result.length; index += 4) { sum += result[index]; count++; }
+        const mean = sum / count;
+        let squares = 0;
+        for (let index = 0; index < result.length; index += 4) squares += (result[index] - mean) ** 2;
+        return Math.sqrt(squares / count);
+      };
+      for (const viewport of [{ width: 256, height: 128 }, { width: 170, height: 85 }, { width: 128, height: 64 }]) {
+        const input = await prepare(createDefaultV3DevelopDocument(), sine, true, viewport);
+        const nativeAmplitude = amplitude(pixels(await native.render(input, { includeAnalysis: false })));
+        const webglAmplitude = amplitude(pixels(await webgl.render(input, { includeAnalysis: false })));
+        checks.push({
+          name: `downscaled-sine-${viewport.width}`,
+          nativeAmplitude: Math.round(nativeAmplitude * 10) / 10,
+          webglAmplitude: Math.round(webglAmplitude * 10) / 10,
+          // Relative bound plus an absolute floor at 2x, where a correct
+          // reduction keeps most of the sine's ~90 RMS amplitude; the floor
+          // fails even if both backends sampled too deep together.
+          passed: nativeAmplitude >= 0.6 * webglAmplitude && (viewport.width !== 256 || nativeAmplitude >= 50),
+        });
+        console.info(JSON.stringify(checks.at(-1)));
+      }
+    } finally { native.dispose(); webgl.dispose(); }
+  }
+  {
     const native = new V3GpuPreviewRenderer("native");
     try {
       const stripes = image(256, 256);

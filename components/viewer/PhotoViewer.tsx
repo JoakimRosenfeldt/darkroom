@@ -252,6 +252,17 @@ export function PhotoViewer({
   const setMaskTool = useDevelopStore((state) => state.setMaskTool);
   const [exportOpen, setExportOpen] = useState(false);
   const captureDetails = decoded ? captureSummary(decoded.metadata) : [];
+  // The header names the photo's full dimensions, not the scaled preview decode.
+  const fullDimensions = (() => {
+    if (!decoded) return null;
+    const width = decoded.metadata.originalWidth;
+    const height = decoded.metadata.originalHeight;
+    if (typeof width !== "number" || typeof height !== "number" ||
+        !Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) return null;
+    if (Math.max(width, height) <= Math.max(decoded.width, decoded.height)) return null;
+    if (Math.abs(width / height - decoded.width / decoded.height) > 0.02) return null;
+    return { width, height };
+  })();
   const currentStack = stacks.find((stack) => stack.entryIds.includes(entry.id));
 
   function compareNextPhoto() {
@@ -540,7 +551,7 @@ export function PhotoViewer({
                   : activePanel === "cleanup"
                     ? "Remove spots and distractions"
                   : decoded
-                    ? [`${decoded.width} × ${decoded.height}`, ...captureDetails].join(" · ")
+                    ? [`${fullDimensions?.width ?? decoded.width} × ${fullDimensions?.height ?? decoded.height}`, ...captureDetails].join(" · ")
                 : loading
                   ? "Preparing preview…"
                   : "Preview unavailable"}

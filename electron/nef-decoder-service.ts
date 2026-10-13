@@ -231,7 +231,9 @@ function runHelper(
     "--input", input,
     "--output", output,
     "--mode", request.mode,
-    "--max-edge", String(request.maxEdge),
+    // Full output must never be scaled: send the protocol's largest edge so a
+    // helper that honors --max-edge in both modes cannot cap it at preview size.
+    "--max-edge", request.mode === "full" ? String(MAX_DIMENSION) : String(request.maxEdge),
     "--pixel-format", "rgb16le",
   ];
 

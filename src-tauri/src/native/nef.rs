@@ -291,6 +291,16 @@ impl DecodedAsset {
     }
 }
 
+/// Full output must never be scaled: send the protocol's largest edge so a
+/// helper that honors --max-edge in both modes cannot cap it at preview size.
+fn helper_max_edge(mode: &str, max_edge: u64) -> u64 {
+    if mode == "full" {
+        65_535
+    } else {
+        max_edge.min(2560)
+    }
+}
+
 fn failure(code: &str, message: &str) -> DecodedAsset {
     DecodedAsset {
         metadata: json!({"available":false,"code":code,"message":message}),
@@ -387,6 +397,7 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
     target.sync_all().map_err(|e| e.to_string())?;
     let copied_at = Instant::now();
     let stderr = work.path().join("stderr");
+    let helper_max_edge = helper_max_edge(mode, max_edge);
     let mut command = Command::new(&helper);
     command
         .arg("--input")
@@ -396,7 +407,7 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         .arg("--mode")
         .arg(mode)
         .arg("--max-edge")
-        .arg(max_edge.min(2560).to_string())
+        .arg(helper_max_edge.to_string())
         .arg("--pixel-format")
         .arg("rgb16le")
         .current_dir(&output)
@@ -529,5 +540,18 @@ pub fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Valu
         "darkroom:get-format-capability-report" => report(ctx),
         "darkroom:catalog-decode-asset" => decode(args, ctx).map(DecodedAsset::into_json),
         _ => Err(format!("Unknown Nikon command: {command}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::helper_max_edge;
+
+    #[test]
+    fn full_mode_never_caps_at_preview_edge() {
+        assert_eq!(helper_max_edge("full", 2560), 65_535);
+        assert_eq!(helper_max_edge("full", 99_999), 65_535);
+        assert_eq!(helper_max_edge("preview", 99_999), 2560);
+        assert_eq!(helper_max_edge("preview", 720), 720);
     }
 }
