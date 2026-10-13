@@ -23,6 +23,7 @@ import type {
 import { decodePersistedDevelopDocument } from "@/lib/develop/v3/codec";
 import {
   applyV3EditCommand,
+  reuseValidatedDocumentGroups,
   type V3EditCommand,
 } from "@/lib/develop/v3/commands";
 import { createDefaultV3DevelopDocument } from "@/lib/develop/v3/document";
@@ -707,7 +708,10 @@ export class DevelopSessionCore implements DevelopSession {
           : "The completed command did not produce an editable v3 document.",
       );
     }
-    const documentChanged = JSON.stringify(before) !== JSON.stringify(validatedAfter.document);
+    // Keep `after`'s group objects where they match the validated parse, so
+    // identity-keyed caches downstream survive the commit.
+    const committedDocument = reuseValidatedDocumentGroups(after, validatedAfter.document);
+    const documentChanged = JSON.stringify(before) !== JSON.stringify(committedDocument);
     const metadataChanged = metadata !== undefined &&
       JSON.stringify(metadata.before) !== JSON.stringify(metadata.after);
     if (!documentChanged) {
@@ -730,7 +734,7 @@ export class DevelopSessionCore implements DevelopSession {
       this.entryId,
       label,
       before,
-      validatedAfter.document,
+      committedDocument,
     );
     this.#state.undo = boundedHistory([
       ...this.#state.undo,

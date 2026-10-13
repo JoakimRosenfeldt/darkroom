@@ -1,4 +1,6 @@
 import { nativeGpuAvailable, registerNativeSource, setNativeGpuTransport } from "./native-context";
+import { applyV3DocumentSync } from "./preview-worker-types";
+import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
 import type { DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { CpuAssetAvailability } from "@/lib/develop/v3/cpu-backend";
@@ -26,6 +28,7 @@ type RenderMessage = Exclude<V3PreviewWorkerRequest, { readonly kind: "initializ
 
 let entry: LibraryEntry | null = null;
 let image: DevelopImage | null = null;
+let residentDocument: DevelopDocumentV3 | null = null;
 let pendingRender: RenderMessage | null = null;
 let renderScheduled = false;
 let rendering = 0;
@@ -89,6 +92,17 @@ async function renderLatest(): Promise<void> {
   const message = pendingRender;
   pendingRender = null;
   if (!message) return;
+  // Captured synchronously with the pop above; syncs applied at receipt
+  // have already advanced residentDocument to this message's document.
+  const renderDocument = residentDocument;
+  if (!renderDocument) {
+    post({
+      kind: "error",
+      requestId: message.requestId,
+      message: "The preview worker has no resident document.",
+    });
+    return;
+  }
   if (!entry || !image) {
     post({
       kind: "error",
@@ -104,7 +118,7 @@ async function renderLatest(): Promise<void> {
     const assets = assetsFor();
     if (message.kind === "export") {
       const request = { kind: "v3-export", entry, image, size: message.size, format: "jpeg", assets, includeAnalysis: false } as const;
-      const prepared = await prepareV3RuntimeRender(message.document, request);
+      const prepared = await prepareV3RuntimeRender(renderDocument, request);
       let result: V3PreviewRenderOutput = prepared.kind === "prepared" ? { kind: "cancelled" } : prepared;
       let backend: V3PreviewBackend = "cpu";
       if (prepared.kind === "prepared") {
@@ -142,7 +156,7 @@ async function renderLatest(): Promise<void> {
       return run;
     };
     const renderCpuPreviewNow = async (): Promise<V3PreviewRenderOutput> => {
-      const prepared = await prepareV3RuntimeRender(message.document, {
+      const prepared = await prepareV3RuntimeRender(renderDocument, {
         ...runtimeRequest,
         maximumPreviewPixels: message.previewMode === "settled"
           ? MAX_CPU_RENDER_PIXELS
@@ -175,7 +189,7 @@ async function renderLatest(): Promise<void> {
       ? Math.min(interactivePixels, MAX_NATIVE_INTERACTIVE_PIXELS)
       : interactivePixels;
     const gpuPreparation = await prepareV3RuntimeRender(
-      message.document,
+      renderDocument,
       gpuUnavailable ? runtimeRequest : {
         ...runtimeRequest,
         maximumPreviewPixels: message.previewMode === "settled"
@@ -263,6 +277,7 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     }));
     entry = message.entry;
     image = message.image;
+    residentDocument = null;
     if (image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
       registerNativeSource(image.rgb, image.nativeSourceHandle);
     }
@@ -280,6 +295,21 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     fastCpuFrames = 0;
     return;
   }
+
+  // Apply at receipt: postMessage order is dispatch order, so the
+  // resident document stays in step even when this render is coalesced
+  // away before it runs. A patch creates a new object, leaving any
+  // in-flight render on its captured reference.
+  const synced = applyV3DocumentSync(residentDocument, message.documentSync);
+  if (!synced) {
+    post({
+      kind: "error",
+      requestId: message.requestId,
+      message: "The preview worker received a document patch with no resident document.",
+    });
+    return;
+  }
+  residentDocument = synced;
 
   if (message.maskMattes) maskMattes = message.maskMattes;
 

@@ -20,6 +20,33 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     return Vertex(vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0), uv);
 }
 "#;
+const SOURCE_PYRAMID: &str = r#"
+struct PyramidConfig { output_size: vec2<f32>, source_maximum: f32, is_linear: f32 }
+@group(0) @binding(0) var source: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(1) var<uniform> config: PyramidConfig;
+@fragment fn main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let scale = vec2<f32>(textureDimensions(source)) / config.output_size;
+    let start = floor(position.xy) * scale;
+    let end = start + scale;
+    let low = vec2<i32>(floor(start));
+    var sum = vec3<f32>(0.0);
+    for (var y = 0; y < 3; y++) {
+        for (var x = 0; x < 3; x++) {
+            let pixel = low + vec2<i32>(x, y);
+            let weight = max(vec2<f32>(0.0), min(end, vec2<f32>(pixel + 1)) - max(start, vec2<f32>(pixel)));
+            if (weight.x * weight.y > 0.0) {
+                var color = vec3<f32>(textureLoad(source, pixel, 0).rgb) / config.source_maximum;
+                if (config.is_linear == 0.0) {
+                    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+                    color = select(pow((color + 0.055) / 1.055, vec3<f32>(2.4)), color / 12.92, color <= vec3<f32>(0.04045));
+                }
+                sum += color * weight.x * weight.y;
+            }
+        }
+    }
+    return vec4<f32>(sum / (scale.x * scale.y), 1.0);
+}
+"#;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +110,14 @@ struct TextureSpec {
     flip_y: bool,
     offset: Option<usize>,
     length: Option<usize>,
+    pyramid: Option<SourcePyramid>,
+}
+
+#[derive(Deserialize)]
+struct SourcePyramid {
+    source: u32,
+    maximum: f32,
+    linear: bool,
 }
 
 fn one() -> u32 {
@@ -136,7 +171,107 @@ struct Session {
     shaders: HashMap<u32, Arc<str>>,
     textures: HashMap<u32, Texture>,
     uniform_buffer: Option<(wgpu::Buffer, u64)>,
-    read_buffer: Option<(wgpu::Buffer, u64)>,
+    read_buffers: [Option<(wgpu::Buffer, u64)>; 2],
+    identity: Arc<()>,
+}
+
+pub enum NativeGpuSubmission {
+    Complete(Vec<u8>),
+    Readback(NativeReadback),
+}
+
+struct ReadLayout {
+    offset: usize,
+    row_bytes: usize,
+    padded_row: usize,
+    width: usize,
+    height: usize,
+    format: wgpu::TextureFormat,
+    output_bpp: usize,
+    flip_y: bool,
+}
+
+struct ReadbackTiming {
+    started: Instant,
+    wait_started: Instant,
+    include_timing: bool,
+    has_passes: bool,
+    prepare_ms: f64,
+    gpu_wait_ms: f64,
+    pack_ms: f64,
+}
+
+pub struct NativeReadback {
+    session: String,
+    identity: Arc<()>,
+    device: wgpu::Device,
+    buffer: (wgpu::Buffer, u64),
+    submission: wgpu::SubmissionIndex,
+    receiver: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    layouts: Vec<ReadLayout>,
+    read_size: u64,
+    output_size: usize,
+    timing: ReadbackTiming,
+}
+
+impl NativeReadback {
+    pub fn read(&mut self) -> Result<Vec<u8>, String> {
+        let result = (|| {
+            self.device
+                .poll(wgpu::PollType::WaitForSubmissionIndex(
+                    self.submission.clone(),
+                ))
+                .map_err(|error| format!("Native GPU wait: {error}"))?;
+            self.receiver
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|error| format!("Native readback callback: {error}"))?
+                .map_err(|error| format!("Native readback: {error}"))?;
+            let mapped = self.buffer.0.slice(..self.read_size).get_mapped_range();
+            self.timing.gpu_wait_ms = self.timing.wait_started.elapsed().as_secs_f64() * 1000.0;
+            let pack_started = Instant::now();
+            let mut output =
+                Vec::with_capacity(self.output_size + usize::from(self.timing.include_timing) * 8);
+            for layout in &self.layouts {
+                let output_size = layout.width * layout.height * layout.output_bpp;
+                let start = output.len();
+                output.resize(start + output_size, 0);
+                let convert_row = |(row, destination): (usize, &mut [u8])| {
+                    let row = if layout.flip_y {
+                        layout.height - 1 - row
+                    } else {
+                        row
+                    };
+                    let source = &mapped[layout.offset + row * layout.padded_row
+                        ..layout.offset + row * layout.padded_row + layout.row_bytes];
+                    convert_pixels(source, destination, layout.format, layout.output_bpp);
+                };
+                if output_size >= 256 * 1024
+                    && let Some(pool) = crate::compute::pool()
+                {
+                    pool.install(|| {
+                        output[start..]
+                            .par_chunks_mut(layout.width * layout.output_bpp)
+                            .enumerate()
+                            .for_each(convert_row)
+                    });
+                } else {
+                    output[start..]
+                        .chunks_mut(layout.width * layout.output_bpp)
+                        .enumerate()
+                        .for_each(convert_row);
+                }
+            }
+            self.timing.pack_ms = pack_started.elapsed().as_secs_f64() * 1000.0;
+            if self.timing.include_timing {
+                output.extend_from_slice(
+                    &(self.timing.started.elapsed().as_secs_f64() * 1000.0).to_le_bytes(),
+                );
+            }
+            Ok(output)
+        })();
+        self.buffer.0.unmap();
+        result
+    }
 }
 
 pub struct NativeGpu {
@@ -147,6 +282,7 @@ pub struct NativeGpu {
     info: NativeGpuInfo,
     sessions: HashMap<String, Session>,
     shader_cache: HashMap<Arc<str>, Shader>,
+    pyramid_pipelines: HashMap<bool, wgpu::RenderPipeline>,
     texture_bytes: u64,
     prepared_source: Option<(String, bool, u32, u32, wgpu::Texture)>,
 }
@@ -219,6 +355,7 @@ impl NativeGpu {
             info,
             sessions: HashMap::new(),
             shader_cache: HashMap::new(),
+            pyramid_pipelines: HashMap::new(),
             texture_bytes: 0,
             prepared_source: None,
         })
@@ -308,11 +445,28 @@ impl NativeGpu {
         Ok(())
     }
 
+    // Used by tests and the benchmark binary; production splits submit and
+    // complete_readback so the GPU lock is not held while waiting.
+    #[allow(dead_code)]
     pub fn execute(
         &mut self,
         bytes: &[u8],
         raw_sources: &std::sync::Mutex<crate::RawSources>,
     ) -> Result<Vec<u8>, String> {
+        match self.submit(bytes, raw_sources)? {
+            NativeGpuSubmission::Complete(bytes) => Ok(bytes),
+            NativeGpuSubmission::Readback(mut readback) => {
+                let result = readback.read();
+                self.complete_readback(readback, result)
+            }
+        }
+    }
+
+    pub fn submit(
+        &mut self,
+        bytes: &[u8],
+        raw_sources: &std::sync::Mutex<crate::RawSources>,
+    ) -> Result<NativeGpuSubmission, String> {
         let started = Instant::now();
         if bytes.len() < 4 || bytes.len() > MAX_BATCH_BYTES {
             return Err("Invalid native GPU batch length".into());
@@ -324,7 +478,9 @@ impl NativeGpu {
         let batch: Batch = serde_json::from_slice(&bytes[4..4 + json_len])
             .map_err(|error| format!("Native GPU metadata: {error}"))?;
         if batch.info {
-            return serde_json::to_vec(&self.info()).map_err(|error| error.to_string());
+            return serde_json::to_vec(&self.info())
+                .map(NativeGpuSubmission::Complete)
+                .map_err(|error| error.to_string());
         }
         if batch.session.is_empty()
             || batch.session.len() > 128
@@ -343,7 +499,7 @@ impl NativeGpu {
                     .map(|texture| texture.bytes)
                     .sum::<u64>();
             }
-            return Ok(Vec::new());
+            return Ok(NativeGpuSubmission::Complete(Vec::new()));
         }
         if !self.sessions.contains_key(&batch.session) && self.sessions.len() >= MAX_SESSIONS {
             return Err("Too many native GPU sessions".into());
@@ -378,18 +534,20 @@ impl NativeGpu {
         let result = self.execute_batch(&mut session, &batch, &bytes[4 + json_len..], &sources);
         let validation = pollster::block_on(self.device.pop_error_scope());
         let memory = pollster::block_on(self.device.pop_error_scope());
-        let mut result = result.and_then(|bytes| match validation.or(memory) {
+        let mut result = result.and_then(|submission| match validation.or(memory) {
             Some(error) => Err(format!("Native GPU: {error}")),
-            None => Ok(bytes),
+            None => Ok(submission),
         });
         if result.is_ok() {
             if !batch.passes.is_empty() {
                 self.info.last_frame_ms = started.elapsed().as_secs_f64() * 1000.0;
             }
-            if batch.include_timing
-                && let Ok(bytes) = &mut result
-            {
-                bytes.extend_from_slice(&(started.elapsed().as_secs_f64() * 1000.0).to_le_bytes());
+            match &mut result {
+                Ok(NativeGpuSubmission::Complete(bytes)) if batch.include_timing => {
+                    bytes.extend_from_slice(&(started.elapsed().as_secs_f64() * 1000.0).to_le_bytes());
+                }
+                Ok(NativeGpuSubmission::Readback(readback)) => readback.timing.started = started,
+                _ => {}
             }
             self.info.rendered_frames += u64::from(!batch.passes.is_empty());
             self.info.rendered_passes += batch.passes.len() as u64;
@@ -407,13 +565,50 @@ impl NativeGpu {
         result
     }
 
+    pub fn complete_readback(
+        &mut self,
+        readback: NativeReadback,
+        result: Result<Vec<u8>, String>,
+    ) -> Result<Vec<u8>, String> {
+        if !self
+            .sessions
+            .get(&readback.session)
+            .is_some_and(|session| Arc::ptr_eq(&session.identity, &readback.identity))
+        {
+            return result;
+        }
+        if result.is_ok() {
+            if readback.timing.has_passes {
+                self.info.last_frame_ms = readback.timing.started.elapsed().as_secs_f64() * 1000.0;
+                self.info.last_prepare_ms = readback.timing.prepare_ms;
+                self.info.last_gpu_wait_ms = readback.timing.gpu_wait_ms;
+                self.info.last_pack_ms = readback.timing.pack_ms;
+            }
+            let session = self.sessions.get_mut(&readback.session).unwrap();
+            let cached_bytes: u64 = session
+                .read_buffers
+                .iter()
+                .flatten()
+                .map(|(_, size)| size)
+                .sum();
+            if cached_bytes + readback.buffer.1 <= MAX_BATCH_BYTES as u64
+                && let Some(slot) = session.read_buffers.iter_mut().find(|slot| slot.is_none())
+            {
+                *slot = Some(readback.buffer);
+            }
+        }
+        // A failed readback drops only its buffer (already unmapped by
+        // `read`); the session and its textures stay usable for the next batch.
+        result
+    }
+
     fn execute_batch(
         &mut self,
         session: &mut Session,
         batch: &Batch,
         data: &[u8],
         sources: &HashMap<String, Arc<crate::RawSource>>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<NativeGpuSubmission, String> {
         let started = Instant::now();
         for id in &batch.delete_textures {
             if let Some(texture) = session.textures.remove(id) {
@@ -457,10 +652,31 @@ impl NativeGpu {
                 &spec.format
             })?;
             let bpp = bytes_per_pixel(format);
-            let size = u64::from(spec.width)
+            let base_size = u64::from(spec.width)
                 * u64::from(spec.height)
                 * u64::from(spec.layers)
                 * u64::from(bpp);
+            let mip_levels = if spec.pyramid.is_some() {
+                if format != wgpu::TextureFormat::Rgba16Float
+                    || spec.layers != 1
+                    || spec.source.is_some()
+                    || spec.offset.is_some()
+                    || spec.length.is_some()
+                {
+                    return Err("Invalid native source pyramid".into());
+                }
+                spec.width.max(spec.height).checked_ilog2().unwrap_or(0) + 1
+            } else {
+                1
+            };
+            let size = (0..mip_levels)
+                .map(|level| {
+                    u64::from((spec.width >> level).max(1))
+                        * u64::from((spec.height >> level).max(1))
+                        * u64::from(spec.layers)
+                        * u64::from(bpp)
+                })
+                .sum::<u64>();
             if spec.width == 0
                 || spec.height == 0
                 || spec.layers == 0
@@ -497,7 +713,7 @@ impl NativeGpu {
                 .filter(|_| !use_prepared);
             let input = match (spec.offset, spec.length) {
                 (Some(offset), Some(length)) => {
-                    let expected = if packed_rgb16 { size / 8 * 6 } else { size };
+                    let expected = if packed_rgb16 { base_size / 8 * 6 } else { base_size };
                     if length as u64 != expected {
                         return Err(format!(
                             "Texture {} requires {size} bytes, got {length}",
@@ -524,7 +740,7 @@ impl NativeGpu {
                 self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("Darkroom image"),
                     size: extent,
-                    mip_level_count: 1,
+                    mip_level_count: mip_levels,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
@@ -566,6 +782,25 @@ impl NativeGpu {
                     },
                     extent,
                 );
+            }
+            if let Some(pyramid) = &spec.pyramid {
+                let source = session
+                    .textures
+                    .get(&pyramid.source)
+                    .ok_or("Unknown native pyramid source")?;
+                if source.layers != 1
+                    || !matches!(
+                        source.format,
+                        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Uint
+                    )
+                    || spec.width != (source.width / 2).max(1)
+                    || spec.height != (source.height / 2).max(1)
+                    || !pyramid.maximum.is_finite()
+                    || pyramid.maximum <= 0.0
+                {
+                    return Err("Invalid native pyramid source".into());
+                }
+                self.build_source_pyramid(source, &value, mip_levels, pyramid);
             }
             let view = value.create_view(&wgpu::TextureViewDescriptor {
                 dimension: Some(wgpu::TextureViewDimension::D2),
@@ -780,20 +1015,40 @@ impl NativeGpu {
             }
             let row_bytes = texture.width as usize * bytes_per_pixel(texture.format) as usize;
             let padded_row = align(row_bytes, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
-            read_layouts.push((read_size, row_bytes, padded_row));
+            read_layouts.push(ReadLayout {
+                offset: read_size,
+                row_bytes,
+                padded_row,
+                width: texture.width as usize,
+                height: texture.height as usize,
+                format: texture.format,
+                output_bpp: if read.format == "rgba8" { 4 } else { 16 },
+                flip_y: read.flip_y,
+            });
             read_size += padded_row * texture.height as usize;
         }
         if read_size > MAX_BATCH_BYTES {
             return Err("Native readback exceeds memory limit".into());
         }
+        let mut read_buffer = None;
         if read_size > 0 {
+            let slot = session
+                .read_buffers
+                .iter()
+                .position(|slot| {
+                    slot.as_ref()
+                        .is_some_and(|(_, size)| *size >= read_size as u64)
+                })
+                .or_else(|| session.read_buffers.iter().position(Option::is_some))
+                .unwrap_or(0);
+            read_buffer = session.read_buffers[slot].take();
             reserve_buffer(
                 &self.device,
-                &mut session.read_buffer,
+                &mut read_buffer,
                 read_size as u64,
                 wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             );
-            for (read, (offset, _, padded_row)) in batch.reads.iter().zip(&read_layouts) {
+            for (read, layout) in batch.reads.iter().zip(&read_layouts) {
                 let texture = &session.textures[&read.texture];
                 encoder.copy_texture_to_buffer(
                     wgpu::TexelCopyTextureInfo {
@@ -803,10 +1058,10 @@ impl NativeGpu {
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyBufferInfo {
-                        buffer: &session.read_buffer.as_ref().unwrap().0,
+                        buffer: &read_buffer.as_ref().unwrap().0,
                         layout: wgpu::TexelCopyBufferLayout {
-                            offset: *offset as u64,
-                            bytes_per_row: Some(*padded_row as u32),
+                            offset: layout.offset as u64,
+                            bytes_per_row: Some(layout.padded_row as u32),
                             rows_per_image: Some(texture.height),
                         },
                     },
@@ -825,65 +1080,167 @@ impl NativeGpu {
         let submission = self.queue.submit([commands]);
         self.check_errors()?;
         if read_size == 0 {
-            return Ok(Vec::new());
+            return Ok(NativeGpuSubmission::Complete(Vec::new()));
         }
-        let buffer = &session.read_buffer.as_ref().unwrap().0;
-        let slice = buffer.slice(..read_size as u64);
+        let buffer = read_buffer.unwrap();
+        let slice = buffer.0.slice(..read_size as u64);
         let (sender, receiver) = mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
-        self.device
-            .poll(wgpu::PollType::WaitForSubmissionIndex(submission))
-            .map_err(|error| format!("Native GPU wait: {error}"))?;
-        receiver
-            .recv_timeout(Duration::from_secs(2))
-            .map_err(|error| format!("Native readback callback: {error}"))?
-            .map_err(|error| format!("Native readback: {error}"))?;
-        let mapped = slice.get_mapped_range();
-        let gpu_wait_ms = wait_started.elapsed().as_secs_f64() * 1000.0;
-        let pack_started = Instant::now();
-        let mut output = Vec::with_capacity(output_size + usize::from(batch.include_timing) * 8);
-        for (read, (offset, row_bytes, padded_row)) in batch.reads.iter().zip(read_layouts) {
-            let texture = &session.textures[&read.texture];
-            let output_bpp = if read.format == "rgba8" { 4 } else { 16 };
-            let output_size = texture.width as usize * texture.height as usize * output_bpp;
-            let start = output.len();
-            output.resize(start + output_size, 0);
-            let convert_row = |(row, destination): (usize, &mut [u8])| {
-                let row = if read.flip_y {
-                    texture.height as usize - 1 - row
-                } else {
-                    row
-                };
-                let source =
-                    &mapped[offset + row * padded_row..offset + row * padded_row + row_bytes];
-                convert_pixels(source, destination, texture.format, output_bpp);
-            };
-            if output_size >= 256 * 1024
-                && let Some(pool) = crate::compute::pool()
-            {
-                pool.install(|| {
-                    output[start..]
-                        .par_chunks_mut(texture.width as usize * output_bpp)
-                        .enumerate()
-                        .for_each(convert_row)
-                });
-            } else {
-                output[start..]
-                    .chunks_mut(texture.width as usize * output_bpp)
-                    .enumerate()
-                    .for_each(convert_row);
+        Ok(NativeGpuSubmission::Readback(NativeReadback {
+            session: batch.session.clone(),
+            identity: Arc::clone(&session.identity),
+            device: self.device.clone(),
+            buffer,
+            submission,
+            receiver,
+            layouts: read_layouts,
+            read_size: read_size as u64,
+            output_size,
+            timing: ReadbackTiming {
+                started,
+                wait_started,
+                include_timing: batch.include_timing,
+                has_passes: !batch.passes.is_empty(),
+                prepare_ms,
+                gpu_wait_ms: 0.0,
+                pack_ms: 0.0,
+            },
+        }))
+    }
+
+    fn build_source_pyramid(
+        &mut self,
+        source: &Texture,
+        destination: &wgpu::Texture,
+        levels: u32,
+        settings: &SourcePyramid,
+    ) {
+        let source_is_integer = source.format == wgpu::TextureFormat::Rgba16Uint;
+        for pipeline_is_integer in [source_is_integer, false] {
+            if self.pyramid_pipelines.contains_key(&pipeline_is_integer) {
+                continue;
             }
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Darkroom linear source reduction"),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Owned(
+                        SOURCE_PYRAMID.replace(
+                            "SOURCE_TYPE",
+                            if pipeline_is_integer { "u32" } else { "f32" },
+                        ),
+                    )),
+                });
+            let pipeline = self
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Darkroom source pyramid"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: &self.vertex,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview: None,
+                    cache: None,
+                });
+            self.pyramid_pipelines.insert(pipeline_is_integer, pipeline);
         }
-        drop(mapped);
-        buffer.unmap();
-        if !batch.passes.is_empty() {
-            self.info.last_prepare_ms = prepare_ms;
-            self.info.last_gpu_wait_ms = gpu_wait_ms;
-            self.info.last_pack_ms = pack_started.elapsed().as_secs_f64() * 1000.0;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Darkroom source pyramid"),
+            });
+        for level in 0..levels {
+            let input = if level == 0 {
+                &source.value
+            } else {
+                destination
+            };
+            let input_view = input.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level.saturating_sub(1),
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+            let output_view = destination.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            });
+            let config = [
+                (destination.width() >> level).max(1) as f32,
+                (destination.height() >> level).max(1) as f32,
+                if level == 0 && source_is_integer {
+                    settings.maximum
+                } else {
+                    1.0
+                },
+                f32::from(level != 0 || settings.linear),
+            ];
+            let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Darkroom reduction size"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: true,
+            });
+            {
+                let mut mapped = uniform.slice(..).get_mapped_range_mut();
+                for (bytes, value) in mapped.chunks_exact_mut(4).zip(config) {
+                    bytes.copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            uniform.unmap();
+            let pipeline = &self.pyramid_pipelines[&(level == 0 && source_is_integer)];
+            let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Darkroom reduction input"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&input_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Darkroom linear reduction"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render.set_pipeline(pipeline);
+            render.set_bind_group(0, &bindings, &[]);
+            render.draw(0..3, 0..1);
         }
-        Ok(output)
+        self.queue.submit([encoder.finish()]);
     }
 
     fn check_errors(&self) -> Result<(), String> {

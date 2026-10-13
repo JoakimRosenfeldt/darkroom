@@ -10,6 +10,7 @@ mod libraw_decode;
 mod libraw_profile;
 mod metadata;
 mod nef;
+mod raw_preview_cache;
 mod settings;
 #[cfg(windows)]
 mod windows_file;
@@ -31,6 +32,7 @@ pub use nef::decode_asset_binary;
 #[derive(Clone)]
 pub struct NativeContext {
     pub app_data: PathBuf,
+    pub app_cache: Option<PathBuf>,
     pub resources: PathBuf,
     pub emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
 }
@@ -38,11 +40,13 @@ pub struct NativeContext {
 impl NativeContext {
     pub fn new(
         app_data: PathBuf,
+        app_cache: Option<PathBuf>,
         resources: PathBuf,
         emit: Arc<dyn Fn(&str, Value) + Send + Sync>,
     ) -> Self {
         Self {
             app_data,
+            app_cache,
             resources,
             emit,
         }

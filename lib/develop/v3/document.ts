@@ -395,6 +395,13 @@ export function createDefaultV3DevelopDocument(): DevelopDocumentV3 {
   return structuredClone(DEFAULT_V3_DEVELOP_DOCUMENT);
 }
 
+// Documents are treated as immutable once created, so a subtree's canonical
+// serialization can be cached by object identity and reused across hashes.
+// Only sizable subtrees are cached: caching every brush point costs more
+// (WeakMap writes, retained strings) than re-serializing it.
+const stableJsonCache = new WeakMap<object, string>();
+const STABLE_JSON_CACHE_MIN_LENGTH = 64;
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
@@ -404,14 +411,22 @@ function stableJson(value: unknown): string {
     return JSON.stringify(Object.is(value, -0) ? 0 : value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
+    const cached = stableJsonCache.get(value);
+    if (cached !== undefined) return cached;
+    const result = `[${value.map(stableJson).join(",")}]`;
+    if (result.length >= STABLE_JSON_CACHE_MIN_LENGTH) stableJsonCache.set(value, result);
+    return result;
   }
   if (typeof value === "object") {
-    return `{${Object.entries(value)
+    const cached = stableJsonCache.get(value);
+    if (cached !== undefined) return cached;
+    const result = `{${Object.entries(value)
       .filter(([, child]) => child !== undefined)
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
       .join(",")}}`;
+    if (result.length >= STABLE_JSON_CACHE_MIN_LENGTH) stableJsonCache.set(value, result);
+    return result;
   }
   throw new Error("Canonical documents cannot contain this value.");
 }
