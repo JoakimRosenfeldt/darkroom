@@ -21,10 +21,11 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 }
 "#;
 const SOURCE_PYRAMID: &str = r#"
+struct PyramidConfig { output_size: vec2<f32>, source_maximum: f32, is_linear: f32 }
 @group(0) @binding(0) var source: texture_2d<SOURCE_TYPE>;
-@group(0) @binding(1) var<uniform> config: vec4<f32>;
+@group(0) @binding(1) var<uniform> config: PyramidConfig;
 @fragment fn main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let scale = vec2<f32>(textureDimensions(source)) / config.xy;
+    let scale = vec2<f32>(textureDimensions(source)) / config.output_size;
     let start = floor(position.xy) * scale;
     let end = start + scale;
     let low = vec2<i32>(floor(start));
@@ -34,8 +35,8 @@ const SOURCE_PYRAMID: &str = r#"
             let pixel = low + vec2<i32>(x, y);
             let weight = max(vec2<f32>(0.0), min(end, vec2<f32>(pixel + 1)) - max(start, vec2<f32>(pixel)));
             if (weight.x * weight.y > 0.0) {
-                var color = vec3<f32>(textureLoad(source, pixel, 0).rgb) / config.z;
-                if (config.w == 0.0) {
+                var color = vec3<f32>(textureLoad(source, pixel, 0).rgb) / config.source_maximum;
+                if (config.is_linear == 0.0) {
                     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
                     color = select(pow((color + 0.055) / 1.055, vec3<f32>(2.4)), color / 12.92, color <= vec3<f32>(0.04045));
                 }
@@ -190,6 +191,16 @@ struct ReadLayout {
     flip_y: bool,
 }
 
+struct ReadbackTiming {
+    started: Instant,
+    wait_started: Instant,
+    include_timing: bool,
+    has_passes: bool,
+    prepare_ms: f64,
+    gpu_wait_ms: f64,
+    pack_ms: f64,
+}
+
 pub struct NativeReadback {
     session: String,
     identity: Arc<()>,
@@ -200,13 +211,7 @@ pub struct NativeReadback {
     layouts: Vec<ReadLayout>,
     read_size: u64,
     output_size: usize,
-    started: Instant,
-    wait_started: Instant,
-    include_timing: bool,
-    has_passes: bool,
-    prepare_ms: f64,
-    gpu_wait_ms: f64,
-    pack_ms: f64,
+    timing: ReadbackTiming,
 }
 
 impl NativeReadback {
@@ -222,10 +227,10 @@ impl NativeReadback {
                 .map_err(|error| format!("Native readback callback: {error}"))?
                 .map_err(|error| format!("Native readback: {error}"))?;
             let mapped = self.buffer.0.slice(..self.read_size).get_mapped_range();
-            self.gpu_wait_ms = self.wait_started.elapsed().as_secs_f64() * 1000.0;
+            self.timing.gpu_wait_ms = self.timing.wait_started.elapsed().as_secs_f64() * 1000.0;
             let pack_started = Instant::now();
             let mut output =
-                Vec::with_capacity(self.output_size + usize::from(self.include_timing) * 8);
+                Vec::with_capacity(self.output_size + usize::from(self.timing.include_timing) * 8);
             for layout in &self.layouts {
                 let output_size = layout.width * layout.height * layout.output_bpp;
                 let start = output.len();
@@ -256,10 +261,10 @@ impl NativeReadback {
                         .for_each(convert_row);
                 }
             }
-            self.pack_ms = pack_started.elapsed().as_secs_f64() * 1000.0;
-            if self.include_timing {
+            self.timing.pack_ms = pack_started.elapsed().as_secs_f64() * 1000.0;
+            if self.timing.include_timing {
                 output.extend_from_slice(
-                    &(self.started.elapsed().as_secs_f64() * 1000.0).to_le_bytes(),
+                    &(self.timing.started.elapsed().as_secs_f64() * 1000.0).to_le_bytes(),
                 );
             }
             Ok(output)
@@ -440,7 +445,9 @@ impl NativeGpu {
         Ok(())
     }
 
-    #[cfg(test)]
+    // Used by tests and the benchmark binary; production splits submit and
+    // complete_readback so the GPU lock is not held while waiting.
+    #[allow(dead_code)]
     pub fn execute(
         &mut self,
         bytes: &[u8],
@@ -539,7 +546,7 @@ impl NativeGpu {
                 Ok(NativeGpuSubmission::Complete(bytes)) if batch.include_timing => {
                     bytes.extend_from_slice(&(started.elapsed().as_secs_f64() * 1000.0).to_le_bytes());
                 }
-                Ok(NativeGpuSubmission::Readback(readback)) => readback.started = started,
+                Ok(NativeGpuSubmission::Readback(readback)) => readback.timing.started = started,
                 _ => {}
             }
             self.info.rendered_frames += u64::from(!batch.passes.is_empty());
@@ -571,11 +578,11 @@ impl NativeGpu {
             return result;
         }
         if result.is_ok() {
-            if readback.has_passes {
-                self.info.last_frame_ms = readback.started.elapsed().as_secs_f64() * 1000.0;
-                self.info.last_prepare_ms = readback.prepare_ms;
-                self.info.last_gpu_wait_ms = readback.gpu_wait_ms;
-                self.info.last_pack_ms = readback.pack_ms;
+            if readback.timing.has_passes {
+                self.info.last_frame_ms = readback.timing.started.elapsed().as_secs_f64() * 1000.0;
+                self.info.last_prepare_ms = readback.timing.prepare_ms;
+                self.info.last_gpu_wait_ms = readback.timing.gpu_wait_ms;
+                self.info.last_pack_ms = readback.timing.pack_ms;
             }
             let session = self.sessions.get_mut(&readback.session).unwrap();
             let cached_bytes: u64 = session
@@ -589,17 +596,9 @@ impl NativeGpu {
             {
                 *slot = Some(readback.buffer);
             }
-        } else {
-            let session = self.sessions.remove(&readback.session).unwrap();
-            self.texture_bytes -= session
-                .textures
-                .values()
-                .map(|texture| texture.bytes)
-                .sum::<u64>();
-            drop(session);
-            self.shader_cache
-                .retain(|key, _| Arc::strong_count(key) > 1);
         }
+        // A failed readback drops only its buffer (already unmapped by
+        // `read`); the session and its textures stay usable for the next batch.
         result
     }
 
@@ -1099,13 +1098,15 @@ impl NativeGpu {
             layouts: read_layouts,
             read_size: read_size as u64,
             output_size,
-            started,
-            wait_started,
-            include_timing: batch.include_timing,
-            has_passes: !batch.passes.is_empty(),
-            prepare_ms,
-            gpu_wait_ms: 0.0,
-            pack_ms: 0.0,
+            timing: ReadbackTiming {
+                started,
+                wait_started,
+                include_timing: batch.include_timing,
+                has_passes: !batch.passes.is_empty(),
+                prepare_ms,
+                gpu_wait_ms: 0.0,
+                pack_ms: 0.0,
+            },
         }))
     }
 
@@ -1116,9 +1117,9 @@ impl NativeGpu {
         levels: u32,
         settings: &SourcePyramid,
     ) {
-        let integer = source.format == wgpu::TextureFormat::Rgba16Uint;
-        for integer in [integer, false] {
-            if self.pyramid_pipelines.contains_key(&integer) {
+        let source_is_integer = source.format == wgpu::TextureFormat::Rgba16Uint;
+        for pipeline_is_integer in [source_is_integer, false] {
+            if self.pyramid_pipelines.contains_key(&pipeline_is_integer) {
                 continue;
             }
             let module = self
@@ -1126,7 +1127,10 @@ impl NativeGpu {
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Darkroom linear source reduction"),
                     source: wgpu::ShaderSource::Wgsl(Cow::Owned(
-                        SOURCE_PYRAMID.replace("SOURCE_TYPE", if integer { "u32" } else { "f32" }),
+                        SOURCE_PYRAMID.replace(
+                            "SOURCE_TYPE",
+                            if pipeline_is_integer { "u32" } else { "f32" },
+                        ),
                     )),
                 });
             let pipeline = self
@@ -1156,7 +1160,7 @@ impl NativeGpu {
                     multiview: None,
                     cache: None,
                 });
-            self.pyramid_pipelines.insert(integer, pipeline);
+            self.pyramid_pipelines.insert(pipeline_is_integer, pipeline);
         }
         let mut encoder = self
             .device
@@ -1182,7 +1186,7 @@ impl NativeGpu {
             let config = [
                 (destination.width() >> level).max(1) as f32,
                 (destination.height() >> level).max(1) as f32,
-                if level == 0 && integer {
+                if level == 0 && source_is_integer {
                     settings.maximum
                 } else {
                     1.0
@@ -1202,7 +1206,7 @@ impl NativeGpu {
                 }
             }
             uniform.unmap();
-            let pipeline = &self.pyramid_pipelines[&(level == 0 && integer)];
+            let pipeline = &self.pyramid_pipelines[&(level == 0 && source_is_integer)];
             let bindings = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Darkroom reduction input"),
                 layout: &pipeline.get_bind_group_layout(0),

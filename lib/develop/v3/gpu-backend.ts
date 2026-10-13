@@ -981,12 +981,13 @@ function program(
   gl: GpuContext,
   fragmentSource: string,
   integerSourceProgram = false,
+  sourcePyramid = false,
 ): WebGLProgram {
   const vertex = shader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
   let source = integerSourceProgram
     ? fragmentSource.replace("#version 300 es\n", "#version 300 es\n#define INTEGER_SOURCE\n")
     : fragmentSource;
-  if (gl instanceof NativeGpuContext && fragmentSource === POINTWISE_SHADER) {
+  if (sourcePyramid && gl instanceof NativeGpuContext && fragmentSource === POINTWISE_SHADER) {
     source = source.replace("#version 300 es\n", "#version 300 es\n#define NATIVE_SOURCE_PYRAMID\n");
   }
   const fragment = shader(gl, gl.FRAGMENT_SHADER, source);
@@ -1157,6 +1158,22 @@ function orientedDimensions(input: CpuRenderInput): { readonly width: number; re
   return input.source.orientation >= 5
     ? { width: input.source.dimensions.height, height: input.source.dimensions.width }
     : input.source.dimensions;
+}
+
+function fullOutputDimensions(input: CpuRenderInput): { readonly width: number; readonly height: number } {
+  const crop = resolveConstrainedCrop(geometryStages(input).user);
+  const oriented = orientedDimensions(input);
+  const swapsAxes = input.document.geometry.orientation.quarterTurns % 2 === 1;
+  return {
+    width: Math.max(1, Math.round((swapsAxes ? oriented.height : oriented.width) * crop.width)),
+    height: Math.max(1, Math.round((swapsAxes ? oriented.width : oriented.height) * crop.height)),
+  };
+}
+
+function isDownscaled(input: CpuRenderInput): boolean {
+  const full = fullOutputDimensions(input);
+  const output = input.request.plan.qualityAndDimensions.outputDimensions;
+  return output.width < full.width || output.height < full.height;
 }
 
 function geometryStages(input: CpuRenderInput): {
@@ -1622,15 +1639,11 @@ function renderPointwise(
   if (state.sourcePyramid) {
     bindTexture(gl, programValue, "uSourcePyramid", 5, state.sourcePyramid);
     const quality = input.request.plan.qualityAndDimensions;
-    const crop = resolveConstrainedCrop(geometryStages(input).user);
-    const oriented = orientedDimensions(input);
-    const swapsAxes = input.document.geometry.orientation.quarterTurns % 2 === 1;
-    const fullWidth = Math.max(1, Math.round((swapsAxes ? oriented.height : oriented.width) * crop.width));
-    const fullHeight = Math.max(1, Math.round((swapsAxes ? oriented.width : oriented.height) * crop.height));
+    const full = fullOutputDimensions(input);
     gl.uniform1i(gl.getUniformLocation(programValue, "uSourceReductionEnabled"),
-      quality.outputDimensions.width < fullWidth && quality.outputDimensions.height < fullHeight ? 1 : 0);
+      isDownscaled(input) ? 1 : 0);
     gl.uniform1f(gl.getUniformLocation(programValue, "uSourceReduction"),
-      Math.min(fullWidth / quality.outputDimensions.width, fullHeight / quality.outputDimensions.height));
+      Math.max(1, Math.min(full.width / quality.outputDimensions.width, full.height / quality.outputDimensions.height)));
     gl.uniform1i(gl.getUniformLocation(programValue, "uSourcePyramidLevels"),
       Math.floor(Math.log2(Math.max(1, Math.floor(Math.max(input.image.sourceWidth, input.image.sourceHeight) / 2)))) + 1);
   }
@@ -2389,7 +2402,9 @@ export class V3GpuPreviewRenderer {
       throw new Error("The GPU source exceeds the maximum texture size.");
     }
     const source = sourceTexture(gl, input);
-    const sourcePyramid = gl instanceof NativeGpuContext ? gl.createSourcePyramid(
+    // Full-resolution renders never sample the pyramid, so skip its build
+    // and texture-budget cost unless this session starts downscaled.
+    const sourcePyramid = gl instanceof NativeGpuContext && isDownscaled(input) ? gl.createSourcePyramid(
       source, input.image.sourceWidth, input.image.sourceHeight,
       2 ** clamp(input.image.bits, 8, 16) - 1,
       input.source.color.kind !== "uncharacterized" && input.source.color.transfer.kind === "linear",
@@ -2398,7 +2413,7 @@ export class V3GpuPreviewRenderer {
       canvas,
       gl,
       programs: {
-        pointwise: program(gl, POINTWISE_SHADER, integerSource(input)),
+        pointwise: program(gl, POINTWISE_SHADER, integerSource(input), sourcePyramid !== null),
         spatial: program(gl, SPATIAL_SHADER),
         postCrop: program(gl, POST_CROP_SHADER),
         encode: program(gl, ENCODE_SHADER),

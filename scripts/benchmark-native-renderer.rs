@@ -32,13 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut request = vec![0; size];
         input.read_exact(&mut request)?;
-        let result = gpu.submit(&request, &sources).and_then(|submission| match submission {
-            gpu::NativeGpuSubmission::Complete(bytes) => Ok(bytes),
-            gpu::NativeGpuSubmission::Readback(mut readback) => {
-                let result = readback.read();
-                gpu.complete_readback(readback, result)
-            }
-        });
+        let result = gpu.execute(&request, &sources);
         let (response, failed) = match result {
             Ok(response) => (response, false),
             Err(error) => (error.into_bytes(), true),

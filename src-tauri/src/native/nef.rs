@@ -352,20 +352,17 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             "NEF input exceeds the supported size.",
         ));
     }
-    let cache = if mode == "preview" {
-        PreviewCache::new(
-            ctx.app_cache.as_deref(),
-            &path,
-            &source_metadata,
-            &format!(
-                "nikon-native-rgb16le-v1:{digest}:{state}:{}",
-                super::libraw_decode::DECODER_REVISION,
-            ),
-            max_edge,
-        )
-    } else {
-        None
-    };
+    let cache = PreviewCache::if_enabled(
+        mode == "preview",
+        ctx.app_cache.as_deref(),
+        &path,
+        &source_metadata,
+        &format!(
+            "nikon-native-rgb16le-v1:{digest}:{state}:{}",
+            super::libraw_decode::DECODER_REVISION,
+        ),
+        max_edge,
+    );
     if let Some(decoded) = cache
         .as_ref()
         .and_then(|cache| cache.load(None))

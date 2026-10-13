@@ -58,6 +58,23 @@ impl PreviewCache {
             hash.update(metadata.ctime().to_le_bytes());
             hash.update(metadata.ctime_nsec().to_le_bytes());
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            hash.update(metadata.volume_serial_number().unwrap_or(0).to_le_bytes());
+            hash.update(metadata.file_index().unwrap_or(0).to_le_bytes());
+            hash.update(metadata.creation_time().to_le_bytes());
+            hash.update(metadata.last_write_time().to_le_bytes());
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let created = metadata
+                .created()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |duration| duration.as_nanos());
+            hash.update(created.to_le_bytes());
+        }
         hash.update(max_edge.to_le_bytes());
         hash.update(std::env::consts::ARCH.as_bytes());
         hash.update(revision.as_bytes());
@@ -65,6 +82,17 @@ impl PreviewCache {
             directory: root?.join("raw-previews-v1"),
             key: hash.finalize(),
         })
+    }
+
+    pub(super) fn if_enabled(
+        enabled: bool,
+        root: Option<&Path>,
+        source: &Path,
+        metadata: &Metadata,
+        revision: &str,
+        max_edge: u64,
+    ) -> Option<Self> {
+        enabled.then(|| Self::new(root, source, metadata, revision, max_edge)).flatten()
     }
 
     fn path(&self) -> PathBuf {
@@ -139,6 +167,9 @@ fn evict(directory: &Path, limit: u64) {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "rawpreview") {
+                return None;
+            }
             let metadata = fs::symlink_metadata(&path).ok()?;
             metadata
                 .is_file()
@@ -238,7 +269,10 @@ mod tests {
         fs::write(cache.path(), &corrupt).unwrap();
         assert!(cache.load(None).is_none());
         cache.store_inner(packet);
+        let in_flight = cache.directory.join(".tmp123456");
+        fs::write(&in_flight, b"partial write from another process").unwrap();
         evict(&cache.directory, 0);
         assert!(cache.load(None).is_none());
+        assert!(in_flight.exists(), "eviction must not remove in-flight temp files");
     }
 }

@@ -98,17 +98,14 @@ pub fn decode_libraw(
     if opened.len() == 0 || opened.len() > MAX_INPUT {
         return Err("RAW input is empty or exceeds the native decode limit.".into());
     }
-    let cache = if preview {
-        PreviewCache::new(
-            ctx.app_cache.as_deref(),
-            &path,
-            &opened,
-            DECODER_REVISION,
-            u64::from(options.max_edge),
-        )
-    } else {
-        None
-    };
+    let cache = PreviewCache::if_enabled(
+        preview,
+        ctx.app_cache.as_deref(),
+        &path,
+        &opened,
+        DECODER_REVISION,
+        u64::from(options.max_edge),
+    );
     if let Some(bytes) = cache.as_ref().and_then(|cache| cache.load(Some(cancelled))) {
         check_cancelled(cancelled)?;
         check_open_regular(&path, &file, &opened)?;
