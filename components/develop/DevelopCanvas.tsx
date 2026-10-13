@@ -1442,7 +1442,9 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       <div
         ref={transformElementRef}
         className={[
-          "absolute inset-0 will-change-transform",
+          // A resting will-change layer can keep its Fit raster scale, blurring the
+          // full-resolution detail canvas portaled inside it, so only hint while panning.
+          panning ? "absolute inset-0 will-change-transform" : "absolute inset-0",
           preview.kind === "rendered" ? "" : "invisible",
           panning || wheelZoomDirect
             ? "transition-none"
