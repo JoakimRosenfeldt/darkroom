@@ -45,3 +45,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test scratch bundles (tests/raw-depth-regressions.test.mts)
+.raw-depth-test-*/

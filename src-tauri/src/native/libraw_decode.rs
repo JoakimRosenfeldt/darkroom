@@ -18,7 +18,7 @@ use super::{
 
 const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024 * 1024;
-pub(super) const DECODER_REVISION: &str = "libraw-native-0.22.1-compat-v1";
+pub(super) const DECODER_REVISION: &str = "libraw-native-0.22.1-linear-v2";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -145,7 +145,8 @@ pub fn decode_libraw(
         params.half_size = i32::from(preview);
         params.output_bps = 16;
         params.output_color = 0;
-        // WASM ignores our two-element gamma setting; keep its default curve for existing edits.
+        params.gamm[0] = 1.0;
+        params.gamm[1] = 1.0;
         params.no_auto_bright = 1;
         params.use_camera_matrix = 0;
         params.use_camera_wb = 1;

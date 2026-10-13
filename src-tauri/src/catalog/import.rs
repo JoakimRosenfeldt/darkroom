@@ -1,5 +1,6 @@
 use super::*;
 use crate::develop::store_io;
+use crate::native::sidecar_path_for;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -213,12 +214,6 @@ fn format_id(path: &Path) -> Option<&'static str> {
         _ => None,
     }
 }
-fn xmp_path(relative: &str) -> String {
-    Path::new(relative)
-        .with_extension("xmp")
-        .to_string_lossy()
-        .into_owned()
-}
 pub(super) fn render(
     pattern: &str,
     source: &Value,
@@ -358,7 +353,13 @@ pub(super) fn verify(plan: &Value) -> Result<(), String> {
         }
         if let Some(xmp) = item["xmpDestinationRelativePath"].as_str() {
             relative(xmp)?;
-            if xmp != xmp_path(string(item, "destinationRelativePath")?) {
+            let destination = Path::new(string(item, "destinationRelativePath")?);
+            // Plans frozen before the sidecar-name unification stored the
+            // stem path (photo.xmp) for standard images. Accept it here;
+            // execution derives the current helper path from the destination.
+            if Path::new(xmp) != sidecar_path_for(destination)
+                && Path::new(xmp) != destination.with_extension("xmp")
+            {
                 return Err("Frozen import sidecar path is invalid.".into());
             }
         }
@@ -496,7 +497,11 @@ impl CatalogService {
             if !supported {
                 can_run = false;
             }
-            let xmp = checked_path(&root.1, &xmp_path(&root.2), false)?;
+            let xmp = checked_path(
+                &root.1,
+                &sidecar_path_for(Path::new(&root.2)).to_string_lossy(),
+                false,
+            )?;
             let xmp_state = match fs::symlink_metadata(&xmp) {
                 Ok(meta) if meta.is_file() && read_file(&xmp).is_ok() => "present",
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent",
@@ -511,7 +516,7 @@ impl CatalogService {
             } else {
                 render(string(&preset["template"], "pattern")?, &source, asset)?
             };
-            let item = json!({"itemId":Uuid::new_v4().to_string(),"sourceAssetId":asset.map(|a|a["assetId"].clone()),"destinationAssetId":if action=="copy" || asset.is_none(){json!(Uuid::new_v4().to_string())}else{asset.unwrap()["assetId"].clone()},"action":action,"source":source,"destinationRelativePath":dest_relative,"xmpDestinationRelativePath":if xmp_state=="present"{json!(xmp_path(&dest_relative))}else{Value::Null},"conflictDecisions":{"duplicate":null,"destination":null}});
+            let item = json!({"itemId":Uuid::new_v4().to_string(),"sourceAssetId":asset.map(|a|a["assetId"].clone()),"destinationAssetId":if action=="copy" || asset.is_none(){json!(Uuid::new_v4().to_string())}else{asset.unwrap()["assetId"].clone()},"action":action,"source":source,"destinationRelativePath":dest_relative,"xmpDestinationRelativePath":if xmp_state=="present"{json!(sidecar_path_for(Path::new(&dest_relative)).to_string_lossy().replace('\\',"/"))}else{Value::Null},"conflictDecisions":{"duplicate":null,"destination":null}});
             let view = json!({"itemId":item["itemId"],"sourceName":path.file_name().unwrap_or_default().to_string_lossy(),"sourceRelativePath":root.2,"destinationRelativePath":dest_relative,"formatId":format,"duplicate":"unique","destinationConflict":false,"outcome":if supported{"run"}else{"skip"}});
             views.push(view);
             sources.push((item, path, supported));
@@ -583,7 +588,12 @@ impl CatalogService {
             let dest_path = checked_path(&destination, &dest_relative, false)?;
             let occupied = |relative: &str| -> Result<bool, String> {
                 Ok(checked_path(&destination, relative, false)?.exists()
-                    || checked_path(&destination, &xmp_path(relative), false)?.exists()
+                    || checked_path(
+                        &destination,
+                        &sidecar_path_for(Path::new(relative)).to_string_lossy(),
+                        false,
+                    )?
+                    .exists()
                     || assets.iter().any(|a| {
                         a["rootId"] == request["destinationRootId"] && a["relativePath"] == relative
                     }))
@@ -625,7 +635,11 @@ impl CatalogService {
                         item["destinationRelativePath"] = json!(renamed);
                         views[index]["destinationRelativePath"] = json!(renamed);
                         if !item["xmpDestinationRelativePath"].is_null() {
-                            item["xmpDestinationRelativePath"] = json!(xmp_path(&renamed));
+                            item["xmpDestinationRelativePath"] = json!(
+                                sidecar_path_for(Path::new(&renamed))
+                                    .to_string_lossy()
+                                    .replace('\\', "/")
+                            );
                         }
                         item["conflictDecisions"]["destination"] =
                             json!({"kind":"rename","destinationRelativePath":renamed});
@@ -1016,38 +1030,56 @@ fn catalog_item(
     };
     apply(service, catalog, vec![mutation])
 }
-fn apply_metadata(service: &mut CatalogService, plan: &Value, item: &Value) -> Result<(), String> {
-    let preset: Value = serde_json::from_str(string(&plan["preset"], "canonicalJson")?)
-        .map_err(|_| "Import preset snapshot is invalid.")?;
-    let payload = &preset["payload"];
+fn metadata_patch(payload: &Value, timestamp: i64) -> Result<Value, String> {
     let metadata = payload
         .get("metadata")
         .filter(|m| m.is_object())
         .unwrap_or(payload);
-    let keywords = metadata
-        .get("keywords")
-        .filter(|v| !v.is_null())
-        .cloned()
-        .unwrap_or(json!([]));
-    if !keywords
-        .as_array()
-        .is_some_and(|items| items.iter().all(Value::is_string))
-    {
-        return Err("Import metadata keywords are invalid.".into());
+    let mut patch = Map::new();
+    // The preset editor saves blank defaults as null text/Develop and an empty keyword list.
+    for key in ["title", "caption", "copyright"] {
+        if let Some(value) = metadata.get(key).filter(|value| !value.is_null()) {
+            if !value.is_string() {
+                return Err("Import metadata text is invalid.".into());
+            }
+            patch.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(keywords) = metadata.get("keywords").filter(|value| !value.is_null()) {
+        let items = keywords
+            .as_array()
+            .filter(|items| items.iter().all(Value::is_string))
+            .ok_or("Import metadata keywords are invalid.")?;
+        if !items.is_empty() {
+            patch.insert("keywordsJson".into(), json!(canonical(keywords)));
+        }
     }
     let develop = payload
         .get("develop")
-        .or_else(|| payload.get("developDefaults"))
-        .or_else(|| metadata.get("develop"))
-        .unwrap_or(&Value::Null);
-    let mut patch = json!({"version":1,"title":metadata["title"],"caption":metadata["caption"],"copyright":metadata["copyright"],"keywordsJson":canonical(&keywords),"developJson":if develop.is_null(){Value::Null}else{json!(canonical(develop))},"developUpdatedAt":now(),"updatedAt":now()});
-    for key in ["title", "caption", "copyright"] {
-        if !patch[key].is_null() && !patch[key].is_string() {
-            return Err("Import metadata text is invalid.".into());
-        }
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            payload
+                .get("developDefaults")
+                .filter(|value| !value.is_null())
+        })
+        .or_else(|| metadata.get("develop").filter(|value| !value.is_null()));
+    if let Some(develop) = develop {
+        patch.insert("developJson".into(), json!(canonical(develop)));
+        patch.insert("developUpdatedAt".into(), json!(timestamp));
     }
-    // Do not reset edits when recovering an already-completed import item.
-    patch["updatedAt"] = json!(now());
+    if !patch.is_empty() {
+        patch.insert("version".into(), json!(1));
+        patch.insert("updatedAt".into(), json!(timestamp));
+    }
+    Ok(Value::Object(patch))
+}
+fn apply_metadata(service: &mut CatalogService, plan: &Value, item: &Value) -> Result<(), String> {
+    let preset: Value = serde_json::from_str(string(&plan["preset"], "canonicalJson")?)
+        .map_err(|_| "Import preset snapshot is invalid.")?;
+    let patch = metadata_patch(&preset["payload"], now())?;
+    if patch.as_object().unwrap().is_empty() {
+        return Ok(());
+    }
     apply(
         service,
         string(plan, "catalogId")?,
@@ -1110,7 +1142,8 @@ fn execute_item(
     let xmp_source = if item["source"]["xmpState"] == "present" {
         Some(checked_path(
             &source_root,
-            &xmp_path(string(&item["source"], "relativePath")?),
+            &sidecar_path_for(Path::new(string(&item["source"], "relativePath")?))
+                .to_string_lossy(),
             false,
         )?)
     } else {
@@ -1118,7 +1151,18 @@ fn execute_item(
     };
     let xmp_dest = item["xmpDestinationRelativePath"]
         .as_str()
-        .map(|path| checked_path(&destination_root, path, true))
+        .map(|_| {
+            // Derive from the destination so pre-unification frozen plans
+            // write the editor-convention sidecar name, not the legacy stem.
+            let derived = sidecar_path_for(Path::new(
+                item["destinationRelativePath"].as_str().unwrap_or_default(),
+            ));
+            checked_path(
+                &destination_root,
+                &derived.to_string_lossy().replace('\\', "/"),
+                true,
+            )
+        })
         .transpose()?;
     let xmp_stage = xmp_dest.as_ref().map(|path| {
         PathBuf::from(format!(
@@ -1408,4 +1452,74 @@ pub(super) fn execute_plan_retryable(
         )],
     )?;
     Ok(json!({"operationId":plan["operationId"],"state":state,"items":results,"error":error}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_blank_defaults_leave_existing_metadata_and_edits_alone() {
+        for payload in [
+            Value::Null,
+            json!({}),
+            json!({"metadata": {}}),
+            json!({"metadata": {"title": null, "caption": null, "copyright": null, "keywords": []}, "develop": null}),
+        ] {
+            assert_eq!(metadata_patch(&payload, 123).unwrap(), json!({}));
+        }
+        assert_eq!(
+            metadata_patch(&json!({"metadata": {"caption": "New caption"}}), 123).unwrap(),
+            json!({"version": 1, "caption": "New caption", "updatedAt": 123})
+        );
+    }
+
+    #[test]
+    fn import_explicit_defaults_only_patch_the_supplied_fields() {
+        assert_eq!(
+            metadata_patch(
+                &json!({"title": "", "keywords": ["Travel"], "developDefaults": {"version": 3}}),
+                123
+            )
+            .unwrap(),
+            json!({"version": 1, "title": "", "keywordsJson": "[\"Travel\"]", "developJson": "{\"version\":3}", "developUpdatedAt": 123, "updatedAt": 123})
+        );
+        assert_eq!(
+            metadata_patch(
+                &json!({"develop": null, "developDefaults": {"version": 3}}),
+                123
+            )
+            .unwrap()["developJson"],
+            "{\"version\":3}"
+        );
+        for payload in [json!({"title": 5}), json!({"keywords": [5]})] {
+            assert!(metadata_patch(&payload, 123).is_err());
+        }
+    }
+
+    #[test]
+    fn import_plans_accept_editor_and_legacy_stem_sidecars_and_reject_other_paths() {
+        let id = Uuid::new_v4().to_string();
+        for (asset, sidecar) in [
+            ("album/photo.jpg", "album/photo.jpg.xmp"),
+            ("album/photo.png", "album/photo.png.xmp"),
+            ("album/photo.webp", "album/photo.webp.xmp"),
+            ("album/photo.NEF", "album/photo.xmp"),
+        ] {
+            let mut plan = json!({"catalogId": id, "operationId": id, "destinationRootId": id, "preset": {}, "items": [{"itemId": id, "destinationAssetId": id, "action": "copy", "source": {"rootId": id, "relativePath": asset}, "destinationRelativePath": asset, "xmpDestinationRelativePath": sidecar}]});
+            assert!(verify(&freeze(plan.clone())).is_ok());
+            if !asset.ends_with(".NEF") {
+                // Plans frozen before the sidecar-name unification stored
+                // the stem path; they must still verify (execution derives
+                // the current helper path from the destination).
+                plan["items"][0]["xmpDestinationRelativePath"] = json!("album/photo.xmp");
+                assert!(verify(&freeze(plan.clone())).is_ok());
+                plan["items"][0]["xmpDestinationRelativePath"] = json!("album/other.xmp");
+                assert_eq!(
+                    verify(&freeze(plan)).unwrap_err(),
+                    "Frozen import sidecar path is invalid."
+                );
+            }
+        }
+    }
 }

@@ -8,6 +8,7 @@ import {
   IconFolder,
   IconTrash,
 } from "@/components/shell/icons";
+import { DeleteFromDiskConfirm } from "@/components/library/DeleteFromDiskConfirm";
 import { useLibraryStore } from "@/stores/library-store";
 
 interface RemovePhotosPopupProps {
@@ -35,6 +36,14 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   const archiveEntries = useLibraryStore((state) => state.archiveEntries);
   const restoreEntries = useLibraryStore((state) => state.restoreEntries);
   const deleteVirtualCopy = useLibraryStore((state) => state.deleteVirtualCopy);
+  const deleteEntriesFromDisk = useLibraryStore(
+    (state) => state.deleteEntriesFromDisk,
+  );
+  const [confirmDiskDelete, setConfirmDiskDelete] = useState(false);
+  const sourceIds = new Set(
+    entries.filter((entry) => entryIds.includes(entry.id)).map((entry) => entry.assetId),
+  );
+  const dependentEntryCount = entries.filter((entry) => sourceIds.has(entry.assetId)).length;
   const isArchiveView = catalogView.type === "archive";
   const [highlightIndex, setHighlightIndex] = useState(0);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -57,9 +66,8 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
         }] : []),
         {
           id: "disk" as const,
-          label: "Remove from disk — unavailable",
-          description: "Safe, recoverable deletion is not available yet.",
-          disabled: true,
+          label: "Remove from disk",
+          description: "Move source files to Trash and remove all linked edits.",
         },
       ];
     }
@@ -102,9 +110,8 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
     });
     result.push({
       id: "disk",
-      label: "Remove from disk — unavailable",
-      description: "Safe, recoverable deletion is not available yet.",
-      disabled: true,
+      label: "Remove from disk",
+      description: "Move source files to Trash and remove all linked edits.",
     });
 
     return result;
@@ -116,7 +123,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
   useEffect(() => {
     dialogRef.current?.focus();
-  }, []);
+  }, [confirmDiskDelete]);
 
   useEffect(() => {
     const highlighted = listRef.current?.children[activeIndex] as
@@ -128,6 +135,10 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   const runAction = useCallback(
     async (option: ActionOption) => {
       if (option.disabled) return;
+      if (option.id === "disk") {
+        setConfirmDiskDelete(true);
+        return;
+      }
       if (option.id === "album") {
         if (catalogView.type === "album") {
           removeEntriesFromAlbum(catalogView.albumId, entryIds);
@@ -173,6 +184,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
   );
 
   useEffect(() => {
+    if (confirmDiskDelete) return;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -209,7 +221,7 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [activeIndex, onClose, options, runAction]);
+  }, [activeIndex, confirmDiskDelete, onClose, options, runAction]);
 
   const photoLabel =
     entryIds.length === 1 ? "1 photo" : `${entryIds.length} photos`;
@@ -227,6 +239,19 @@ export function RemovePhotosPopup({ entryIds, onClose }: RemovePhotosPopupProps)
       case "copy":
         return IconTrash;
     }
+  }
+
+  if (confirmDiskDelete) {
+    return (
+      <DeleteFromDiskConfirm
+        sourceCount={sourceIds.size}
+        dependentEntryCount={dependentEntryCount}
+        onClose={() => setConfirmDiskDelete(false)}
+        onConfirm={() => {
+          void deleteEntriesFromDisk(entryIds).then(onClose).catch(() => {});
+        }}
+      />
+    );
   }
 
   return createPortal(

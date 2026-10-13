@@ -70,11 +70,13 @@ function transferList(result: V3PreviewRenderOutput): Transferable[] {
 function assetsFor(): CpuAssetAvailability | undefined {
   if (maskMattes.length === 0) return undefined;
   const mattes = new Map(
-    maskMattes.map((matte) => [matte.assetId, matte] as const),
+    maskMattes.filter((matte) => matte.kind !== "depth-map").map((matte) => [matte.assetId, matte] as const),
   );
+  const depths = new Map(maskMattes.filter((matte) => matte.kind === "depth-map").map((matte) => [matte.assetId, matte] as const));
   return {
-    hasAsset: (assetId) => mattes.has(assetId),
+    hasAsset: (assetId) => mattes.has(assetId) || depths.has(assetId),
     maskMatte: (assetId) => mattes.get(assetId),
+    depthMap: (assetId) => depths.get(assetId),
   };
 }
 

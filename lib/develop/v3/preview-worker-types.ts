@@ -12,6 +12,7 @@ export type V3PreviewWorkerImage = Omit<DevelopImage, "blob" | "objectUrl">;
 
 export interface V3PreviewWorkerMaskMatte {
   readonly assetId: string;
+  readonly kind?: "mask-matte" | "depth-map";
   readonly width: number;
   readonly height: number;
   readonly pixels: Uint8Array;

@@ -1236,10 +1236,24 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     });
     const confirmed = await api.catalogReadSidecar(request);
     if (!confirmed) throw new Error("XMP sidecar disappeared after publication.");
-    const latest = get();
-    if (latest.catalogId !== started.catalogId || latest.sessionId !== started.sessionId) {
+    if (get().catalogId !== started.catalogId || get().sessionId !== started.sessionId) {
       throw new Error("Catalog changed before XMP publication completed.");
     }
+    if (resolution === "merge") {
+      // Apply the merged result to the catalog (HH-09), but only for fields
+      // the merge actually considered. Catalog-only values that live solely
+      // in entryMetadata (e.g. written by an import preset, with no
+      // override, baseline, or sidecar field) must survive publication.
+      const touchedFields = METADATA_EDITABLE_FIELDS.filter(
+        (field) =>
+          baseline[field] !== undefined ||
+          catalogProjection[field] !== undefined ||
+          sidecarProjection[field] !== undefined,
+      );
+      get().resetMetadataFields([entryId], touchedFields);
+      get().applyMetadataOverrides([entryId], desired);
+    }
+    const latest = get();
     set({
       libraryWorkspace: {
         ...latest.libraryWorkspace,
@@ -1882,6 +1896,14 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   mergeKeyword: (sourceId, targetId) => {
     const workspace = get().libraryWorkspace;
     if (sourceId === targetId || !workspace.keywords.some((item) => item.id === sourceId) || !workspace.keywords.some((item) => item.id === targetId)) return;
+    let ancestor = workspace.keywords.find((item) => item.id === targetId);
+    const visited = new Set<string>();
+    while (ancestor && !visited.has(ancestor.id)) {
+      visited.add(ancestor.id);
+      const parentId = ancestor.parentId;
+      if (parentId === sourceId) return;
+      ancestor = workspace.keywords.find((item) => item.id === parentId);
+    }
     const entryKeywordIds = Object.fromEntries(
       Object.entries(workspace.entryKeywordIds).map(([entryId, ids]) => [
         entryId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 interface DeleteFromDiskConfirmProps {
@@ -17,6 +17,12 @@ export function DeleteFromDiskConfirm({
   onClose,
 }: DeleteFromDiskConfirmProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  const confirm = useCallback(() => {
+    if (busy) return;
+    setBusy(true);
+    onConfirm();
+  }, [busy, onConfirm]);
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -34,13 +40,13 @@ export function DeleteFromDiskConfirm({
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        onConfirm();
+        confirm();
       }
     }
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [onConfirm, onClose]);
+  }, [confirm, onClose]);
 
   const photoLabel = `${sourceCount} source ${sourceCount === 1 ? "file" : "files"} · ${dependentEntryCount} linked edit ${dependentEntryCount === 1 ? "entry" : "entries"}`;
 
@@ -80,14 +86,16 @@ export function DeleteFromDiskConfirm({
           <button
             type="button"
             onClick={onClose}
-            className="rounded px-2.5 py-1 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text"
+            disabled={busy}
+            className="rounded px-2.5 py-1 text-xs text-lr-text-muted transition hover:bg-lr-panel-raised hover:text-lr-text disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="button"
-            onClick={onConfirm}
-            className="rounded bg-red-500/20 px-2.5 py-1 text-xs text-red-400 transition hover:bg-red-500/30"
+            onClick={confirm}
+            disabled={busy}
+            className="rounded bg-red-500/20 px-2.5 py-1 text-xs text-red-400 transition hover:bg-red-500/30 disabled:opacity-50"
           >
             Remove from disk
           </button>

@@ -24,6 +24,7 @@ import {
   type Sha256Digest,
 } from "@/lib/develop/render-contract";
 import type { LibraryEntry } from "@/lib/fs/types";
+import { sourceSignaturesEqual } from "@/lib/develop/source-transform";
 import { cameraProfileIsCompatible } from "@/lib/camera-profiles/matrix";
 import {
   MAX_EXPORT_EDGE,
@@ -31,7 +32,14 @@ import {
   type ExportFormatId,
   type ExportSizeOptions,
 } from "@/lib/export/types";
-import { acceptedAssetRevision, type DevelopAssetRef } from "./assets";
+import { acceptedAssetRevision, type DevelopAssetDescriptor, type DevelopAssetRef } from "./assets";
+import {
+  DEPTH_MAP_CHANNELS,
+  DEPTH_MAP_FLOAT32_LE,
+  DEPTH_MAP_FORMAT_VERSION,
+  DEPTH_MAP_HEADER_BYTES,
+  DEPTH_MAP_MAGIC,
+} from "./asset-store";
 import { V3_COMPILER_VERSION } from "./compiler";
 import {
   MAX_CPU_EXPORT_PIXELS,
@@ -377,16 +385,33 @@ async function runtimeAssets(
     Object.values(legacy?.maskAssets ?? {}).map((asset) => [asset.sha256, asset]),
   );
   const requiredIds = new Set<string>();
+  const currentIds = new Set<string>();
+  const staleIds = new Set<string>();
   for (const mask of document.local.masks) {
     for (const node of maskSourceNodes(mask.expression)) {
-      if (node.source.kind === "ai-matte" && acceptedMasks.has(node.source.asset.assetId)) {
+      if (node.source.kind === "ai-matte" || node.source.kind === "depth-range") {
         requiredIds.add(node.source.asset.assetId);
+        if (acceptedMasks.has(node.source.asset.assetId) && sourceSignaturesEqual(node.source.source, source.signature)) {
+          currentIds.add(node.source.asset.assetId);
+        } else {
+          staleIds.add(node.source.asset.assetId);
+        }
       }
     }
   }
   if (requiredIds.size === 0) return supplied;
+  for (const assetId of staleIds) currentIds.delete(assetId);
   const decoded = new Map<string, DecodedMaskAsset>();
-  await Promise.all([...requiredIds].map(async (assetId) => {
+  await Promise.all([...currentIds].map(async (assetId) => {
+    const reference = acceptedMasks.get(assetId);
+    if (!reference) return;
+    const provided = reference.kind === "depth-map"
+      ? supplied?.depthMap?.(assetId)
+      : supplied?.maskMatte?.(assetId);
+    if (provided && supplied?.hasAsset(assetId)) {
+      decoded.set(assetId, provided);
+      return;
+    }
     const retained = retainedByDigest.get(assetId);
     if (retained) {
       try {
@@ -397,14 +422,18 @@ async function runtimeAssets(
       }
     }
     if (typeof window === "undefined" || !window.darkroom) return;
-    const reference = acceptedMasks.get(assetId);
-    if (!reference) return;
     try {
       const result = await window.darkroom.developAssetRead({
         reference,
         sourceSignature: source.signature,
       });
-      if (result.kind !== "ready" || result.descriptor.mimeType !== "image/png") return;
+      if (result.kind !== "ready") return;
+      if (reference.kind === "depth-map") {
+        if (result.descriptor.mimeType !== "application/x-darkroom-depth") return;
+        decoded.set(assetId, decodeV3DepthAsset(result.descriptor, result.bytes));
+        return;
+      }
+      if (result.descriptor.mimeType !== "image/png") return;
       decoded.set(assetId, await cachedMaskAssetBytes({
         id: assetId,
         sha256: result.descriptor.sha256,
@@ -414,14 +443,46 @@ async function runtimeAssets(
         byteLength: result.descriptor.byteLength,
       }, result.bytes));
     } catch {
-      // Preflight reports an unavailable matte and blocks export.
+      // Preflight reports unavailable raster assets and blocks export.
     }
   }));
-  if (decoded.size === 0) return supplied;
   return {
-    hasAsset: (assetId) => decoded.has(assetId) || (supplied?.hasAsset(assetId) ?? false),
-    maskMatte: (assetId) => decoded.get(assetId) ?? supplied?.maskMatte?.(assetId),
+    ...supplied,
+    hasAsset: (assetId) => requiredIds.has(assetId) ? decoded.has(assetId) : (supplied?.hasAsset(assetId) ?? false),
+    maskMatte: (assetId) => requiredIds.has(assetId)
+      ? acceptedMasks.get(assetId)?.kind === "mask-matte" ? decoded.get(assetId) : undefined
+      : supplied?.maskMatte?.(assetId),
+    depthMap: (assetId) => requiredIds.has(assetId)
+      ? acceptedMasks.get(assetId)?.kind === "depth-map" ? decoded.get(assetId) : undefined
+      : supplied?.depthMap?.(assetId),
   };
+}
+
+export function decodeV3DepthAsset(
+  descriptor: Pick<DevelopAssetDescriptor, "dimensions" | "byteLength">,
+  bytes: Uint8Array,
+): DecodedMaskAsset {
+  const { width, height } = descriptor.dimensions;
+  const count = width * height;
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 ||
+      !Number.isSafeInteger(count) || count > MAX_EXPORT_PIXELS ||
+      bytes.byteLength !== descriptor.byteLength || bytes.byteLength !== DEPTH_MAP_HEADER_BYTES + count * 4 ||
+      !DEPTH_MAP_MAGIC.every((value, index) => bytes[index] === value)) {
+    throw new Error("Depth asset size or signature is invalid.");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint16(8, true) !== DEPTH_MAP_FORMAT_VERSION || view.getUint8(10) !== DEPTH_MAP_FLOAT32_LE || view.getUint8(11) !== DEPTH_MAP_CHANNELS ||
+      view.getUint32(12, true) !== width || view.getUint32(16, true) !== height ||
+      view.getUint32(20, true) !== width * 4) {
+    throw new Error("Depth asset header is invalid.");
+  }
+  const pixels = new Uint8Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const value = view.getFloat32(DEPTH_MAP_HEADER_BYTES + index * 4, true);
+    if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error("Depth asset values are invalid.");
+    pixels[index] = Math.round(value * 255);
+  }
+  return { width, height, pixels };
 }
 
 export async function loadV3MaskCoverageAssets(
@@ -433,11 +494,13 @@ export async function loadV3MaskCoverageAssets(
   return {
     sourceSignature: source.signature,
     maskMatte: assets.maskMatte,
+    depthMap: assets.depthMap,
   };
 }
 
 export interface V3PreviewMaskMatte {
   readonly assetId: string;
+  readonly kind?: "mask-matte" | "depth-map";
   readonly width: number;
   readonly height: number;
   readonly pixels: Uint8Array;
@@ -451,7 +514,7 @@ export async function loadV3PreviewMaskMattes(
   const requiredIds = new Set<string>();
   for (const mask of document.local.masks) {
     for (const node of maskSourceNodes(mask.expression)) {
-      if (node.source.kind === "ai-matte") requiredIds.add(node.source.asset.assetId);
+      if (node.source.kind === "ai-matte" || node.source.kind === "depth-range") requiredIds.add(node.source.asset.assetId);
     }
   }
   if (requiredIds.size === 0) return [];
@@ -460,8 +523,9 @@ export async function loadV3PreviewMaskMattes(
   const assets = await runtimeAssets(document, sourceResult.source, undefined);
   if (!assets?.maskMatte) return [];
   return [...requiredIds].flatMap((assetId) => {
-    const matte = assets.maskMatte?.(assetId);
-    return matte ? [{ assetId, ...matte }] : [];
+    const kind = document.local.maskAssetRefs.find((reference) => reference.assetId === assetId)?.kind;
+    const matte = kind === "depth-map" ? assets.depthMap?.(assetId) : assets.maskMatte?.(assetId);
+    return matte ? [{ assetId, kind: kind === "depth-map" ? "depth-map" as const : "mask-matte" as const, ...matte }] : [];
   });
 }
 

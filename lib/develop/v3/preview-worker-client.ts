@@ -16,6 +16,7 @@ import type { LibraryEntry } from "@/lib/fs/types";
 import type { ExportSizeOptions } from "@/lib/export/types";
 import type { MainThreadGpuPreview } from "./main-thread-preview";
 import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
+import { maskSourceNodes } from "./masking";
 
 interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
@@ -252,7 +253,12 @@ export class V3PreviewWorkerClient {
 
   async #dispatch(message: ClientMessage): Promise<void> {
     try {
-      if (this.#mainGpu) {
+      // Depth-masked documents must render in the worker: the main-thread
+      // GPU preview has no depthMap supply (HH-12).
+      const hasDepthMasks = message.document.local.masks.some((mask) =>
+        maskSourceNodes(mask.expression).some((node) => node.source.kind === "depth-range"),
+      );
+      if (this.#mainGpu && !hasDepthMasks) {
         const renderer = await this.#mainGpu;
         // Compute, advance, and hand off with no await in between so
         // concurrent dispatches stay in order. The renderer applies the

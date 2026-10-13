@@ -175,7 +175,17 @@ function KeywordItem({
               })()} className="block w-full rounded px-2 py-1.5 text-left text-[11px] text-lr-text-muted hover:bg-lr-panel-hover">Move under…</button>
             ) : null}
             <button type="button" onClick={() => void (async () => {
-              const targets = [...childrenByParent.values()].flat().filter((item) => item.id !== keyword.id);
+              const descendants = new Set<string>();
+              const pending = [keyword.id];
+              while (pending.length > 0) {
+                const current = pending.pop();
+                for (const child of childrenByParent.get(current ?? "") ?? []) {
+                  if (descendants.has(child.id)) continue;
+                  descendants.add(child.id);
+                  pending.push(child.id);
+                }
+              }
+              const targets = [...childrenByParent.values()].flat().filter((item) => item.id !== keyword.id && !descendants.has(item.id));
               if (targets.length === 0) return;
               const targetId = await requestText({
                 title: "Merge keyword",

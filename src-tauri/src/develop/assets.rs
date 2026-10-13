@@ -187,6 +187,29 @@ fn rejected(reason: &str, message: &str) -> Value {
 fn issue(kind: &str, reason: &str, action: &str, message: &str) -> Value {
     json!({"kind":kind,"reason":reason,"action":action,"message":message})
 }
+pub(crate) fn rebind_catalog(value: &mut Value, source_id: &str, target_id: &str) {
+    match value {
+        Value::Object(object) => {
+            if object.get("catalogId").and_then(Value::as_str) == Some(source_id) {
+                object.insert("catalogId".into(), json!(target_id));
+            }
+            if let Some(id) = object.get("candidateId").and_then(Value::as_str) {
+                let rebound = digest(format!("{target_id}:{id}").as_bytes());
+                object.insert("candidateId".into(), json!(rebound));
+            }
+            for child in object.values_mut() {
+                rebind_catalog(child, source_id, target_id);
+            }
+        }
+        Value::Array(array) => {
+            for child in array {
+                rebind_catalog(child, source_id, target_id);
+            }
+        }
+        _ => (),
+    }
+}
+
 pub struct DevelopAssets {
     root: PathBuf,
 }
@@ -198,6 +221,120 @@ impl DevelopAssets {
         }
         Ok(Self { root })
     }
+    pub(crate) fn package_catalog(
+        &self,
+        catalog_id: &str,
+        required: &HashSet<String>,
+        destination: &Path,
+    ) -> Result<(), String> {
+        for id in required.iter().collect::<BTreeSet<_>>() {
+            hash(&json!(id))?;
+            let mut manifest = self
+                .manifest(id)?
+                .ok_or("Catalog references missing Develop assets; backup is incomplete.")?;
+            manifest["records"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|record| {
+                    record["candidate"]["descriptor"]["sourceSignature"]["catalogId"] == catalog_id
+                });
+            if manifest["records"].as_array().unwrap().is_empty() {
+                return Err("Catalog Develop asset has no matching source binding.".into());
+            }
+            let bytes = read(&self.path("objects", id, "asset"), LIMIT)?;
+            for record in manifest["records"].as_array().unwrap() {
+                let descriptor = &record["candidate"]["descriptor"];
+                if bytes.len() as u64 != descriptor["byteLength"].as_u64().unwrap()
+                    || digest(&bytes) != *id
+                    || !content(descriptor, &bytes)
+                {
+                    return Err("Catalog Develop asset is corrupt.".into());
+                }
+            }
+            let root = destination.join("develop-assets-v3");
+            atomic_write(
+                &root
+                    .join("objects")
+                    .join(&id[..2])
+                    .join(format!("{id}.asset")),
+                &bytes,
+                true,
+            )?;
+            atomic_json(
+                &root
+                    .join("manifests")
+                    .join(&id[..2])
+                    .join(format!("{id}.json")),
+                &manifest,
+                MANIFEST_LIMIT,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn restore_catalog(
+        &mut self,
+        package: &Path,
+        source_id: &str,
+        target_id: &str,
+    ) -> Result<(), String> {
+        if !package.join("develop-assets-v3").exists() {
+            return Ok(());
+        }
+        let packaged = Self {
+            root: package.join("develop-assets-v3"),
+        };
+        for shard in fs::read_dir(packaged.root.join("manifests")).map_err(|e| e.to_string())? {
+            for entry in
+                fs::read_dir(shard.map_err(|e| e.to_string())?.path()).map_err(|e| e.to_string())?
+            {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let id = name
+                    .strip_suffix(".json")
+                    .filter(|id| valid_hash(id))
+                    .ok_or("Packaged asset name is invalid.")?;
+                let manifest = packaged
+                    .manifest(id)?
+                    .ok_or("Packaged asset manifest is missing.")?;
+                let bytes = read(&packaged.path("objects", id, "asset"), LIMIT)?;
+                for mut record in manifest["records"].as_array().unwrap().clone() {
+                    if record["candidate"]["descriptor"]["sourceSignature"]["catalogId"]
+                        != source_id
+                    {
+                        return Err("Packaged asset belongs to a different catalog.".into());
+                    }
+                    rebind_catalog(&mut record, source_id, target_id);
+                    let candidate = &record["candidate"];
+                    let request = json!({"candidate":candidate,"nowMs":record["createdAtMs"],"recoveryUntilMs":record["recoveryUntilMs"]});
+                    let stored = self.put(&request, &bytes)?;
+                    if !["stored", "deduplicated"].contains(&stored["kind"].as_str().unwrap_or(""))
+                    {
+                        return Err(format!(
+                            "Could not restore Develop asset: {}",
+                            stored["message"]
+                        ));
+                    }
+                    if record["lifecycle"] != "preview-candidate" {
+                        let mut transition = request;
+                        transition["lifecycle"] = record["lifecycle"].clone();
+                        transition["reference"] = accepted_ref(candidate);
+                        let result = self.transition(&transition)?;
+                        if !["changed", "unchanged"]
+                            .contains(&result["kind"].as_str().unwrap_or(""))
+                        {
+                            return Err(format!(
+                                "Could not restore Develop asset lifecycle: {}",
+                                result["message"]
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn path(&self, group: &str, id: &str, extension: &str) -> PathBuf {
         self.root
             .join(group)
