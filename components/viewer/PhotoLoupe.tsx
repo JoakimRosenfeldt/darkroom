@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { disposeDevelopImage, loadDevelopExportImage, type DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import { buildV3SourceRecord, loadV3PreviewMaskMattes, resolveV3ExportDimensions } from "@/lib/develop/v3/runtime";
@@ -84,7 +83,7 @@ function intersectsView(tile: DetailTile, originX: number, originY: number, widt
     tile.fullY < originY + height && tile.fullY + tile.fullHeight > originY;
 }
 
-export function PhotoLoupe({ entry, document, position, focusPosition, onPositionChange, displaySize, basePreviewDimensions, onSourceDimensions, active = true, preload = false, passive = false, panning = false, showStatus = true, canvasContainer }: {
+export function PhotoLoupe({ entry, document, position, focusPosition, onPositionChange, displaySize, basePreviewDimensions, onSourceDimensions, active = true, preload = false, passive = false, panning = false, showStatus = true }: {
   entry: LibraryEntry;
   document: DevelopDocumentV3;
   position?: LoupePosition;
@@ -98,7 +97,6 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
   passive?: boolean;
   panning?: boolean;
   showStatus?: boolean;
-  canvasContainer?: HTMLElement | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -237,7 +235,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
     }
     drawRef.current = drawCachedTiles;
     drawRef.current();
-  }, [active, currentInput, source, entry, document, viewport, canvasContainer, drawCachedTiles]);
+  }, [active, currentInput, source, entry, document, viewport, drawCachedTiles]);
 
   useEffect(() => {
     if (loadReady || (!active && !preload) || (passive && panning)) return;
@@ -604,7 +602,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
       onPositionChange?.(next);
     }}
     onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
-    {canvasContainer === undefined ? canvas : canvasContainer ? createPortal(canvas, canvasContainer) : null}
+    {canvas}
     {visibleStatus ? <p role="status" className="absolute bottom-4 max-w-lg rounded bg-black/80 px-3 py-2 text-center text-xs text-white">{visibleStatus}</p> : null}
   </div>;
 }

@@ -44,6 +44,42 @@ test("decodes through the mock, caps preview size, and removes temporary output"
   assert.deepEqual(await readdir(sample.temp), []);
 });
 
+test("full mode sends an uncapping max edge so helpers cannot scale it to preview size", async (t) => {
+  const sample = await fixture();
+  t.after(() => rm(sample.root, { recursive: true, force: true }));
+  const report = path.join(sample.root, "argv.jsonl");
+  const helper = path.join(sample.root, "argv-reporter.mjs");
+  await writeFile(helper, `
+    import { appendFile, writeFile } from "node:fs/promises";
+    import path from "node:path";
+    const output = process.argv[process.argv.indexOf("--output") + 1];
+    await appendFile(process.env.REPORT_PATH, JSON.stringify({
+      mode: process.argv[process.argv.indexOf("--mode") + 1],
+      maxEdge: process.argv[process.argv.indexOf("--max-edge") + 1],
+    }) + "\\n");
+    await writeFile(path.join(output, "pixels.bin"), Buffer.alloc(6));
+    await writeFile(path.join(output, "result.json"), JSON.stringify({
+      version: 1, width: 1, height: 1, channels: 3, bitDepth: 16,
+      byteCount: 6, pixelFormat: "rgb16le", orientation: 1,
+      colorSpace: "srgb", transferFunction: "srgb"
+    }));
+  `);
+  const service = createNefDecoderService({
+    helper: { executable: process.execPath, fixedArgs: [helper], env: { REPORT_PATH: report } },
+    tempRoot: sample.temp,
+  });
+
+  const full = await service.decode(sample.library, { relativePath: "photo.nef", mode: "full", maxEdge: 2560 });
+  const preview = await service.decode(sample.library, { relativePath: "photo.nef", mode: "preview", maxEdge: 99_999 });
+  assert.equal(full.available, true);
+  assert.equal(preview.available, true);
+  const calls = (await readFile(report, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(calls, [
+    { mode: "full", maxEdge: "65535" },
+    { mode: "preview", maxEdge: "2560" },
+  ]);
+});
+
 test("checked-in mock pixels stay test-only even when the command is mislabeled", async (t) => {
   const sample = await fixture("native");
   t.after(() => rm(sample.root, { recursive: true, force: true }));
