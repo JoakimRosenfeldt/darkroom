@@ -626,33 +626,136 @@ async fn darkroom_libraw_decode(
     ));
     let (bytes, handle) = decoded?;
     if let Some(handle) = handle {
-        tauri::async_runtime::spawn_blocking(move || {
-            let started = Instant::now();
-            let Ok(mut state) = GPU.get_or_init(|| Mutex::new(GpuState::new())).lock() else {
-                return;
-            };
-            if state.sync_generation() != generation {
-                return;
-            }
-            let source = raw_sources()
-                .lock()
-                .ok()
-                .and_then(|mut sources| sources.get(&handle));
-            let Some(source) = source else {
-                return;
-            };
-            if let Ok(renderer) = state.renderer.as_mut()
-                && let Err(error) = renderer.prepare_source(handle, &source, true)
-            {
-                eprintln!("Could not prepare native RAW source: {error}");
-            }
-            timing(format_args!(
-                "prepare source texture: {} ms",
-                started.elapsed().as_millis()
-            ));
-        });
+        spawn_prepare_source(handle, generation);
     }
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn spawn_prepare_source(handle: String, generation: u64) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = Instant::now();
+        if GPU_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        let source = raw_sources()
+            .lock()
+            .ok()
+            .and_then(|mut sources| sources.get(&handle));
+        let Some(source) = source else {
+            return;
+        };
+        // Expand and Y-flip outside the GPU lock so interactive preview frames never wait on CPU packing.
+        let (wgpu_format, bpp, expanded) = gpu::expand_source_for_gpu(&source, true);
+        let Ok(mut state) = GPU.get_or_init(|| Mutex::new(GpuState::new())).lock() else {
+            return;
+        };
+        if state.sync_generation() != generation {
+            return;
+        }
+        if let Ok(renderer) = state.renderer.as_mut()
+            && let Err(error) = renderer.prepare_source_expanded(
+                handle,
+                source.format,
+                source.width,
+                source.height,
+                true,
+                wgpu_format,
+                bpp,
+                &expanded,
+            )
+        {
+            eprintln!("Could not prepare native source: {error}");
+        }
+        timing(format_args!(
+            "prepare source texture: {} ms",
+            started.elapsed().as_millis()
+        ));
+    });
+}
+
+#[tauri::command]
+async fn darkroom_decode_standard(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, Arc<Backend>>,
+    jobs: tauri::State<'_, Arc<RawDecodeJobs>>,
+    request_id: String,
+    request: Value,
+    options: native::StandardDecodeOptions,
+    on_started: tauri::ipc::Channel<()>,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err("Image decode request id is invalid.".into());
+    }
+    let cancelled = Arc::new(RawDecodeCancellation::default());
+    {
+        let mut active = jobs
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| "Image decoder is unavailable.")?;
+        if active.contains_key(&request_id) {
+            return Err("Image decode request id is already active.".into());
+        }
+        active.insert(request_id.clone(), cancelled.clone());
+    }
+    let job = RawDecodeJob {
+        id: request_id,
+        cancelled,
+        jobs: jobs.inner().clone(),
+    };
+    on_started.send(()).map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let backend = state.inner().clone();
+    let generation = GPU_GENERATION.load(Ordering::Acquire);
+    let decoded = tauri::async_runtime::spawn_blocking(move || {
+        let job = job;
+        if job.cancelled.requested.load(Ordering::Relaxed) {
+            return Err("Image decode was cancelled.".into());
+        }
+        let location = backend
+            .catalog
+            .lock()
+            .map_err(|_| "Catalog service is unavailable.")?
+            .resolve_asset(&request)?;
+        native::decode_standard(&location, &options, &job.cancelled.requested)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    timing(format_args!(
+        "standard decode: {} ms",
+        started.elapsed().as_millis()
+    ));
+    let (bytes, handle) = decoded?;
+    if let Some(handle) = handle {
+        spawn_prepare_source(handle, generation);
+    }
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+async fn darkroom_read_source(
+    window: tauri::WebviewWindow,
+    handle: String,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
+        return Err("Untrusted desktop request.".into());
+    }
+    if uuid::Uuid::parse_str(&handle).is_err() {
+        return Err("Native source handle is invalid.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = raw_sources()
+            .lock()
+            .map_err(|_| "Native source cache is unavailable.")?
+            .get(&handle)
+            .ok_or("Native source is unavailable")?;
+        Ok(tauri::ipc::Response::new(source.data.clone()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -754,10 +857,36 @@ struct GpuState {
 
 const RAW_SOURCE_LIMIT: usize = 384 * 1024 * 1024;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NativeSourceFormat {
+    Rgb16,
+    Rgb8,
+    Rgba8,
+}
+
+impl NativeSourceFormat {
+    pub(crate) fn spec_format(self) -> &'static str {
+        match self {
+            Self::Rgb16 => "rgb16uint",
+            Self::Rgb8 => "rgb8unorm",
+            Self::Rgba8 => "rgba8unorm",
+        }
+    }
+
+    pub(crate) fn bytes_per_pixel(self) -> u64 {
+        match self {
+            Self::Rgb16 => 6,
+            Self::Rgb8 => 3,
+            Self::Rgba8 => 4,
+        }
+    }
+}
+
 pub(crate) struct RawSource {
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) rgb16: Vec<u8>,
+    pub(crate) format: NativeSourceFormat,
+    pub(crate) data: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -769,9 +898,9 @@ pub(crate) struct RawSources {
 
 impl RawSources {
     pub(crate) fn insert(&mut self, handle: String, source: RawSource) {
-        let size = source.rgb16.len();
+        let size = source.data.len();
         if let Some(old) = self.entries.remove(&handle) {
-            self.bytes -= old.rgb16.len();
+            self.bytes -= old.data.len();
             self.lru.retain(|key| key != &handle);
         }
         while self.bytes + size > RAW_SOURCE_LIMIT {
@@ -779,7 +908,7 @@ impl RawSources {
                 break;
             };
             if let Some(old) = self.entries.remove(&oldest) {
-                self.bytes -= old.rgb16.len();
+                self.bytes -= old.data.len();
             }
         }
         self.bytes += size;
@@ -1030,8 +1159,10 @@ pub fn run() {
             darkroom_read,
             darkroom_preview,
             darkroom_decode,
+            darkroom_decode_standard,
             darkroom_libraw_decode,
             darkroom_libraw_cancel,
+            darkroom_read_source,
             darkroom_export,
             darkroom_gpu,
             darkroom_gpu_info,
@@ -1137,11 +1268,15 @@ pub fn run_backend_console() -> Result<(), String> {
 }
 
 #[cfg(test)]
+pub(crate) static RAW_SOURCES_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn raw_sources_evict_oldest_and_reset_with_gpu_sessions() {
+        let _guard = RAW_SOURCES_TEST_LOCK.lock().unwrap();
         let mut sources = raw_sources().lock().unwrap();
         sources.clear();
         for index in 0..4 {
@@ -1150,7 +1285,8 @@ mod tests {
                 RawSource {
                     width: 1,
                     height: 1,
-                    rgb16: vec![index as u8; 128 * 1024 * 1024],
+                    format: NativeSourceFormat::Rgb16,
+                    data: vec![index as u8; 128 * 1024 * 1024],
                 },
             );
         }

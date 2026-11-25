@@ -17,9 +17,9 @@ const nativeTextDecoder = new TextDecoder();
 export type NativeGpuTransport = (bytes: Uint8Array<ArrayBuffer>) => Promise<ArrayBuffer>;
 let workerTransport: NativeGpuTransport | null = null;
 let cachedMaxTextureDimension: number | null = null;
-const nativeSources = new WeakMap<Uint16Array, string>();
+const nativeSources = new WeakMap<ArrayBufferView, string>();
 
-export function registerNativeSource(pixels: Uint16Array, handle: string): void {
+export function registerNativeSource(pixels: ArrayBufferView, handle: string): void {
   nativeSources.set(pixels, handle);
 }
 
@@ -107,7 +107,7 @@ export class NativeGpuContext {
   readonly #readbacks = new Map<number, Uint8Array<ArrayBuffer>>();
   #shaders: { id: number; source: string }[] = [];
   #uploads: TextureUpload[] = [];
-  #sourcePixels = new Map<string, Uint16Array>();
+  #sourcePixels = new Map<string, ArrayBufferView>();
   #deleted: number[] = [];
   #passes: Pass[] = [];
   #chunks: (Uint8Array | ConvertedChunk)[] = [];
@@ -222,7 +222,8 @@ export class NativeGpuContext {
     const formats = new Map([[this.RGB8, "rgb8unorm"], [this.RGBA8, "rgba8unorm"], [this.RGB16UI, "rgba16uint"], [this.RGBA32UI, "rgba32uint"], [this.RGBA32F, "rgba32float"], [this.RGBA16F, "rgba16float"], [this.R32F, "r32float"]]);
     const name = formats.get(format);
     if (!name) throw new Error("Unsupported native texture format.");
-    const handle = format === this.RGB16UI && pixels instanceof Uint16Array
+    const handle = pixels &&
+      (format === this.RGB16UI || format === this.RGB8 || format === this.RGBA8)
       ? nativeSources.get(pixels)
       : undefined;
     const range = handle
@@ -230,7 +231,7 @@ export class NativeGpuContext {
       : format === this.RGB16UI && pixels instanceof Uint16Array
         ? this.#append({ kind: "rgb16", pixels, width, height, layers, flipY: false })
         : pixels ? this.#append(pixels) : {};
-    if (handle && pixels instanceof Uint16Array) this.#sourcePixels.set(handle, pixels);
+    if (handle && pixels) this.#sourcePixels.set(handle, pixels);
     // Packed RGB8/RGB16 sources are expanded and Y-flipped natively instead of in the webview.
     const uploadFormat = format === this.RGB16UI && pixels instanceof Uint16Array ? "rgb16uint" : name;
     this.#uploads.push({
@@ -306,16 +307,24 @@ export class NativeGpuContext {
         const textures = batch.textures.map((upload) => {
           if (!upload.source) return upload;
           const pixels = sourcePixels.get(upload.source);
-          if (!pixels) throw error;
+          if (!pixels || pixels.byteLength === 0) throw error;
           nativeSources.delete(pixels);
           const padding = (4 - offset % 4) % 4;
           if (padding) { fallbackChunks.push(new Uint8Array(padding)); offset += padding; }
-          const length = upload.width * upload.height * upload.layers * 6;
-          fallbackChunks.push({ kind: "rgb16", pixels, width: upload.width, height: upload.height, layers: upload.layers, flipY: upload.flipY ?? false });
-          const fallback = { ...upload, offset, length };
+          if (upload.format === "rgb16uint" && pixels instanceof Uint16Array) {
+            const length = upload.width * upload.height * upload.layers * 6;
+            fallbackChunks.push({ kind: "rgb16", pixels, width: upload.width, height: upload.height, layers: upload.layers, flipY: upload.flipY ?? false });
+            const fallback = { ...upload, offset, length };
+            delete fallback.source;
+            delete fallback.flipY;
+            offset += length;
+            return fallback;
+          }
+          const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+          fallbackChunks.push(bytes);
+          const fallback = { ...upload, offset, length: bytes.byteLength };
           delete fallback.source;
-          delete fallback.flipY;
-          offset += length;
+          offset += bytes.byteLength;
           return fallback;
         });
         if (fallbackChunks.length === chunks.length) throw error;
@@ -359,15 +368,23 @@ export class NativeGpuContext {
         const textures = batch.textures.map((upload) => {
           if (!upload.source) return upload;
           const pixels = sourcePixels.get(upload.source);
-          if (!pixels) throw error;
+          if (!pixels || pixels.byteLength === 0) throw error;
           nativeSources.delete(pixels);
           const padding = (4 - offset % 4) % 4;
           if (padding) { fallbackChunks.push(new Uint8Array(padding)); offset += padding; }
-          const length = upload.width * upload.height * upload.layers * 6;
-          fallbackChunks.push({ kind: "rgb16", pixels, width: upload.width, height: upload.height, layers: upload.layers, flipY: false });
-          const fallback = { ...upload, offset, length };
+          if (upload.format === "rgb16uint" && pixels instanceof Uint16Array) {
+            const length = upload.width * upload.height * upload.layers * 6;
+            fallbackChunks.push({ kind: "rgb16", pixels, width: upload.width, height: upload.height, layers: upload.layers, flipY: false });
+            const fallback = { ...upload, offset, length };
+            delete fallback.source;
+            offset += length;
+            return fallback;
+          }
+          const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+          fallbackChunks.push(bytes);
+          const fallback = { ...upload, offset, length: bytes.byteLength };
           delete fallback.source;
-          offset += length;
+          offset += bytes.byteLength;
           return fallback;
         });
         if (fallbackChunks.length === chunks.length) throw error;

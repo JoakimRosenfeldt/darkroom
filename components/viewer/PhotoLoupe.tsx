@@ -287,7 +287,8 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
 
   useEffect(() => {
     if (loadReady || (!active && !preload) || (passive && panning)) return;
-    const timer = setTimeout(() => setReadyEntry(entry), passive ? 200 : 0);
+    const delay = passive ? (isTauri() ? 60 : 200) : 0;
+    const timer = setTimeout(() => setReadyEntry(entry), delay);
     return () => clearTimeout(timer);
   }, [loadReady, entry, active, preload, passive, panning, displayWidth]);
 

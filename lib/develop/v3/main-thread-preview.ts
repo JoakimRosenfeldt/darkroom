@@ -36,7 +36,7 @@ export class MainThreadGpuPreview {
     readonly image: DevelopImage,
     readonly native = false,
   ) {
-    if (native && image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
+    if (native && image.nativeSourceHandle) {
       registerNativeSource(image.rgb, image.nativeSourceHandle);
     }
   }

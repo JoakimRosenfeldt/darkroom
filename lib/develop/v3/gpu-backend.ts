@@ -1168,7 +1168,8 @@ function sourceTexture(gl: GpuContext, input: CpuRenderInput): WebGLTexture {
       (input.image.rgb instanceof Uint8Array || input.image.rgb instanceof Uint8ClampedArray)
     ) {
       const expected = input.image.sourceWidth * input.image.sourceHeight * input.image.colors;
-      const view = input.image.rgb.length === expected
+      const handleBacked = Boolean(input.image.nativeSourceHandle) && input.image.rgb.length === 0;
+      const view = handleBacked || input.image.rgb.length === expected
         ? input.image.rgb
         : input.image.rgb.subarray(0, expected);
       if (input.image.colors === 3) {
@@ -2409,12 +2410,16 @@ export class V3GpuPreviewRenderer {
     this.#state = null;
   }
 
+  #allowNativeSourceHandle(): boolean {
+    return this.backend === "native" || (this.backend === "auto" && nativeGpuAvailable());
+  }
+
   async render(
     input: CpuRenderInput,
     options: { readonly includeAnalysis: boolean },
   ): Promise<V3GpuPreviewRenderResult | null> {
     if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return preparation;
     try {
       const frame = await this.#renderFrame(
@@ -2469,7 +2474,7 @@ export class V3GpuPreviewRenderer {
     core: RenderRegion,
   ): Promise<CpuRenderResult | null> {
     if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return null;
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     if (!validRenderRegion(core, dimensions)) return null;
@@ -2504,7 +2509,7 @@ export class V3GpuPreviewRenderer {
       input.request.requestedTaps.length > 0 ||
       v3GpuPreviewSupport(input, this.backend).kind !== "supported"
     ) return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return null;
     const core = fullOutputRegion(input);
     try {

@@ -339,11 +339,12 @@ export function PhotoViewer({
 
     void loadImage();
     // Start the full-resolution decode for 1:1 zoom without waiting for the preview.
-    // The delay skips photos passed while browsing, as Nikon SDK decodes cannot be cancelled.
+    // A short delay skips photos passed while browsing rapidly.
+    const fullPreloadDelayMs = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? 60 : 250;
     const fullTimer = developProcessKind === "v3" && entry.formatAvailability.status === "supported"
       ? setTimeout(() => {
         loadDevelopExportImage(entry, { rawColorMode, signal: controller.signal }).catch(() => undefined);
-      }, 250)
+      }, fullPreloadDelayMs)
       : undefined;
 
     return () => {

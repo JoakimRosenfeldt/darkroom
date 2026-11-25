@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { computeV3DocumentSync } from "./preview-worker-types";
 import type { NativeGpuWorkerRequest, NativeGpuWorkerResponse } from "./preview-worker-types";
-import type { DevelopImage } from "@/lib/cache/develop-image-cache";
+import { ensureDevelopImagePixels, type DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { PixelDimensions } from "@/lib/develop/process";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { V3PreviewRenderMode } from "@/lib/develop/v3/runtime";
@@ -135,6 +135,15 @@ export class V3PreviewWorkerClient {
     this.#mainGpu?.dispose();
     this.#mainGpu = this.#createMainGpu(entry, image);
     if (!this.#worker || !this.#workerReady) return;
+    const expected = image.sourceWidth * image.sourceHeight * image.colors;
+    if (image.rgb.length < expected && image.nativeSourceHandle) {
+      // Tear down the idle CPU worker so it lazily materializes pixels if ever needed.
+      this.#worker.terminate();
+      this.#worker = null;
+      this.#workerPromise = null;
+      this.#workerReady = false;
+      return;
+    }
     const source = sourceImage(image);
     const buffer = source.rgb.buffer;
     if (!(buffer instanceof ArrayBuffer)) throw new Error("The preview source pixels cannot be transferred to a worker.");
@@ -271,6 +280,11 @@ export class V3PreviewWorkerClient {
         if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
       }
       if (this.#disposed) return;
+      const expected = this.#image.sourceWidth * this.#image.sourceHeight * this.#image.colors;
+      if (this.#image.rgb.length < expected && this.#image.nativeSourceHandle) {
+        await ensureDevelopImagePixels(this.#image, this.#entry);
+        if (this.#disposed) return;
+      }
       const worker = await this.#ensureWorker();
       if (this.#disposed) return;
       const { document, ...rest } = message;

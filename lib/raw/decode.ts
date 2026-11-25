@@ -9,7 +9,7 @@ import { getAssetRequest } from "@/lib/fs/session-catalog";
 import { runWithThumbnailLimit } from "@/lib/cache/concurrency";
 import { nefProfile } from "./profiles/nef";
 import { standardImageProfile } from "./profiles/standard";
-import { decodeWithNativeLibRaw } from "./native-client";
+import { decodeWithNativeLibRaw, decodeWithNativeStandard } from "./native-client";
 import type { DecodeOptions, DecodedImage, ImageProfile } from "./types";
 
 const PROFILES: Record<"standard" | "nef", typeof standardImageProfile> = {
@@ -58,6 +58,9 @@ export async function decodeEntry(
     const request = getAssetRequest(entry);
     if (profile.id === "nef") {
       const native = await decodeWithNativeLibRaw(request, options);
+      if (native) return native;
+    } else if (profile.id === "standard") {
+      const native = await decodeWithNativeStandard(request, options);
       if (native) return native;
     }
     const file = await getFileFromEntry(entry);

@@ -552,7 +552,11 @@ function outputBlockingDiagnostic(
       };
 }
 
-function imageValidationError(image: DevelopImage, source: SourceRecord): string | null {
+function imageValidationError(
+  image: DevelopImage,
+  source: SourceRecord,
+  allowNativeSourceHandle = false,
+): string | null {
   if (
     !Number.isSafeInteger(image.sourceWidth) ||
     !Number.isSafeInteger(image.sourceHeight) ||
@@ -568,7 +572,10 @@ function imageValidationError(image: DevelopImage, source: SourceRecord): string
     return "The CPU backend accepts only RGB or RGBA source components.";
   }
   const requiredComponents = image.sourceWidth * image.sourceHeight * image.colors;
-  if (!Number.isSafeInteger(requiredComponents) || image.rgb.length < requiredComponents) {
+  const backedByNativeHandle = allowNativeSourceHandle &&
+    Boolean(image.nativeSourceHandle) &&
+    image.rgb.length === 0;
+  if (!Number.isSafeInteger(requiredComponents) || (!backedByNativeHandle && image.rgb.length < requiredComponents)) {
     return "Decoded source pixels are incomplete.";
   }
   if (source.precision.kind !== "integer") {
@@ -770,13 +777,14 @@ export function activeStageHalo(input: CpuRenderInput): number {
 function preflight(
   input: CpuRenderInput,
   plan: CompiledV3Plan,
+  allowNativeSourceHandle = false,
 ): {
   readonly notices: CpuBackendDiagnostic[];
   readonly blocking: CpuBackendBlockingDiagnostic[];
 } {
   const notices: CpuBackendDiagnostic[] = [...plan.diagnostics];
   const blocking: CpuBackendBlockingDiagnostic[] = [];
-  const imageError = imageValidationError(input.image, input.source);
+  const imageError = imageValidationError(input.image, input.source, allowNativeSourceHandle);
   if (imageError) {
     blocking.push({ kind: "source-pixels-invalid", category: "source", reason: imageError });
   }
@@ -2613,6 +2621,7 @@ function renderTiledExport(
 
 export async function prepareV3CpuRender(
   input: CpuRenderInput,
+  allowNativeSourceHandle = false,
 ): Promise<CpuRenderPreparationResult> {
   if (cancelled(input.cancellation)) return { kind: "cancelled" };
   const identityIssue = backendIdentityIssue(input.request);
@@ -2648,7 +2657,7 @@ export async function prepareV3CpuRender(
       issues: [key.issue ?? { kind: "plan-key-invalid", reason: "Plan key is missing." }],
     };
   }
-  const preflightResult = preflight(input, compiled.plan);
+  const preflightResult = preflight(input, compiled.plan, allowNativeSourceHandle);
   const blocked = nonEmptyBlocking(preflightResult.blocking);
   if (blocked) return { kind: "blocked", diagnostics: blocked };
   if (cancelled(input.cancellation)) return { kind: "cancelled" };

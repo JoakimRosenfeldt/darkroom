@@ -2,6 +2,7 @@ import { parseOperationId } from "@/lib/catalog/ids";
 import type { EntryMetadata } from "@/lib/catalog/types";
 import {
   disposeDevelopImage,
+  ensureDevelopImagePixels,
   loadDevelopExportImage,
   type DevelopImage,
 } from "@/lib/cache/develop-image-cache";
@@ -228,7 +229,8 @@ function v3RenderError(
 
 function hasCompleteSourcePixels(image: DevelopImage): boolean {
   const expected = image.sourceWidth * image.sourceHeight * image.colors;
-  return Number.isSafeInteger(expected) && expected > 0 && image.rgb.length === expected;
+  return Number.isSafeInteger(expected) && expected > 0 &&
+    (image.rgb.length === expected || Boolean(image.nativeSourceHandle));
 }
 
 function toEncodeOptions(options: ExportRunnerOptions["options"]): EncodeOptions {
@@ -281,6 +283,8 @@ function createDefaultAdapter(): ExportRunnerAdapter {
 
         let pixels: RawExportRenderResult;
         if (renderSnapshot.processKind === "v2") {
+          await ensureDevelopImagePixels(exportImage, entry, { signal: controller.signal });
+          checkCancellation();
           renderer ??= new FrozenV2Renderer(document.createElement("canvas"), true);
           pixels = await developSession.render({
             kind: "export",

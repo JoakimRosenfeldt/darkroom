@@ -1,6 +1,7 @@
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isNikonDecoderProvenance } from "@/lib/formats/registry";
 import { decodeEntry } from "@/lib/raw/decode";
+import { readNativeSourcePixels } from "@/lib/raw/native-client";
 import type { CameraProfileDecode, PixelProvenance } from "@/lib/raw/types";
 import { assetCacheKey } from "./asset-cache-key";
 
@@ -187,21 +188,74 @@ function getFullImage(key: string): DevelopImage | undefined {
   return cached;
 }
 
+function logicalImageBytes(image: DevelopImage): number {
+  const pixelBytes = image.rgb.byteLength > 0
+    ? image.rgb.byteLength
+    : image.nativeSourceHandle
+      ? image.sourceWidth * image.sourceHeight * image.colors * (image.bits > 8 ? 2 : 1)
+      : 0;
+  return pixelBytes + (image.blob?.size ?? 0);
+}
+
 function rememberFullImage(key: string, image: DevelopImage): void {
-  const imageBytes = image.rgb.byteLength + (image.blob?.size ?? 0);
+  const imageBytes = logicalImageBytes(image);
   if (imageBytes > FULL_IMAGE_CACHE_BYTES) return;
 
   fullImageCache.delete(key);
   fullImageCache.set(key, image);
   let bytes = 0;
   for (const cached of fullImageCache.values()) {
-    bytes += cached.rgb.byteLength + (cached.blob?.size ?? 0);
+    bytes += logicalImageBytes(cached);
   }
   for (const [oldestKey, oldest] of fullImageCache) {
     if (bytes <= FULL_IMAGE_CACHE_BYTES || fullImageCache.size === 1) break;
     fullImageCache.delete(oldestKey);
-    bytes -= oldest.rgb.byteLength + (oldest.blob?.size ?? 0);
+    bytes -= logicalImageBytes(oldest);
   }
+}
+
+export async function ensureDevelopImagePixels(
+  image: DevelopImage,
+  entry: LibraryEntry,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode" | "signal"> = {},
+): Promise<DevelopImage> {
+  const expected = image.sourceWidth * image.sourceHeight * image.colors;
+  if (image.rgb.length >= expected) return image;
+  options.signal?.throwIfAborted();
+  if (image.nativeSourceHandle) {
+    const pixels = await readNativeSourcePixels(image.nativeSourceHandle, image.bits);
+    options.signal?.throwIfAborted();
+    if (pixels && pixels.length >= expected) {
+      Object.defineProperty(image, "rgb", {
+        value: pixels,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      return image;
+    }
+  }
+  const rawColorMode = options.rawColorMode ??
+    (image.pixelProvenance.decoderPath === "libraw" && image.pixelProvenance.colorSpace === "camera-rgb"
+      ? "libraw-camera-matrix"
+      : "decoder-rendered");
+  const decoded = await decodeEntry(entry, {
+    fullResolution: true,
+    sourcePixels: true,
+    handleOnly: false,
+    signal: options.signal,
+    cameraProfile: cameraProfileDecode(entry, rawColorMode),
+  });
+  if (decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
+  options.signal?.throwIfAborted();
+  Object.defineProperty(image, "rgb", {
+    value: decoded.rgb,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  if (decoded.nativeSourceHandle) image.nativeSourceHandle = decoded.nativeSourceHandle;
+  return image;
 }
 
 function cloneRgb(rgb: DevelopImage["rgb"]): DevelopImage["rgb"] {
@@ -292,6 +346,17 @@ export async function loadDevelopImage(
   const image = await waitForImage(load, options.signal);
   options.signal?.throwIfAborted();
   rememberImage(cache, key, image, options.cache === "thumbnail" ? THUMBNAIL_CACHE_BYTES : EDITOR_CACHE_BYTES);
+  // If a standard image was already decoded at full native resolution with pixels,
+  // reuse it directly for 1:1 detail and export without decoding the file twice.
+  if (
+    !options.includeBlob &&
+    image.pixelProvenance.decoderPath === "processed-standard" &&
+    image.rgb.length >= image.sourceWidth * image.sourceHeight * image.colors &&
+    image.metadata.originalWidth === image.sourceWidth &&
+    image.metadata.originalHeight === image.sourceHeight
+  ) {
+    rememberFullImage(fullImageCacheKey(entry, rawColorMode), image);
+  }
   return image;
 }
 
@@ -332,6 +397,10 @@ export async function loadDevelopInferenceImage(
     throw new Error("AI source loading was cancelled.");
   }
   const decoded = await loadFullResolutionImage(entry, { signal });
+  if (signal?.aborted) {
+    throw new Error("AI source loading was cancelled.");
+  }
+  await ensureDevelopImagePixels(decoded, entry, { signal });
   if (signal?.aborted) {
     throw new Error("AI source loading was cancelled.");
   }

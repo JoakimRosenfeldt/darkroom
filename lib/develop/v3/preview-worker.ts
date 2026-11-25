@@ -291,7 +291,7 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     entry = message.entry;
     image = message.image;
     residentDocument = null;
-    if (image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
+    if (image.nativeSourceHandle) {
       registerNativeSource(image.rgb, image.nativeSourceHandle);
     }
     gpuRenderer?.dispose();

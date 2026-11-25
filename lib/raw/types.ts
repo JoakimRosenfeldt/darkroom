@@ -52,6 +52,8 @@ export interface DecodeOptions {
   fullResolution?: boolean;
   /** Decode the original image into pixels without changing thumbnail output. */
   sourcePixels?: boolean;
+  /** Keep full-resolution pixels in the native cache and return only a handle. */
+  handleOnly?: boolean;
   maxEdge?: number;
   priority?: number | (() => number);
   signal?: AbortSignal;

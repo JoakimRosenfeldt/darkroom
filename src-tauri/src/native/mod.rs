@@ -12,6 +12,7 @@ mod metadata;
 mod nef;
 mod raw_preview_cache;
 mod settings;
+mod standard_decode;
 #[cfg(windows)]
 mod windows_file;
 
@@ -29,6 +30,7 @@ pub use libraw_profile::verify_libraw_profile;
 pub use metadata::analyze_file;
 pub(crate) use metadata::{analyze_file_with_digest, sha256 as metadata_sha256};
 pub use nef::decode_asset_binary;
+pub use standard_decode::{StandardDecodeOptions, decode_standard};
 
 #[derive(Clone)]
 pub struct NativeContext {
