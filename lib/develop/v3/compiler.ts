@@ -157,9 +157,16 @@ function nonEmptyDiagnostics(
   return first ? [first, ...diagnostics.slice(1)] : null;
 }
 
+const validatedStageDefinitionsCache = new WeakMap<
+  readonly SemanticStageDefinition[],
+  readonly CompilerValidationIssue[]
+>();
+
 export function validateSemanticCompilerStages(
   definitions: readonly SemanticStageDefinition[],
 ): readonly CompilerValidationIssue[] {
+  const cached = validatedStageDefinitionsCache.get(definitions);
+  if (cached !== undefined) return cached;
   const issues: CompilerValidationIssue[] = [];
   const definitionsById = new Map<SemanticStageId, SemanticStageDefinition[]>();
   for (const definition of definitions) {
@@ -224,6 +231,7 @@ export function validateSemanticCompilerStages(
     visited.add(stageId);
   };
   for (const stageId of SEMANTIC_STAGE_IDS) visit(stageId);
+  validatedStageDefinitionsCache.set(definitions, issues);
   return issues;
 }
 

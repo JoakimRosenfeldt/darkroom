@@ -4,16 +4,19 @@ import { translateNativeFragmentShader, packNativeUniforms, type NativeShader } 
 type BinaryRange = { offset: number; length: number };
 type TextureUpload = { id: number; width: number; height: number; layers: number; format: string; source?: string; flipY?: boolean; pyramid?: { source: number; maximum: number; linear: boolean } } & Partial<BinaryRange>;
 type Pass = { shader: number; targets: number[]; textures: number[]; uniforms: BinaryRange };
-type Program = { id: number; shader: NativeShader; values: Map<string, readonly number[]>; locations: Map<string, WebGLUniformLocation> };
+type Program = { id: number; shader: NativeShader; values: Map<string, ArrayLike<number>>; locations: Map<string, WebGLUniformLocation> };
 type Read = { texture: number; format: "rgba8" | "rgba32f"; flipY?: boolean };
 type NativeBatch = { session: string; shaders: { id: number; source: string }[]; textures: TextureUpload[]; deleteTextures: number[]; passes: Pass[]; reads: Read[]; includeTiming: boolean };
 type ConvertedChunk =
   | { kind: "rgb16"; pixels: Uint16Array; width: number; height: number; layers: number; flipY: boolean }
   | { kind: "flip"; pixels: Uint8Array; rowBytes: number; height: number; layers: number };
 const MAX_BATCH_BYTES = 512 * 1024 * 1024;
+const nativeTextEncoder = new TextEncoder();
+const nativeTextDecoder = new TextDecoder();
 
 export type NativeGpuTransport = (bytes: Uint8Array<ArrayBuffer>) => Promise<ArrayBuffer>;
 let workerTransport: NativeGpuTransport | null = null;
+let cachedMaxTextureDimension: number | null = null;
 const nativeSources = new WeakMap<Uint16Array, string>();
 
 export function registerNativeSource(pixels: Uint16Array, handle: string): void {
@@ -22,6 +25,7 @@ export function registerNativeSource(pixels: Uint16Array, handle: string): void 
 
 export function setNativeGpuTransport(transport: NativeGpuTransport): void {
   workerTransport = transport;
+  cachedMaxTextureDimension = null;
 }
 
 export function nativeGpuAvailable(): boolean {
@@ -33,7 +37,7 @@ function transport(bytes: Uint8Array<ArrayBuffer>): Promise<ArrayBuffer> {
 }
 
 function packRequest(batch: NativeBatch, chunks: readonly (Uint8Array | ConvertedChunk)[], byteLength: number): Uint8Array<ArrayBuffer> {
-  const metadata = new TextEncoder().encode(JSON.stringify(batch));
+  const metadata = nativeTextEncoder.encode(JSON.stringify(batch));
   const metadataLength = Math.ceil(metadata.length / 4) * 4;
   if (4 + metadataLength + byteLength > MAX_BATCH_BYTES) throw new Error("Native GPU upload exceeds the batch memory limit.");
   const request = new Uint8Array(4 + metadataLength + byteLength);
@@ -74,7 +78,7 @@ export class NativeGpuContext {
   readonly FRAMEBUFFER_COMPLETE = 36053; readonly HALF_FLOAT = 5131;
   readonly LINEAR = 9729; readonly LINK_STATUS = 35714; readonly MAX_TEXTURE_SIZE = 3379;
   readonly NEAREST = 9728; readonly NO_ERROR = 0; readonly R32F = 33326; readonly RED = 6403;
-  readonly RGB16UI = 36215; readonly RGBA = 6408; readonly RGBA16F = 34842;
+  readonly RGB = 6407; readonly RGB8 = 32849; readonly RGB16UI = 36215; readonly RGBA = 6408; readonly RGBA16F = 34842;
   readonly RGBA32F = 34836; readonly RGBA32UI = 36208; readonly RGBA8 = 32856;
   readonly RGBA_INTEGER = 36249; readonly RGB_INTEGER = 36248;
   readonly TEXTURE0 = 33984; readonly TEXTURE4 = 33988; readonly TEXTURE_2D = 3553;
@@ -113,15 +117,20 @@ export class NativeGpuContext {
   #resourcesSettled: Promise<unknown> = Promise.resolve();
 
   async initialize(): Promise<void> {
-    const metadata = new TextEncoder().encode(JSON.stringify({ session: this.#session, info: true }));
+    if (cachedMaxTextureDimension !== null) {
+      this.#maximumTextureSize = cachedMaxTextureDimension;
+      return;
+    }
+    const metadata = nativeTextEncoder.encode(JSON.stringify({ session: this.#session, info: true }));
     const request = new Uint8Array(4 + metadata.length);
     new DataView(request.buffer).setUint32(0, metadata.length, true);
     request.set(metadata, 4);
-    const info: unknown = JSON.parse(new TextDecoder().decode(await transport(request)));
+    const info: unknown = JSON.parse(nativeTextDecoder.decode(await transport(request)));
     if (!info || typeof info !== "object" || !("maxTextureDimension" in info) ||
       typeof info.maxTextureDimension !== "number" || !Number.isSafeInteger(info.maxTextureDimension) || info.maxTextureDimension < 1) {
       throw new Error("Native GPU capabilities are invalid.");
     }
+    cachedMaxTextureDimension = info.maxTextureDimension;
     this.#maximumTextureSize = info.maxTextureDimension;
   }
 
@@ -174,7 +183,7 @@ export class NativeGpuContext {
     this.#locations.set(location, { program: value, name: name.replace(/\[0\]$/, "") });
     return location;
   }
-  #uniform(location: WebGLUniformLocation | null, values: readonly number[]): void {
+  #uniform(location: WebGLUniformLocation | null, values: ArrayLike<number>): void {
     const value = location && this.#locations.get(location);
     if (value) value.program.values.set(value.name, values);
   }
@@ -183,11 +192,12 @@ export class NativeGpuContext {
   uniform2i(location: WebGLUniformLocation | null, x: number, y: number): void { this.#uniform(location, [x, y]); }
   uniform2f(location: WebGLUniformLocation | null, x: number, y: number): void { this.#uniform(location, [x, y]); }
   uniform3f(location: WebGLUniformLocation | null, x: number, y: number, z: number): void { this.#uniform(location, [x, y, z]); }
-  uniform1fv(location: WebGLUniformLocation | null, values: Float32List): void { this.#uniform(location, Array.from(values)); }
-  uniform4fv(location: WebGLUniformLocation | null, values: Float32List): void { this.#uniform(location, Array.from(values)); }
+  uniform4f(location: WebGLUniformLocation | null, x: number, y: number, z: number, w: number): void { this.#uniform(location, [x, y, z, w]); }
+  uniform1fv(location: WebGLUniformLocation | null, values: Float32List): void { this.#uniform(location, values); }
+  uniform4fv(location: WebGLUniformLocation | null, values: Float32List): void { this.#uniform(location, values); }
   uniformMatrix3fv(location: WebGLUniformLocation | null, transpose: boolean, values: Float32List): void {
     if (transpose) throw new Error("Native matrices must use column order.");
-    this.#uniform(location, Array.from(values));
+    this.#uniform(location, values);
   }
   createTexture(): WebGLTexture { const texture = {}; this.#textureIds.set(texture, this.#nextId++); return texture; }
   createSourcePyramid(source: WebGLTexture, width: number, height: number, maximum: number, linear: boolean): WebGLTexture {
@@ -209,7 +219,7 @@ export class NativeGpuContext {
   texImage3D(target: number, _level: number, format: number, width: number, height: number, layers: number, _border: number, _external: number, _type: number, pixels: ArrayBufferView | null): void {
     const texture = this.#bindings.get(`${this.#unit}:${target}`);
     if (!texture) throw new Error("Native upload has no texture.");
-    const formats = new Map([[this.RGBA8, "rgba8unorm"], [this.RGB16UI, "rgba16uint"], [this.RGBA32UI, "rgba32uint"], [this.RGBA32F, "rgba32float"], [this.RGBA16F, "rgba16float"], [this.R32F, "r32float"]]);
+    const formats = new Map([[this.RGB8, "rgb8unorm"], [this.RGBA8, "rgba8unorm"], [this.RGB16UI, "rgba16uint"], [this.RGBA32UI, "rgba32uint"], [this.RGBA32F, "rgba32float"], [this.RGBA16F, "rgba16float"], [this.R32F, "r32float"]]);
     const name = formats.get(format);
     if (!name) throw new Error("Unsupported native texture format.");
     const handle = format === this.RGB16UI && pixels instanceof Uint16Array
@@ -218,16 +228,15 @@ export class NativeGpuContext {
     const range = handle
       ? {}
       : format === this.RGB16UI && pixels instanceof Uint16Array
-        ? this.#append({ kind: "rgb16", pixels, width, height, layers, flipY: this.#flipY })
-        : this.#flipY && pixels
-          ? this.#append({ kind: "flip", pixels: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), rowBytes: pixels.byteLength / (height * layers), height, layers })
-          : pixels ? this.#append(pixels) : {};
+        ? this.#append({ kind: "rgb16", pixels, width, height, layers, flipY: false })
+        : pixels ? this.#append(pixels) : {};
     if (handle && pixels instanceof Uint16Array) this.#sourcePixels.set(handle, pixels);
-    // Packed RGB16 sources are expanded to RGBA16 natively instead of in the webview.
+    // Packed RGB8/RGB16 sources are expanded and Y-flipped natively instead of in the webview.
     const uploadFormat = format === this.RGB16UI && pixels instanceof Uint16Array ? "rgb16uint" : name;
     this.#uploads.push({
       id: this.#id(texture), width, height, layers, format: uploadFormat,
-      ...(handle ? { source: handle, flipY: this.#flipY } : {}),
+      ...(handle ? { source: handle } : {}),
+      ...(this.#flipY && (handle || pixels) ? { flipY: true } : {}),
       ...range,
     });
   }
@@ -331,6 +340,45 @@ export class NativeGpuContext {
     if (!Number.isFinite(durationMs) || durationMs < 0) throw new Error("Native GPU frame duration is invalid.");
     return durationMs + preparationMs;
   }
+  async flush(): Promise<void> {
+    if (this.#shaders.length === 0 && this.#uploads.length === 0 && this.#deleted.length === 0 && this.#passes.length === 0) return;
+    const batch: NativeBatch = { session: this.#session, shaders: this.#shaders, textures: this.#uploads, deleteTextures: this.#deleted, passes: this.#passes, reads: [], includeTiming: true };
+    const chunks = this.#chunks;
+    const byteLength = this.#byteLength;
+    const sourcePixels = this.#sourcePixels;
+    this.#sourcePixels = new Map();
+    this.#shaders = []; this.#uploads = []; this.#deleted = []; this.#passes = []; this.#chunks = []; this.#byteLength = 0;
+    const request = packRequest(batch, chunks, byteLength);
+    const sent = this.#allSettled.then(async () => {
+      try {
+        await transport(request);
+      } catch (error) {
+        if (!String(error).includes("Native source is unavailable")) throw error;
+        const fallbackChunks = [...chunks];
+        let offset = byteLength;
+        const textures = batch.textures.map((upload) => {
+          if (!upload.source) return upload;
+          const pixels = sourcePixels.get(upload.source);
+          if (!pixels) throw error;
+          nativeSources.delete(pixels);
+          const padding = (4 - offset % 4) % 4;
+          if (padding) { fallbackChunks.push(new Uint8Array(padding)); offset += padding; }
+          const length = upload.width * upload.height * upload.layers * 6;
+          fallbackChunks.push({ kind: "rgb16", pixels, width: upload.width, height: upload.height, layers: upload.layers, flipY: false });
+          const fallback = { ...upload, offset, length };
+          delete fallback.source;
+          offset += length;
+          return fallback;
+        });
+        if (fallbackChunks.length === chunks.length) throw error;
+        await transport(packRequest({ ...batch, textures }, fallbackChunks, offset));
+      }
+    });
+    const settled = sent.then(() => undefined, () => undefined);
+    this.#allSettled = settled;
+    this.#resourcesSettled = settled;
+    await sent;
+  }
   readback(texture: WebGLTexture | null): Uint8Array<ArrayBuffer> {
     const bytes = this.#readbacks.get(texture ? this.#id(texture) : 0);
     if (!bytes) throw new Error("Native GPU readback is unavailable.");
@@ -343,7 +391,7 @@ export class NativeGpuContext {
     new Uint8Array(target.buffer, target.byteOffset, target.byteLength).set(bytes);
   }
   async release(): Promise<void> {
-    const metadata = new TextEncoder().encode(JSON.stringify({ session: this.#session, release: true }));
+    const metadata = nativeTextEncoder.encode(JSON.stringify({ session: this.#session, release: true }));
     const request = new Uint8Array(4 + metadata.length);
     new DataView(request.buffer).setUint32(0, metadata.length, true); request.set(metadata, 4);
     try { await transport(request); } catch { /* A failed device has already released its resources. */ }

@@ -14,9 +14,8 @@ import type {
 } from "@/lib/develop/v3/preview-worker-types";
 import type { LibraryEntry } from "@/lib/fs/types";
 import type { ExportSizeOptions } from "@/lib/export/types";
-import type { MainThreadGpuPreview } from "./main-thread-preview";
+import { MainThreadGpuPreview } from "./main-thread-preview";
 import type { RenderRegion } from "@/lib/develop/v3/cpu-backend";
-import { maskSourceNodes } from "./masking";
 
 interface PreviewWorkerRenderOptions {
   readonly viewportDimensions: PixelDimensions;
@@ -86,7 +85,7 @@ export class V3PreviewWorkerClient {
   #workerReady = false;
   readonly #nativeSessions = new Set<string>();
   readonly #nativeGpu = isTauri();
-  #mainGpu: Promise<MainThreadGpuPreview> | null;
+  #mainGpu: MainThreadGpuPreview | null;
   #entry: LibraryEntry;
   #image: DevelopImage;
   readonly #pending = new Map<number, PendingRender>();
@@ -95,6 +94,7 @@ export class V3PreviewWorkerClient {
   readonly #activePreviews = new Set<number>();
   #queuedPreview: QueuedPreview | null = null;
   #maskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
+  #mainMaskMattes: readonly V3PreviewWorkerMaskMatte[] | null = null;
   // Last document dispatched per destination, paired with the instance
   // it was sent to. A patch is only valid against that instance's
   // resident document, so a dispatch to a different instance (a
@@ -111,9 +111,14 @@ export class V3PreviewWorkerClient {
     this.#mainGpu = this.#createMainGpu(entry, image);
   }
 
-  #createMainGpu(entry: LibraryEntry, image: DevelopImage): Promise<MainThreadGpuPreview> | null {
+  #createMainGpu(entry: LibraryEntry, image: DevelopImage): MainThreadGpuPreview | null {
     const webkit = typeof navigator !== "undefined" && /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
-    return webkit && !this.#nativeGpu ? import("./main-thread-preview").then(({ MainThreadGpuPreview }) => new MainThreadGpuPreview(entry, image)) : null;
+    return this.#nativeGpu || webkit ? new MainThreadGpuPreview(entry, image, this.#nativeGpu) : null;
+  }
+
+  warmup(document: DevelopDocumentV3): void {
+    if (this.#disposed || !this.#nativeGpu || !this.#mainGpu) return;
+    void this.#mainGpu.warmup(document);
   }
 
   // Points an idle client at another photo so its worker and loaded modules can be reused.
@@ -124,9 +129,10 @@ export class V3PreviewWorkerClient {
     this.#entry = entry;
     this.#image = image;
     this.#maskMattes = null;
+    this.#mainMaskMattes = null;
     this.#workerSync = null;
     this.#mainSync = null;
-    void this.#mainGpu?.then((renderer) => renderer.dispose());
+    this.#mainGpu?.dispose();
     this.#mainGpu = this.#createMainGpu(entry, image);
     if (!this.#worker || !this.#workerReady) return;
     const source = sourceImage(image);
@@ -179,7 +185,7 @@ export class V3PreviewWorkerClient {
           this.#worker = null;
         }
         void this.#releaseNativeSessions();
-        void this.#mainGpu?.then((renderer) => renderer.dispose());
+        this.#mainGpu?.dispose();
         reject(error);
       };
       worker.onmessage = (event: MessageEvent<V3PreviewWorkerResponse | NativeGpuWorkerRequest>) => {
@@ -253,27 +259,15 @@ export class V3PreviewWorkerClient {
 
   async #dispatch(message: ClientMessage): Promise<void> {
     try {
-      // Depth-masked documents must render in the worker: the main-thread
-      // GPU preview has no depthMap supply (HH-12).
-      const hasDepthMasks = message.document.local.masks.some((mask) =>
-        maskSourceNodes(mask.expression).some((node) => node.source.kind === "depth-range"),
-      );
-      if (this.#mainGpu && !hasDepthMasks) {
-        const renderer = await this.#mainGpu;
-        // Compute, advance, and hand off with no await in between so
-        // concurrent dispatches stay in order. The renderer applies the
-        // sync at the start of its render even when it returns null and
-        // this dispatch falls through to the worker, so its last-sent
-        // document advances either way; the worker sync below is then
-        // computed separately against worker state. The stored base is
-        // used only if it was sent to this same renderer instance: a
-        // dispatch that captured a since-replaced renderer writes a
-        // pair the next dispatch will not match, forcing a full sync.
+      const renderer = this.#mainGpu;
+      if (renderer) {
         const { document, ...rest } = message;
         const base = this.#mainSync?.target === renderer ? this.#mainSync.document : null;
         const documentSync = computeV3DocumentSync(base, document);
+        const maskMattes = message.maskMattes === this.#mainMaskMattes ? undefined : message.maskMattes;
         this.#mainSync = { target: renderer, document };
-        const result = await renderer.render({ ...rest, documentSync });
+        this.#mainMaskMattes = message.maskMattes ?? EMPTY_MASK_MATTES;
+        const result = await renderer.render({ ...rest, documentSync, maskMattes });
         if (result) { this.#receive({ kind: "result", requestId: message.requestId, ...result }); return; }
       }
       if (this.#disposed) return;
@@ -332,10 +326,11 @@ export class V3PreviewWorkerClient {
     this.#disposed = true;
     this.#workerSync = null;
     this.#mainSync = null;
+    this.#mainMaskMattes = null;
     // Avoid tearing down WebKit module loaders while the worker is still starting.
     if (this.#workerReady) this.#worker?.terminate();
     void this.#releaseNativeSessions();
-    void this.#mainGpu?.then((renderer) => renderer.dispose());
+    this.#mainGpu?.dispose();
     for (const pending of this.#pending.values()) {
       pending.resolve({ backend: "cpu", result: { kind: "cancelled" } });
     }

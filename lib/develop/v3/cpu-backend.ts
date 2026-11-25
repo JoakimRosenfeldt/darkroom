@@ -14,7 +14,6 @@ import {
   type TransferFunction,
 } from "../process";
 import {
-  parseSha256Digest,
   type BlockingDevelopDiagnostic,
   type RenderOutputIntent,
   type RenderQualityRequest,
@@ -95,6 +94,7 @@ import {
 import { applyInputCalibration, effectiveInputCalibration, type Rgb } from "./profiles";
 import { MAX_TILE_OVERLAP, type CancellationProbe } from "./source";
 import { applyWhiteBalance } from "./white-balance";
+import { sha256DigestSync } from "./sha256";
 
 export const V3_CPU_BACKEND_ID = "darkroom-v3-cpu-reference";
 export const V3_CPU_BACKEND_REVISION = "2";
@@ -2410,6 +2410,7 @@ function copyCorePixels(
 export function analyzeV3DisplayOutput(
   pixels: Uint8Array,
   dimensions: PixelDimensions,
+  stride?: number,
 ): CpuAnalysisTapResult {
   return {
     tap: "display-output",
@@ -2419,6 +2420,7 @@ export function analyzeV3DisplayOutput(
       channels: 4,
       encoding: "uint8",
       data: pixels,
+      stride,
     }),
   };
 }
@@ -2435,19 +2437,8 @@ function unavailableAnalysis(tap: "wb-sample" | "proof-output"): CpuAnalysisTapR
   };
 }
 
-function hexDigest(buffer: ArrayBuffer): string {
-  return [...new Uint8Array(buffer)]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function sha256(material: string): Promise<Sha256Digest | null> {
-  if (!globalThis.crypto?.subtle) return null;
-  const bytes = new TextEncoder().encode(material);
-  const copy = new Uint8Array(new ArrayBuffer(bytes.byteLength));
-  copy.set(bytes);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", copy);
-  return parseSha256Digest(hexDigest(digest));
+function sha256(material: string): Sha256Digest | null {
+  return sha256DigestSync(material);
 }
 
 function backendIdentityIssue(request: RenderRequest): CpuBackendValidationIssue | null {
@@ -2636,7 +2627,7 @@ export async function prepareV3CpuRender(
   if (compiled.kind === "invalid") return compiled;
   if (cancelled(input.cancellation)) return { kind: "cancelled" };
 
-  const documentDigest = await sha256(compiled.plan.canonicalDocumentHashInput);
+  const documentDigest = sha256(compiled.plan.canonicalDocumentHashInput);
   if (!documentDigest) {
     return {
       kind: "blocked",
@@ -2673,7 +2664,7 @@ export async function prepareV3CpuRender(
       }],
     };
   }
-  const planFingerprint = await sha256(key.material);
+  const planFingerprint = sha256(key.material);
   if (!planFingerprint) {
     return {
       kind: "blocked",

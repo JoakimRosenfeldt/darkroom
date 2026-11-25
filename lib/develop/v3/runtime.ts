@@ -16,13 +16,13 @@ import {
   type SourceRecord,
 } from "@/lib/develop/process";
 import {
-  parseSha256Digest,
   type AcceptedAssetRevision,
   type ExportQualityRequest,
   type PreviewQualityRequest,
   type RenderRequest,
   type Sha256Digest,
 } from "@/lib/develop/render-contract";
+import { sha256DigestSync } from "./sha256";
 import type { LibraryEntry } from "@/lib/fs/types";
 import { sourceSignaturesEqual } from "@/lib/develop/source-transform";
 import { cameraProfileIsCompatible } from "@/lib/camera-profiles/matrix";
@@ -703,21 +703,17 @@ function exportQuality(
   };
 }
 
-function hexDigest(buffer: ArrayBuffer): string {
-  return [...new Uint8Array(buffer)]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-}
+const documentDigestCache = new WeakMap<DevelopDocumentV3, Sha256Digest>();
 
-async function documentHash(
+function documentHash(
   document: DevelopDocumentV3,
-): Promise<Sha256Digest | null> {
+): Sha256Digest | null {
   if (!globalThis.crypto?.subtle) return null;
-  const input = new TextEncoder().encode(canonicalV3DocumentHashInput(document));
-  const bytes = new Uint8Array(new ArrayBuffer(input.byteLength));
-  bytes.set(input);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-  return parseSha256Digest(hexDigest(digest));
+  const cached = documentDigestCache.get(document);
+  if (cached !== undefined) return cached;
+  const digest = sha256DigestSync(canonicalV3DocumentHashInput(document));
+  if (digest) documentDigestCache.set(document, digest);
+  return digest;
 }
 
 type RuntimeRequestResult =
@@ -747,12 +743,12 @@ function fingerprintBlocked(): Exclude<
   };
 }
 
-async function renderRequest(
+function renderRequest(
   document: DevelopDocumentV3,
   source: SourceRecord,
   request: V3RuntimeRenderRequest,
-): Promise<RuntimeRequestResult> {
-  const canonicalDocumentHash = await documentHash(document);
+): RuntimeRequestResult {
+  const canonicalDocumentHash = documentHash(document);
   if (!canonicalDocumentHash) return fingerprintBlocked();
   try {
     const acceptedAssetRevisions = documentAssetReferences(document);
@@ -837,7 +833,7 @@ export async function prepareV3RuntimeRender(
   if (sourceResult.kind === "blocked") {
     return { kind: "blocked", diagnostics: [sourceResult.diagnostic] };
   }
-  const prepared = await renderRequest(document, sourceResult.source, request);
+  const prepared = renderRequest(document, sourceResult.source, request);
   if (!("plan" in prepared)) return prepared;
   if (request.cancellation?.isCancelled()) return { kind: "cancelled" };
   const assets = await runtimeAssets(document, sourceResult.source, request.assets);

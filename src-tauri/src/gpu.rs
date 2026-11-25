@@ -170,7 +170,8 @@ struct Shader {
 struct Session {
     shaders: HashMap<u32, Arc<str>>,
     textures: HashMap<u32, Texture>,
-    uniform_buffer: Option<(wgpu::Buffer, u64)>,
+    uniform_buffers: [Option<(wgpu::Buffer, u64)>; 2],
+    uniform_slot: usize,
     read_buffers: [Option<(wgpu::Buffer, u64)>; 2],
     identity: Arc<()>,
 }
@@ -644,10 +645,16 @@ impl NativeGpu {
             if !session.textures.contains_key(&spec.id) && session.textures.len() >= 512 {
                 return Err("Native texture cache exceeds size limit".into());
             }
-            // Packed RGB16 sources arrive without alpha and are expanded here.
+            // Packed RGB8/RGB16 sources arrive without alpha and are expanded here.
             let packed_rgb16 = spec.format == "rgb16uint";
+            let packed_rgb8 = spec.format == "rgb8unorm";
+            if (packed_rgb16 || packed_rgb8) && spec.layers != 1 {
+                return Err("Packed RGB native textures require a single layer".into());
+            }
             let format = texture_format(if packed_rgb16 {
                 "rgba16uint"
+            } else if packed_rgb8 {
+                "rgba8unorm"
             } else {
                 &spec.format
             })?;
@@ -713,10 +720,16 @@ impl NativeGpu {
                 .filter(|_| !use_prepared);
             let input = match (spec.offset, spec.length) {
                 (Some(offset), Some(length)) => {
-                    let expected = if packed_rgb16 { base_size / 8 * 6 } else { base_size };
+                    let expected = if packed_rgb16 {
+                        base_size / 8 * 6
+                    } else if packed_rgb8 {
+                        base_size / 4 * 3
+                    } else {
+                        base_size
+                    };
                     if length as u64 != expected {
                         return Err(format!(
-                            "Texture {} requires {size} bytes, got {length}",
+                            "Texture {} requires {expected} bytes, got {length}",
                             spec.id
                         ));
                     }
@@ -760,8 +773,30 @@ impl NativeGpu {
                     Some(expanded.as_slice())
                 }
                 (None, Some(input)) if packed_rgb16 => {
-                    expanded =
-                        expand_rgb16(input, spec.width as usize, spec.height as usize, false);
+                    expanded = expand_rgb16(
+                        input,
+                        spec.width as usize,
+                        spec.height as usize,
+                        spec.flip_y,
+                    );
+                    Some(expanded.as_slice())
+                }
+                (None, Some(input)) if packed_rgb8 => {
+                    expanded = expand_rgb8(
+                        input,
+                        spec.width as usize,
+                        spec.height as usize,
+                        spec.flip_y,
+                    );
+                    Some(expanded.as_slice())
+                }
+                (None, Some(input)) if spec.flip_y => {
+                    expanded = flip_rows(
+                        input,
+                        spec.width as usize * bpp as usize,
+                        spec.height as usize,
+                        spec.layers as usize,
+                    );
                     Some(expanded.as_slice())
                 }
                 (None, input) => input,
@@ -845,15 +880,17 @@ impl NativeGpu {
             uniform_data.resize(offset + length, 0);
             uniform_ranges.push((offset as u64, length as u64));
         }
+        let uniform_slot = session.uniform_slot;
         if !uniform_data.is_empty() {
+            session.uniform_slot = (uniform_slot + 1) % session.uniform_buffers.len();
             reserve_buffer(
                 &self.device,
-                &mut session.uniform_buffer,
+                &mut session.uniform_buffers[uniform_slot],
                 uniform_data.len() as u64,
                 wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             );
             self.queue.write_buffer(
-                &session.uniform_buffer.as_ref().unwrap().0,
+                &session.uniform_buffers[uniform_slot].as_ref().unwrap().0,
                 0,
                 &uniform_data,
             );
@@ -936,7 +973,7 @@ impl NativeGpu {
             let mut entries = vec![wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &session.uniform_buffer.as_ref().unwrap().0,
+                    buffer: &session.uniform_buffers[uniform_slot].as_ref().unwrap().0,
                     offset,
                     size: NonZeroU64::new(length),
                 }),
@@ -1074,11 +1111,9 @@ impl NativeGpu {
             }
         }
         let commands = encoder.finish();
-        self.check_errors()?;
         let prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
         let wait_started = Instant::now();
         let submission = self.queue.submit([commands]);
-        self.check_errors()?;
         if read_size == 0 {
             return Ok(NativeGpuSubmission::Complete(Vec::new()));
         }
@@ -1243,17 +1278,6 @@ impl NativeGpu {
         self.queue.submit([encoder.finish()]);
     }
 
-    fn check_errors(&self) -> Result<(), String> {
-        let validation = pollster::block_on(self.device.pop_error_scope());
-        let memory = pollster::block_on(self.device.pop_error_scope());
-        self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        match validation.or(memory) {
-            Some(error) => Err(format!("Native GPU: {error}")),
-            None => Ok(()),
-        }
-    }
-
     fn validate_pass(
         &self,
         session: &Session,
@@ -1397,6 +1421,69 @@ fn texture_format(name: &str) -> Result<wgpu::TextureFormat, String> {
         "r32float" => wgpu::TextureFormat::R32Float,
         _ => return Err(format!("Unknown native texture format {name}")),
     })
+}
+
+fn expand_rgb8(input: &[u8], width: usize, height: usize, flip_y: bool) -> Vec<u8> {
+    let mut output = vec![0xff; input.len() / 3 * 4];
+    let rows_per_chunk = (4096 / width.max(1)).max(1);
+    let expand = |(chunk, target): (usize, &mut [u8])| {
+        let first_row = chunk * rows_per_chunk;
+        let rows = target.len() / (width * 4);
+        for row in 0..rows {
+            let y = first_row + row;
+            let source_y = if flip_y { height - 1 - y } else { y };
+            let source = &input[source_y * width * 3..(source_y + 1) * width * 3];
+            let target = &mut target[row * width * 4..(row + 1) * width * 4];
+            for (pixel, rgba) in source.chunks_exact(3).zip(target.chunks_exact_mut(4)) {
+                rgba[..3].copy_from_slice(pixel);
+            }
+        }
+    };
+    if input.len() >= 1 << 20
+        && let Some(pool) = crate::compute::pool()
+    {
+        pool.install(|| {
+            output
+                .par_chunks_mut(width * 4 * rows_per_chunk)
+                .enumerate()
+                .for_each(expand)
+        });
+    } else {
+        output
+            .chunks_mut(width * 4 * rows_per_chunk)
+            .enumerate()
+            .for_each(expand);
+    }
+    output
+}
+
+fn flip_rows(input: &[u8], row_bytes: usize, height: usize, layers: usize) -> Vec<u8> {
+    let mut output = vec![0; input.len()];
+    let layer_bytes = row_bytes * height;
+    for layer in 0..layers {
+        let source_layer = &input[layer * layer_bytes..(layer + 1) * layer_bytes];
+        let target_layer = &mut output[layer * layer_bytes..(layer + 1) * layer_bytes];
+        let flip = |(y, target): (usize, &mut [u8])| {
+            let source_y = height - 1 - y;
+            target.copy_from_slice(&source_layer[source_y * row_bytes..(source_y + 1) * row_bytes]);
+        };
+        if layer_bytes >= 1 << 20
+            && let Some(pool) = crate::compute::pool()
+        {
+            pool.install(|| {
+                target_layer
+                    .par_chunks_mut(row_bytes)
+                    .enumerate()
+                    .for_each(flip)
+            });
+        } else {
+            target_layer
+                .chunks_mut(row_bytes)
+                .enumerate()
+                .for_each(flip);
+        }
+    }
+    output
 }
 
 fn expand_rgb16(input: &[u8], width: usize, height: usize, flip_y: bool) -> Vec<u8> {
@@ -1650,5 +1737,40 @@ mod tests {
         );
         let readback = request(vec![], json!([{"texture": 1, "format": "rgba32f"}]), &[]);
         assert_eq!(gpu.execute(&readback, &sources).unwrap().len(), 3 * 2 * 16);
+    }
+
+    #[test]
+    fn rgb8_and_flipped_rgba8_uploads_read_back_identically() {
+        let Some(mut gpu) = gpu_or_skip() else { return };
+        let sources = Mutex::new(RawSources::default());
+        let rgb8: Vec<u8> = (1_u8..=18).collect();
+        let mut expected_rgba = Vec::with_capacity(24);
+        for row in [1, 0] {
+            for pixel in rgb8[row * 9..(row + 1) * 9].chunks_exact(3) {
+                expected_rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        let mut unflipped_rgba = Vec::with_capacity(24);
+        for pixel in rgb8.chunks_exact(3) {
+            unflipped_rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+        }
+        let rgb8_upload = request(
+            vec![json!({
+                "id": 1, "width": 3, "height": 2, "layers": 1, "format": "rgb8unorm",
+                "flipY": true, "offset": 0, "length": rgb8.len(),
+            })],
+            json!([{"texture": 1, "format": "rgba8"}]),
+            &rgb8,
+        );
+        let rgba8_upload = request(
+            vec![json!({
+                "id": 2, "width": 3, "height": 2, "layers": 1, "format": "rgba8unorm",
+                "flipY": true, "offset": 0, "length": unflipped_rgba.len(),
+            })],
+            json!([{"texture": 2, "format": "rgba8"}]),
+            &unflipped_rgba,
+        );
+        assert_eq!(gpu.execute(&rgb8_upload, &sources).unwrap(), expected_rgba);
+        assert_eq!(gpu.execute(&rgba8_upload, &sources).unwrap(), expected_rgba);
     }
 }

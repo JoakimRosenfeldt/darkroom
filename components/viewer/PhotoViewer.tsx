@@ -27,7 +27,6 @@ import {
   type V3CanvasTool,
   type V3CanvasDiagnostic,
 } from "@/components/develop/DevelopCanvas";
-import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
@@ -125,7 +124,6 @@ export function PhotoViewer({
     setV3RenderDiagnostics((current) =>
       JSON.stringify(current) === JSON.stringify(next) ? current : next);
   }, []);
-  const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [v3CanvasState, setV3CanvasState] = useState<{
     readonly entryId: string;
     readonly tool: V3CanvasTool;
@@ -623,7 +621,6 @@ export function PhotoViewer({
                   image={decoded}
                   alt={entry.name}
                   onRenderDiagnostics={reportV3RenderDiagnostics}
-                  onAnalysis={setV3Analysis}
                   cropActive={!defaultsPending && activePanel === "crop"}
                   maskingActive={
                     !defaultsPending && (activePanel === "masking" || (maskUi?.tool ?? "none") !== "none")
@@ -673,7 +670,6 @@ export function PhotoViewer({
             resultEntryIds={resultEntryIds}
             missingEntryIds={missingEntryIds}
             resultEntries={entries}
-            v3Analysis={v3Analysis}
             v3RenderDiagnostics={v3RenderDiagnostics}
             v3CanvasTool={v3CanvasTool}
             onV3CanvasToolChange={setV3CanvasTool}

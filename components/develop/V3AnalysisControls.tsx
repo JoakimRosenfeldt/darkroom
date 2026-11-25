@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ActionButton, StatusCard } from "@/components/develop/V3PanelControls";
-import { currentV3AnalysisBinding } from "@/components/develop/DevelopCanvas";
+import {
+  activeV3AnalysisFor,
+  currentV3AnalysisBinding,
+  subscribeV3Analysis,
+} from "@/components/develop/DevelopCanvas";
 import { getDevelopSession } from "@/lib/develop/session";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
 import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
@@ -19,16 +23,18 @@ type DisplayOutputTap = Extract<CpuAnalysisTapResult, { readonly tap: "display-o
 type SceneHeadroomTap = Extract<CpuAnalysisTapResult, { readonly tap: "scene-headroom" }>;
 
 export interface V3AutoToneControlProps {
-  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly analysis?: readonly CpuAnalysisTapResult[];
   readonly document: DevelopDocumentV3;
   readonly disabled?: boolean;
 }
 
 export interface V3HistogramPanelProps {
-  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly analysis?: readonly CpuAnalysisTapResult[];
   readonly sourceIdentity: V3HistogramSourceIdentity;
   readonly decodedMetadata: Record<string, unknown>;
 }
+
+const EMPTY_ANALYSIS: readonly CpuAnalysisTapResult[] = [];
 
 export interface V3HistogramSourceIdentity {
   readonly catalogId: string;
@@ -65,7 +71,7 @@ function noResultMessage(reason: "empty" | "invalid-statistics" | "invalid-histo
 }
 
 export function V3AutoToneControl({
-  analysis,
+  analysis: providedAnalysis,
   document,
   disabled = false,
 }: V3AutoToneControlProps) {
@@ -78,6 +84,12 @@ export function V3AutoToneControl({
     const entryId = state.activeEntryId;
     return entryId ? state.sessions[entryId] : undefined;
   });
+  const liveAnalysis = useSyncExternalStore(
+    subscribeV3Analysis,
+    () => activeV3AnalysisFor(activeCatalogId, activeEntryId),
+    () => EMPTY_ANALYSIS,
+  );
+  const analysis = providedAnalysis ?? liveAnalysis;
   const tap = toneInputTap(analysis);
   const binding = currentV3AnalysisBinding(analysis);
   const analysisIsCurrent = Boolean(
@@ -168,26 +180,57 @@ export function V3AutoToneControl({
   );
 }
 
+const DRAWN_X_COORDS = Array.from(
+  { length: MAX_DRAWN_BINS },
+  (_, index) => `${index === 0 ? "M" : "L"}${(index / (MAX_DRAWN_BINS - 1) * HISTOGRAM_WIDTH).toFixed(2)} `,
+);
+
 function downsampleBins(input: ReadonlyArray<number>): readonly number[] {
-  if (input.length <= MAX_DRAWN_BINS) return [...input];
-  return Array.from({ length: MAX_DRAWN_BINS }, (_, outputIndex) => {
-    const start = Math.floor(outputIndex * input.length / MAX_DRAWN_BINS);
-    const end = Math.max(start + 1, Math.floor((outputIndex + 1) * input.length / MAX_DRAWN_BINS));
+  const length = input.length;
+  if (length <= MAX_DRAWN_BINS) return input;
+  const result = new Array<number>(MAX_DRAWN_BINS);
+  if (length === MAX_DRAWN_BINS * 2) {
+    for (let index = 0; index < MAX_DRAWN_BINS; index += 1) {
+      const offset = index * 2;
+      result[index] = (input[offset] ?? 0) + (input[offset + 1] ?? 0);
+    }
+    return result;
+  }
+  for (let outputIndex = 0; outputIndex < MAX_DRAWN_BINS; outputIndex += 1) {
+    const start = Math.floor(outputIndex * length / MAX_DRAWN_BINS);
+    const end = Math.max(start + 1, Math.floor((outputIndex + 1) * length / MAX_DRAWN_BINS));
     let total = 0;
     for (let index = start; index < end; index += 1) total += input[index] ?? 0;
-    return total;
-  });
+    result[outputIndex] = total;
+  }
+  return result;
 }
 
 function histogramPath(bins: readonly number[], maximum: number): string {
-  if (bins.length === 0 || maximum <= 0) return "";
-  const line = bins.map((count, index) => {
-    const x = bins.length === 1 ? 0 : index / (bins.length - 1) * HISTOGRAM_WIDTH;
-    const normalized = Math.sqrt(Math.max(0, count) / maximum);
-    const y = HISTOGRAM_HEIGHT - normalized * (HISTOGRAM_HEIGHT - 2);
-    return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
-  }).join(" ");
-  return `${line} L${HISTOGRAM_WIDTH} ${HISTOGRAM_HEIGHT} L0 ${HISTOGRAM_HEIGHT} Z`;
+  const length = bins.length;
+  if (length === 0 || maximum <= 0) return "";
+  const invMax = 1 / maximum;
+  const yScale = HISTOGRAM_HEIGHT - 2;
+  const parts = new Array<string>(length + 1);
+  if (length === MAX_DRAWN_BINS) {
+    for (let index = 0; index < length; index += 1) {
+      const count = bins[index]!;
+      const normalized = count > 0 ? Math.sqrt(count * invMax) : 0;
+      const y = Math.round((HISTOGRAM_HEIGHT - normalized * yScale) * 100) / 100;
+      parts[index] = `${DRAWN_X_COORDS[index]}${y}`;
+    }
+  } else {
+    const denom = length === 1 ? 1 : length - 1;
+    for (let index = 0; index < length; index += 1) {
+      const x = length === 1 ? 0 : Math.round((index / denom * HISTOGRAM_WIDTH) * 100) / 100;
+      const count = bins[index]!;
+      const normalized = count > 0 ? Math.sqrt(count * invMax) : 0;
+      const y = Math.round((HISTOGRAM_HEIGHT - normalized * yScale) * 100) / 100;
+      parts[index] = `${index === 0 ? "M" : "L"}${x} ${y}`;
+    }
+  }
+  parts[length] = `L${HISTOGRAM_WIDTH} ${HISTOGRAM_HEIGHT} L0 ${HISTOGRAM_HEIGHT} Z`;
+  return parts.join(" ");
 }
 
 function positiveNumber(value: unknown): number | null {
@@ -353,7 +396,13 @@ function HeadroomSummary({ tap }: { readonly tap: SceneHeadroomTap | null }) {
   );
 }
 
-export function V3HistogramPanel({ analysis, sourceIdentity, decodedMetadata }: V3HistogramPanelProps) {
+export function V3HistogramPanel({ analysis: providedAnalysis, sourceIdentity, decodedMetadata }: V3HistogramPanelProps) {
+  const liveAnalysis = useSyncExternalStore(
+    subscribeV3Analysis,
+    () => activeV3AnalysisFor(sourceIdentity.catalogId, sourceIdentity.entryId),
+    () => EMPTY_ANALYSIS,
+  );
+  const analysis = providedAnalysis ?? liveAnalysis;
   const binding = currentV3AnalysisBinding(analysis);
   const analysisMatchesSource = binding?.catalogId === sourceIdentity.catalogId &&
     binding.entryId === sourceIdentity.entryId &&
