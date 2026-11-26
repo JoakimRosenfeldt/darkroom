@@ -621,19 +621,21 @@ function hdr(value: unknown, path: string, state: CodecState): HdrEdits {
   };
 }
 
+const codecTextEncoder = new TextEncoder();
+
 function payloadBytes(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
     if (serialized === undefined) invalid("Develop document is not JSON data.");
-    return new TextEncoder().encode(serialized).byteLength;
+    return codecTextEncoder.encode(serialized).byteLength;
   } catch (error) {
     if (error instanceof V3DocumentCodecError) throw error;
     return invalid("Develop document is not serializable JSON data.");
   }
 }
 
-export function parseV3DevelopDocument(value: unknown): DevelopDocumentV3 {
-  if (payloadBytes(value) > MAX_V3_PAYLOAD_BYTES) {
+export function parseV3DevelopDocument(value: unknown, skipPayloadCheck = false): DevelopDocumentV3 {
+  if (!skipPayloadCheck && payloadBytes(value) > MAX_V3_PAYLOAD_BYTES) {
     invalid(`v3 develop documents cannot exceed ${MAX_V3_PAYLOAD_BYTES} bytes.`);
   }
   const state: CodecState = { quarantine: [], quarantineBytes: 0 };
@@ -864,7 +866,7 @@ export function decodePersistedDevelopDocument(
       return { kind: "editable", document: parseDevelopDocument(value) };
     }
     if (value.version === DEVELOP_PROCESS_VERSION) {
-      return { kind: "editable", document: parseV3DevelopDocument(value) };
+      return { kind: "editable", document: parseV3DevelopDocument(value, true) };
     }
     if (value.version > DEVELOP_PROCESS_VERSION) {
       const parsedRaw = jsonValue(value, "develop document");

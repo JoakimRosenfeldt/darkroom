@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   KeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -57,8 +57,11 @@ export function ToneCurveEditor({
     pointer: CurvePoint;
     point: CurvePoint;
   } | null>(null);
+  const pendingMoveRef = useRef<{ index: number; point: CurvePoint } | null>(null);
+  const moveFrameRef = useRef(0);
   const svgRef = useRef<SVGSVGElement>(null);
   const points = settings[channel];
+  const curvePath = useMemo(() => pathFor(points), [points]);
   const beginEditGroup = useDevelopStore((state) => state.beginEditGroup);
   const endEditGroup = useDevelopStore((state) => state.endEditGroup);
   const cancelEditGroup = useDevelopStore((state) => state.cancelEditGroup);
@@ -68,16 +71,35 @@ export function ToneCurveEditor({
 
   useEffect(() => {
     drag.current = null;
+    pendingMoveRef.current = null;
+    cancelAnimationFrame(moveFrameRef.current);
+    moveFrameRef.current = 0;
     keyboardEdit.current = false;
   }, [activeEntryId]);
 
+  useEffect(() => () => {
+    cancelAnimationFrame(moveFrameRef.current);
+  }, []);
+
+  const flushPendingMove = () => {
+    cancelAnimationFrame(moveFrameRef.current);
+    moveFrameRef.current = 0;
+    const pending = pendingMoveRef.current;
+    pendingMoveRef.current = null;
+    if (pending) commitPoint(pending.index, pending.point);
+  };
+
   const commitCurveEdit = () => {
+    flushPendingMove();
     drag.current = null;
     keyboardEdit.current = false;
     endEditGroup();
   };
 
   const cancelCurveEdit = () => {
+    cancelAnimationFrame(moveFrameRef.current);
+    moveFrameRef.current = 0;
+    pendingMoveRef.current = null;
     drag.current = null;
     keyboardEdit.current = false;
     cancelEditGroup();
@@ -233,14 +255,25 @@ export function ToneCurveEditor({
             return;
           }
           const pointer = eventPoint(event.clientX, event.clientY, false);
-          commitPoint(drag.current.index, {
-            x:
-              drag.current.point.x +
-              (pointer.x - drag.current.pointer.x) * DRAG_SENSITIVITY,
-            y:
-              drag.current.point.y +
-              (pointer.y - drag.current.pointer.y) * DRAG_SENSITIVITY,
-          });
+          pendingMoveRef.current = {
+            index: drag.current.index,
+            point: {
+              x:
+                drag.current.point.x +
+                (pointer.x - drag.current.pointer.x) * DRAG_SENSITIVITY,
+              y:
+                drag.current.point.y +
+                (pointer.y - drag.current.pointer.y) * DRAG_SENSITIVITY,
+            },
+          };
+          if (moveFrameRef.current === 0) {
+            moveFrameRef.current = requestAnimationFrame(() => {
+              moveFrameRef.current = 0;
+              const pending = pendingMoveRef.current;
+              pendingMoveRef.current = null;
+              if (pending) commitPoint(pending.index, pending.point);
+            });
+          }
         }}
         onPointerUp={() => {
           commitCurveEdit();
@@ -264,7 +297,7 @@ export function ToneCurveEditor({
           </g>
         ))}
         <line x1={INSET} y1={SIZE - INSET} x2={SIZE - INSET} y2={INSET} stroke="#464646" strokeWidth="1" pointerEvents="none" />
-        <path d={pathFor(points)} fill="none" stroke={channelInfo.color} strokeWidth="2" pointerEvents="none" />
+        <path d={curvePath} fill="none" stroke={channelInfo.color} strokeWidth="2" pointerEvents="none" />
         {points.map((point, index) => {
           const position = svgPoint(point);
           return (

@@ -227,7 +227,65 @@ fn build() {
     if env::var("CARGO_CFG_TARGET_FAMILY").as_deref() == Ok("unix") {
         libraw.flag_if_supported("-pthread");
     }
+    enable_openmp(&mut libraw);
     libraw.compile("raw_r");
+}
+
+fn enable_openmp(libraw: &mut cc::Build) {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let compiler = libraw.get_compiler();
+
+    if compiler.is_like_msvc() {
+        libraw.flag_if_supported("/openmp");
+        return;
+    }
+
+    // macOS Apple Clang does not ship libomp by default; only enable where
+    // the compiler + runtime link cleanly (Linux GCC/Clang, Windows GNU).
+    if target_os == "macos" {
+        return;
+    }
+
+    let openmp_flag = "-fopenmp";
+    if !libraw.is_flag_supported(openmp_flag).unwrap_or(false) {
+        return;
+    }
+
+    let out_dir = match env::var_os("OUT_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => return,
+    };
+    let probe_src = out_dir.join("openmp_probe.cpp");
+    let probe_bin = out_dir.join("openmp_probe");
+    if std::fs::write(
+        &probe_src,
+        "#include <omp.h>\nint main() {\n  int s = 0;\n#pragma omp parallel for reduction(+:s)\n  for (int i = 0; i < 8; ++i) s += i;\n  return s == 28 ? 0 : 1;\n}\n",
+    )
+    .is_err()
+    {
+        return;
+    }
+
+    let ok = compiler
+        .to_command()
+        .arg(openmp_flag)
+        .arg(&probe_src)
+        .arg("-o")
+        .arg(&probe_bin)
+        .status()
+        .is_ok_and(|status| status.success());
+    let _ = std::fs::remove_file(&probe_src);
+    let _ = std::fs::remove_file(&probe_bin);
+
+    if ok {
+        libraw.flag(openmp_flag);
+        if compiler.is_like_gnu() || target_env == "gnu" {
+            println!("cargo:rustc-link-lib=gomp");
+        } else if compiler.is_like_clang() {
+            println!("cargo:rustc-link-lib=omp");
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -258,6 +316,8 @@ fn bindings(out_dir: &Path) {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .allowlist_type("libraw_data_t")
         .allowlist_type("libraw_processed_image_t")
+        .allowlist_type("libraw_decoder_info_t")
+        .allowlist_type("LibRaw_errors")
         .allowlist_function("libraw_init")
         .allowlist_function("libraw_close")
         .allowlist_function("libraw_set_progress_handler")
@@ -266,6 +326,7 @@ fn bindings(out_dir: &Path) {
         .allowlist_function("libraw_open_wfile")
         .allowlist_function("libraw_unpack")
         .allowlist_function("libraw_unpack_thumb")
+        .allowlist_function("libraw_get_decoder_info")
         .allowlist_function("libraw_dcraw_process")
         .allowlist_function("libraw_dcraw_make_mem_image")
         .allowlist_function("libraw_dcraw_make_mem_thumb")

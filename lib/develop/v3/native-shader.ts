@@ -195,7 +195,7 @@ export function writeNativeUniform(
 
 export function packNativeUniforms(
   shader: NativeShader,
-  values: ReadonlyMap<string, readonly number[]>,
+  values: ReadonlyMap<string, ArrayLike<number>>,
 ): Uint8Array {
   const buffer = new Uint8Array(shader.uniformBufferSize);
   for (const uniform of shader.uniforms) {

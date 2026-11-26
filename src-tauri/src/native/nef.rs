@@ -1,8 +1,14 @@
 use std::{
+    cmp::Reverse,
+    collections::BinaryHeap,
     fs::{self, File},
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{
+        Arc, Condvar, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -13,7 +19,7 @@ use super::{
     NativeContext,
     assets::{check_open_regular, open_regular, resolve_asset},
     binary_value,
-    raw_preview_cache::PreviewCache,
+    raw_preview_cache::{FullDecodeCache, PreviewCache},
 };
 
 fn platform() -> &'static str {
@@ -70,10 +76,164 @@ fn helper(ctx: &NativeContext) -> Option<(PathBuf, &'static str)> {
     }
 }
 
+fn is_cancelled(cancelled: Option<&AtomicBool>) -> bool {
+    cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed))
+}
+
+fn is_stopped(cancelled: Option<&AtomicBool>, preempted: Option<&AtomicBool>) -> bool {
+    is_cancelled(cancelled) || is_cancelled(preempted)
+}
+
+/// Serializes `nikon-nef-decoder` spawns to 1 concurrent process (the Nikon SDK
+/// already saturates all CPU cores via TBB and allocates 500–900 MB RSS per
+/// process), orders waiting jobs by descending priority, and preempts low-priority
+/// background preloads when a foreground user request arrives.
+struct NikonHelperGateState {
+    busy: bool,
+    active: Option<(i32, Arc<AtomicBool>)>,
+    next_seq: u64,
+    waiters: BinaryHeap<(i32, Reverse<u64>)>,
+}
+
+struct NikonHelperGate {
+    state: Mutex<NikonHelperGateState>,
+    condvar: Condvar,
+}
+
+struct NikonHelperPermit {
+    gate: &'static NikonHelperGate,
+    preempted: Arc<AtomicBool>,
+}
+
+impl Drop for NikonHelperPermit {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.gate.state.lock() {
+            state.busy = false;
+            state.active = None;
+            self.gate.condvar.notify_all();
+        }
+    }
+}
+
+impl NikonHelperGate {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(NikonHelperGateState {
+                busy: false,
+                active: None,
+                next_seq: 0,
+                waiters: BinaryHeap::new(),
+            }),
+            condvar: Condvar::new(),
+        }
+    }
+
+    fn acquire(
+        &'static self,
+        priority: i32,
+        cancelled: Option<&AtomicBool>,
+    ) -> Result<NikonHelperPermit, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "Nikon decoder queue is unavailable.")?;
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
+        let seq = state.next_seq;
+        state.next_seq = state.next_seq.wrapping_add(1);
+        let key = (priority, Reverse(seq));
+        state.waiters.push(key);
+        loop {
+            if is_cancelled(cancelled) {
+                state.waiters.retain(|item| *item != key);
+                self.condvar.notify_all();
+                return Err("Nikon decode was cancelled.".into());
+            }
+            if state.busy
+                && priority >= 50
+                && let Some((active_prio, ref active_preempt)) = state.active
+                && active_prio < 0
+            {
+                active_preempt.store(true, Ordering::Relaxed);
+            }
+            if !state.busy && state.waiters.peek() == Some(&key) {
+                state.waiters.pop();
+                state.busy = true;
+                let preempted = Arc::new(AtomicBool::new(false));
+                state.active = Some((priority, Arc::clone(&preempted)));
+                return Ok(NikonHelperPermit {
+                    gate: self,
+                    preempted,
+                });
+            }
+            let (guard, _) = self
+                .condvar
+                .wait_timeout(state, Duration::from_millis(5))
+                .map_err(|_| "Nikon decoder queue is unavailable.")?;
+            state = guard;
+        }
+    }
+}
+
+fn nikon_helper_gate() -> &'static NikonHelperGate {
+    static GATE: OnceLock<NikonHelperGate> = OnceLock::new();
+    GATE.get_or_init(NikonHelperGate::new)
+}
+
+#[cfg(target_os = "macos")]
+fn try_clone_snapshot(source: &File, work_dir: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::io::AsRawFd;
+
+    unsafe extern "C" {
+        fn fclonefileat(
+            srcfd: libc::c_int,
+            dst_dirfd: libc::c_int,
+            dst: *const libc::c_char,
+            flags: u32,
+        ) -> libc::c_int;
+    }
+
+    let Ok(dir) = File::open(work_dir) else {
+        return false;
+    };
+    let Ok(name) = CString::new("input.nef") else {
+        return false;
+    };
+    unsafe { fclonefileat(source.as_raw_fd(), dir.as_raw_fd(), name.as_ptr(), 0) == 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn try_clone_snapshot(_source: &File, _work_dir: &Path) -> bool {
+    false
+}
+
+fn read_exact_file(path: &Path, byte_count: usize, cancelled: Option<&AtomicBool>) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() as usize != byte_count {
+        return Err("Nikon decoder pixel byte count is invalid.".into());
+    }
+    let mut pixels = vec![0_u8; byte_count];
+    for chunk in pixels.chunks_mut(4 * 1024 * 1024) {
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
+        file.read_exact(chunk).map_err(|e| e.to_string())?;
+    }
+    Ok(pixels)
+}
+
 fn run_with_timeout(
     mut command: Command,
     timeout: Duration,
+    cancelled: Option<&AtomicBool>,
+    preempted: Option<&AtomicBool>,
 ) -> Result<std::process::ExitStatus, String> {
+    if is_stopped(cancelled, preempted) {
+        return Err("Nikon decode was cancelled.".into());
+    }
     let mut child = command
         .spawn()
         .map_err(|_| "Nikon decoder could not start.")?;
@@ -81,12 +241,17 @@ fn run_with_timeout(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
+            Ok(None) if is_stopped(cancelled, preempted) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Nikon decode was cancelled.".into());
+            }
             Ok(None) if start.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("Nikon decoder timed out.".into());
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
             Err(_) => return Err("Nikon decoder failed.".into()),
         }
     }
@@ -167,7 +332,7 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
                         .stderr(Stdio::from(
                             File::create(&stderr).map_err(|e| e.to_string())?,
                         ));
-                    let status = run_with_timeout(command, Duration::from_secs(5))?;
+                    let status = run_with_timeout(command, Duration::from_secs(5), None, None)?;
                     if fs::metadata(&stdout).map_err(|e| e.to_string())?.len() > 16 * 1024
                         || fs::metadata(&stderr).map_err(|e| e.to_string())?.len() > 16 * 1024
                     {
@@ -261,6 +426,8 @@ fn report(ctx: &NativeContext) -> Result<Value, String> {
 struct DecodedAsset {
     metadata: Value,
     pixels: Vec<u8>,
+    source_handle: Option<String>,
+    pixels_omitted: bool,
 }
 
 impl DecodedAsset {
@@ -271,7 +438,12 @@ impl DecodedAsset {
         if metadata["available"] != true || metadata["byteCount"].as_u64()? != pixels.len() as u64 {
             return None;
         }
-        Some(Self { metadata, pixels })
+        Some(Self {
+            metadata,
+            pixels,
+            source_handle: None,
+            pixels_omitted: false,
+        })
     }
 
     fn into_json(mut self) -> Value {
@@ -283,10 +455,17 @@ impl DecodedAsset {
 
     fn to_binary(&self) -> Result<Vec<u8>, String> {
         let metadata = serde_json::to_vec(&self.metadata).map_err(|e| e.to_string())?;
-        let mut response = Vec::with_capacity(4 + metadata.len() + self.pixels.len());
+        let payload_len = if self.pixels_omitted {
+            0
+        } else {
+            self.pixels.len()
+        };
+        let mut response = Vec::with_capacity(4 + metadata.len() + payload_len);
         response.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
         response.extend_from_slice(&metadata);
-        response.extend_from_slice(&self.pixels);
+        if !self.pixels_omitted {
+            response.extend_from_slice(&self.pixels);
+        }
         Ok(response)
     }
 }
@@ -305,13 +484,160 @@ fn failure(code: &str, message: &str) -> DecodedAsset {
     DecodedAsset {
         metadata: json!({"available":false,"code":code,"message":message}),
         pixels: Vec::new(),
+        source_handle: None,
+        pixels_omitted: false,
     }
 }
 
-fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
+fn package_full_decoded(
+    mut metadata: Value,
+    pixels: Vec<u8>,
+    width: u64,
+    height: u64,
+    handle_only: bool,
+) -> Result<(DecodedAsset, Option<Arc<crate::RawSource>>), String> {
+    if pixels.len() <= crate::RAW_SOURCE_LIMIT {
+        let handle = uuid::Uuid::new_v4().to_string();
+        if handle_only {
+            let arc = Arc::new(crate::RawSource {
+                width: width as u32,
+                height: height as u32,
+                format: crate::NativeSourceFormat::Rgb16,
+                data: pixels,
+            });
+            let inserted = crate::raw_sources()
+                .lock()
+                .map(|mut sources| {
+                    sources.insert_arc(handle.clone(), Arc::clone(&arc));
+                    true
+                })
+                .unwrap_or(false);
+            if !inserted {
+                return Err("Native source cache is unavailable.".into());
+            }
+            metadata["sourceHandle"] = json!(handle);
+            metadata["pixelsOmitted"] = json!(true);
+            return Ok((
+                DecodedAsset {
+                    metadata,
+                    pixels: Vec::new(),
+                    source_handle: Some(handle),
+                    pixels_omitted: true,
+                },
+                Some(arc),
+            ));
+        }
+        let arc = Arc::new(crate::RawSource {
+            width: width as u32,
+            height: height as u32,
+            format: crate::NativeSourceFormat::Rgb16,
+            data: pixels.clone(),
+        });
+        let stored = crate::raw_sources()
+            .lock()
+            .map(|mut sources| {
+                sources.insert_arc(handle.clone(), Arc::clone(&arc));
+                true
+            })
+            .unwrap_or(false);
+        if stored {
+            metadata["sourceHandle"] = json!(handle);
+            return Ok((
+                DecodedAsset {
+                    metadata,
+                    pixels,
+                    source_handle: Some(handle),
+                    pixels_omitted: false,
+                },
+                Some(arc),
+            ));
+        }
+    }
+    Ok((
+        DecodedAsset {
+            metadata,
+            pixels,
+            source_handle: None,
+            pixels_omitted: false,
+        },
+        None,
+    ))
+}
+
+fn spawn_preview_from_full(
+    preview_cache: PreviewCache,
+    source: Arc<crate::RawSource>,
+    base_metadata: Value,
+) {
+    if preview_cache.exists() {
+        return;
+    }
+    let _ = std::thread::Builder::new().spawn(move || {
+        let src_w = source.width as usize;
+        let src_h = source.height as usize;
+        if src_w == 0 || src_h == 0 {
+            return;
+        }
+        let scale = (2560.0_f64 / src_w.max(src_h) as f64).min(1.0);
+        let dst_w = (src_w as f64 * scale).round().max(1.0) as usize;
+        let dst_h = (src_h as f64 * scale).round().max(1.0) as usize;
+        let never_cancel = AtomicBool::new(false);
+        let pixels = if dst_w == src_w && dst_h == src_h {
+            source.data.clone()
+        } else {
+            let Ok(resized) = super::libraw_decode::resize_rgb16_parallel(
+                &source.data,
+                src_w,
+                src_h,
+                dst_w,
+                dst_h,
+                &never_cancel,
+            ) else {
+                return;
+            };
+            resized
+        };
+        let mut metadata = base_metadata;
+        metadata["width"] = json!(dst_w);
+        metadata["height"] = json!(dst_h);
+        metadata["byteCount"] = json!(pixels.len());
+        metadata["fullWidth"] = json!(src_w);
+        metadata["fullHeight"] = json!(src_h);
+        if let Some(obj) = metadata.as_object_mut() {
+            obj.remove("sourceHandle");
+            obj.remove("pixelsOmitted");
+        }
+        let preview_asset = DecodedAsset {
+            metadata,
+            pixels,
+            source_handle: None,
+            pixels_omitted: false,
+        };
+        if let Ok(bytes) = preview_asset.to_binary() {
+            preview_cache.store(&bytes, None);
+        }
+    });
+}
+
+fn decode(
+    args: &[Value],
+    ctx: &NativeContext,
+    cancelled: Option<&AtomicBool>,
+    allow_handle_only: bool,
+) -> Result<DecodedAsset, String> {
+    if is_cancelled(cancelled) {
+        return Err("Nikon decode was cancelled.".into());
+    }
     let request = args.get(1).ok_or("Invalid Nikon decode request.")?;
     let mode = request.get("mode").and_then(Value::as_str).unwrap_or("");
     let max_edge = request.get("maxEdge").and_then(Value::as_u64).unwrap_or(0);
+    let priority = request
+        .get("priority")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let handle_only =
+        allow_handle_only && request.get("handleOnly").and_then(Value::as_bool).unwrap_or(false);
     if !matches!(mode, "preview" | "full") || max_edge == 0 {
         return Ok(failure("INVALID_ARGUMENT", "Invalid Nikon decode request."));
     }
@@ -362,39 +688,117 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             "NEF input exceeds the supported size.",
         ));
     }
+    let cache_revision = format!(
+        "nikon-native-rgb16le-v1:{digest}:{state}:{}",
+        super::libraw_decode::DECODER_REVISION,
+    );
     let cache = PreviewCache::if_enabled(
         mode == "preview",
         ctx.app_cache.as_deref(),
         &path,
         &source_metadata,
-        &format!(
-            "nikon-native-rgb16le-v1:{digest}:{state}:{}",
-            super::libraw_decode::DECODER_REVISION,
-        ),
+        &cache_revision,
         max_edge,
     );
     if let Some(decoded) = cache
         .as_ref()
-        .and_then(|cache| cache.load(None))
+        .and_then(|cache| cache.load(cancelled))
         .and_then(DecodedAsset::from_binary)
     {
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
+        if check_open_regular(&path, &source, &source_metadata).is_err() {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+        crate::timing(format_args!(
+            "nikon preview cache-hit: {} ms",
+            started.elapsed().as_millis()
+        ));
+        return Ok(decoded);
+    }
+    let full_cache = (mode == "full")
+        .then(|| FullDecodeCache::new(ctx.app_cache.as_deref(), &path, &source_metadata, &cache_revision))
+        .flatten();
+    if let Some((cached_meta, cached_pixels)) =
+        full_cache.as_ref().and_then(|cache| cache.load(cancelled))
+    {
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
+        if check_open_regular(&path, &source, &source_metadata).is_err() {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+        let width = cached_meta["width"].as_u64().unwrap_or(0);
+        let height = cached_meta["height"].as_u64().unwrap_or(0);
+        if width > 0 && height > 0 && width * height * 6 == cached_pixels.len() as u64 {
+            crate::timing(format_args!(
+                "nikon full cache-hit {width}x{height}: {} ms",
+                started.elapsed().as_millis()
+            ));
+            let (decoded, _) =
+                package_full_decoded(cached_meta, cached_pixels, width, height, handle_only)?;
+            return Ok(decoded);
+        }
+    }
+    if is_cancelled(cancelled) {
+        return Err("Nikon decode was cancelled.".into());
+    }
+    let gate_started = Instant::now();
+    let gate_permit = nikon_helper_gate().acquire(priority, cancelled)?;
+    let gate_waited_ms = gate_started.elapsed().as_millis();
+    // Re-check disk caches in case an earlier in-flight decode just populated them.
+    if let Some(decoded) = cache
+        .as_ref()
+        .and_then(|cache| cache.load(cancelled))
+        .and_then(DecodedAsset::from_binary)
+    {
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
         if check_open_regular(&path, &source, &source_metadata).is_err() {
             return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
         }
         return Ok(decoded);
     }
+    if let Some((cached_meta, cached_pixels)) =
+        full_cache.as_ref().and_then(|cache| cache.load(cancelled))
+    {
+        if is_cancelled(cancelled) {
+            return Err("Nikon decode was cancelled.".into());
+        }
+        if check_open_regular(&path, &source, &source_metadata).is_err() {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+        let width = cached_meta["width"].as_u64().unwrap_or(0);
+        let height = cached_meta["height"].as_u64().unwrap_or(0);
+        if width > 0 && height > 0 && width * height * 6 == cached_pixels.len() as u64 {
+            let (decoded, _) =
+                package_full_decoded(cached_meta, cached_pixels, width, height, handle_only)?;
+            return Ok(decoded);
+        }
+    }
     let work = tempfile::tempdir().map_err(|e| e.to_string())?;
     let input = work.path().join("input.nef");
     let output = work.path().join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
-    let mut target = File::create(&input).map_err(|e| e.to_string())?;
-    let copied = std::io::copy(&mut source, &mut target).map_err(|e| e.to_string())?;
-    if copied != source_metadata.len()
-        || check_open_regular(&path, &source, &source_metadata).is_err()
-    {
-        return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+    if try_clone_snapshot(&source, work.path()) {
+        if check_open_regular(&path, &source, &source_metadata).is_err() {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+    } else {
+        let mut target = File::create(&input).map_err(|e| e.to_string())?;
+        let copied = std::io::copy(&mut source, &mut target).map_err(|e| e.to_string())?;
+        if copied != source_metadata.len()
+            || check_open_regular(&path, &source, &source_metadata).is_err()
+        {
+            return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
+        }
+        // Flush userspace buffers and close the throwaway snapshot before spawning
+        // the helper; skipping fsync avoids APFS F_FULLFSYNC stalls on temp files.
+        target.flush().map_err(|e| e.to_string())?;
+        drop(target);
     }
-    target.sync_all().map_err(|e| e.to_string())?;
     let copied_at = Instant::now();
     let stderr = work.path().join("stderr");
     let helper_max_edge = helper_max_edge(mode, max_edge);
@@ -416,7 +820,13 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         .stderr(Stdio::from(
             File::create(&stderr).map_err(|e| e.to_string())?,
         ));
-    let status = run_with_timeout(command, Duration::from_secs(60));
+    let status = run_with_timeout(
+        command,
+        Duration::from_secs(60),
+        cancelled,
+        Some(&gate_permit.preempted),
+    );
+    drop(gate_permit);
     let decoded_at = Instant::now();
     match status {
         Ok(status) if status.success() => (),
@@ -442,6 +852,9 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
                 }
             }
             return Ok(failure("HELPER_CRASH", "Nikon decoder failed."));
+        }
+        Err(message) if message.contains("cancelled") => {
+            return Err(message);
         }
         Err(message) if message.contains("timed out") => {
             return Ok(failure("TIMEOUT", "Nikon decoder timed out."));
@@ -492,13 +905,16 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
             "Nikon decoder metadata violates protocol version 1.",
         ));
     }
-    let pixels = fs::read(output.join("pixels.bin")).map_err(|e| e.to_string())?;
-    if pixels.len() as u64 != byte_count {
-        return Ok(failure(
-            "INVALID_OUTPUT",
-            "Nikon decoder pixel byte count is invalid.",
-        ));
-    }
+    let pixels = match read_exact_file(&output.join("pixels.bin"), byte_count as usize, cancelled) {
+        Ok(pixels) => pixels,
+        Err(message) if message.contains("cancelled") => return Err(message),
+        Err(_) => {
+            return Ok(failure(
+                "INVALID_OUTPUT",
+                "Nikon decoder pixel byte count is invalid.",
+            ));
+        }
+    };
     if checksum(&helper)? != digest {
         return Ok(failure(
             "SDK_UNAVAILABLE",
@@ -506,7 +922,7 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         ));
     }
     crate::timing(format_args!(
-        "nikon {mode} {width}x{height}: checksum+copy {} ms, helper {} ms, read {} ms",
+        "nikon {mode} {width}x{height}: gate {gate_waited_ms} ms, checksum+copy {} ms, helper {} ms, read {} ms",
         (copied_at - started).as_millis(),
         (decoded_at - copied_at).as_millis(),
         decoded_at.elapsed().as_millis()
@@ -519,33 +935,72 @@ fn decode(args: &[Value], ctx: &NativeContext) -> Result<DecodedAsset, String> {
         metadata["fullWidth"] = json!(full_width);
         metadata["fullHeight"] = json!(full_height);
     }
+    // Remove temporary 55–272 MB files off the critical response path.
+    let _ = std::thread::Builder::new().spawn(move || drop(work));
+    if is_cancelled(cancelled) {
+        return Err("Nikon decode was cancelled.".into());
+    }
     if check_open_regular(&path, &source, &source_metadata).is_err() {
         return Ok(failure("INPUT_IO", "NEF source changed during decoding."));
     }
-    let decoded = DecodedAsset { metadata, pixels };
+    if mode == "full" {
+        let cache_meta = metadata.clone();
+        let (decoded, arc_source) =
+            package_full_decoded(metadata, pixels, width, height, handle_only)?;
+        if let Some(arc) = arc_source {
+            if let Some(full_cache) = full_cache {
+                full_cache.store_arc(cache_meta.clone(), Arc::clone(&arc), cancelled);
+            }
+            if let Some(preview_cache) = PreviewCache::new(
+                ctx.app_cache.as_deref(),
+                &path,
+                &source_metadata,
+                &cache_revision,
+                2560,
+            ) {
+                spawn_preview_from_full(preview_cache, arc, cache_meta);
+            }
+        }
+        return Ok(decoded);
+    }
+    let decoded = DecodedAsset {
+        metadata,
+        pixels,
+        source_handle: None,
+        pixels_omitted: false,
+    };
     if let Some(cache) = cache
         && let Ok(bytes) = decoded.to_binary()
     {
-        cache.store(&bytes, None);
+        cache.store(&bytes, cancelled);
     }
     Ok(decoded)
 }
 
-pub fn decode_asset_binary(args: &[Value], ctx: &NativeContext) -> Result<Vec<u8>, String> {
-    decode(args, ctx)?.to_binary()
+pub fn decode_asset_binary(
+    args: &[Value],
+    ctx: &NativeContext,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(Vec<u8>, Option<String>), String> {
+    let decoded = decode(args, ctx, cancelled, true)?;
+    let handle = decoded.source_handle.clone();
+    let bytes = decoded.to_binary()?;
+    Ok((bytes, handle))
 }
 
 pub fn handle(command: &str, args: &[Value], ctx: &NativeContext) -> Result<Value, String> {
     match command {
         "darkroom:get-format-capability-report" => report(ctx),
-        "darkroom:catalog-decode-asset" => decode(args, ctx).map(DecodedAsset::into_json),
+        "darkroom:catalog-decode-asset" => {
+            decode(args, ctx, None, false).map(DecodedAsset::into_json)
+        }
         _ => Err(format!("Unknown Nikon command: {command}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::helper_max_edge;
+    use super::*;
 
     #[test]
     fn full_mode_never_caps_at_preview_edge() {
@@ -553,5 +1008,96 @@ mod tests {
         assert_eq!(helper_max_edge("full", 99_999), 65_535);
         assert_eq!(helper_max_edge("preview", 99_999), 2560);
         assert_eq!(helper_max_edge("preview", 720), 720);
+    }
+
+    #[test]
+    fn handle_only_omits_pixels_and_stores_raw_source() {
+        let _guard = crate::RAW_SOURCES_TEST_LOCK.lock().unwrap();
+        let width = 8_u64;
+        let height = 6_u64;
+        let byte_count = width * height * 6;
+        let pixels = vec![42_u8; byte_count as usize];
+        let metadata = json!({
+            "available": true,
+            "provenance": "nikon-sdk",
+            "version": 1,
+            "width": width,
+            "height": height,
+            "channels": 3,
+            "bitDepth": 16,
+            "byteCount": byte_count,
+            "pixelFormat": "rgb16le",
+            "orientation": 1,
+            "colorSpace": "srgb",
+            "transferFunction": "srgb",
+        });
+        let (decoded, _) =
+            package_full_decoded(metadata, pixels.clone(), width, height, true).unwrap();
+        let handle = decoded
+            .source_handle
+            .clone()
+            .expect("expected native source handle");
+        assert!(decoded.pixels_omitted);
+        let binary = decoded.to_binary().unwrap();
+        let header_len = u32::from_le_bytes(binary[..4].try_into().unwrap()) as usize;
+        assert_eq!(binary.len(), 4 + header_len);
+        let header: Value = serde_json::from_slice(&binary[4..4 + header_len]).unwrap();
+        assert_eq!(header["pixelsOmitted"], true);
+        assert_eq!(header["sourceHandle"], handle);
+        let cached = crate::raw_sources()
+            .lock()
+            .unwrap()
+            .get(&handle)
+            .expect("source should be cached");
+        assert_eq!(cached.width, width as u32);
+        assert_eq!(cached.height, height as u32);
+        assert_eq!(cached.format, crate::NativeSourceFormat::Rgb16);
+        assert_eq!(cached.data, pixels);
+    }
+
+    #[test]
+    fn nikon_helper_gate_preempts_background_for_foreground() {
+        static TEST_GATE: OnceLock<NikonHelperGate> = OnceLock::new();
+        let gate = TEST_GATE.get_or_init(NikonHelperGate::new);
+        let bg_permit = gate.acquire(-20, None).unwrap();
+        let bg_preempted = Arc::clone(&bg_permit.preempted);
+        let bg_thread = std::thread::spawn(move || {
+            let start = Instant::now();
+            while !bg_permit.preempted.load(Ordering::Relaxed)
+                && start.elapsed() < Duration::from_secs(2)
+            {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            drop(bg_permit);
+        });
+        let started = Instant::now();
+        let fg_permit = gate.acquire(200, None).unwrap();
+        drop(fg_permit);
+        bg_thread.join().unwrap();
+        assert!(bg_preempted.load(Ordering::Relaxed));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_with_timeout_kills_process_on_cancel() {
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let trigger = cancelled.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            trigger.store(true, Ordering::Relaxed);
+        });
+        let started = Instant::now();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let err = run_with_timeout(cmd, Duration::from_secs(10), Some(&cancelled), None)
+            .expect_err("expected cancelled error");
+        handle.join().unwrap();
+        assert!(err.contains("cancelled"), "unexpected error: {err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation took too long: {:?}",
+            started.elapsed()
+        );
     }
 }

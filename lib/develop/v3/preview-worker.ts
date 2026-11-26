@@ -80,13 +80,24 @@ function assetsFor(): CpuAssetAvailability | undefined {
   };
 }
 
+const scheduleChannel = typeof MessageChannel !== "undefined" ? new MessageChannel() : null;
+if (scheduleChannel) {
+  scheduleChannel.port1.onmessage = () => {
+    void renderLatest();
+  };
+}
+
 function scheduleRender(): void {
   const limit = gpuWarm && !exporting && pendingRender?.kind === "render" ? 2 : 1;
   if (renderScheduled || rendering >= limit) return;
   renderScheduled = true;
-  setTimeout(() => {
-    void renderLatest();
-  }, 0);
+  if (scheduleChannel) {
+    scheduleChannel.port2.postMessage(null);
+  } else {
+    setTimeout(() => {
+      void renderLatest();
+    }, 0);
+  }
 }
 
 async function renderLatest(): Promise<void> {
@@ -280,7 +291,7 @@ self.onmessage = (event: MessageEvent<V3PreviewWorkerRequest | NativeGpuWorkerRe
     entry = message.entry;
     image = message.image;
     residentDocument = null;
-    if (image.nativeSourceHandle && image.rgb instanceof Uint16Array) {
+    if (image.nativeSourceHandle) {
       registerNativeSource(image.rgb, image.nativeSourceHandle);
     }
     gpuRenderer?.dispose();

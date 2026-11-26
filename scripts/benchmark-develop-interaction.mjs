@@ -9,7 +9,7 @@ export async function benchmarkDevelopInteraction(page, report) {
     const main = () => [...document.querySelectorAll('canvas[role="img"]')].find((canvas) => !canvas.getAttribute("aria-label")?.includes("full-resolution edited detail"));
     const detail = () => document.querySelector('canvas[aria-label$=", full-resolution edited detail"]');
     const shell = () => main().closest("[aria-busy]");
-    const transform = () => shell().querySelector(".will-change-transform");
+    const transform = () => main().closest('[style*="transform-origin"]') ?? shell().querySelector(".will-change-transform");
     const detailShell = () => document.querySelector('[aria-label="100 percent detail; drag to pan"]');
     const draws = [];
     const requests = [];

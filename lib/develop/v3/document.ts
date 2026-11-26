@@ -431,8 +431,12 @@ function stableJson(value: unknown): string {
   throw new Error("Canonical documents cannot contain this value.");
 }
 
+const canonicalHashInputCache = new WeakMap<DevelopDocumentV3, string>();
+
 export function canonicalV3DocumentHashInput(document: DevelopDocumentV3): string {
-  return stableJson({
+  const cached = canonicalHashInputCache.get(document);
+  if (cached !== undefined) return cached;
+  const result = stableJson({
     version: document.version,
     process: document.process,
     schemaRevision: document.schemaRevision,
@@ -449,4 +453,6 @@ export function canonicalV3DocumentHashInput(document: DevelopDocumentV3): strin
     hdr: document.hdr,
     appliedPreset: document.appliedPreset,
   });
+  canonicalHashInputCache.set(document, result);
+  return result;
 }

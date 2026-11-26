@@ -1,9 +1,36 @@
 use std::io::{self, Read, Write};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum NativeSourceFormat {
+    Rgb16,
+    Rgb8,
+    Rgba8,
+}
+
+impl NativeSourceFormat {
+    fn spec_format(self) -> &'static str {
+        match self {
+            Self::Rgb16 => "rgb16uint",
+            Self::Rgb8 => "rgb8unorm",
+            Self::Rgba8 => "rgba8unorm",
+        }
+    }
+
+    fn bytes_per_pixel(self) -> u64 {
+        match self {
+            Self::Rgb16 => 6,
+            Self::Rgb8 => 3,
+            Self::Rgba8 => 4,
+        }
+    }
+}
+
 struct RawSource {
     width: u32,
     height: u32,
-    rgb16: Vec<u8>,
+    format: NativeSourceFormat,
+    data: Vec<u8>,
 }
 
 struct RawSources;

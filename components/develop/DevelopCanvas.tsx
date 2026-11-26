@@ -86,13 +86,35 @@ const activeAnalysis = new Map<
     readonly binding: V3AnalysisBinding;
   }
 >();
+const analysisListeners = new Set<() => void>();
+
+function notifyAnalysisListeners(): void {
+  for (const listener of analysisListeners) listener();
+}
+
+export function subscribeV3Analysis(listener: () => void): () => void {
+  analysisListeners.add(listener);
+  return () => {
+    analysisListeners.delete(listener);
+  };
+}
+
+export function activeV3AnalysisFor(
+  catalogId: string | null | undefined,
+  entryId: string | null | undefined,
+): readonly CpuAnalysisTapResult[] {
+  if (!catalogId || !entryId) return EMPTY_ANALYSIS;
+  return activeAnalysis.get(analysisKey(catalogId, entryId))?.analysis ?? EMPTY_ANALYSIS;
+}
 
 function analysisKey(catalogId: string, entryId: string): string {
   return JSON.stringify([catalogId, entryId]);
 }
 
 function clearActiveAnalysis(catalogId: string, entryId: string): void {
-  activeAnalysis.delete(analysisKey(catalogId, entryId));
+  if (activeAnalysis.delete(analysisKey(catalogId, entryId))) {
+    notifyAnalysisListeners();
+  }
 }
 
 function bindActiveAnalysis(
@@ -104,6 +126,7 @@ function bindActiveAnalysis(
     analysis,
     binding,
   });
+  notifyAnalysisListeners();
 }
 
 export function currentV3AnalysisBinding(
@@ -218,6 +241,8 @@ interface PanGesture {
 
 const FIT_TRANSFORM: ViewerTransform = { scale: 1, x: 0, y: 0 };
 const EMPTY_ANALYSIS: readonly CpuAnalysisTapResult[] = [];
+const EMPTY_MASK_MATTES: readonly V3PreviewMaskMatte[] = [];
+const WHEEL_ZOOM_IDLE_MS = 120;
 
 function centeredImageRect(
   viewport: DisplayDimensions,
@@ -305,7 +330,16 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   const drawnRequestRef = useRef(0);
   const analyzedRequestRef = useRef(0);
   const drawnFrameRef = useRef<DrawnFrame | null>(null);
-  const lastInteractiveRevisionRef = useRef<number | null>(null);
+  const wasInteractiveRef = useRef(false);
+  const lastSettledAnalysisRef = useRef<{
+    readonly catalogId: string;
+    readonly entryId: string;
+    readonly assetRevision: number;
+    readonly documentRevision: number;
+    readonly document: DevelopDocumentV3;
+    readonly analysis: readonly CpuAnalysisTapResult[];
+    readonly planFingerprint: Sha256Digest;
+  } | null>(null);
   const beforeContentKeyRef = useRef<string | null>(null);
   const maskMattesRef = useRef<{
     readonly key: string;
@@ -343,14 +377,17 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   const beforeGeometry = document?.geometry ?? null;
   const beforeGeometryFrame = document?.local.geometryFrame ?? null;
   const beforeManualDistortion = document?.optics.manualDistortion ?? null;
-  const beforeDocumentKey = beforeGeometry && beforeGeometryFrame &&
-      beforeManualDistortion !== null
-    ? JSON.stringify({
-        geometry: beforeGeometry,
-        geometryFrame: beforeGeometryFrame,
-        manualDistortion: beforeManualDistortion,
-      } satisfies BeforeDocumentInput)
-    : null;
+  const beforeDocumentKey = useMemo(
+    () =>
+      beforeGeometry && beforeGeometryFrame && beforeManualDistortion !== null
+        ? JSON.stringify({
+            geometry: beforeGeometry,
+            geometryFrame: beforeGeometryFrame,
+            manualDistortion: beforeManualDistortion,
+          } satisfies BeforeDocumentInput)
+        : null,
+    [beforeGeometry, beforeGeometryFrame, beforeManualDistortion],
+  );
   const neutralBeforeDocument = useMemo(
     () => beforeDocumentKey
       ? beforeDocument(JSON.parse(beforeDocumentKey) as BeforeDocumentInput)
@@ -401,7 +438,10 @@ export const DevelopCanvas = memo(function DevelopCanvas({
   const viewTransformRef = useRef(viewTransform);
   const transformElementRef = useRef<HTMLDivElement | null>(null);
   const [wheelZoomDirect, setWheelZoomDirect] = useState(false);
+  const [wheelZooming, setWheelZooming] = useState(false);
   const wheelZoomDirectRef = useRef(false);
+  const wheelZoomTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const wheelBoundsRef = useRef<DOMRect | null>(null);
   useLayoutEffect(() => {
     viewTransformRef.current = viewTransform;
   }, [viewTransform]);
@@ -454,7 +494,8 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     drawnRequestRef.current = 0;
     analyzedRequestRef.current = 0;
     drawnFrameRef.current = null;
-    lastInteractiveRevisionRef.current = null;
+    wasInteractiveRef.current = false;
+    lastSettledAnalysisRef.current = null;
     maskMattesRef.current = null;
     detailRenderingRef.current = false;
     let worker: V3PreviewWorkerClient;
@@ -488,6 +529,27 @@ export const DevelopCanvas = memo(function DevelopCanvas({
 
   useEffect(() => {
     const container = containerRef.current;
+    if (!container) return;
+    let animationFrame = 0;
+    const updateViewport = () => {
+      const width = Math.max(1, Math.round(container.clientWidth));
+      const height = Math.max(1, Math.round(container.clientHeight));
+      setViewport((current) => current.width === width && current.height === height ? current : { width, height });
+    };
+    updateViewport();
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(animationFrame);
+      animationFrame = requestAnimationFrame(updateViewport);
+    });
+    observer.observe(container);
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
     const context = canvas.getContext("2d");
@@ -497,23 +559,12 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     }
 
     let disposed = false;
-    let renderedViewportWidth = 0;
-    let renderedViewportHeight = 0;
     let refineTimer: ReturnType<typeof setTimeout> | undefined;
     let analysisTimer: ReturnType<typeof setTimeout> | undefined;
-    let animationFrame = 0;
 
-    const render = (force = false) => {
+    const render = () => {
       const width = Math.max(1, Math.round(container.clientWidth));
       const height = Math.max(1, Math.round(container.clientHeight));
-      setViewport((current) => current.width === width && current.height === height ? current : { width, height });
-      if (
-        !force &&
-        width === renderedViewportWidth &&
-        height === renderedViewportHeight
-      ) return;
-      renderedViewportWidth = width;
-      renderedViewportHeight = height;
       const session = getDevelopSession(entry.catalogId, entry.id);
       const quickWorker = quickWorkerRef.current;
       if (!session || !document || !quickWorker) {
@@ -546,6 +597,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         (!includePointColor || pointColorInputRef.current !== null) &&
         hasCurrentAnalysis;
       if (canReuseSettledFrame && drawnFrame) {
+        wasInteractiveRef.current = false;
         const scale = Math.min(width / canvas.width, height / canvas.height);
         setDisplayDimensions((current) => {
           const next = {
@@ -559,18 +611,16 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           viewportHeight: height,
           viewportWidth: width,
         };
-        renderedViewportWidth = width;
-        renderedViewportHeight = height;
         return;
       }
       if (previewMode === "interactive") {
-        lastInteractiveRevisionRef.current = renderSnapshot.documentRevision;
+        wasInteractiveRef.current = true;
         if (sameContent && drawnFrame?.viewportWidth === width &&
             drawnFrame.viewportHeight === height &&
             drawnFrame.viewportScale === previewRenderScale) return;
       }
-      const interactionRelease = previewMode === "settled" &&
-        lastInteractiveRevisionRef.current === renderSnapshot.documentRevision;
+      const interactionRelease = previewMode === "settled" && wasInteractiveRef.current;
+      if (previewMode === "settled") wasInteractiveRef.current = false;
       if (interactionRelease && sameContent && drawnFrame?.viewportWidth === width &&
           drawnFrame.viewportHeight === height && drawnFrame.viewportScale === previewRenderScale &&
           drawnFrame.mode === "settled" &&
@@ -580,11 +630,23 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       clearTimeout(analysisTimer);
       const sameContentSettledRender = previewMode === "settled" && sameContent &&
         drawnFrame?.mode === "settled";
+      const cachedSettledAnalysis = lastSettledAnalysisRef.current;
+      const matchesCachedSettledAnalysis = Boolean(
+        previewMode === "settled" &&
+        cachedSettledAnalysis &&
+        cachedSettledAnalysis.catalogId === entry.catalogId &&
+        cachedSettledAnalysis.entryId === entry.id &&
+        cachedSettledAnalysis.assetRevision === entry.assetRevision &&
+        cachedSettledAnalysis.documentRevision === renderSnapshot.documentRevision &&
+        cachedSettledAnalysis.document === document,
+      );
       if (!sameContent) {
         pointColorInputRef.current = null;
         setShowBefore(false);
-        clearActiveAnalysis(entry.catalogId, entry.id);
-        analysisCallbackRef.current?.(EMPTY_ANALYSIS);
+        if (previewMode === "settled" && !matchesCachedSettledAnalysis) {
+          clearActiveAnalysis(entry.catalogId, entry.id);
+          analysisCallbackRef.current?.(EMPTY_ANALYSIS);
+        }
       }
       const requestId = ++requestRef.current;
       if (!hasRenderedRef.current) setPreview({ kind: "loading" });
@@ -709,6 +771,17 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         });
         diagnosticsCallbackRef.current?.(result.diagnostics);
         if (!cropActive && result.analysis.length > 0) {
+          if (mode === "settled" && result.analysis.some((tap) => tap.tap === "tone-input")) {
+            lastSettledAnalysisRef.current = {
+              catalogId: entry.catalogId,
+              entryId: entry.id,
+              assetRevision: entry.assetRevision,
+              documentRevision: renderSnapshot.documentRevision,
+              document,
+              analysis: result.analysis,
+              planFingerprint: result.planFingerprint,
+            };
+          }
           bindActiveAnalysis(result.analysis, {
             catalogId: entry.catalogId,
             entryId: entry.id,
@@ -750,15 +823,20 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       };
 
       const renderPreview = async (): Promise<void> => {
-        const maskMatteKey = JSON.stringify(renderDocument.local.maskAssetRefs);
-        if (maskMattesRef.current?.key !== maskMatteKey) {
-          maskMattesRef.current = {
-            key: maskMatteKey,
-            value: loadV3PreviewMaskMattes(renderDocument, entry, image),
-          };
+        let maskMattes: readonly V3PreviewMaskMatte[];
+        if (renderDocument.local.maskAssetRefs.length === 0) {
+          maskMattes = EMPTY_MASK_MATTES;
+        } else {
+          const maskMatteKey = JSON.stringify(renderDocument.local.maskAssetRefs);
+          if (maskMattesRef.current?.key !== maskMatteKey) {
+            maskMattesRef.current = {
+              key: maskMatteKey,
+              value: loadV3PreviewMaskMattes(renderDocument, entry, image),
+            };
+          }
+          maskMattes = await maskMattesRef.current.value;
+          if (disposed || requestId !== requestRef.current) return;
         }
-        const maskMattes = await maskMattesRef.current.value;
-        if (disposed || requestId !== requestRef.current) return;
         const options = {
           viewportDimensions: {
             width: Math.max(1, Math.round(width * previewRenderScale)),
@@ -768,12 +846,14 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           maskMattes,
           includePointColor,
         } as const;
-        const renderAnalysis = async (mode: "interactive" | "settled"): Promise<void> => {
+        const renderAnalysis = async (mode: "interactive" | "settled", reuseQuickWorker = false): Promise<void> => {
           const canPublish = (): boolean =>
             isCurrentRequest() ||
             (mode === "interactive" && isLiveInteraction());
           if (cropActive || !canPublish()) return;
-          const analysisWorker = analysisWorkerRef.current ??= new V3PreviewWorkerClient(entry, image);
+          const analysisWorker = reuseQuickWorker
+            ? quickWorker
+            : analysisWorkerRef.current ??= new V3PreviewWorkerClient(entry, image);
           const analysisScale = mode === "interactive"
             ? Math.min(1, 256 / (Math.max(options.viewportDimensions.width, options.viewportDimensions.height) *
                 Math.min(2, Math.max(0.5, options.devicePixelRatio))))
@@ -799,6 +879,17 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           const analysis = mode === "interactive"
             ? result.analysis.filter((tap) => tap.tap !== "tone-input")
             : result.analysis;
+          if (mode === "settled" && analysis.some((tap) => tap.tap === "tone-input")) {
+            lastSettledAnalysisRef.current = {
+              catalogId: entry.catalogId,
+              entryId: entry.id,
+              assetRevision: entry.assetRevision,
+              documentRevision: renderSnapshot.documentRevision,
+              document,
+              analysis,
+              planFingerprint: result.planFingerprint,
+            };
+          }
           analyzedRequestRef.current = requestId;
           bindActiveAnalysis(analysis, {
             catalogId: entry.catalogId,
@@ -848,22 +939,32 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           detailWorkerRef.current = detailWorker;
           detailRenderingRef.current = true;
         }
-        const detailedPromise = detailWorker.render(renderDocument, {
+        const detailed = await detailWorker.render(renderDocument, {
           ...options,
           previewMode: "settled",
           includeAnalysis: backend !== "gpu" && !cropActive,
+          includeHistogram: backend === "gpu" && !cropActive && !hasCurrentAnalysis && !matchesCachedSettledAnalysis,
         }).finally(() => {
           if (detailWorkerRef.current === detailWorker) detailRenderingRef.current = false;
         });
-        if (backend === "gpu" && !cropActive && !hasCurrentAnalysis) {
-          void renderAnalysis("interactive").catch(handleRenderError);
-        }
-        const detailed = await detailedPromise;
         if (!applyResult(detailed.result, "settled", detailed.backend)) return;
-        if (cropActive || disposed || requestId !== requestRef.current ||
-            (detailed.result.kind === "rendered" && detailed.result.analysis.length > 0)) return;
+        if (!cropActive && matchesCachedSettledAnalysis && cachedSettledAnalysis) {
+          bindActiveAnalysis(cachedSettledAnalysis.analysis, {
+            catalogId: cachedSettledAnalysis.catalogId,
+            entryId: cachedSettledAnalysis.entryId,
+            assetRevision: cachedSettledAnalysis.assetRevision,
+            documentRevision: cachedSettledAnalysis.documentRevision,
+            planFingerprint: cachedSettledAnalysis.planFingerprint,
+          });
+          analysisCallbackRef.current?.(cachedSettledAnalysis.analysis);
+          analyzedRequestRef.current = Math.max(analyzedRequestRef.current, requestId);
+          return;
+        }
+        const detailedHasToneAnalysis = detailed.result.kind === "rendered" &&
+          detailed.result.analysis.some((tap) => tap.tap === "tone-input");
+        if (cropActive || disposed || requestId !== requestRef.current || detailedHasToneAnalysis) return;
         analysisTimer = setTimeout(() => {
-          void renderAnalysis("settled").catch(handleRenderError);
+          void renderAnalysis("settled", detailed.backend === "gpu").catch(handleRenderError);
         }, 120);
       };
 
@@ -881,26 +982,18 @@ export const DevelopCanvas = memo(function DevelopCanvas({
       void renderPreview().catch(handleRenderError);
     };
 
-    const scheduleRender = (force = false): void => {
-      cancelAnimationFrame(animationFrame);
-      animationFrame = requestAnimationFrame(() => render(force));
-    };
-    render(true);
-    const observer = new ResizeObserver(() => scheduleRender());
-    observer.observe(container);
+    render();
     return () => {
       disposed = true;
       clearTimeout(refineTimer);
       clearTimeout(analysisTimer);
-      cancelAnimationFrame(animationFrame);
       if (detailRenderingRef.current) {
         detailWorkerRef.current?.dispose();
         detailWorkerRef.current = null;
         detailRenderingRef.current = false;
       }
-      observer.disconnect();
     };
-  }, [canvasInteractionActive, cropActive, document, documentRevision, entry, image, includePointColor, presentationContext, previewMode, previewRenderScale]);
+  }, [canvasInteractionActive, cropActive, document, documentRevision, entry, image, includePointColor, presentationContext, previewMode, previewRenderScale, viewport.width, viewport.height]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1110,7 +1203,14 @@ export const DevelopCanvas = memo(function DevelopCanvas({
         panRef.current || preview.kind !== "rendered" || event.deltaY === 0 ||
         (event.target instanceof Element && event.target.closest("button, input, select, [role=button]"))) return;
     event.preventDefault();
-    const bounds = containerRef.current!.getBoundingClientRect();
+    const bounds = wheelBoundsRef.current ?? containerRef.current!.getBoundingClientRect();
+    wheelBoundsRef.current = bounds;
+    setWheelZooming(true);
+    clearTimeout(wheelZoomTimerRef.current);
+    wheelZoomTimerRef.current = setTimeout(() => {
+      wheelBoundsRef.current = null;
+      setWheelZooming(false);
+    }, WHEEL_ZOOM_IDLE_MS);
     if (!wheelZoomDirectRef.current) {
       // Take over from the visible point of an in-flight control zoom.
       const transform = transformElementRef.current
@@ -1153,7 +1253,11 @@ export const DevelopCanvas = memo(function DevelopCanvas({
     if (!container) return;
     const wheel = (event: WheelEvent) => onWheelRef.current(event);
     container.addEventListener("wheel", wheel, { passive: false });
-    return () => container.removeEventListener("wheel", wheel);
+    return () => {
+      container.removeEventListener("wheel", wheel);
+      clearTimeout(wheelZoomTimerRef.current);
+      wheelBoundsRef.current = null;
+    };
   }, []);
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -1434,7 +1538,7 @@ export const DevelopCanvas = memo(function DevelopCanvas({
           showStatus={zoomed}
           preload
           passive
-          panning={panning}
+          panning={panning || wheelZooming}
         />
       ) : null}
       <div

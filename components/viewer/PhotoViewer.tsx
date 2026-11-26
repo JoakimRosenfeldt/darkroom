@@ -9,10 +9,12 @@ import type {
   DevelopImageLoadOptions,
 } from "@/lib/cache/develop-image-cache";
 import {
+  getCachedDevelopExportImage,
   getCachedDevelopImage,
   loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
+  preloadFullDevelopImages,
 } from "@/lib/cache/develop-image-cache";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import {
@@ -27,7 +29,6 @@ import {
   type V3CanvasTool,
   type V3CanvasDiagnostic,
 } from "@/components/develop/DevelopCanvas";
-import type { CpuAnalysisTapResult } from "@/lib/develop/v3/cpu-backend";
 import type { DevelopPanelId } from "@/components/develop/DevelopPanelRail";
 import { useDevelopSettingsSync } from "@/components/develop/useDevelopSettingsSync";
 import { isPresetTransientEdit, useDevelopStore } from "@/stores/develop-store";
@@ -125,7 +126,6 @@ export function PhotoViewer({
     setV3RenderDiagnostics((current) =>
       JSON.stringify(current) === JSON.stringify(next) ? current : next);
   }, []);
-  const [v3Analysis, setV3Analysis] = useState<readonly CpuAnalysisTapResult[]>([]);
   const [v3CanvasState, setV3CanvasState] = useState<{
     readonly entryId: string;
     readonly tool: V3CanvasTool;
@@ -192,6 +192,7 @@ export function PhotoViewer({
     const projection = state.sessions[entry.id]?.ui.projection;
     return projection?.kind === "recovery" ? projection.message : null;
   });
+  const [fullPreloadSettledEntry, setFullPreloadSettledEntry] = useState<LibraryEntry | null>(null);
   const rawColorMode: NonNullable<DevelopImageLoadOptions["rawColorMode"]> = developProcessKind === "v3"
     ? "libraw-camera-matrix"
     : "decoder-rendered";
@@ -341,11 +342,20 @@ export function PhotoViewer({
 
     void loadImage();
     // Start the full-resolution decode for 1:1 zoom without waiting for the preview.
-    // The delay skips photos passed while browsing, as Nikon SDK decodes cannot be cancelled.
+    // A short delay skips photos passed while browsing rapidly.
+    const fullPreloadDelayMs = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? 60 : 250;
     const fullTimer = developProcessKind === "v3" && entry.formatAvailability.status === "supported"
       ? setTimeout(() => {
-        loadDevelopExportImage(entry, { rawColorMode, signal: controller.signal }).catch(() => undefined);
-      }, 250)
+        loadDevelopExportImage(entry, {
+          rawColorMode,
+          signal: controller.signal,
+          priority: 50,
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            if (active) setFullPreloadSettledEntry(entry);
+          });
+      }, fullPreloadDelayMs)
       : undefined;
 
     return () => {
@@ -359,11 +369,21 @@ export function PhotoViewer({
     const activeEntry = entries[availableActiveIndex];
     if (!activeEntry || activeEntry.formatAvailability.status !== "supported") return;
     const includeBlob = developProcessKind === "v2";
-    preloadDevelopImages(entries, decoded ? availableActiveIndex : -1, {
+    const readyForNeighbors = Boolean(decoded) && (
+      developProcessKind !== "v3" ||
+      fullPreloadSettledEntry === activeEntry ||
+      getCachedDevelopExportImage(activeEntry, { rawColorMode }) !== null
+    );
+    preloadDevelopImages(entries, readyForNeighbors ? availableActiveIndex : -1, {
       includeBlob,
       rawColorMode,
     });
-  }, [decoded, entries, availableActiveIndex, developProcessKind, rawColorMode]);
+    preloadFullDevelopImages(
+      entries,
+      readyForNeighbors && developProcessKind === "v3" ? availableActiveIndex : -1,
+      { rawColorMode },
+    );
+  }, [decoded, entries, availableActiveIndex, developProcessKind, rawColorMode, fullPreloadSettledEntry]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
 
@@ -623,7 +643,6 @@ export function PhotoViewer({
                   image={decoded}
                   alt={entry.name}
                   onRenderDiagnostics={reportV3RenderDiagnostics}
-                  onAnalysis={setV3Analysis}
                   cropActive={!defaultsPending && activePanel === "crop"}
                   maskingActive={
                     !defaultsPending && (activePanel === "masking" || (maskUi?.tool ?? "none") !== "none")
@@ -673,7 +692,6 @@ export function PhotoViewer({
             resultEntryIds={resultEntryIds}
             missingEntryIds={missingEntryIds}
             resultEntries={entries}
-            v3Analysis={v3Analysis}
             v3RenderDiagnostics={v3RenderDiagnostics}
             v3CanvasTool={v3CanvasTool}
             onV3CanvasToolChange={setV3CanvasTool}

@@ -1,10 +1,15 @@
 "use client";
 
+import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { disposeDevelopImage, loadDevelopExportImage, type DevelopImage } from "@/lib/cache/develop-image-cache";
 import type { DevelopDocumentV3 } from "@/lib/develop/v3/document";
+import { localAdjustmentsAreNeutral } from "@/lib/develop/v3/local-adjustments";
+import { maskSourceNodes } from "@/lib/develop/v3/masking";
+import { NEUTRAL_MONOCHROME_PROFILE } from "@/lib/develop/v3/monochrome";
 import { buildV3SourceRecord, loadV3PreviewMaskMattes, resolveV3ExportDimensions } from "@/lib/develop/v3/runtime";
 import { V3PreviewWorkerClient } from "@/lib/develop/v3/preview-worker-client";
+import type { V3PreviewWorkerMaskMatte } from "@/lib/develop/v3/preview-worker-types";
 import { useDevelopStore } from "@/stores/develop-store";
 import type { ExportSizeOptions } from "@/lib/export/types";
 import type { LibraryEntry } from "@/lib/fs/types";
@@ -61,6 +66,24 @@ type PlannedView = {
 const LOADING_STATUS = "Loading full-resolution photo…";
 const MAX_DETAIL_RENDER_PIXELS = 8_000_000;
 const INTERACTIVE_DETAIL_DELAY_MS = 100;
+const EMPTY_MASK_MATTES: readonly V3PreviewWorkerMaskMatte[] = [];
+
+function documentSupportsGpu(document: DevelopDocumentV3): boolean {
+  if (document.compatibility.legacyV2) return false;
+  if (document.cleanup.components.some((component) => component.enabled)) return false;
+  if (document.optics.defringe.amount !== 0) return false;
+  if (
+    document.color.monochrome.enabled &&
+    document.color.monochrome.profileId !== NEUTRAL_MONOCHROME_PROFILE.id
+  ) return false;
+  return document.local.masks.every((mask) => {
+    if (!mask.enabled || localAdjustmentsAreNeutral(mask.adjustments)) return true;
+    return maskSourceNodes(mask.expression).every((node) => {
+      if (node.source.kind === "brush") return node.source.autoMask.kind === "off";
+      return node.source.kind !== "luminance-range" && node.source.kind !== "color-range";
+    });
+  });
+}
 
 function sameViewport(left: LoupeViewport, right: LoupeViewport): boolean {
   return left.width === right.width && left.height === right.height && left.dpr === right.dpr;
@@ -143,6 +166,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
   [source, entry, document, center, focus, interactive, displayWidth, viewport]);
   const currentInputRef = useRef(currentInput);
   const detailRenderDeadlineRef = useRef(0);
+  const canvasHasPixelsRef = useRef(false);
 
   const drawCachedTiles = useCallback((): void => {
     if (!activeRef.current) return;
@@ -153,16 +177,24 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
 
     const width = Math.max(1, Math.round(viewport.width * viewport.dpr));
     const height = Math.max(1, Math.round(viewport.height * viewport.dpr));
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
-    context.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
-    context.globalAlpha = 1;
-    context.clearRect(0, 0, viewport.width, viewport.height);
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
+    if (canvas.width !== width) {
+      canvas.width = width;
+      canvasHasPixelsRef.current = false;
+    }
+    if (canvas.height !== height) {
+      canvas.height = height;
+      canvasHasPixelsRef.current = false;
+    }
 
     const dimensionContext = dimensionsContextRef.current;
-    if (!input || !dimensionContext || dimensionContext.source !== input.source || dimensionContext.document !== input.document) return;
+    if (!input || !dimensionContext || dimensionContext.source !== input.source || dimensionContext.document !== input.document) {
+      if (canvasHasPixelsRef.current) {
+        context.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+        context.clearRect(0, 0, viewport.width, viewport.height);
+        canvasHasPixelsRef.current = false;
+      }
+      return;
+    }
     const fullDimensions = dimensionContext.dimensions;
     const cssScale = input.displayWidth === undefined ? 1 / input.viewport.dpr : input.displayWidth / fullDimensions.width;
     const geometry = createDetailViewGeometry(fullDimensions, input.viewport, input.center, cssScale);
@@ -172,7 +204,21 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
       .filter((tile) => intersectsView(tile, geometry.originX, geometry.originY, geometry.visibleWidth, geometry.visibleHeight))
       .filter((tile) => tile.level.width / fullDimensions.width + 1e-9 >= baseDensityX && tile.level.height / fullDimensions.height + 1e-9 >= baseDensityY)
       .sort((left, right) => left.level.density - right.level.density);
+    if (visibleTiles.length === 0) {
+      if (canvasHasPixelsRef.current) {
+        context.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+        context.clearRect(0, 0, viewport.width, viewport.height);
+        canvasHasPixelsRef.current = false;
+      }
+      return;
+    }
+    context.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+    context.globalAlpha = 1;
+    context.clearRect(0, 0, viewport.width, viewport.height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
     const maximumDensity = visibleTiles.at(-1)?.level.density ?? 0;
+    let drewAny = false;
     for (const tile of visibleTiles) {
       if (tile.level.density < maximumDensity) {
         const higherTiles = visibleTiles.filter((candidate) => candidate.level.density > tile.level.density);
@@ -198,7 +244,9 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
       if (snappedRight <= snappedLeft || snappedBottom <= snappedTop) continue;
       context.drawImage(tile.canvas, snappedLeft, snappedTop, snappedRight - snappedLeft, snappedBottom - snappedTop);
       cacheRef.current.touch(tile.key);
+      drewAny = true;
     }
+    canvasHasPixelsRef.current = drewAny;
     context.globalAlpha = 1;
 
   }, [viewport, baseWidth, baseHeight]);
@@ -238,8 +286,9 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
   }, [active, currentInput, source, entry, document, viewport, drawCachedTiles]);
 
   useEffect(() => {
-    if (loadReady || (!active && !preload) || (passive && panning)) return;
-    const timer = setTimeout(() => setReadyEntry(entry), passive ? 200 : 0);
+    if (loadReady || (!active && !preload) || (!active && passive && panning)) return;
+    const delay = active ? 0 : passive ? (isTauri() ? 60 : 200) : 0;
+    const timer = setTimeout(() => setReadyEntry(entry), delay);
     return () => clearTimeout(timer);
   }, [loadReady, entry, active, preload, passive, panning, displayWidth]);
 
@@ -261,7 +310,11 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
     if (!loadReady) return;
     const controller = new AbortController();
     let image: DevelopImage | undefined;
-    void loadDevelopExportImage(entry, { rawColorMode: "libraw-camera-matrix", signal: controller.signal }).then((loaded) => {
+    void loadDevelopExportImage(entry, {
+      rawColorMode: "libraw-camera-matrix",
+      signal: controller.signal,
+      priority: activeRef.current ? 200 : 50,
+    }).then((loaded) => {
       image = loaded;
       if (controller.signal.aborted) { disposeDevelopImage(loaded); return; }
       if (loaded.pixelProvenance.decoderPath === "embedded-preview") throw new Error("Full RAW decoding failed. An embedded preview cannot show 1:1 detail.");
@@ -290,6 +343,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
     let detailTimer: ReturnType<typeof setTimeout> | undefined;
     let dimensionDocument: DevelopDocumentV3 | null = null;
     let acceleratedDocument: DevelopDocumentV3 | null = null;
+    let gpuConfirmed = isTauri();
     let fullDimensions: DetailDimensions | null = null;
     let sourceGeometry: ExportGeometry | null = null;
     let levels = new Map<string, DetailLevel>();
@@ -394,14 +448,19 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
       rendering = true;
       void (async () => {
         try {
-          const matteKey = JSON.stringify(input.document.local.maskAssetRefs);
-          if (maskMattes?.key !== matteKey) {
-            maskMattes = { key: matteKey, value: loadV3PreviewMaskMattes(input.document, entry, source.image) };
-          }
-          const mattes = await maskMattes.value;
-          if (!effectActive) return;
-          if (!sameLatestView(input) || (purpose === "prefetch" && (panningRef.current || input.interactive))) {
-            return;
+          let mattes: readonly V3PreviewWorkerMaskMatte[];
+          if (input.document.local.maskAssetRefs.length === 0) {
+            mattes = EMPTY_MASK_MATTES;
+          } else {
+            const matteKey = JSON.stringify(input.document.local.maskAssetRefs);
+            if (maskMattes?.key !== matteKey) {
+              maskMattes = { key: matteKey, value: loadV3PreviewMaskMattes(input.document, entry, source.image) };
+            }
+            mattes = await maskMattes.value;
+            if (!effectActive) return;
+            if (!sameLatestView(input) || (purpose === "prefetch" && (panningRef.current || input.interactive))) {
+              return;
+            }
           }
           const worker = workerRef.current ?? new V3PreviewWorkerClient(entry, source.image);
           workerRef.current = worker;
@@ -427,6 +486,8 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
             throw new Error("The detail tile dimensions do not match the requested region.");
           }
           acceleratedDocument = rendered.backend === "gpu" ? input.document : null;
+          if (rendered.backend === "gpu") gpuConfirmed = true;
+          else if (documentSupportsGpu(input.document)) gpuConfirmed = false;
 
           const rgba = result.pixels.pixels;
           const imageData = new ImageData(rgba.buffer instanceof ArrayBuffer
@@ -487,6 +548,16 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
         setVisibleBusy(false);
         return;
       }
+      if (input.interactive && cacheRef.current.values().length === 0) {
+        const delay = detailRenderDeadlineRef.current - performance.now();
+        if (delay > 0) {
+          detailTimer = setTimeout(() => {
+            detailTimer = undefined;
+            pump();
+          }, delay);
+          return;
+        }
+      }
       let planned: PlannedView;
       try {
         planned = planForInput(input);
@@ -506,7 +577,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
           }, delay);
           return;
         }
-        if (acceleratedDocument !== input.document) {
+        if (!(gpuConfirmed && documentSupportsGpu(input.document)) && acceleratedDocument !== input.document) {
           renderTiles(input, [visibleRequest], "visible");
           return;
         }
@@ -545,7 +616,7 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
         setVisibleBusy(false);
         return;
       }
-      if (resumeDetail) {
+      if (resumeDetail || (!panningRef.current && !currentInputRef.current?.interactive)) {
         pump();
         return;
       }
@@ -557,12 +628,33 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
 
     scheduleRef.current = schedule;
     schedule();
+    let idleWarmupId: number | undefined;
+    let idleWarmupTimer: ReturnType<typeof setTimeout> | undefined;
+    if (preload && isTauri() && !activeRef.current) {
+      const warm = () => {
+        if (!effectActive || workerRef.current) return;
+        const latestDoc = currentInputRef.current?.document;
+        if (!latestDoc || !documentSupportsGpu(latestDoc)) return;
+        const worker = new V3PreviewWorkerClient(entry, source.image);
+        workerRef.current = worker;
+        worker.warmup(latestDoc);
+      };
+      if (typeof requestIdleCallback === "function") {
+        idleWarmupId = requestIdleCallback(warm, { timeout: 300 });
+      } else {
+        idleWarmupTimer = setTimeout(warm, 120);
+      }
+    }
     return () => {
       effectActive = false;
       clearSchedule();
+      if (idleWarmupId !== undefined && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(idleWarmupId);
+      }
+      clearTimeout(idleWarmupTimer);
       scheduleRef.current = null;
     };
-  }, [source, entry]);
+  }, [source, entry, preload]);
 
   useEffect(() => {
     scheduleRef.current?.();

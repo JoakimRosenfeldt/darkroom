@@ -357,9 +357,9 @@ function markPresetModifiedResult(
   document: DevelopDocumentV3,
   edited: Extract<V3CommandResult, { readonly changed: true }>,
 ): V3CommandResult {
-  const validated = validateV3CommandDocument(
-    markAppliedPresetModified(document, edited.document),
-  );
+  const marked = markAppliedPresetModified(document, edited.document);
+  if (marked === edited.document) return edited;
+  const validated = validateV3CommandDocument(marked);
   const reused = reuseDocumentGroups(edited.document, validated);
   if (equal(edited.document.appliedPreset, reused.appliedPreset)) {
     const next = reused.appliedPreset === edited.document.appliedPreset

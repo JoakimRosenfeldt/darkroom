@@ -141,7 +141,7 @@ export function EditPanel({
   readonly editingDisabled: boolean;
   readonly activePanel: DevelopPanelId | null;
   readonly batch: V3BatchContext;
-  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly analysis?: readonly CpuAnalysisTapResult[];
   readonly diagnostics: readonly V3CanvasDiagnostic[];
   readonly canvasTool: V3CanvasTool;
   readonly onCanvasToolChange: (tool: V3CanvasTool) => void;
@@ -310,7 +310,7 @@ function LightTab({
   analysis,
 }: {
   readonly document: DevelopDocumentV3;
-  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly analysis?: readonly CpuAnalysisTapResult[];
 }) {
   const dispatch = useDevelopStore((state) => state.dispatchV3);
   const reset = useDevelopStore((state) => state.resetV3Group);
@@ -1125,7 +1125,7 @@ function OutputTab({
   decodedMetadata,
 }: {
   readonly document: DevelopDocumentV3;
-  readonly analysis: readonly CpuAnalysisTapResult[];
+  readonly analysis?: readonly CpuAnalysisTapResult[];
   readonly diagnostics: readonly V3CanvasDiagnostic[];
   readonly histogramSource: V3HistogramSourceIdentity;
   readonly decodedMetadata: Record<string, unknown>;

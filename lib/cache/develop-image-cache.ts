@@ -1,6 +1,7 @@
 import type { LibraryEntry } from "@/lib/fs/types";
 import { isNikonDecoderProvenance } from "@/lib/formats/registry";
 import { decodeEntry } from "@/lib/raw/decode";
+import { readNativeSourcePixels } from "@/lib/raw/native-client";
 import type { CameraProfileDecode, PixelProvenance } from "@/lib/raw/types";
 import { assetCacheKey } from "./asset-cache-key";
 
@@ -33,7 +34,7 @@ export interface DevelopImageLoadOptions {
 
 const EDITOR_CACHE_BYTES = 160 * 1024 * 1024;
 const THUMBNAIL_CACHE_BYTES = 32 * 1024 * 1024;
-const FULL_IMAGE_CACHE_BYTES = 320 * 1024 * 1024;
+const FULL_IMAGE_CACHE_BYTES = 512 * 1024 * 1024;
 const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();
@@ -47,6 +48,7 @@ interface ImageLoad {
 const inFlightImages = new Map<string, ImageLoad>();
 const fullInFlightImages = new Map<string, ImageLoad>();
 const preloads = new Map<string, AbortController>();
+const fullPreloads = new Map<string, AbortController>();
 
 const fullImageCache = new Map<string, DevelopImage>();
 
@@ -187,21 +189,74 @@ function getFullImage(key: string): DevelopImage | undefined {
   return cached;
 }
 
+function logicalImageBytes(image: DevelopImage): number {
+  const pixelBytes = image.rgb.byteLength > 0
+    ? image.rgb.byteLength
+    : image.nativeSourceHandle
+      ? image.sourceWidth * image.sourceHeight * image.colors * (image.bits > 8 ? 2 : 1)
+      : 0;
+  return pixelBytes + (image.blob?.size ?? 0);
+}
+
 function rememberFullImage(key: string, image: DevelopImage): void {
-  const imageBytes = image.rgb.byteLength + (image.blob?.size ?? 0);
+  const imageBytes = logicalImageBytes(image);
   if (imageBytes > FULL_IMAGE_CACHE_BYTES) return;
 
   fullImageCache.delete(key);
   fullImageCache.set(key, image);
   let bytes = 0;
   for (const cached of fullImageCache.values()) {
-    bytes += cached.rgb.byteLength + (cached.blob?.size ?? 0);
+    bytes += logicalImageBytes(cached);
   }
   for (const [oldestKey, oldest] of fullImageCache) {
     if (bytes <= FULL_IMAGE_CACHE_BYTES || fullImageCache.size === 1) break;
     fullImageCache.delete(oldestKey);
-    bytes -= oldest.rgb.byteLength + (oldest.blob?.size ?? 0);
+    bytes -= logicalImageBytes(oldest);
   }
+}
+
+export async function ensureDevelopImagePixels(
+  image: DevelopImage,
+  entry: LibraryEntry,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode" | "signal"> = {},
+): Promise<DevelopImage> {
+  const expected = image.sourceWidth * image.sourceHeight * image.colors;
+  if (image.rgb.length >= expected) return image;
+  options.signal?.throwIfAborted();
+  if (image.nativeSourceHandle) {
+    const pixels = await readNativeSourcePixels(image.nativeSourceHandle, image.bits);
+    options.signal?.throwIfAborted();
+    if (pixels && pixels.length >= expected) {
+      Object.defineProperty(image, "rgb", {
+        value: pixels,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      return image;
+    }
+  }
+  const rawColorMode = options.rawColorMode ??
+    (image.pixelProvenance.decoderPath === "libraw" && image.pixelProvenance.colorSpace === "camera-rgb"
+      ? "libraw-camera-matrix"
+      : "decoder-rendered");
+  const decoded = await decodeEntry(entry, {
+    fullResolution: true,
+    sourcePixels: true,
+    handleOnly: false,
+    signal: options.signal,
+    cameraProfile: cameraProfileDecode(entry, rawColorMode),
+  });
+  if (decoded.objectUrl) URL.revokeObjectURL(decoded.objectUrl);
+  options.signal?.throwIfAborted();
+  Object.defineProperty(image, "rgb", {
+    value: decoded.rgb,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  if (decoded.nativeSourceHandle) image.nativeSourceHandle = decoded.nativeSourceHandle;
+  return image;
 }
 
 function cloneRgb(rgb: DevelopImage["rgb"]): DevelopImage["rgb"] {
@@ -292,6 +347,17 @@ export async function loadDevelopImage(
   const image = await waitForImage(load, options.signal);
   options.signal?.throwIfAborted();
   rememberImage(cache, key, image, options.cache === "thumbnail" ? THUMBNAIL_CACHE_BYTES : EDITOR_CACHE_BYTES);
+  // If a standard image was already decoded at full native resolution with pixels,
+  // reuse it directly for 1:1 detail and export without decoding the file twice.
+  if (
+    !options.includeBlob &&
+    image.pixelProvenance.decoderPath === "processed-standard" &&
+    image.rgb.length >= image.sourceWidth * image.sourceHeight * image.colors &&
+    image.metadata.originalWidth === image.sourceWidth &&
+    image.metadata.originalHeight === image.sourceHeight
+  ) {
+    rememberFullImage(fullImageCacheKey(entry, rawColorMode), image);
+  }
   return image;
 }
 
@@ -335,6 +401,10 @@ export async function loadDevelopInferenceImage(
   if (signal?.aborted) {
     throw new Error("AI source loading was cancelled.");
   }
+  await ensureDevelopImagePixels(decoded, entry, { signal });
+  if (signal?.aborted) {
+    throw new Error("AI source loading was cancelled.");
+  }
   return { ...decoded, rgb: cloneRgb(decoded.rgb) };
 }
 
@@ -372,4 +442,43 @@ export function preloadDevelopImages(
       .catch(() => undefined)
       .finally(() => { if (preloads.get(key) === controller) preloads.delete(key); });
   }
+}
+
+export function preloadFullDevelopImages(
+  entries: LibraryEntry[],
+  activeIndex: number,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode"> = {},
+): void {
+  const isTauriEnv = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (!isTauriEnv) return;
+  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
+  const keyFor = (entry: LibraryEntry) => fullImageCacheKey(entry, rawColorMode);
+  const wanted = new Set<string>();
+  // Keep an in-flight preload alive if the user just navigated into it.
+  for (const index of activeIndex < 0 ? [] : [activeIndex, activeIndex + 1]) {
+    const entry = entries[index];
+    if (entry && entry.formatAvailability.status === "supported") wanted.add(keyFor(entry));
+  }
+  for (const [id, controller] of fullPreloads) {
+    if (!wanted.has(id)) {
+      controller.abort();
+      fullPreloads.delete(id);
+    }
+  }
+  if (activeIndex < 0) return;
+  const next = entries[activeIndex + 1];
+  if (!next || next.formatAvailability.status !== "supported") return;
+  const key = keyFor(next);
+  if (fullImageCache.has(key) || fullPreloads.has(key) || fullInFlightImages.has(key)) return;
+  const controller = new AbortController();
+  fullPreloads.set(key, controller);
+  void loadFullResolutionImage(next, {
+    rawColorMode,
+    signal: controller.signal,
+    priority: -20,
+  })
+    .catch(() => undefined)
+    .finally(() => {
+      if (fullPreloads.get(key) === controller) fullPreloads.delete(key);
+    });
 }

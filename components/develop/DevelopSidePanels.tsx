@@ -35,7 +35,7 @@ interface DevelopSidePanelsProps {
   resultEntryIds: readonly string[];
   missingEntryIds: readonly string[];
   resultEntries: readonly LibraryEntry[];
-  v3Analysis: readonly CpuAnalysisTapResult[];
+  v3Analysis?: readonly CpuAnalysisTapResult[];
   v3RenderDiagnostics: readonly V3CanvasDiagnostic[];
   v3CanvasTool: V3CanvasTool;
   onV3CanvasToolChange: (tool: V3CanvasTool) => void;

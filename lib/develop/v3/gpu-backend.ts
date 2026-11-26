@@ -16,6 +16,7 @@ import {
   IDENTITY_HOMOGRAPHY,
   geometryCacheIdentity,
   createOutputToStoredMapper,
+  invertHomography,
   resolveConstrainedCrop,
   type CanonicalGeometry,
 } from "@/lib/develop/v3/geometry";
@@ -43,14 +44,12 @@ import { effectiveInputCalibration } from "@/lib/develop/v3/profiles";
 type GpuContext = WebGL2RenderingContext | NativeGpuContext;
 
 const CURVE_LUT_SIZE = 1_024;
-const MAX_CACHED_GEOMETRY_MAPS = 16;
-const MAX_CACHED_GEOMETRY_BYTES = 64 * 1024 * 1024;
 const MAX_CACHED_TARGETS = 3;
 const MAX_CACHED_TARGET_BYTES = 192 * 1024 * 1024;
 const MAX_CACHED_LOCAL_ADJUSTMENTS = 16;
 const MAX_CACHED_LOCAL_ADJUSTMENT_BYTES = 192 * 1024 * 1024;
 const GPU_TILE_EDGE = 512;
-const NATIVE_GPU_TILE_EDGE = 1_024;
+const NATIVE_GPU_TILE_EDGE = 2_048;
 const MAX_GPU_MASK_LAYERS = 8;
 const MAX_CACHED_MASK_COVERAGE_BYTES = 64 * 1024 * 1024;
 // Ids are unique per object and never reused, so identity keys cannot false-hit.
@@ -104,10 +103,23 @@ uniform highp usampler2D uSource;
 precision highp sampler2D;
 uniform sampler2D uSource;
 #endif
-uniform sampler2D uMap;
 uniform bool uIdentityGeometry;
+uniform bool uGeometryValid;
 uniform vec2 uRegionOrigin;
 uniform vec2 uFullOutputSize;
+uniform vec2 uLoupeCenter;
+uniform float uLoupeZoom;
+uniform vec4 uUserCrop;
+uniform mat3 uUprightInverse;
+uniform mat3 uManualInverse;
+uniform float uUserCos;
+uniform float uUserSin;
+uniform float uUserAspect;
+uniform int uUserQuarterTurns;
+uniform bool uUserFlipX;
+uniform bool uUserFlipY;
+uniform float uOpticsK1;
+uniform int uExifOrientation;
 uniform sampler2D uCurves;
 uniform ivec2 uOutputSize;
 uniform int uTransfer;
@@ -597,12 +609,68 @@ vec3 applyLocalAdjustments(vec3 color) {
   );
 }
 
+vec2 invertQuarterTurns(vec2 point, int turns) {
+  if (turns == 1) return vec2(point.y, 1.0 - point.x);
+  if (turns == 2) return vec2(1.0 - point.x, 1.0 - point.y);
+  if (turns == 3) return vec2(1.0 - point.y, point.x);
+  return point;
+}
+
+vec2 exifOrientedToStored(vec2 point, int orientation) {
+  if (orientation == 2) return vec2(1.0 - point.x, point.y);
+  if (orientation == 3) return vec2(1.0 - point.x, 1.0 - point.y);
+  if (orientation == 4) return vec2(point.x, 1.0 - point.y);
+  if (orientation == 5) return vec2(point.y, point.x);
+  if (orientation == 6) return vec2(point.y, 1.0 - point.x);
+  if (orientation == 7) return vec2(1.0 - point.y, 1.0 - point.x);
+  if (orientation == 8) return vec2(1.0 - point.y, point.x);
+  return point;
+}
+
+vec4 resolveMapping() {
+  vec2 base = (gl_FragCoord.xy + uRegionOrigin) / uFullOutputSize;
+  if (uIdentityGeometry) return vec4(base, 0.0, 1.0);
+  if (!uGeometryValid) return vec4(0.0);
+  vec2 outputPoint = uLoupeZoom == 1.0
+    ? base
+    : uLoupeCenter + (base - vec2(0.5)) / uLoupeZoom;
+  vec2 point = uUserCrop.xy + outputPoint * uUserCrop.zw;
+  vec3 h1 = uUprightInverse * vec3(point, 1.0);
+  if (abs(h1.z) < 1e-10) return vec4(0.0);
+  point = h1.xy / h1.z;
+  vec3 h2 = uManualInverse * vec3(point, 1.0);
+  if (abs(h2.z) < 1e-10) return vec4(0.0);
+  point = h2.xy / h2.z;
+  if (uUserSin != 0.0 || uUserCos != 1.0) {
+    float rx = (point.x - 0.5) * uUserAspect;
+    float ry = point.y - 0.5;
+    point = vec2(
+      0.5 + (rx * uUserCos - ry * uUserSin) / uUserAspect,
+      0.5 + rx * uUserSin + ry * uUserCos
+    );
+  }
+  if (uUserFlipX) point.x = 1.0 - point.x;
+  if (uUserFlipY) point.y = 1.0 - point.y;
+  point = invertQuarterTurns(point, uUserQuarterTurns);
+  if (point.x < 0.0 || point.x > 1.0 || point.y < 0.0 || point.y > 1.0) {
+    return vec4(0.0);
+  }
+  point = clamp(point, vec2(0.0), vec2(1.0));
+  if (uOpticsK1 != 0.0) {
+    vec2 d = point - vec2(0.5);
+    float r2 = dot(d, d);
+    float radial = clamp(1.0 + uOpticsK1 * r2, 0.125, 8.0);
+    point = vec2(0.5) + d * radial;
+  }
+  point = exifOrientedToStored(point, uExifOrientation);
+  if (point.x < 0.0 || point.x > 1.0 || point.y < 0.0 || point.y > 1.0) {
+    return vec4(0.0);
+  }
+  return vec4(point, 0.0, 1.0);
+}
+
 void main() {
-  ivec2 pixel = ivec2(gl_FragCoord.xy);
-  ivec2 mapPixel = ivec2(pixel.x, uOutputSize.y - 1 - pixel.y);
-  vec4 mapping = uIdentityGeometry
-    ? vec4((gl_FragCoord.xy + uRegionOrigin) / uFullOutputSize, 0.0, 1.0)
-    : texelFetch(uMap, mapPixel, 0);
+  vec4 mapping = resolveMapping();
 #ifdef NATIVE_SOURCE_PYRAMID
   vec2 dx = dFdx(mapping.xy) * uSourceSize;
   vec2 dy = dFdy(mapping.xy) * uSourceSize;
@@ -819,17 +887,11 @@ interface GpuTargets {
   readonly height: number;
   readonly precision: "half" | "float";
   readonly pointwise: WebGLTexture;
-  readonly toneInput: WebGLTexture;
-  readonly pointColorInput: WebGLTexture;
-  readonly scratch: WebGLTexture;
-  readonly postCrop: WebGLTexture;
+  toneInput: WebGLTexture | null;
+  pointColorInput: WebGLTexture | null;
+  scratch: WebGLTexture | null;
+  postCrop: WebGLTexture | null;
   readonly framebuffers: Map<string, WebGLFramebuffer>;
-}
-
-interface GeometryMap {
-  readonly key: string;
-  readonly bytes: number;
-  readonly texture: WebGLTexture;
 }
 
 interface GpuState {
@@ -837,14 +899,18 @@ interface GpuState {
   readonly gl: GpuContext;
   readonly programs: GpuPrograms;
   readonly source: WebGLTexture;
+  readonly dummyTexture: WebGLTexture;
   sourcePyramid: WebGLTexture | null;
   pointwisePyramid: WebGLProgram | null;
   readonly sourceIsInteger: boolean;
   readonly maximumTextureSize: number;
-  curves: { readonly key: string; readonly texture: WebGLTexture } | null;
+  curves: {
+    readonly ref: DevelopDocumentV3["tone"]["curves"];
+    readonly key: string;
+    readonly texture: WebGLTexture;
+  } | null;
   grainCoordinates: { readonly key: string; readonly texture: WebGLTexture } | null;
   readonly targets: Map<string, GpuTargets>;
-  readonly geometryMaps: Map<string, GeometryMap>;
   readonly localAdjustments: Map<string, { readonly texture: WebGLTexture; readonly bytes: number }>;
   readonly maskCoverage: Map<string, { readonly texture: WebGLTexture; readonly bytes: number }>;
 }
@@ -861,7 +927,11 @@ interface GpuRenderedFrame {
 export type V3GpuPreviewRenderResult =
   | (
       Omit<Extract<CpuRenderResult, { readonly kind: "rendered" }>, "pixels"> &
-      { readonly bitmap: ImageBitmap; readonly renderDurationMs: number; readonly processingDurationMs?: number }
+      (
+        | { readonly bitmap: ImageBitmap }
+        | { readonly pixels: { readonly kind: "rgba8"; readonly pixels: Uint8Array } }
+      ) &
+      { readonly renderDurationMs: number; readonly processingDurationMs?: number }
     )
   | Exclude<CpuRenderResult, { readonly kind: "rendered" }>;
 
@@ -1093,6 +1163,38 @@ function sourceTexture(gl: GpuContext, input: CpuRenderInput): WebGLTexture {
         filter: gl.NEAREST,
       });
     }
+    if (
+      gl instanceof NativeGpuContext &&
+      (input.image.rgb instanceof Uint8Array || input.image.rgb instanceof Uint8ClampedArray)
+    ) {
+      const expected = input.image.sourceWidth * input.image.sourceHeight * input.image.colors;
+      const handleBacked = Boolean(input.image.nativeSourceHandle) && input.image.rgb.length === 0;
+      const view = handleBacked || input.image.rgb.length === expected
+        ? input.image.rgb
+        : input.image.rgb.subarray(0, expected);
+      if (input.image.colors === 3) {
+        return texture(gl, {
+          width: input.image.sourceWidth,
+          height: input.image.sourceHeight,
+          internalFormat: gl.RGB8,
+          format: gl.RGB,
+          type: gl.UNSIGNED_BYTE,
+          pixels: view,
+          filter: gl.NEAREST,
+        });
+      }
+      if (input.image.colors === 4) {
+        return texture(gl, {
+          width: input.image.sourceWidth,
+          height: input.image.sourceHeight,
+          internalFormat: gl.RGBA8,
+          format: gl.RGBA,
+          type: gl.UNSIGNED_BYTE,
+          pixels: view,
+          filter: gl.NEAREST,
+        });
+      }
+    }
     return texture(gl, {
       width: input.image.sourceWidth,
       height: input.image.sourceHeight,
@@ -1137,20 +1239,33 @@ function createTargets(
     height,
     precision,
     pointwise: floatTarget(gl, width, height, precision),
-    toneInput: floatTarget(gl, width, height, precision),
-    pointColorInput: floatTarget(gl, width, height, precision),
-    scratch: floatTarget(gl, width, height, precision),
-    postCrop: floatTarget(gl, width, height, precision),
+    toneInput: null,
+    pointColorInput: null,
+    scratch: null,
+    postCrop: null,
     framebuffers: new Map(),
   };
 }
 
+function ensureTarget(
+  gl: GpuContext,
+  targets: GpuTargets,
+  slot: "toneInput" | "pointColorInput" | "scratch" | "postCrop",
+): WebGLTexture {
+  let value = targets[slot];
+  if (!value) {
+    value = floatTarget(gl, targets.width, targets.height, targets.precision);
+    targets[slot] = value;
+  }
+  return value;
+}
+
 function deleteTargets(gl: GpuContext, targets: GpuTargets): void {
   gl.deleteTexture(targets.pointwise);
-  gl.deleteTexture(targets.toneInput);
-  gl.deleteTexture(targets.pointColorInput);
-  gl.deleteTexture(targets.scratch);
-  gl.deleteTexture(targets.postCrop);
+  if (targets.toneInput) gl.deleteTexture(targets.toneInput);
+  if (targets.pointColorInput) gl.deleteTexture(targets.pointColorInput);
+  if (targets.scratch) gl.deleteTexture(targets.scratch);
+  if (targets.postCrop) gl.deleteTexture(targets.postCrop);
   for (const framebuffer of targets.framebuffers.values()) gl.deleteFramebuffer(framebuffer);
 }
 
@@ -1263,35 +1378,6 @@ function outputPointForRegion(
     x: quality.sourceCenter.x + (point.x - 0.5) / quality.zoom,
     y: quality.sourceCenter.y + (point.y - 0.5) / quality.zoom,
   };
-}
-
-function geometryMapPixels(
-  input: CpuRenderInput,
-  region: RenderRegion,
-): Float32Array {
-  const dimensions = { width: region.width, height: region.height };
-  const stages = geometryStages(input);
-  const mapUser = createOutputToStoredMapper(stages.user);
-  const mapOptics = createOutputToStoredMapper(stages.optics);
-  const pixels = new Float32Array(dimensions.width * dimensions.height * 4);
-  for (let y = 0; y < dimensions.height; y += 1) {
-    for (let x = 0; x < dimensions.width; x += 1) {
-      const output = outputPointForRegion(input, region, x, y);
-      const user = mapUser(output);
-      if (user.kind !== "mapped" || !user.insideDestination) continue;
-      const optics = mapOptics({
-        x: clamp(user.point.x, 0, 1),
-        y: clamp(user.point.y, 0, 1),
-      });
-      if (optics.kind !== "mapped" || !optics.insideDestination) continue;
-      const offset = (y * dimensions.width + x) * 4;
-      pixels[offset] = optics.point.x;
-      pixels[offset + 1] = optics.point.y;
-      pixels[offset + 2] = 0;
-      pixels[offset + 3] = 1;
-    }
-  }
-  return pixels;
 }
 
 function geometryMapKey(input: CpuRenderInput, region: RenderRegion): string {
@@ -1550,8 +1636,12 @@ function curveValue(
 }
 
 function curveTexture(state: GpuState, document: DevelopDocumentV3): WebGLTexture {
+  if (state.curves?.ref === document.tone.curves) return state.curves.texture;
   const key = JSON.stringify(document.tone.curves);
-  if (state.curves?.key === key) return state.curves.texture;
+  if (state.curves?.key === key) {
+    state.curves = { ref: document.tone.curves, key, texture: state.curves.texture };
+    return state.curves.texture;
+  }
   const gl = state.gl;
   const values = new Float32Array(CURVE_LUT_SIZE * 4);
   for (let index = 0; index < CURVE_LUT_SIZE; index += 1) {
@@ -1572,17 +1662,23 @@ function curveTexture(state: GpuState, document: DevelopDocumentV3): WebGLTextur
     filter: gl.NEAREST,
   });
   if (state.curves) gl.deleteTexture(state.curves.texture);
-  state.curves = { key, texture: value };
+  state.curves = { ref: document.tone.curves, key, texture: value };
   return value;
 }
 
+const curvesIdentityCache = new WeakMap<DevelopDocumentV3["tone"]["curves"], boolean>();
+
 function curvesAreIdentity(document: DevelopDocumentV3): boolean {
-  return [
+  const cached = curvesIdentityCache.get(document.tone.curves);
+  if (cached !== undefined) return cached;
+  const identity = [
     document.tone.curves.rgb,
     document.tone.curves.red,
     document.tone.curves.green,
     document.tone.curves.blue,
   ].every((points) => points.every((point) => point.x === point.y));
+  curvesIdentityCache.set(document.tone.curves, identity);
+  return identity;
 }
 
 function bindTexture(
@@ -1644,56 +1740,109 @@ function renderPointwise(
   state: GpuState,
   input: CpuRenderInput,
   targets: GpuTargets,
-  map: WebGLTexture,
   localAdjustments: WebGLTexture | null,
   maskCoverage: WebGLTexture | null,
   region: RenderRegion,
   identityGeometry: boolean,
 ): void {
   const gl = state.gl;
-  // The pyramid follows the current render, not the session's first one: a
-  // full-res render drops it, a later downscaled render rebuilds it.
-  if (gl instanceof NativeGpuContext) {
-    if (isDownscaled(input)) {
-      state.sourcePyramid ??= buildSourcePyramid(gl, state.source, input);
-      state.pointwisePyramid ??= program(gl, POINTWISE_SHADER, integerSource(input), true);
-    } else if (state.sourcePyramid) {
-      gl.deleteTexture(state.sourcePyramid);
-      state.sourcePyramid = null;
-    }
+  const downscaled = isDownscaled(input);
+  if (gl instanceof NativeGpuContext && downscaled) {
+    state.sourcePyramid ??= buildSourcePyramid(gl, state.source, input);
+    state.pointwisePyramid ??= program(gl, POINTWISE_SHADER, integerSource(input), true);
   }
-  const programValue = state.sourcePyramid && state.pointwisePyramid
-    ? state.pointwisePyramid
+  const usePyramid = downscaled && state.sourcePyramid !== null && state.pointwisePyramid !== null;
+  const programValue = usePyramid
+    ? state.pointwisePyramid!
     : state.programs.pointwise;
   const curves = curveTexture(state, input.document);
-  attach(gl, targets, input.includePointColor !== false || input.request.requestedTaps.includes("tone-input")
-    ? [targets.pointwise, targets.toneInput, targets.pointColorInput]
-    : [targets.pointwise]);
+  const wantsExtraTargets = input.includePointColor !== false ||
+    input.request.requestedTaps.includes("tone-input");
+  attach(
+    gl,
+    targets,
+    wantsExtraTargets
+      ? [
+          targets.pointwise,
+          ensureTarget(gl, targets, "toneInput"),
+          ensureTarget(gl, targets, "pointColorInput"),
+        ]
+      : [targets.pointwise],
+  );
   gl.useProgram(programValue);
   bindTexture(gl, programValue, "uSource", 0, state.source);
-  if (state.sourcePyramid) {
+  if (usePyramid && state.sourcePyramid) {
     bindTexture(gl, programValue, "uSourcePyramid", 5, state.sourcePyramid);
     const quality = input.request.plan.qualityAndDimensions;
     const full = fullOutputDimensions(input);
-    gl.uniform1i(gl.getUniformLocation(programValue, "uSourceReductionEnabled"),
-      isDownscaled(input) ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uSourceReductionEnabled"), 1);
     gl.uniform1f(gl.getUniformLocation(programValue, "uSourceReduction"),
       Math.max(1, Math.min(full.width / quality.outputDimensions.width, full.height / quality.outputDimensions.height)));
     gl.uniform1i(gl.getUniformLocation(programValue, "uSourcePyramidLevels"),
       Math.floor(Math.log2(Math.max(1, Math.floor(Math.max(input.image.sourceWidth, input.image.sourceHeight) / 2)))) + 1);
   }
-  bindTexture(gl, programValue, "uMap", 1, map);
-  const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
+  const quality = input.request.plan.qualityAndDimensions;
+  const outputDimensions = quality.outputDimensions;
   gl.uniform1i(gl.getUniformLocation(programValue, "uIdentityGeometry"), identityGeometry ? 1 : 0);
   gl.uniform2f(gl.getUniformLocation(programValue, "uRegionOrigin"), region.x, outputDimensions.height - region.y - region.height);
   gl.uniform2f(gl.getUniformLocation(programValue, "uFullOutputSize"), outputDimensions.width, outputDimensions.height);
+  if (identityGeometry) {
+    gl.uniform1i(gl.getUniformLocation(programValue, "uGeometryValid"), 1);
+    gl.uniform2f(gl.getUniformLocation(programValue, "uLoupeCenter"), 0.5, 0.5);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uLoupeZoom"), 1);
+    gl.uniform4f(gl.getUniformLocation(programValue, "uUserCrop"), 0, 0, 1, 1);
+    gl.uniformMatrix3fv(gl.getUniformLocation(programValue, "uUprightInverse"), false, matrixForWebGl(IDENTITY_HOMOGRAPHY));
+    gl.uniformMatrix3fv(gl.getUniformLocation(programValue, "uManualInverse"), false, matrixForWebGl(IDENTITY_HOMOGRAPHY));
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserCos"), 1);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserSin"), 0);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserAspect"), 1);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserQuarterTurns"), 0);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserFlipX"), 0);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserFlipY"), 0);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uOpticsK1"), 0);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uExifOrientation"), 1);
+  } else {
+    const stages = geometryStages(input);
+    const crop = resolveConstrainedCrop(stages.user);
+    const uprightInverse = invertHomography(
+      stages.user.upright.enabled ? stages.user.upright.matrix : IDENTITY_HOMOGRAPHY,
+    );
+    const manualInverse = invertHomography(stages.user.manualPerspective);
+    const oriented = orientedDimensions(input);
+    const rawAspect = stages.user.orientation.quarterTurns % 2 === 1
+      ? oriented.height / Math.max(1, oriented.width)
+      : oriented.width / Math.max(1, oriented.height);
+    const userAspect = clamp(rawAspect, 1 / 1000, 1000);
+    const angle = clamp(-stages.user.orientation.fineAngleDegrees, -180, 180) * Math.PI / 180;
+    const opticsK1 = input.document.optics.manualDistortion === 0
+      ? 0
+      : clamp(input.document.optics.manualDistortion / 100, -1, 1);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uGeometryValid"), uprightInverse && manualInverse ? 1 : 0);
+    gl.uniform2f(
+      gl.getUniformLocation(programValue, "uLoupeCenter"),
+      quality.kind === "loupe" ? quality.sourceCenter.x : 0.5,
+      quality.kind === "loupe" ? quality.sourceCenter.y : 0.5,
+    );
+    gl.uniform1f(gl.getUniformLocation(programValue, "uLoupeZoom"), quality.kind === "loupe" ? quality.zoom : 1);
+    gl.uniform4f(gl.getUniformLocation(programValue, "uUserCrop"), crop.x, crop.y, crop.width, crop.height);
+    gl.uniformMatrix3fv(gl.getUniformLocation(programValue, "uUprightInverse"), false, matrixForWebGl(uprightInverse ?? IDENTITY_HOMOGRAPHY));
+    gl.uniformMatrix3fv(gl.getUniformLocation(programValue, "uManualInverse"), false, matrixForWebGl(manualInverse ?? IDENTITY_HOMOGRAPHY));
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserCos"), angle === 0 ? 1 : Math.cos(angle));
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserSin"), angle === 0 ? 0 : Math.sin(angle));
+    gl.uniform1f(gl.getUniformLocation(programValue, "uUserAspect"), userAspect);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserQuarterTurns"), stages.user.orientation.quarterTurns);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserFlipX"), stages.user.orientation.flipHorizontal ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uUserFlipY"), stages.user.orientation.flipVertical ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(programValue, "uOpticsK1"), opticsK1);
+    gl.uniform1i(gl.getUniformLocation(programValue, "uExifOrientation"), input.source.orientation);
+  }
   bindTexture(gl, programValue, "uCurves", 2, curves);
   bindTexture(
     gl,
     programValue,
     "uLocalAdjustments",
     3,
-    localAdjustments ?? targets.postCrop,
+    localAdjustments ?? state.dummyTexture,
   );
   gl.uniform1f(
     gl.getUniformLocation(programValue, "uLocalEnabled"),
@@ -1794,73 +1943,77 @@ function renderPointwise(
   );
 
   const pointColor = boundedPointColorSettings(input.document.color.pointColor).adjustments;
-  const pointColorEnabled = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorHue = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorSaturation = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorLuminance = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorHueRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorSaturationRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorLuminanceRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorFalloff = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorHueShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorSaturationShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  const pointColorLuminanceShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
-  pointColor.forEach((adjustment, index) => {
-    pointColorEnabled[index] = adjustment.enabled ? 1 : 0;
-    pointColorHue[index] = adjustment.sourceHueDegrees;
-    pointColorSaturation[index] = adjustment.sourceSaturation;
-    pointColorLuminance[index] = adjustment.sourceLuminance;
-    pointColorHueRange[index] = adjustment.hueRangeDegrees;
-    pointColorSaturationRange[index] = adjustment.saturationRange;
-    pointColorLuminanceRange[index] = adjustment.luminanceRange;
-    pointColorFalloff[index] = adjustment.falloff;
-    pointColorHueShift[index] = adjustment.hueShiftDegrees;
-    pointColorSaturationShift[index] = adjustment.saturationShift;
-    pointColorLuminanceShift[index] = adjustment.luminanceShift;
-  });
   gl.uniform1i(gl.getUniformLocation(programValue, "uPointColorCount"), pointColor.length);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorEnabled[0]"), pointColorEnabled);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHue[0]"), pointColorHue);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturation[0]"), pointColorSaturation);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminance[0]"), pointColorLuminance);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHueRange[0]"), pointColorHueRange);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturationRange[0]"), pointColorSaturationRange);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminanceRange[0]"), pointColorLuminanceRange);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorFalloff[0]"), pointColorFalloff);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHueShift[0]"), pointColorHueShift);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturationShift[0]"), pointColorSaturationShift);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminanceShift[0]"), pointColorLuminanceShift);
+  if (pointColor.length > 0) {
+    const pointColorEnabled = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorHue = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorSaturation = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorLuminance = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorHueRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorSaturationRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorLuminanceRange = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorFalloff = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorHueShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorSaturationShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    const pointColorLuminanceShift = new Float32Array(MAX_POINT_COLOR_SAMPLES);
+    pointColor.forEach((adjustment, index) => {
+      pointColorEnabled[index] = adjustment.enabled ? 1 : 0;
+      pointColorHue[index] = adjustment.sourceHueDegrees;
+      pointColorSaturation[index] = adjustment.sourceSaturation;
+      pointColorLuminance[index] = adjustment.sourceLuminance;
+      pointColorHueRange[index] = adjustment.hueRangeDegrees;
+      pointColorSaturationRange[index] = adjustment.saturationRange;
+      pointColorLuminanceRange[index] = adjustment.luminanceRange;
+      pointColorFalloff[index] = adjustment.falloff;
+      pointColorHueShift[index] = adjustment.hueShiftDegrees;
+      pointColorSaturationShift[index] = adjustment.saturationShift;
+      pointColorLuminanceShift[index] = adjustment.luminanceShift;
+    });
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorEnabled[0]"), pointColorEnabled);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHue[0]"), pointColorHue);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturation[0]"), pointColorSaturation);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminance[0]"), pointColorLuminance);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHueRange[0]"), pointColorHueRange);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturationRange[0]"), pointColorSaturationRange);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminanceRange[0]"), pointColorLuminanceRange);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorFalloff[0]"), pointColorFalloff);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorHueShift[0]"), pointColorHueShift);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorSaturationShift[0]"), pointColorSaturationShift);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uPointColorLuminanceShift[0]"), pointColorLuminanceShift);
+  }
 
-  const mixerHue = new Float32Array(8);
-  const mixerSaturation = new Float32Array(8);
-  const mixerLuminance = new Float32Array(8);
-  MIXER_BANDS.forEach(({ id }, index) => {
+  const mixerEnabled = MIXER_BANDS.some(({ id }) => {
     const band = input.document.color.mixer[id];
-    mixerHue[index] = band.hue;
-    mixerSaturation[index] = band.saturation;
-    mixerLuminance[index] = band.luminance;
+    return band.hue !== 0 || band.saturation !== 0 || band.luminance !== 0;
   });
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerHue[0]"), mixerHue);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerSaturation[0]"), mixerSaturation);
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerLuminance[0]"), mixerLuminance);
-  gl.uniform1f(
-    gl.getUniformLocation(programValue, "uMixerEnabled"),
-    MIXER_BANDS.some(({ id }) => {
+  gl.uniform1f(gl.getUniformLocation(programValue, "uMixerEnabled"), mixerEnabled ? 1 : 0);
+  if (mixerEnabled) {
+    const mixerHue = new Float32Array(8);
+    const mixerSaturation = new Float32Array(8);
+    const mixerLuminance = new Float32Array(8);
+    MIXER_BANDS.forEach(({ id }, index) => {
       const band = input.document.color.mixer[id];
-      return band.hue !== 0 || band.saturation !== 0 || band.luminance !== 0;
-    }) ? 1 : 0,
-  );
+      mixerHue[index] = band.hue;
+      mixerSaturation[index] = band.saturation;
+      mixerLuminance[index] = band.luminance;
+    });
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerHue[0]"), mixerHue);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerSaturation[0]"), mixerSaturation);
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uMixerLuminance[0]"), mixerLuminance);
+  }
 
   const monochrome = input.document.color.monochrome;
-  const monochromeMixer = new Float32Array(8);
-  MONOCHROME_CHANNELS.forEach((channel, index) => {
-    monochromeMixer[index] = monochrome.mixer[channel];
-  });
   gl.uniform1f(
     gl.getUniformLocation(programValue, "uMonochromeEnabled"),
     monochrome.enabled ? 1 : 0,
   );
-  gl.uniform1fv(gl.getUniformLocation(programValue, "uMonochromeMixer[0]"), monochromeMixer);
+  if (monochrome.enabled) {
+    const monochromeMixer = new Float32Array(8);
+    MONOCHROME_CHANNELS.forEach((channel, index) => {
+      monochromeMixer[index] = monochrome.mixer[channel];
+    });
+    gl.uniform1fv(gl.getUniformLocation(programValue, "uMonochromeMixer[0]"), monochromeMixer);
+  }
 
   const grading = input.document.color.grading;
   const gradingWheel = (
@@ -1911,6 +2064,16 @@ function renderSpatial(
   input: CpuRenderInput,
   targets: GpuTargets,
 ): WebGLTexture {
+  const presence = input.document.presence;
+  const sharpening = input.document.detail.sharpening;
+  if (
+    presence.texture === 0 &&
+    presence.clarity === 0 &&
+    presence.dehaze === 0 &&
+    sharpening.sharpening === 0
+  ) {
+    return targets.pointwise;
+  }
   const sourceDimensions = orientedDimensions(input);
   const outputDimensions = input.request.plan.qualityAndDimensions.outputDimensions;
   const sourceScale = Math.max(
@@ -1918,14 +2081,13 @@ function renderSpatial(
     sourceDimensions.height / outputDimensions.height,
   );
   let current = targets.pointwise;
-  let scratch = targets.scratch;
+  let scratch = ensureTarget(state.gl, targets, "scratch");
   const run = (pass: Parameters<typeof renderSpatialPass>[4]): void => {
     renderSpatialPass(state, targets, current, scratch, pass);
     const previous = current;
     current = scratch;
     scratch = previous;
   };
-  const presence = input.document.presence;
   if (presence.texture !== 0) {
     run({
       mode: 0,
@@ -1947,7 +2109,6 @@ function renderSpatial(
       radius: clamp(32 / clamp(sourceScale, 1 / 64, 64), 0.25, 512),
     });
   }
-  const sharpening = input.document.detail.sharpening;
   if (sharpening.sharpening !== 0) {
     run({
       mode: 3,
@@ -2002,7 +2163,8 @@ function renderPostCrop(
   const gl = state.gl;
   const programValue = state.programs.postCrop;
   const grainCoordinates = grainCoordinatesTexture(state, input, region);
-  attach(gl, targets, [targets.postCrop]);
+  const postCropTarget = ensureTarget(gl, targets, "postCrop");
+  attach(gl, targets, [postCropTarget]);
   gl.useProgram(programValue);
   bindTexture(gl, programValue, "uImage", 0, source);
   bindTexture(gl, programValue, "uGrainCoordinates", 1, grainCoordinates);
@@ -2022,7 +2184,7 @@ function renderPostCrop(
   gl.uniform1f(gl.getUniformLocation(programValue, "uGrain"), postCrop.grain);
   gl.uniform1f(gl.getUniformLocation(programValue, "uGrainRoughness"), postCrop.grainRoughness);
   draw(gl);
-  return targets.postCrop;
+  return postCropTarget;
 }
 
 function renderEncoded(state: GpuState, source: WebGLTexture): void {
@@ -2093,28 +2255,13 @@ function readFloatTexture(
 
 const MAX_HISTOGRAM_SAMPLES = 16_384;
 
-// A full 1 MP histogram costs about 18 ms; a strided sample keeps drag frames fast.
-function sampledPixels(
-  pixels: Uint8Array,
+function histogramSampleStride(
   dimensions: { readonly width: number; readonly height: number },
-): [Uint8Array, { readonly width: number; readonly height: number }] {
-  const stride = Math.ceil(Math.sqrt(dimensions.width * dimensions.height / MAX_HISTOGRAM_SAMPLES));
-  if (stride <= 1) return [pixels, dimensions];
-  const width = Math.ceil(dimensions.width / stride);
-  const height = Math.ceil(dimensions.height / stride);
-  const sampled = new Uint8Array(width * height * 4);
-  let target = 0;
-  for (let y = 0; y < dimensions.height; y += stride) {
-    for (let x = 0; x < dimensions.width; x += stride) {
-      const source = (y * dimensions.width + x) * 4;
-      sampled[target] = pixels[source]!;
-      sampled[target + 1] = pixels[source + 1]!;
-      sampled[target + 2] = pixels[source + 2]!;
-      sampled[target + 3] = pixels[source + 3]!;
-      target += 4;
-    }
-  }
-  return [sampled, { width, height }];
+): number {
+  return Math.max(
+    1,
+    Math.ceil(Math.sqrt(dimensions.width * dimensions.height / MAX_HISTOGRAM_SAMPLES)),
+  );
 }
 
 function requestedAnalysis(
@@ -2139,7 +2286,7 @@ function requestedAnalysis(
       case "display-output":
         if (!pixels) break;
         results.push(input.sampledHistogram
-          ? analyzeV3DisplayOutput(...sampledPixels(pixels, dimensions))
+          ? analyzeV3DisplayOutput(pixels, dimensions, histogramSampleStride(dimensions))
           : analyzeV3DisplayOutput(pixels, dimensions));
         break;
       case "scene-headroom":
@@ -2225,14 +2372,24 @@ export class V3GpuPreviewRenderer {
 
   constructor(readonly backend: "auto" | "native" | "webgl" = "auto") {}
 
+  async warmup(input: CpuRenderInput): Promise<void> {
+    if (this.#unavailable || this.#state || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return;
+    try {
+      const state = await this.#initialize(input);
+      if (state.gl instanceof NativeGpuContext) {
+        await state.gl.flush();
+      }
+    } catch {
+      // Non-fatal: normal rendering will fall back cleanly if needed.
+    }
+  }
+
   dispose(): void {
     const state = this.#state;
     if (!state) return;
     for (const targets of state.targets.values()) deleteTargets(state.gl, targets);
-    for (const map of state.geometryMaps.values()) {
-      state.gl.deleteTexture(map.texture);
-    }
     state.gl.deleteTexture(state.source);
+    state.gl.deleteTexture(state.dummyTexture);
     if (state.sourcePyramid) state.gl.deleteTexture(state.sourcePyramid);
     if (state.curves) state.gl.deleteTexture(state.curves.texture);
     if (state.grainCoordinates) state.gl.deleteTexture(state.grainCoordinates.texture);
@@ -2253,12 +2410,16 @@ export class V3GpuPreviewRenderer {
     this.#state = null;
   }
 
+  #allowNativeSourceHandle(): boolean {
+    return this.backend === "native" || (this.backend === "auto" && nativeGpuAvailable());
+  }
+
   async render(
     input: CpuRenderInput,
     options: { readonly includeAnalysis: boolean },
   ): Promise<V3GpuPreviewRenderResult | null> {
     if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return preparation;
     try {
       const frame = await this.#renderFrame(
@@ -2268,6 +2429,20 @@ export class V3GpuPreviewRenderer {
         "half",
         false,
       );
+      if (frame.pixels) {
+        return {
+          kind: "rendered",
+          planFingerprint: preparation.planFingerprint,
+          frameIdentity: preparation.frameIdentity,
+          dimensions: input.request.plan.qualityAndDimensions.outputDimensions,
+          pixels: { kind: "rgba8", pixels: frame.pixels },
+          renderDurationMs: frame.renderDurationMs,
+          processingDurationMs: frame.processingDurationMs,
+          pointColorInput: frame.pointColorInput,
+          diagnostics: preparation.diagnostics,
+          analysis: frame.analysis,
+        };
+      }
       const bitmap = frame.bitmap ?? (this.#state && typeof HTMLCanvasElement !== "undefined" && this.#state.canvas instanceof HTMLCanvasElement
         ? await createImageBitmap(this.#state.canvas) : null);
       if (!bitmap) throw new Error("The GPU preview bitmap is unavailable.");
@@ -2299,7 +2474,7 @@ export class V3GpuPreviewRenderer {
     core: RenderRegion,
   ): Promise<CpuRenderResult | null> {
     if (this.#unavailable || v3GpuPreviewSupport(input, this.backend).kind !== "supported") return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return null;
     const dimensions = input.request.plan.qualityAndDimensions.outputDimensions;
     if (!validRenderRegion(core, dimensions)) return null;
@@ -2334,7 +2509,7 @@ export class V3GpuPreviewRenderer {
       input.request.requestedTaps.length > 0 ||
       v3GpuPreviewSupport(input, this.backend).kind !== "supported"
     ) return null;
-    const preparation = await prepareV3CpuRender(input);
+    const preparation = await prepareV3CpuRender(input, this.#allowNativeSourceHandle());
     if (preparation.kind !== "ready") return null;
     const core = fullOutputRegion(input);
     try {
@@ -2438,6 +2613,15 @@ export class V3GpuPreviewRenderer {
       throw new Error("The GPU source exceeds the maximum texture size.");
     }
     const source = sourceTexture(gl, input);
+    const dummyTexture = texture(gl, {
+      width: 1,
+      height: 1,
+      internalFormat: gl.RGBA8,
+      format: gl.RGBA,
+      type: gl.UNSIGNED_BYTE,
+      pixels: new Uint8Array(4),
+      filter: gl.NEAREST,
+    });
     const sourcePyramid = gl instanceof NativeGpuContext && isDownscaled(input)
       ? buildSourcePyramid(gl, source, input)
       : null;
@@ -2451,6 +2635,7 @@ export class V3GpuPreviewRenderer {
         encode: program(gl, ENCODE_SHADER),
       },
       source,
+      dummyTexture,
       sourcePyramid,
       pointwisePyramid: null,
       sourceIsInteger: integerSource(input),
@@ -2458,7 +2643,6 @@ export class V3GpuPreviewRenderer {
       curves: null,
       grainCoordinates: null,
       targets: new Map(),
-      geometryMaps: new Map(),
       localAdjustments: new Map(),
       maskCoverage: new Map(),
     };
@@ -2498,8 +2682,14 @@ export class V3GpuPreviewRenderer {
   }
 
   #evictTargets(state: GpuState): void {
-    const targetBytes = (value: GpuTargets): number =>
-      value.width * value.height * 5 * (value.precision === "half" ? 8 : 16);
+    const targetBytes = (value: GpuTargets): number => {
+      const count = 1 +
+        (value.toneInput ? 1 : 0) +
+        (value.pointColorInput ? 1 : 0) +
+        (value.scratch ? 1 : 0) +
+        (value.postCrop ? 1 : 0);
+      return value.width * value.height * count * (value.precision === "half" ? 8 : 16);
+    };
     let bytes = [...state.targets.values()].reduce((total, value) => total + targetBytes(value), 0);
     while (state.targets.size > 1 && (
       state.targets.size > MAX_CACHED_TARGETS || bytes > MAX_CACHED_TARGET_BYTES
@@ -2515,44 +2705,6 @@ export class V3GpuPreviewRenderer {
         deleteTargets(state.gl, oldest);
       }
     }
-  }
-
-  #geometryMap(
-    state: GpuState,
-    input: CpuRenderInput,
-    region: RenderRegion,
-  ): WebGLTexture {
-    const key = geometryMapKey(input, region);
-    const current = state.geometryMaps.get(key);
-    if (current) {
-      state.geometryMaps.delete(key);
-      state.geometryMaps.set(key, current);
-      return current.texture;
-    }
-    const value = texture(state.gl, {
-      width: region.width,
-      height: region.height,
-      internalFormat: state.gl.RGBA32F,
-      format: state.gl.RGBA,
-      type: state.gl.FLOAT,
-      pixels: geometryMapPixels(input, region),
-      filter: state.gl.NEAREST,
-    });
-    state.geometryMaps.set(key, { key, texture: value, bytes: region.width * region.height * 16 });
-    let bytes = [...state.geometryMaps.values()].reduce((total, map) => total + map.bytes, 0);
-    while (state.geometryMaps.size > 1 && (
-      state.geometryMaps.size > MAX_CACHED_GEOMETRY_MAPS || bytes > MAX_CACHED_GEOMETRY_BYTES
-    )) {
-      const oldestKey = state.geometryMaps.keys().next().value;
-      if (oldestKey === undefined) break;
-      const oldest = state.geometryMaps.get(oldestKey);
-      state.geometryMaps.delete(oldestKey);
-      if (oldest) {
-        bytes -= oldest.bytes;
-        state.gl.deleteTexture(oldest.texture);
-      }
-    }
-    return value;
   }
 
   async #renderFrame(
@@ -2575,33 +2727,32 @@ export class V3GpuPreviewRenderer {
     const targets = this.#targets(state, dimensions.width, dimensions.height, precision);
     try {
       const identityGeometry = denoiseGeometryIsIdentity(input) && input.request.plan.qualityAndDimensions.kind !== "loupe";
-      const map = identityGeometry ? targets.scratch : this.#geometryMap(state, input, region);
       const maskCoverage = maskCoverageTexture(state, input, region);
       const localAdjustments = maskCoverage ? null : localAdjustmentTexture(state, input, region);
       const started = performance.now();
-      renderPointwise(state, input, targets, map, localAdjustments, maskCoverage, region, identityGeometry);
+      renderPointwise(state, input, targets, localAdjustments, maskCoverage, region, identityGeometry);
       const spatial = renderSpatial(state, input, targets);
       const postCrop = renderPostCrop(state, input, targets, spatial, region);
       renderEncoded(state, postCrop);
       if (state.gl instanceof NativeGpuContext) {
         const floatReads: WebGLTexture[] = [];
-        if (includeAnalysis && input.request.requestedTaps.includes("tone-input")) floatReads.push(targets.toneInput);
+        if (includeAnalysis && input.request.requestedTaps.includes("tone-input") && targets.toneInput) floatReads.push(targets.toneInput);
         if (includeAnalysis && input.request.requestedTaps.includes("scene-headroom")) floatReads.push(postCrop);
-        if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export") floatReads.push(targets.pointColorInput);
+        if (!readPixels && input.includePointColor !== false && input.request.plan.qualityAndDimensions.kind !== "export" && targets.pointColorInput) floatReads.push(targets.pointColorInput);
         const submitStarted = performance.now();
         const nativeDurationMs = await state.gl.submit(floatReads);
         const submitted = performance.now();
         const pixels = state.gl.readback(null);
-        const floatRead = (texture: WebGLTexture) => floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
+        const floatRead = (texture: WebGLTexture | null) =>
+          texture && floatReads.includes(texture) ? readFloatTexture(state.gl, targets, texture) : null;
         const tone = floatRead(targets.toneInput);
         const scene = floatRead(postCrop);
         const point = floatRead(targets.pointColorInput);
-        const bitmap = readPixels ? null : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), dimensions.width, dimensions.height));
         const pointInput = point ? pointColorInput(point, dimensions.width, dimensions.height) : null;
         const analysis = includeAnalysis ? requestedAnalysis(input, tone, scene, pixels) : [];
         return {
-          bitmap,
-          pixels: readPixels ? pixels : null,
+          bitmap: null,
+          pixels,
           pointColorInput: pointInput,
           analysis,
           renderDurationMs: performance.now() - started,
@@ -2615,7 +2766,7 @@ export class V3GpuPreviewRenderer {
         const wantsPointColor = !readPixels &&
           input.includePointColor !== false &&
           input.request.plan.qualityAndDimensions.kind !== "export";
-        const pointInput = wantsPointColor
+        const pointInput = wantsPointColor && targets.pointColorInput
           ? readFloatTexture(state.gl, targets, targets.pointColorInput)
           : null;
         const bitmap = !readPixels && state.canvas && "transferToImageBitmap" in state.canvas ? state.canvas.transferToImageBitmap() : null;
@@ -2636,14 +2787,15 @@ export class V3GpuPreviewRenderer {
       const pixels = wantsDisplayOutput || readPixels
         ? readOutputPixels(state.gl, dimensions.width, dimensions.height)
         : null;
-      const toneInput = wantsToneInput
+      const toneInput = wantsToneInput && targets.toneInput
         ? readFloatTexture(state.gl, targets, targets.toneInput)
         : null;
       const scene = wantsSceneHeadroom
         ? readFloatTexture(state.gl, targets, postCrop)
         : null;
       const pointInput = input.includePointColor === false ||
-        input.request.plan.qualityAndDimensions.kind === "export"
+        input.request.plan.qualityAndDimensions.kind === "export" ||
+        !targets.pointColorInput
         ? null
         : readFloatTexture(state.gl, targets, targets.pointColorInput);
       const analysis = requestedAnalysis(input, toneInput, scene, pixels);
