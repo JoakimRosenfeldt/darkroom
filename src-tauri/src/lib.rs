@@ -1049,7 +1049,13 @@ pub(crate) struct RawSources {
 }
 
 impl RawSources {
-    pub(crate) fn insert(&mut self, handle: String, source: RawSource) {
+    pub(crate) fn insert(&mut self, handle: String, source: RawSource) -> Arc<RawSource> {
+        let arc = Arc::new(source);
+        self.insert_arc(handle, Arc::clone(&arc));
+        arc
+    }
+
+    pub(crate) fn insert_arc(&mut self, handle: String, source: Arc<RawSource>) {
         let size = source.data.len();
         if let Some(old) = self.entries.remove(&handle) {
             self.bytes -= old.data.len();
@@ -1064,7 +1070,7 @@ impl RawSources {
             }
         }
         self.bytes += size;
-        self.entries.insert(handle.clone(), Arc::new(source));
+        self.entries.insert(handle.clone(), source);
         self.lru.push_back(handle);
     }
 

@@ -1,8 +1,15 @@
 use std::{
+    collections::HashSet,
     ffi::c_void,
+    fs::Metadata,
     io::Read,
+    path::{Path, PathBuf},
     slice,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::UNIX_EPOCH,
 };
 
 use libraw_rs_vendor as raw;
@@ -20,6 +27,54 @@ use super::{
 const MAX_INPUT: u64 = 128 * 1024 * 1024;
 const MAX_OUTPUT: usize = 512 * 1024 * 1024;
 pub(super) const DECODER_REVISION: &str = "libraw-native-0.22.1-linear-v2";
+
+#[derive(Hash, PartialEq, Eq)]
+struct FileIdentity {
+    path: PathBuf,
+    len: u64,
+    mtime_nanos: u128,
+}
+
+fn file_identity(path: &Path, metadata: &Metadata) -> Option<FileIdentity> {
+    let mtime_nanos = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(FileIdentity {
+        path: path.to_path_buf(),
+        len: metadata.len(),
+        mtime_nanos,
+    })
+}
+
+fn unsupported_files() -> &'static Mutex<HashSet<FileIdentity>> {
+    static CACHE: OnceLock<Mutex<HashSet<FileIdentity>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn is_known_unsupported(id: Option<&FileIdentity>) -> bool {
+    let Some(id) = id else {
+        return false;
+    };
+    unsupported_files()
+        .lock()
+        .map(|set| set.contains(id))
+        .unwrap_or(false)
+}
+
+fn mark_unsupported(id: Option<FileIdentity>) {
+    let Some(id) = id else {
+        return;
+    };
+    if let Ok(mut set) = unsupported_files().lock() {
+        if set.len() >= 512 {
+            set.clear();
+        }
+        set.insert(id);
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -109,6 +164,12 @@ pub fn decode_libraw(
     if opened.len() == 0 || opened.len() > MAX_INPUT {
         return Err("RAW input is empty or exceeds the native decode limit.".into());
     }
+    let identity = file_identity(&path, &opened);
+    if is_known_unsupported(identity.as_ref()) {
+        return Err(
+            "LIBRAW_UNSUPPORTED: Nikon High Efficiency (HE/HE*) NEF requires Nikon decoder.".into(),
+        );
+    }
     let cache = PreviewCache::if_enabled(
         preview,
         ctx.app_cache.as_deref(),
@@ -169,15 +230,25 @@ pub fn decode_libraw(
         if result == raw::LibRaw_errors_LIBRAW_FILE_UNSUPPORTED
             || result == raw::LibRaw_errors_LIBRAW_NOT_IMPLEMENTED
         {
+            mark_unsupported(identity);
             return Err(format!("LIBRAW_UNSUPPORTED: LibRaw cannot open NEF ({result})."));
         }
         return Err(format!("LibRaw could not open NEF ({result})."));
     }
     unsafe {
+        let nef_compression = (*handle.0).makernotes.nikon.NEFCompression;
+        if nef_compression == 13 || nef_compression == 14 {
+            mark_unsupported(identity);
+            return Err(
+                "LIBRAW_UNSUPPORTED: Nikon High Efficiency (HE/HE*) NEF requires Nikon decoder."
+                    .into(),
+            );
+        }
         let mut info: raw::libraw_decoder_info_t = std::mem::zeroed();
         if raw::libraw_get_decoder_info(handle.0, &mut info) == 0 && !info.decoder_name.is_null() {
             let name = std::ffi::CStr::from_ptr(info.decoder_name);
             if name.to_str() == Ok("nikon_he_load_raw()") {
+                mark_unsupported(identity);
                 return Err(
                     "LIBRAW_UNSUPPORTED: Nikon High Efficiency (HE/HE*) NEF requires Nikon decoder."
                         .into(),
@@ -268,6 +339,7 @@ pub fn decode_libraw(
         if result == raw::LibRaw_errors_LIBRAW_FILE_UNSUPPORTED
             || result == raw::LibRaw_errors_LIBRAW_NOT_IMPLEMENTED
         {
+            mark_unsupported(identity);
             return Err(format!("LIBRAW_UNSUPPORTED: LibRaw cannot unpack NEF ({result})."));
         }
         return Err(format!("LibRaw could not unpack NEF ({result})."));
@@ -546,7 +618,7 @@ unsafe fn extract_rgb16_direct(
     Ok(Some((out_width, out_height, output)))
 }
 
-fn resize_rgb16_parallel(
+pub(super) fn resize_rgb16_parallel(
     pixels: &[u8],
     source_width: usize,
     source_height: usize,

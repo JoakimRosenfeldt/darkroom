@@ -48,6 +48,7 @@ interface ImageLoad {
 const inFlightImages = new Map<string, ImageLoad>();
 const fullInFlightImages = new Map<string, ImageLoad>();
 const preloads = new Map<string, AbortController>();
+const fullPreloads = new Map<string, AbortController>();
 
 const fullImageCache = new Map<string, DevelopImage>();
 
@@ -441,4 +442,43 @@ export function preloadDevelopImages(
       .catch(() => undefined)
       .finally(() => { if (preloads.get(key) === controller) preloads.delete(key); });
   }
+}
+
+export function preloadFullDevelopImages(
+  entries: LibraryEntry[],
+  activeIndex: number,
+  options: Pick<DevelopImageLoadOptions, "rawColorMode"> = {},
+): void {
+  const isTauriEnv = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (!isTauriEnv) return;
+  const rawColorMode = options.rawColorMode ?? "decoder-rendered";
+  const keyFor = (entry: LibraryEntry) => fullImageCacheKey(entry, rawColorMode);
+  const wanted = new Set<string>();
+  // Keep an in-flight preload alive if the user just navigated into it.
+  for (const index of activeIndex < 0 ? [] : [activeIndex, activeIndex + 1]) {
+    const entry = entries[index];
+    if (entry && entry.formatAvailability.status === "supported") wanted.add(keyFor(entry));
+  }
+  for (const [id, controller] of fullPreloads) {
+    if (!wanted.has(id)) {
+      controller.abort();
+      fullPreloads.delete(id);
+    }
+  }
+  if (activeIndex < 0) return;
+  const next = entries[activeIndex + 1];
+  if (!next || next.formatAvailability.status !== "supported") return;
+  const key = keyFor(next);
+  if (fullImageCache.has(key) || fullPreloads.has(key) || fullInFlightImages.has(key)) return;
+  const controller = new AbortController();
+  fullPreloads.set(key, controller);
+  void loadFullResolutionImage(next, {
+    rawColorMode,
+    signal: controller.signal,
+    priority: -20,
+  })
+    .catch(() => undefined)
+    .finally(() => {
+      if (fullPreloads.get(key) === controller) fullPreloads.delete(key);
+    });
 }

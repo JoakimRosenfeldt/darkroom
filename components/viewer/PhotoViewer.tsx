@@ -14,6 +14,7 @@ import {
   loadDevelopExportImage,
   loadDevelopImage,
   preloadDevelopImages,
+  preloadFullDevelopImages,
 } from "@/lib/cache/develop-image-cache";
 import { ModuleSpine } from "@/components/shell/ModuleSpine";
 import {
@@ -377,6 +378,11 @@ export function PhotoViewer({
       includeBlob,
       rawColorMode,
     });
+    preloadFullDevelopImages(
+      entries,
+      readyForNeighbors && developProcessKind === "v3" ? availableActiveIndex : -1,
+      { rawColorMode },
+    );
   }, [decoded, entries, availableActiveIndex, developProcessKind, rawColorMode, fullPreloadSettledEntry]);
 
   useEntryMetadataShortcuts(selectionTargets, exportOpen);
