@@ -28,6 +28,14 @@ pub struct LibRawDecodeOptions {
     max_edge: u32,
     #[serde(default)]
     handle_only: bool,
+    #[serde(default)]
+    priority: i32,
+}
+
+impl LibRawDecodeOptions {
+    pub(crate) fn priority(&self) -> i32 {
+        self.priority
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,7 +151,7 @@ pub fn decode_libraw(
             Some(progress),
             std::ptr::from_ref(cancelled).cast_mut().cast(),
         );
-        (*handle.0).rawparams.max_raw_memory_mb = 384;
+        (*handle.0).rawparams.max_raw_memory_mb = 512;
         let params = &mut (*handle.0).params;
         params.half_size = i32::from(preview);
         params.output_bps = 16;
@@ -158,7 +166,24 @@ pub fn decode_libraw(
     let result = unsafe { raw::libraw_open_buffer(handle.0, bytes.as_ptr().cast(), bytes.len()) };
     check_cancelled(cancelled)?;
     if result != 0 {
+        if result == raw::LibRaw_errors_LIBRAW_FILE_UNSUPPORTED
+            || result == raw::LibRaw_errors_LIBRAW_NOT_IMPLEMENTED
+        {
+            return Err(format!("LIBRAW_UNSUPPORTED: LibRaw cannot open NEF ({result})."));
+        }
         return Err(format!("LibRaw could not open NEF ({result})."));
+    }
+    unsafe {
+        let mut info: raw::libraw_decoder_info_t = std::mem::zeroed();
+        if raw::libraw_get_decoder_info(handle.0, &mut info) == 0 && !info.decoder_name.is_null() {
+            let name = std::ffi::CStr::from_ptr(info.decoder_name);
+            if name.to_str() == Ok("nikon_he_load_raw()") {
+                return Err(
+                    "LIBRAW_UNSUPPORTED: Nikon High Efficiency (HE/HE*) NEF requires Nikon decoder."
+                        .into(),
+                );
+            }
+        }
     }
     let sizes = unsafe { &(*handle.0).sizes };
     let divisor = if preview { 2 } else { 1 };
@@ -240,83 +265,103 @@ pub fn decode_libraw(
     let result = unsafe { raw::libraw_unpack(handle.0) };
     check_cancelled(cancelled)?;
     if result != 0 {
+        if result == raw::LibRaw_errors_LIBRAW_FILE_UNSUPPORTED
+            || result == raw::LibRaw_errors_LIBRAW_NOT_IMPLEMENTED
+        {
+            return Err(format!("LIBRAW_UNSUPPORTED: LibRaw cannot unpack NEF ({result})."));
+        }
         return Err(format!("LibRaw could not unpack NEF ({result})."));
     }
-    let result = unsafe { raw::libraw_dcraw_process(handle.0) };
-    check_cancelled(cancelled)?;
-    if result != 0 {
-        return Err(format!("LibRaw could not process NEF ({result})."));
-    }
 
-    let (width, height, pixel_bytes) = if let Some((source_width, source_height, full_pixels)) =
-        unsafe { extract_rgb16_direct(&*handle.0, cancelled)? }
+    let (width, height, pixel_bytes) = if let Some(fast) =
+        unsafe { super::bayer_demosaic::process_bayer_fast(handle.0, preview, options.max_edge, cancelled)? }
     {
-        if preview {
-            let scale =
-                (f64::from(options.max_edge) / source_width.max(source_height) as f64).min(1.0);
+        fast
+    } else {
+        let result = unsafe { raw::libraw_dcraw_process(handle.0) };
+        check_cancelled(cancelled)?;
+        if result != 0 {
+            return Err(format!("LibRaw could not process NEF ({result})."));
+        }
+
+        if let Some((source_width, source_height, full_pixels)) =
+            unsafe { extract_rgb16_direct(&*handle.0, cancelled)? }
+        {
+            if preview {
+                let scale =
+                    (f64::from(options.max_edge) / source_width.max(source_height) as f64).min(1.0);
+                let width = (source_width as f64 * scale).round().max(1.0) as usize;
+                let height = (source_height as f64 * scale).round().max(1.0) as usize;
+                if width == source_width && height == source_height {
+                    (width, height, full_pixels)
+                } else {
+                    let resized = resize_rgb16_parallel(
+                        &full_pixels,
+                        source_width,
+                        source_height,
+                        width,
+                        height,
+                        cancelled,
+                    )?;
+                    (width, height, resized)
+                }
+            } else {
+                (source_width, source_height, full_pixels)
+            }
+        } else {
+            let mut error = 0;
+            let image =
+                ProcessedImage(unsafe { raw::libraw_dcraw_make_mem_image(handle.0, &mut error) });
+            check_cancelled(cancelled)?;
+            if image.0.is_null() {
+                return Err(format!("LibRaw could not produce RGB16 pixels ({error})."));
+            }
+            let image = unsafe { &*image.0 };
+            let source_width = usize::from(image.width);
+            let source_height = usize::from(image.height);
+            let source_bytes = source_width
+                .checked_mul(source_height)
+                .and_then(|samples| samples.checked_mul(6))
+                .filter(|bytes| *bytes <= MAX_OUTPUT)
+                .ok_or("LibRaw output exceeds the supported size.")?;
+            if image.type_ != 2
+                || source_width == 0
+                || source_height == 0
+                || image.colors != 3
+                || image.bits != 16
+                || source_bytes > MAX_OUTPUT
+                || image.data_size as usize != source_bytes
+            {
+                return Err("LibRaw did not produce bounded RGB16 camera pixels.".into());
+            }
+            let scale = if preview {
+                (f64::from(options.max_edge) / source_width.max(source_height) as f64).min(1.0)
+            } else {
+                1.0
+            };
             let width = (source_width as f64 * scale).round().max(1.0) as usize;
             let height = (source_height as f64 * scale).round().max(1.0) as usize;
-            if width == source_width && height == source_height {
-                (width, height, full_pixels)
-            } else {
-                let resized = resize_rgb16_parallel(
-                    &full_pixels,
-                    source_width,
-                    source_height,
-                    width,
-                    height,
-                    cancelled,
-                )?;
-                (width, height, resized)
-            }
-        } else {
-            (source_width, source_height, full_pixels)
+            let pixels = unsafe { slice::from_raw_parts(image.data.as_ptr(), source_bytes) };
+            let output =
+                if width == source_width && height == source_height && cfg!(target_endian = "little") {
+                    let mut out = Vec::with_capacity(source_bytes);
+                    for row in pixels.chunks_exact(source_width * 6) {
+                        check_cancelled(cancelled)?;
+                        out.extend_from_slice(row);
+                    }
+                    out
+                } else {
+                    resize_rgb16_parallel(
+                        pixels,
+                        source_width,
+                        source_height,
+                        width,
+                        height,
+                        cancelled,
+                    )?
+                };
+            (width, height, output)
         }
-    } else {
-        let mut error = 0;
-        let image =
-            ProcessedImage(unsafe { raw::libraw_dcraw_make_mem_image(handle.0, &mut error) });
-        check_cancelled(cancelled)?;
-        if image.0.is_null() {
-            return Err(format!("LibRaw could not produce RGB16 pixels ({error})."));
-        }
-        let image = unsafe { &*image.0 };
-        let source_width = usize::from(image.width);
-        let source_height = usize::from(image.height);
-        let source_bytes = source_width
-            .checked_mul(source_height)
-            .and_then(|samples| samples.checked_mul(6))
-            .filter(|bytes| *bytes <= MAX_OUTPUT)
-            .ok_or("LibRaw output exceeds the supported size.")?;
-        if image.type_ != 2
-            || source_width == 0
-            || source_height == 0
-            || image.colors != 3
-            || image.bits != 16
-            || source_bytes > MAX_OUTPUT
-            || image.data_size as usize != source_bytes
-        {
-            return Err("LibRaw did not produce bounded RGB16 camera pixels.".into());
-        }
-        let scale = if preview {
-            (f64::from(options.max_edge) / source_width.max(source_height) as f64).min(1.0)
-        } else {
-            1.0
-        };
-        let width = (source_width as f64 * scale).round().max(1.0) as usize;
-        let height = (source_height as f64 * scale).round().max(1.0) as usize;
-        let pixels = unsafe { slice::from_raw_parts(image.data.as_ptr(), source_bytes) };
-        let output = if width == source_width && height == source_height && cfg!(target_endian = "little") {
-            let mut out = Vec::with_capacity(source_bytes);
-            for row in pixels.chunks_exact(source_width * 6) {
-                check_cancelled(cancelled)?;
-                out.extend_from_slice(row);
-            }
-            out
-        } else {
-            resize_rgb16_parallel(pixels, source_width, source_height, width, height, cancelled)?
-        };
-        (width, height, output)
     };
     check_cancelled(cancelled)?;
 

@@ -4,6 +4,7 @@ use serde_json::Value;
 
 mod ai_models;
 mod assets;
+mod bayer_demosaic;
 mod embedded_preview;
 mod export;
 mod libraw_decode;

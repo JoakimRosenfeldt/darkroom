@@ -177,6 +177,8 @@ export interface CatalogDecodeRequest {
   readonly kind: "nef";
   readonly mode: "preview" | "full";
   readonly maxEdge: number;
+  readonly handleOnly?: boolean;
+  readonly priority?: number;
 }
 
 export interface CatalogDecodeFailure {
@@ -199,6 +201,8 @@ export interface CatalogDecodeSuccess {
   readonly colorSpace: "srgb";
   readonly transferFunction: "srgb";
   readonly pixels: ArrayBuffer;
+  readonly sourceHandle?: string;
+  readonly pixelsOmitted?: boolean;
   /** Full-resolution size from the RAW header, sent with previews. */
   readonly fullWidth?: number;
   readonly fullHeight?: number;
@@ -440,7 +444,23 @@ export function parseCatalogDecodeRequest(value: unknown): CatalogDecodeRequest 
   if (mode !== "preview" && mode !== "full") throw new Error("Decode mode is invalid.");
   const maxEdge = integer(input.maxEdge, "maxEdge", 1);
   if (maxEdge > MAX_DECODE_EDGE) throw new Error(`maxEdge must be less than or equal to ${MAX_DECODE_EDGE}.`);
-  return { kind: "nef", mode, maxEdge };
+  const handleOnly = input.handleOnly === undefined
+    ? undefined
+    : typeof input.handleOnly === "boolean"
+      ? input.handleOnly
+      : (() => { throw new Error("handleOnly must be a boolean."); })();
+  const priority = input.priority === undefined
+    ? undefined
+    : typeof input.priority === "number" && Number.isFinite(input.priority)
+      ? Math.trunc(input.priority)
+      : (() => { throw new Error("priority must be a finite number."); })();
+  return {
+    kind: "nef",
+    mode,
+    maxEdge,
+    ...(handleOnly === undefined ? {} : { handleOnly }),
+    ...(priority === undefined ? {} : { priority }),
+  };
 }
 
 export function parseCatalogScanRequest(value: unknown): CatalogScanRequest {
@@ -756,8 +776,20 @@ export function parseCatalogDecodeResult(value: unknown): CatalogDecodeResult {
   if (byteCount > MAX_DECODE_BYTES || input.pixels.byteLength > MAX_DECODE_BYTES) {
     throw new Error("Catalog decode output is too large.");
   }
+  const pixelsOmitted = input.pixelsOmitted === true;
+  const sourceHandle = input.sourceHandle;
+  if (sourceHandle !== undefined && (typeof sourceHandle !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sourceHandle))) {
+    throw new Error("Catalog decode source handle is invalid.");
+  }
   const expectedByteCount = width * height * 3 * 2;
-  if (!Number.isSafeInteger(expectedByteCount) || byteCount !== expectedByteCount || byteCount !== input.pixels.byteLength) {
+  if (!Number.isSafeInteger(expectedByteCount) || byteCount !== expectedByteCount) {
+    throw new Error("Catalog decode byte count is inconsistent.");
+  }
+  if (pixelsOmitted) {
+    if (typeof sourceHandle !== "string" || input.pixels.byteLength !== 0) {
+      throw new Error("Catalog decode handle-only payload is inconsistent.");
+    }
+  } else if (byteCount !== input.pixels.byteLength) {
     throw new Error("Catalog decode byte count is inconsistent.");
   }
   const orientation = integer(input.orientation, "decode orientation", 1);
@@ -776,6 +808,8 @@ export function parseCatalogDecodeResult(value: unknown): CatalogDecodeResult {
     colorSpace: input.colorSpace === "srgb" ? "srgb" : (() => { throw new Error("decode color space is invalid."); })(),
     transferFunction: input.transferFunction === "srgb" ? "srgb" : (() => { throw new Error("decode transfer function is invalid."); })(),
     pixels: input.pixels,
+    ...(typeof sourceHandle === "string" ? { sourceHandle } : {}),
+    ...(pixelsOmitted ? { pixelsOmitted: true } : {}),
     ...(input.fullWidth === undefined ? {} : {
       fullWidth: integer(input.fullWidth, "decode fullWidth", 1),
       fullHeight: integer(input.fullHeight, "decode fullHeight", 1),

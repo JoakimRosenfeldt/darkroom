@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { parseCatalogDecodeResult } from "@/lib/catalog/api";
 
@@ -89,7 +89,11 @@ export const desktopTransport = {
         return await invoke<ArrayBuffer>("darkroom_preview", { request: args[0] }) as T;
       }
       if (channel === "darkroom:catalog-decode-asset") {
-        const response = await invoke<ArrayBuffer>("darkroom_decode", { args });
+        const response = await invoke<ArrayBuffer>("darkroom_decode", {
+          args,
+          requestId: crypto.randomUUID(),
+          onStarted: new Channel<void>(),
+        });
         if (!(response instanceof ArrayBuffer) || response.byteLength < 4) {
           throw new Error("Native decode response is invalid.");
         }
@@ -103,6 +107,12 @@ export const desktopTransport = {
           throw new Error("Native decode metadata is invalid.");
         }
         if ("available" in metadata && metadata.available === true) {
+          if ("pixelsOmitted" in metadata && metadata.pixelsOmitted === true) {
+            if (pixelOffset !== response.byteLength) {
+              throw new Error("Native decode handle-only response contains pixels.");
+            }
+            return parseCatalogDecodeResult({ ...metadata, pixels: new ArrayBuffer(0) }) as T;
+          }
           if (!("byteCount" in metadata) || metadata.byteCount !== response.byteLength - pixelOffset) {
             throw new Error("Native decode pixel byte count is invalid.");
           }

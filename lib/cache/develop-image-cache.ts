@@ -34,7 +34,7 @@ export interface DevelopImageLoadOptions {
 
 const EDITOR_CACHE_BYTES = 160 * 1024 * 1024;
 const THUMBNAIL_CACHE_BYTES = 32 * 1024 * 1024;
-const FULL_IMAGE_CACHE_BYTES = 320 * 1024 * 1024;
+const FULL_IMAGE_CACHE_BYTES = 512 * 1024 * 1024;
 const PREVIEW_MAX_EDGE = 2_560;
 
 const imageCache = new Map<string, DevelopImage>();

@@ -286,8 +286,8 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
   }, [active, currentInput, source, entry, document, viewport, drawCachedTiles]);
 
   useEffect(() => {
-    if (loadReady || (!active && !preload) || (passive && panning)) return;
-    const delay = passive ? (isTauri() ? 60 : 200) : 0;
+    if (loadReady || (!active && !preload) || (!active && passive && panning)) return;
+    const delay = active ? 0 : passive ? (isTauri() ? 60 : 200) : 0;
     const timer = setTimeout(() => setReadyEntry(entry), delay);
     return () => clearTimeout(timer);
   }, [loadReady, entry, active, preload, passive, panning, displayWidth]);
@@ -310,7 +310,11 @@ export function PhotoLoupe({ entry, document, position, focusPosition, onPositio
     if (!loadReady) return;
     const controller = new AbortController();
     let image: DevelopImage | undefined;
-    void loadDevelopExportImage(entry, { rawColorMode: "libraw-camera-matrix", signal: controller.signal }).then((loaded) => {
+    void loadDevelopExportImage(entry, {
+      rawColorMode: "libraw-camera-matrix",
+      signal: controller.signal,
+      priority: activeRef.current ? 200 : 50,
+    }).then((loaded) => {
       image = loaded;
       if (controller.signal.aborted) { disposeDevelopImage(loaded); return; }
       if (loaded.pixelProvenance.decoderPath === "embedded-preview") throw new Error("Full RAW decoding failed. An embedded preview cannot show 1:1 detail.");

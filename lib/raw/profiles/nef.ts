@@ -1,5 +1,6 @@
 import type { DecodeOptions, DecodedImage, ImageProfile } from "../types";
 import { getFormatExtensionsForProfile, getFormatCapabilityForFileName } from "@/lib/formats/registry";
+import { nativeGpuAvailable } from "@/lib/develop/v3/native-context";
 import { decodeEmbeddedThumbnail, decodeWithLibRaw } from "../libraw-client";
 
 const PREVIEW_MAX_EDGE = 2_560;
@@ -86,17 +87,29 @@ async function decodeDevelopedNef(
 
   if (api && options.assetRequest) {
     try {
+      const handleOnly = Boolean(
+        options.fullResolution &&
+        options.sourcePixels &&
+        options.handleOnly !== false &&
+        nativeGpuAvailable(),
+      );
+      const priority = typeof options.priority === "function"
+        ? options.priority()
+        : options.priority;
       const result = await api.catalogDecodeAsset(options.assetRequest, {
         kind: "nef",
         mode: options.fullResolution ? "full" : "preview",
         maxEdge: Math.min(options.maxEdge ?? PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE),
+        ...(handleOnly ? { handleOnly: true } : {}),
+        ...(priority !== undefined && Number.isFinite(priority) ? { priority: Math.trunc(priority) } : {}),
       });
       options.signal?.throwIfAborted();
       if (result.available) {
         return {
           width: result.width,
           height: result.height,
-          rgb: new Uint16Array(result.pixels),
+          rgb: result.pixelsOmitted ? new Uint16Array(0) : new Uint16Array(result.pixels),
+          nativeSourceHandle: result.sourceHandle,
           bits: result.bitDepth,
           colors: result.channels,
           pixelProvenance: {

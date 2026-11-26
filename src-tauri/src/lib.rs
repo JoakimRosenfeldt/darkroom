@@ -8,10 +8,11 @@ mod native;
 
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, VecDeque},
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, VecDeque},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
@@ -512,7 +513,121 @@ async fn darkroom_preview(
     .map_err(|e| e.to_string())?
 }
 
-static NEF_DECODE_QUEUE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+struct DecodeWaiter {
+    priority: i32,
+    seq: u64,
+    tx: tokio::sync::oneshot::Sender<()>,
+}
+
+impl PartialEq for DecodeWaiter {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.seq == other.seq
+    }
+}
+impl Eq for DecodeWaiter {}
+impl PartialOrd for DecodeWaiter {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DecodeWaiter {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.priority, Reverse(self.seq)).cmp(&(other.priority, Reverse(other.seq)))
+    }
+}
+
+struct PriorityDecodeQueueState {
+    available: usize,
+    next_seq: u64,
+    waiters: BinaryHeap<DecodeWaiter>,
+}
+
+struct PriorityDecodeQueue {
+    state: Mutex<PriorityDecodeQueueState>,
+}
+
+struct PriorityDecodePermit {
+    queue: &'static PriorityDecodeQueue,
+}
+
+impl Drop for PriorityDecodePermit {
+    fn drop(&mut self) {
+        self.queue.release();
+    }
+}
+
+impl PriorityDecodeQueue {
+    fn new(permits: usize) -> Self {
+        Self {
+            state: Mutex::new(PriorityDecodeQueueState {
+                available: permits,
+                next_seq: 0,
+                waiters: BinaryHeap::new(),
+            }),
+        }
+    }
+
+    async fn acquire(
+        &'static self,
+        priority: i32,
+        cancelled: &RawDecodeCancellation,
+    ) -> Result<PriorityDecodePermit, String> {
+        if cancelled.requested.load(Ordering::Relaxed) {
+            return Err("RAW decode was cancelled.".into());
+        }
+        let rx = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "RAW decode queue is unavailable.")?;
+            if state.available > 0 {
+                state.available -= 1;
+                return Ok(PriorityDecodePermit { queue: self });
+            }
+            let seq = state.next_seq;
+            state.next_seq = state.next_seq.wrapping_add(1);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            state.waiters.push(DecodeWaiter { priority, seq, tx });
+            rx
+        };
+        let mut rx = rx;
+        tokio::select! {
+            biased;
+            _ = cancelled.queued.notified() => {
+                // If a permit was already sent right as we cancelled, return it to the queue.
+                if rx.try_recv().is_ok() {
+                    self.release();
+                }
+                Err("RAW decode was cancelled.".into())
+            }
+            res = &mut rx => {
+                res.map_err(|_| "RAW decode queue was closed.".to_owned())?;
+                if cancelled.requested.load(Ordering::Relaxed) {
+                    self.release();
+                    return Err("RAW decode was cancelled.".into());
+                }
+                Ok(PriorityDecodePermit { queue: self })
+            }
+        }
+    }
+
+    fn release(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        while let Some(waiter) = state.waiters.pop() {
+            if waiter.tx.send(()).is_ok() {
+                return;
+            }
+        }
+        state.available += 1;
+    }
+}
+
+fn nef_decode_queue() -> &'static PriorityDecodeQueue {
+    static QUEUE: OnceLock<PriorityDecodeQueue> = OnceLock::new();
+    QUEUE.get_or_init(|| PriorityDecodeQueue::new(2))
+}
 
 /// Prints stage timings to stderr when DARKROOM_TIMING is set.
 pub(crate) fn timing(message: std::fmt::Arguments) {
@@ -591,11 +706,9 @@ async fn darkroom_libraw_decode(
     // Acknowledge registration before the caller can send cancellation.
     on_started.send(()).map_err(|e| e.to_string())?;
     let queued = Instant::now();
-    let permit = tokio::select! {
-        biased;
-        _ = job.cancelled.queued.notified() => return Err("RAW decode was cancelled.".into()),
-        permit = NEF_DECODE_QUEUE.acquire() => permit.map_err(|e| e.to_string())?,
-    };
+    let permit = nef_decode_queue()
+        .acquire(options.priority(), &job.cancelled)
+        .await?;
     let started = Instant::now();
     let label = format!("{:?} {}", options, request["assetId"]);
     let backend = state.inner().clone();
@@ -782,7 +895,10 @@ fn darkroom_libraw_cancel(
 async fn darkroom_decode(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<Backend>>,
+    jobs: tauri::State<'_, Arc<RawDecodeJobs>>,
     mut args: Value,
+    request_id: String,
+    on_started: tauri::ipc::Channel<()>,
 ) -> Result<tauri::ipc::Response, String> {
     if window.label() != "main" || !trusted_url(&window.url().map_err(|e| e.to_string())?) {
         return Err("Untrusted desktop request.".into());
@@ -790,11 +906,34 @@ async fn darkroom_decode(
     if args.as_array().is_none_or(|items| items.len() != 2) {
         return Err("Asset decode arguments are invalid.".into());
     }
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err("RAW decode request id is invalid.".into());
+    }
+    let cancelled = Arc::new(RawDecodeCancellation::default());
+    {
+        let mut active = jobs
+            .inner()
+            .0
+            .lock()
+            .map_err(|_| "RAW decoder is unavailable.")?;
+        if active.contains_key(&request_id) {
+            return Err("RAW decode request id is already active.".into());
+        }
+        active.insert(request_id.clone(), cancelled.clone());
+    }
+    let job = RawDecodeJob {
+        id: request_id,
+        cancelled: cancelled.clone(),
+        jobs: jobs.inner().clone(),
+    };
+    on_started.send(()).map_err(|e| e.to_string())?;
+    let priority = args[1]
+        .get("priority")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     let queued = Instant::now();
-    let permit = NEF_DECODE_QUEUE
-        .acquire()
-        .await
-        .map_err(|e| e.to_string())?;
+    let permit = nef_decode_queue().acquire(priority, &cancelled).await?;
     timing(format_args!(
         "nikon {} {}: queued {} ms",
         args[1]["mode"],
@@ -802,19 +941,32 @@ async fn darkroom_decode(
         queued.elapsed().as_millis()
     ));
     let backend = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let generation = GPU_GENERATION.load(Ordering::Acquire);
+    let decoded = tauri::async_runtime::spawn_blocking(move || {
         let _permit = permit;
+        let _job = job;
+        if cancelled.requested.load(Ordering::Relaxed) {
+            return Err("Nikon decode was cancelled.".into());
+        }
         let location = backend
             .catalog
             .lock()
             .map_err(|_| "Catalog service is unavailable.")?
             .resolve_asset(&args[0])?;
         args.as_array_mut().unwrap().push(location);
-        native::decode_asset_binary(args.as_array().unwrap(), &backend.native)
-            .map(tauri::ipc::Response::new)
+        native::decode_asset_binary(
+            args.as_array().unwrap(),
+            &backend.native,
+            Some(&cancelled.requested),
+        )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    let (bytes, handle) = decoded;
+    if let Some(handle) = handle {
+        spawn_prepare_source(handle, generation);
+    }
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -855,7 +1007,7 @@ struct GpuState {
     renderer: Result<gpu::NativeGpu, String>,
 }
 
-const RAW_SOURCE_LIMIT: usize = 384 * 1024 * 1024;
+const RAW_SOURCE_LIMIT: usize = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum NativeSourceFormat {
@@ -1279,7 +1431,7 @@ mod tests {
         let _guard = RAW_SOURCES_TEST_LOCK.lock().unwrap();
         let mut sources = raw_sources().lock().unwrap();
         sources.clear();
-        for index in 0..4 {
+        for index in 0..5 {
             sources.insert(
                 index.to_string(),
                 RawSource {
@@ -1296,5 +1448,43 @@ mod tests {
         drop(sources);
         reset_gpu_sessions();
         assert!(raw_sources().lock().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn priority_decode_queue_serves_higher_priority_first() {
+        static TEST_QUEUE: OnceLock<PriorityDecodeQueue> = OnceLock::new();
+        let queue = TEST_QUEUE.get_or_init(|| PriorityDecodeQueue::new(1));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+            let cancel_hold = RawDecodeCancellation::default();
+            let holder = queue.acquire(0, &cancel_hold).await.unwrap();
+
+            let order_low = order.clone();
+            let low = tokio::spawn(async move {
+                let c = RawDecodeCancellation::default();
+                let _p = queue.acquire(-10, &c).await.unwrap();
+                order_low.lock().unwrap().push("low");
+            });
+
+            // Yield so `low` enters the waiter heap before `high`.
+            tokio::task::yield_now().await;
+
+            let order_high = order.clone();
+            let high = tokio::spawn(async move {
+                let c = RawDecodeCancellation::default();
+                let _p = queue.acquire(200, &c).await.unwrap();
+                order_high.lock().unwrap().push("high");
+            });
+
+            while queue.state.lock().unwrap().waiters.len() < 2 {
+                tokio::task::yield_now().await;
+            }
+            drop(holder);
+            low.await.unwrap();
+            high.await.unwrap();
+
+            assert_eq!(*order.lock().unwrap(), vec!["high", "low"]);
+        });
     }
 }
